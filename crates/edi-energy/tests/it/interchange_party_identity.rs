@@ -1,15 +1,15 @@
 //! (Feature-gated on `reqote`: the fixtures below are REQOTE interchanges, and
 //! `just test-features` builds permutations where that message type is off. The
-//! §2.13 rule itself is message-type agnostic — see
+//! Kap. 2.13 rule itself is message-type agnostic — see
 //! `parse::check_interchange_party_identity`.)
 #![cfg(feature = "reqote")]
 
-//! UNB and NAD must name the same parties — BDEW Allgemeine Festlegungen §2.13.
+//! UNB and NAD must name the same parties — BDEW Allgemeine Festlegungen Kap. 2.13.
 //!
 //! > "Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten
 //! > MP-ID sind identisch."
 //! >
-//! > — Allgemeine Festlegungen V6.1d §2.13
+//! > — Allgemeine Festlegungen V6.1d Kap. 2.13
 //!
 //! The rule applies to every EDI@Energy message, and the reason it is enforced
 //! at parse time is an authorisation one: AS4 authenticates the *envelope*
@@ -65,7 +65,7 @@ fn a_sender_claiming_another_party_in_nad_is_rejected() {
     // The message must name the rule, so an operator reading a rejected
     // interchange knows why.
     let rendered = edi_energy::parse(&wire).unwrap_err().to_string();
-    assert!(rendered.contains("§2.13"), "{rendered}");
+    assert!(rendered.contains("Kap. 2.13"), "{rendered}");
 }
 
 /// A mismatched receiver is the same defect in the other direction.
@@ -150,7 +150,7 @@ UNT+7+MSG1'UNZ+1+REF1'"
 /// not, even though it holds the `UNB` header the check needs. An AS4 adapter
 /// that reached for `parse_interchange_buffered` — the path recommended for
 /// exactly that job, because it exposes the envelope before deserialization —
-/// got no §2.13 enforcement at all. An authorisation boundary that depends on
+/// got no Kap. 2.13 enforcement at all. An authorisation boundary that depends on
 /// which overload the caller picked is not a boundary.
 #[test]
 fn the_buffered_iterator_enforces_the_rule_too() {
@@ -190,13 +190,13 @@ fn the_buffered_iterator_accepts_a_consistent_interchange() {
 
 /// The `UNB` test indicator is readable when the interchange as a whole is not.
 ///
-/// Allgemeine Festlegungen V6.1d §3 forbids processing a test interchange on a
+/// Allgemeine Festlegungen V6.1d Kap. 3 forbids processing a test interchange on a
 /// production endpoint, and that decision belongs to the envelope. Taking it
 /// from a full parse makes it conditional on the whole interchange being
 /// acceptable — so an interchange that is both flagged **and** defective, the
 /// one least worth trusting, would be the one the guard does not see.
 ///
-/// The §2.13 party mismatch is the defect used here because it is one of the
+/// The Kap. 2.13 party mismatch is the defect used here because it is one of the
 /// several a full parse refuses *after* the segments decode cleanly. Bytes that
 /// do not decode into segments at all carry no readable `UNB` either, and there
 /// is nothing to decide from.

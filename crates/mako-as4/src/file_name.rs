@@ -1,6 +1,6 @@
 //! The file name of an Übertragungsdatei.
 
-/// The Übertragungsdatei name of Allgemeine Festlegungen V6.1d §2.12:
+/// The Übertragungsdatei name of Allgemeine Festlegungen V6.1d Kap. 2.12:
 /// `Nachrichtentyp_Anwendungsreferenz_von_an_yyyymmdd_DAR.txt`.
 ///
 /// - `message_type` — UNH DE0065 (`UTILMD`, `APERAK`, …)

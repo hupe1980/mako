@@ -62,7 +62,9 @@ fn the_lf_abmeldung_ablehnung_is_dispatched_with_its_antwortcode() {
     assert_eq!(utilmd.payload["pid"], 55_009, "A03 is an Ablehnungscode");
     assert_eq!(utilmd.payload["antwort_code"], "A03");
     assert_eq!(utilmd.payload["antwort_codeliste"], "E_0609");
-    assert_eq!(utilmd.payload["malo"], MALO);
+    // Neither answer column lists an `SG5` (UTILMD AHB Strom 2.2 Kap. 8.10):
+    // `SG6 RFF+TN` ties the answer to the 55007.
+    assert!(utilmd.payload.get("malo").is_none());
     // The answer goes back to the NB that asked.
     assert_eq!(utilmd.payload["sender"], LF);
     assert_eq!(utilmd.payload["receiver"], NB);

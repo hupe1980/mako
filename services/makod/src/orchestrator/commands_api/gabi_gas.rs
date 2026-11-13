@@ -436,3 +436,68 @@ pub(super) fn cmd_gabi_mehrmindermengen_melden<'a>(
 > {
     Box::pin(dispatch_gabi_mehrmindermengen_melden(s, p))
 }
+
+// ── MMM Allokationsliste Gas — the GNB's Ablehnung (ORDRSP 19110) ────────────
+
+/// Body of `gabi.allokationsliste.ablehnen`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AllokationslisteAblehnungBody {
+    /// MP-ID of the Lieferant — the 17110's `NAD+MS`.
+    lf_mp_id: String,
+    /// The 17110's `BGM` DE 1004, echoed in `SG1 RFF+ON`.
+    dokumentennummer: String,
+    /// The code out of `E_0803` / `G_0001`.
+    antwortcode: String,
+}
+
+pub(super) fn cmd_gabi_allokationsliste_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gabi_allokationsliste_ablehnung(s, p))
+}
+
+/// The GNB refuses a Start Abo of the marktlokationsscharfen Allokationsliste
+/// Gas on ORDRSP 19110 (ORDRSP AHB 1.1b Kap. 4.2, S. 15–16). The rendered
+/// ORDRSP passes the pre-send gate before anything is written.
+async fn dispatch_gabi_allokationsliste_ablehnung(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_gabi_gas::{GaBiGasMmmaWorkflow, MMMA_WORKFLOW_NAME, MmmaCommand};
+    let body: AllokationslisteAblehnungBody = serde_json::from_value(payload.clone())
+        .map_err(|e| DispatchError::InvalidPayload(format!("payload: {e}")))?;
+    let nonempty = |raw: &str, field: &str| -> Result<String, DispatchError> {
+        let t = raw.trim();
+        if t.is_empty() {
+            return Err(DispatchError::InvalidPayload(format!(
+                "{field:?} must not be empty"
+            )));
+        }
+        Ok(t.to_owned())
+    };
+    let key = mako_gabi_gas::mmma::anforderung_key(
+        &nonempty(&body.lf_mp_id, "lf_mp_id")?,
+        &nonempty(&body.dokumentennummer, "dokumentennummer")?,
+    );
+    let cmd = MmmaCommand::SendAblehnung {
+        antwortcode: nonempty(&body.antwortcode, "antwortcode")?,
+        message_ref: MessageRef::new(uuid::Uuid::new_v4().simple().to_string()),
+    };
+    dispatch_to_process_in_version::<GaBiGasMmmaWorkflow, _>(
+        state,
+        &key,
+        MMMA_WORKFLOW_NAME,
+        move |current, fv| {
+            use mako_engine::workflow::Workflow as _;
+            let out = GaBiGasMmmaWorkflow::handle(current, cmd.clone())
+                .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, fv, &out.outbox)?;
+            Ok(cmd)
+        },
+    )
+    .await
+}

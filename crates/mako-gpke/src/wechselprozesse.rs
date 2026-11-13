@@ -76,7 +76,7 @@
 //!   (GPKE Teil 2, SD Lieferbeginn / Lieferende / Kündigung)
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format for grid connection processes
 //! - **APERAK** — technical acknowledgement, **45 Minuten** (Sonntag 12:00 on a Saturday)
-//!   (APERAK AHB 1.1 § 2.4.1), a different clock from the business answer
+//!   (APERAK AHB 1.1 Kap. 2.4.1), a different clock from the business answer
 
 use std::collections::HashMap;
 
@@ -633,19 +633,12 @@ pub enum SupplierChangeCommand {
     /// Teil 2, SD Lieferbeginn Nr. 5/6 and SD Lieferende von LF an NB Nr. 2/3.
     /// [`mako_fristen::antwort::antwort_deadline`] resolves it.
     ///
-    /// # Post-acceptance obligations
+    /// # Further messages the Bestätigung owes
     ///
-    /// The workflow is a pure state machine: it does not know which downstream
-    /// processes (MSCONS, ORDERS, …) must be triggered after a PID-55001
-    /// acceptance. Callers are responsible for computing the `obligations` slice
-    /// using [`crate::post_acceptance::lieferbeginn_obligations`] and passing it
-    /// here. When `accepted = true`, all entries in `obligations` are
-    /// co-persisted atomically with the `AntwortGesendet` event via the outbox.
-    /// When `accepted = false`, `obligations` is ignored.
-    ///
-    /// This design keeps cross-process PID knowledge (MSCONS 13015, ORDERS 17134)
-    /// outside the supplier-change state machine while preserving the atomicity
-    /// guarantee the Festlegung's „unverzüglich" requires.
+    /// `obligations` are outbox entries the caller co-persists atomically with
+    /// the `AntwortGesendet` event, when `accepted = true`. Each must be a
+    /// complete typed wire message: an MSCONS 13015 or an ORDERS 17134 is a
+    /// column of its own, with its own data, and is sent through its own door.
     SendAntwort {
         /// The NB's answer: the resolved EBD Antwortcode and its cluster.
         ///
@@ -655,12 +648,8 @@ pub enum SupplierChangeCommand {
         /// Lieferbeginn is `A51` / `A58` out of `E_0623`, the Ablehnung one of
         /// `E_0622`'s; Gas answers out of `G_0011` / `G_0012`.
         antwort: crate::LfAntwort,
-        /// Pre-computed post-acceptance outbox obligations to co-persist
-        /// atomically with the `AntwortGesendet` event.
-        ///
-        /// Build this with [`crate::post_acceptance::lieferbeginn_obligations`]
-        /// for PID 55001 (Lieferbeginn). Pass an empty `Vec` for all other PIDs
-        /// or when no downstream processes must be triggered.
+        /// Further outbox entries to co-persist atomically with the
+        /// `AntwortGesendet` event; empty when the answer owes none.
         ///
         /// Ignored when the answer is an Ablehnung.
         obligations: Vec<PendingOutbox>,
@@ -754,7 +743,7 @@ pub const ABMELDUNG_ANTWORT_PIDS: &[u32] = &[55_005, 55_006];
 /// The UTILMD AHB Strom lays each Anwendungsfall out as a **triple** of adjacent
 /// PID columns — `(Anfrage, Bestätigung, Ablehnung)` with the header reading
 /// `LF an NB / NB an LF / NB an LF` — so the response is `anfrage + 1` to accept
-/// and `anfrage + 2` to reject. Verified against AHB Strom 2.1 §55001/§55004 and
+/// and `anfrage + 2` to reject. Verified against AHB Strom 2.1 Kap. 55001/Kap. 55004 and
 /// 2.2; `pid-reference.md` carries the same mapping.
 ///
 /// Note: PID 55079 does not exist in BDEW UTILMD AHB Strom (no such PID
@@ -807,7 +796,7 @@ pub(crate) fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruef
 /// Frist as still running until Tuesday night.
 ///
 /// It is also **not** the APERAK *sending* deadline (45 min, Sonntag 12:00 for a Saturday arrival, per
-/// APERAK AHB 1.1 § 2.4.1 — see `mako_fristen::APERAK_STROM_WINDOW_LABEL`),
+/// APERAK AHB 1.1 Kap. 2.4.1 — see `mako_fristen::APERAK_STROM_WINDOW_LABEL`),
 /// which runs beside it on the same message.
 ///
 /// Register the deadline immediately after `ReceiveUtilmd` is processed:
@@ -1088,9 +1077,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         // message was parseable and process-able.
                         .caused_by(1),
                         // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per
-                        // APERAK AHB 1.1 §2.4: both Anerkennung and rejection must always
+                        // APERAK AHB 1.1 Kap. 2.4: both Anerkennung and rejection must always
                         // be sent for Strom (unlike Gas, where silence = acceptance).
-                        // Frist (UTILMD/ORDERS): 45 Min (APERAK AHB 1.1 §2.4.1).
+                        // Frist (UTILMD/ORDERS): 45 Min (APERAK AHB 1.1 Kap. 2.4.1).
                         // Saturday UTILMD/ORDERS: Sonntag 12 Uhr; other: nächster Werktag 12 Uhr.
                         PendingOutbox::aperak_anerkennung(
                             receiver.as_str(),
@@ -1102,7 +1091,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 } else {
                     // AHB validation failed — emit APERAK BGM+313
                     // (Verarbeitbarkeitsfehlermeldung) back to the new supplier.
-                    // APERAK AHB 1.1 §2.1.1: mandatory rejection APERAK on validation failure.
+                    // APERAK AHB 1.1 Kap. 2.1.1: mandatory rejection APERAK on validation failure.
                     // Caused by Initiated (index 0) — no ValidationPassed event in this path.
                     vec![
                         PendingOutbox::aperak_fehler(
@@ -1117,7 +1106,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 };
 
                 // The APERAK's delivery window is the ingest door's, derived
-                // from the message (APERAK AHB 1.1 §2.4.1).
+                // from the message (APERAK AHB 1.1 Kap. 2.4.1).
                 Ok(WorkflowOutput::with_outbox(events, outbox))
             }
 
@@ -1157,33 +1146,34 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     // anyway is eleven `NOT-PERMITTED` findings at the LFN.
                     let form = crate::AntwortForm::of(rpid.as_u32());
                     let lokationsdaten = form.is_some_and(|f| f.lokationsdaten);
-                    let mut payload = serde_json::json!({
-                        "pid":          rpid.as_u32(),
-                        "sender":       data.grid_operator.as_str(),
-                        "receiver":     data.new_supplier.as_str(),
+                    let mut payload = mako_engine::payload::UtilmdPayload {
+                        pid: rpid.as_u32(),
+                        sender: data.grid_operator.as_str().to_owned(),
+                        receiver: Some(data.new_supplier.as_str().to_owned()),
                         // `SG4 STS+E01++<code>:<ebd>` — Muss on every
                         // Antwortnachricht. Without it the renderer emits a
                         // well-formed UTILMD that states no Grund at all.
-                        "antwort_code": antwort.antwort_code,
-                        "antwort_codeliste":  antwort.ebd,
+                        antwort_code: Some(antwort.antwort_code.clone()),
+                        antwort_codeliste: antwort.ebd.clone(),
                         // `SG6 RFF+TN` — Muss on every Antwortnachricht: the
                         // answer's own `IDE+24` is a fresh number, so this is
                         // the only thing that ties it to the Anfrage.
-                        "referenz_vorgangsnummer": data.vorgangsnummer,
+                        referenz_vorgangsnummer: Some(data.vorgangsnummer.clone()),
                         // `SG4 DTM` — the renderer drops it where the column
                         // lists no place for the qualifier this PID rides
                         // (every Ablehnung), so it is stated unconditionally
                         // rather than gated by a second copy of that table.
-                        "process_date": data.process_date,
+                        process_date: Some(data.process_date.clone()),
                         // `SG4 STS+7` — the Anfrage's Transaktionsgrund. Its
                         // Ergänzung is decided below, per Anwendungsfall.
-                        "transaktionsgrund": data.transaktionsgrund,
+                        transaktionsgrund: data.transaktionsgrund.clone(),
                         // `FTX+ACB` — the Erläuterung the catch-all codes
                         // require and every Ablehnung benefits from.
-                        "bemerkung":    antwort.bemerkung,
+                        bemerkung: antwort.bemerkung.clone(),
                         // `BGM` DE 1001 — `E02` on the Abmeldungs-Antworten.
-                        "document_code": form.map_or("E01", |f| f.document_code),
-                    });
+                        document_code: Some(form.map_or("E01", |f| f.document_code).to_owned()),
+                        ..Default::default()
+                    };
                     // `SG4 STS+7` DE 9013 element 3. Three cases, and only one
                     // of them is the NB's own judgement:
                     //   • 55002 — the NB classifies the Marktlokation
@@ -1216,33 +1206,32 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         }),
                         None => None,
                     };
-                    if let Some(erg) = ergaenzung {
-                        payload["transaktionsgrund_ergaenzung"] = serde_json::json!(erg);
-                    }
+                    payload.transaktionsgrund_ergaenzung = ergaenzung;
                     if lokationsdaten {
                         // `SG5 LOC+Z16` — the Marktlokation the NB confirms.
-                        payload["malo"] = serde_json::json!(data.location_id.as_str());
+                        payload.malo = Some(data.location_id.as_str().to_owned());
                         // `SG6 RFF+Z60` — which Produktpaket-ID the NB will
                         // implement.
                         // The NB names a package only when it is implementing
                         // a different one; otherwise it is the one the
                         // Anmeldung offered.
-                        payload["geplantes_produktpaket"] = serde_json::json!(
-                            antwort
-                                .geplantes_produktpaket
-                                .clone()
-                                .or_else(|| data.produktpaket_id.clone())
-                        );
+                        payload.geplantes_produktpaket = antwort
+                            .geplantes_produktpaket
+                            .clone()
+                            .or_else(|| data.produktpaket_id.clone());
                         // `SG5 LOC+Z17` + `SG8 SEQ+Z98`/`SEQ+ZF3` — the
                         // Messlokationen and the Messstellenbetreiber of each.
-                        payload["messlokationen"] = serde_json::json!(antwort.messlokationen);
-                        payload["malo_msb"] = serde_json::json!(antwort.malo_msb);
+                        payload.messlokationen = antwort
+                            .messlokationen
+                            .iter()
+                            .map(crate::AntwortMesslokation::to_payload)
+                            .collect();
+                        payload.malo_msb = antwort
+                            .malo_msb
+                            .as_ref()
+                            .map(crate::ZugeordneterMsb::to_payload);
                     }
-                    outbox.push(PendingOutbox::new(
-                        "UTILMD",
-                        data.new_supplier.as_str(),
-                        payload,
-                    ));
+                    outbox.push(PendingOutbox::typed(data.new_supplier.as_str(), &payload));
                     if ABMELDUNG_ANTWORT_PIDS.contains(&rpid.as_u32()) {
                         // The Lieferant that sent the Abmeldung is the one
                         // whose assignment ends at `process_date`.

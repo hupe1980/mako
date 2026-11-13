@@ -397,7 +397,7 @@ impl MessageReport {
 /// The UNB/UNZ envelope, as the receiving platform reads it.
 ///
 /// Worth asserting on: the MP-IDs in the envelope must match the NAD segments
-/// inside (BDEW "Identifikatoren" §2.13), the qualifier is derived from the ID
+/// inside (BDEW "Identifikatoren" Kap. 2.13), the qualifier is derived from the ID
 /// rather than chosen, and `test_indicator` decides whether a real counterparty
 /// would process the interchange at all.
 #[pyclass(get_all, frozen, skip_from_py_object)]
@@ -1260,7 +1260,7 @@ pub fn build_mscons(
 /// of functions exists to keep apart.
 ///
 /// `error_code` is the APERAK ERC. Supplying one selects BGM+313
-/// (Verarbeitbarkeitsfehlermeldung) per BDEW APERAK AHB 1.1 §2.1.1; without it
+/// (Verarbeitbarkeitsfehlermeldung) per BDEW APERAK AHB 1.1 Kap. 2.1.1; without it
 /// the message is a positive acknowledgement.
 #[pyfunction]
 #[pyo3(signature = (

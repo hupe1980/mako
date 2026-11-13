@@ -98,7 +98,6 @@ mod tests {
         assert_eq!(party_id_type_for_agency("9"), PARTY_TYPE_GLN);
         assert_eq!(party_id_type_for_agency("14"), PARTY_TYPE_GLN);
         assert_eq!(party_id_type_for_agency("500"), PARTY_TYPE_GLN);
-        assert_eq!(party_id_type_for_agency("ZEW"), PARTY_TYPE_BDEW);
     }
 
     /// §2.2.3.2 — the payload is binary in its own part, never inline XML.

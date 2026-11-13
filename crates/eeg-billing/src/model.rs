@@ -1182,7 +1182,7 @@ impl SettlePosition {
             "\u{00a7}21 Abs. 3 EEG 2023" => Some("mieterstrom"),
             b if b == "\u{00a7}50b EEG 2023" || b == "\u{00a7}50 EEG 2023" => Some("flexibilitaet"),
             b if b.contains("post-F\u{00f6}rderung") => Some("post-eeg-spot"),
-            "\u{00a7}7 KWKG 2023" => Some("kwk-zuschlag"),
+            "\u{00a7}7 KWKG" => Some("kwk-zuschlag"),
             "\u{00a7}21 EEG 2023" => Some("verguetung"),
             _ => None,
         };

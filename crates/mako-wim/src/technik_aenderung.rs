@@ -83,7 +83,7 @@ pub const ORDERS_PIDS: &[u32] = &[17011];
 /// | 19006 | Ablehnung Auftrag Änderung Technik | `E_0249` / `E_0250` |
 ///
 /// Three neighbouring ORDRSP PIDs answer other processes (ORDRSP AHB 1.1b
-/// §§ 4.11–4.13) and are not part of this set:
+/// Kap. 4.11–4.13) and are not part of this set:
 ///
 /// - **19003 / 19004** „Fortführungsbestätigung / Ablehnung Fortführung"
 ///   answer the Weiterverpflichtung ORDERS 17002 out of `E_0203` —
@@ -130,6 +130,27 @@ pub const BGM_DIREKTE_BEAUFTRAGUNG: &str = "Z12";
 /// `BGM` DE 1001 `Z93` „Bestellung eines Angebots Änderung der Technik der
 /// Lokation" — the AWH Bestellung after a QUOTES (Hinweis `[591]`).
 pub const BGM_BESTELLUNG_NACH_ANGEBOT: &str = "Z93";
+
+/// A Produkt a 17011 `Z12` orders for a Messlokation — Codeliste der
+/// Konfigurationen 1.4 Kap. 7 (S. 58), Ebene „Messlokation": the code, and
+/// whether a Lieferant may order it (the NB may order every one).
+pub const MESSLOKATION_PRODUKTE: &[(&str, &str, bool)] = &[
+    ("9991000002305", "Einbau iMS", true),
+    ("9991000002313", "Einbau kME / rLM", true),
+    ("9991000002321", "Einbau Wandler", false),
+    (
+        PRODUKT_WEITERE_ENERGIEFLUSSRICHTUNG,
+        "weitere Energieflussrichtung",
+        false,
+    ),
+    ("9991000002347", "Vergleichsmessung", false),
+    ("9991000002355", "Änderung der Messebene", false),
+];
+
+/// „weitere Energieflussrichtung" — the Produkt whose 17011 names the
+/// Marktlokation (`SG3 RFF+Z18`) and its MSB (`SG2 NAD+DEB`), ORDERS AHB 1.1b
+/// Kap. 4.12, Bedingungen `[152]`/`[571]`.
+pub const PRODUKT_WEITERE_ENERGIEFLUSSRICHTUNG: &str = "9991000002339";
 
 /// The Beauftragungsart the received ORDERS' `BGM` DE 1001 states, which with
 /// the Besteller's Marktrolle selects the answer's tree.
@@ -605,24 +626,25 @@ fn antwort(
     }
     let pid = Pruefidentifikator::new(ordrsp_pid)
         .map_err(|e| WorkflowError::validation(format!("answer PID {ordrsp_pid}: {e}")))?;
-    let mut payload = serde_json::json!({
-        "pid": ordrsp_pid,
-        "sender": kopf.empfaenger,
-        "receiver": eingang.sender.as_str(),
-        "message_ref": message_ref.as_str(),
-        "document_code": kopf.beauftragung,
-        "document_id": message_ref.as_str(),
-        "order_reference": kopf.dokumentennummer,
-        "antwort_code": antwortcode,
-        "antwort_codeliste": tree,
-        "antwort_freitext": freitext,
-        "ansprechpartner": ansprechpartner,
-        "sparte": "strom",
-    });
-    if art == TechnikBeauftragung::DirekteBeauftragung {
-        payload["ausfuehrungsdatum"] = serde_json::json!(kopf.ausfuehrungsdatum);
-    }
-    let outbox = vec![PendingOutbox::new("ORDRSP", eingang.sender.as_str(), payload).caused_by(0)];
+    let payload = mako_engine::payload::OrdrspPayload {
+        pid: Some(ordrsp_pid),
+        sender: Some(kopf.empfaenger.clone()),
+        receiver: Some(eingang.sender.as_str().to_owned()),
+        message_ref: Some(message_ref.as_str().to_owned()),
+        document_code: Some(kopf.beauftragung.clone()),
+        document_id: Some(message_ref.as_str().to_owned()),
+        order_reference: Some(kopf.dokumentennummer.clone()),
+        antwort_code: Some(antwortcode.clone()),
+        antwort_codeliste: Some(tree.to_owned()),
+        antwort_freitext: freitext.map(str::to_owned),
+        ansprechpartner: Some(ansprechpartner.to_payload()),
+        sparte: Some(mako_engine::types::Sparte::Strom),
+        ausfuehrungsdatum: (art == TechnikBeauftragung::DirekteBeauftragung)
+            .then(|| kopf.ausfuehrungsdatum.clone())
+            .flatten(),
+        ..Default::default()
+    };
+    let outbox = vec![PendingOutbox::typed(eingang.sender.as_str(), &payload).caused_by(0)];
     Ok(WorkflowOutput::with_outbox(
         vec![TechnikAenderungEvent::AntwortGesendet {
             ordrsp_pid: pid,
@@ -786,17 +808,19 @@ impl Workflow for WimTechnikAenderungWorkflow {
                     location_id: location_id.clone(),
                     message_ref: message_ref.clone(),
                 };
-                let outbox = vec![PendingOutbox::new(
-                    "ORDERS",
-                    recipient.as_str(),
-                    serde_json::json!({
-                        "pid":         orders_pid.as_u32(),
-                        "location":    location_id,
-                        "orders_ref":  message_ref.as_str(),
-                        "document_id": message_ref.as_str(),
-                        "payload":     payload,
-                    }),
-                )];
+                // The column's fields arrive from the caller; a key the ORDERS
+                // does not declare is refused here, at the command.
+                let mut body: mako_engine::payload::OrdersPayload = if payload.is_null() {
+                    mako_engine::payload::OrdersPayload::default()
+                } else {
+                    serde_json::from_value(payload)
+                        .map_err(|e| WorkflowError::rejected(format!("ORDERS {orders_pid}: {e}")))?
+                };
+                body.pid = Some(orders_pid.as_u32());
+                body.location = location_id.or(body.location);
+                body.message_ref = Some(message_ref.as_str().to_owned());
+                body.document_id = Some(message_ref.as_str().to_owned());
+                let outbox = vec![PendingOutbox::typed(recipient.as_str(), &body)];
                 // The counterparty's Antwortfrist, from the published row for
                 // this ORDERS; a PID no Festlegung quantifies registers nothing.
                 let frist: Vec<PendingDeadline> =
@@ -940,6 +964,12 @@ mod tests {
         .expect("accepted");
         assert_eq!(out.deadlines.len(), 1);
         assert_eq!(out.deadlines[0].label, ANTWORT_WINDOW_LABEL);
+        // The ORDERS reads back as its typed payload, the Belegnummer under
+        // the key the renderer reads.
+        use mako_engine::payload::OutboundPayload as _;
+        let typed = mako_engine::payload::OrdersPayload::from_payload(&out.outbox[0].payload)
+            .expect("an ORDERS payload");
+        assert_eq!(typed.message_ref.as_deref(), Some("ORDERS-1"));
         assert_eq!(
             Some(out.deadlines[0].due_at),
             mako_fristen::antwort::antwort_deadline(17_011, sent)
@@ -1099,6 +1129,10 @@ mod eingang_tests {
         .expect("refused");
         assert_eq!(out.outbox[0].payload["pid"], ABLEHNUNG_PID);
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0250");
+        use mako_engine::payload::OutboundPayload as _;
+        let typed = mako_engine::payload::OrdrspPayload::from_payload(&out.outbox[0].payload)
+            .expect("an ORDRSP payload");
+        assert!(typed.ansprechpartner.is_some() && typed.order_reference.is_some());
         assert!(
             WimTechnikAenderungWorkflow::handle(
                 &offen,

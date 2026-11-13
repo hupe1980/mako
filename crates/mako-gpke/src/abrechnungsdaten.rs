@@ -10,10 +10,22 @@
 //! | 55156 | Rückmeldung / Anfrage Abr.-Daten BK-Abr. verb. MaLo | LF → NB |
 //! | 55220 | Rückmeldung / Anfrage Abr.-Daten Netznutzungsabrechnung | LF → NB |
 //! | 55673 | Rückmeldung / Anfrage Abr.-Daten BK-Abr. erz. MaLo | LF → NB |
-//! | 21047 | Bearbeitungsstandsmeldung (IFTSTA) | NB → LF |
+//! | 55614 | Rückmeldung / Anfrage Abr.-Daten BK-Abr. verb. MaLo | ÜNB → NB |
+//! | 55675 | Rückmeldung / Anfrage Abr.-Daten BK-Abr. erz. MaLo | ÜNB → NB |
+//! | 21047 | Bearbeitungsstandsmeldung (IFTSTA) | NB → LF · NB → ÜNB |
 //!
 //! **Frist: der 2. Werktag nach dem ÜT** (GPKE Teil 2 Kap. 3.1.1.2 / 3.1.2.2 / 3.1.3.2
-//! Prozessschritt 2/3), from `mako_fristen::antwort`.
+//! Prozessschritt 2/3; towards the ÜNB Kap. 3.1.2.2 Nr. 6, S. 76 and 3.1.3.3 Nr. 2,
+//! S. 82), from `mako_fristen::antwort`.
+//!
+//! # Which tree
+//!
+//! IFTSTA AHB 2.1 Kap. 7.7 (S. 62) names the tree by the recipient's role. To a
+//! LF the NB answers out of `E_0595`; to a ÜNB out of `E_0618` „Rückmeldung
+//! verarbeiten" (a Qualitätsrückmeldung, EBD 4.3 Kap. 6.16.4, S. 258) or
+//! `E_0613` „Bestellung prüfen" (a Bestellung einer Änderung, Kap. 6.18.1, S.
+//! 265–267) — the 55614 / 55675 carries either, so the caller names the tree
+//! and [`bearbeitungsstand_baeume`] admits it.
 //!
 //! # The answer is not an agreement
 //!
@@ -41,8 +53,25 @@ use mako_engine::{
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
-/// Inbound PIDs this workflow answers — all LF → NB, GPKE Teil 2 Kap. 3.1.
-pub const ABRECHNUNGSDATEN_PIDS: &[u32] = &[55_156, 55_220, 55_673];
+/// Inbound PIDs this workflow answers — LF → NB and ÜNB → NB, GPKE Teil 2
+/// Kap. 3.1.
+pub const ABRECHNUNGSDATEN_PIDS: &[u32] = &[55_156, 55_220, 55_673, 55_614, 55_675];
+
+/// The trees the Bearbeitungsstand on the inbound `pid` may name (IFTSTA AHB
+/// 2.1 Kap. 7.7, S. 62: `E_0595` to a LF, `[20]`; `E_0613` / `E_0618` to a
+/// ÜNB, `[29]`).
+#[must_use]
+pub fn bearbeitungsstand_baeume(pid: u32) -> &'static [&'static str] {
+    use mako_pruefung::codes as c;
+    match pid {
+        55_156 | 55_220 | 55_673 => &[c::EBD_BESTELLUNG],
+        55_614 | 55_675 => &[
+            c::EBD_RUECKMELDUNG_ABRECHNUNGSDATEN_UENB,
+            c::EBD_BESTELLUNG_ABRECHNUNGSDATEN_UENB,
+        ],
+        _ => &[],
+    }
+}
 
 /// The IFTSTA Bearbeitungsstandsmeldung the NB answers with.
 pub const BEARBEITUNGSSTAND_PID: u32 = 21_047;
@@ -77,6 +106,10 @@ pub enum AbrechnungsdatenEvent {
         document_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `IDE` DE 7402 of the Rückmeldung — what the Bearbeitungsstand
+        /// names in `SG15 RFF+ACW`.
+        #[serde(default)]
+        vorgangsnummer: String,
         /// `true` if the message passed AHB validation.
         validation_passed: bool,
         /// Validation issues, for the `Abgebrochen` event.
@@ -86,8 +119,10 @@ pub enum AbrechnungsdatenEvent {
     BearbeitungsstandGesendet {
         /// The Prüfidentifikator the queued IFTSTA carries (21047).
         pid: u32,
-        /// The `E_0595` code it states.
+        /// The code it states.
         antwort_code: String,
+        /// The tree the code comes from — `E_0595`, `E_0613` or `E_0618`.
+        codeliste: String,
         /// `true` when a Stammdatenänderung follows — the code's own cluster.
         sendet_stammdatenaenderung: bool,
         /// `FTX` Bemerkung, where one was given.
@@ -139,9 +174,14 @@ impl EventPayload for AbrechnungsdatenEvent {
 
     fn antwort(&self) -> Option<Antwortcode> {
         match self {
-            Self::BearbeitungsstandGesendet { antwort_code, .. } => {
-                Some(Antwortcode::new(antwort_code.clone(), Some(BESTELLUNG_EBD)))
-            }
+            Self::BearbeitungsstandGesendet {
+                antwort_code,
+                codeliste,
+                ..
+            } => Some(Antwortcode::new(
+                antwort_code.clone(),
+                Some(codeliste.as_str()),
+            )),
             _ => None,
         }
     }
@@ -164,6 +204,9 @@ pub struct AbrechnungsdatenData {
     pub document_date: String,
     /// EDIFACT message reference.
     pub message_ref: MessageRef,
+    /// `IDE` DE 7402 of the Rückmeldung.
+    #[serde(default)]
+    pub vorgangsnummer: String,
 }
 
 /// State of an Abrechnungsdaten Bearbeitungsstand process.
@@ -251,6 +294,8 @@ pub enum AbrechnungsdatenCommand {
         document_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `IDE` DE 7402 of the Rückmeldung.
+        vorgangsnummer: String,
         /// AHB validation outcome.
         validation_passed: bool,
         /// Validation issues.
@@ -264,8 +309,11 @@ pub enum AbrechnungsdatenCommand {
     /// `gpke-stammdatenaenderung`; it does **not** select the answer PID, since
     /// 21047 carries both outcomes.
     SendBearbeitungsstand {
-        /// The `E_0595` Antwortcode.
+        /// The Antwortcode.
         antwort_code: String,
+        /// The tree it comes from — one [`bearbeitungsstand_baeume`] admits
+        /// for the inbound PID.
+        codeliste: String,
         /// `true` when the code's cluster is „Änderung der Daten".
         sendet_stammdatenaenderung: bool,
         /// `FTX` Bemerkung — required alongside `A99`.
@@ -327,6 +375,7 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
                 location_id,
                 document_date,
                 message_ref,
+                vorgangsnummer,
                 validation_passed,
                 validation_errors,
             } => {
@@ -346,6 +395,7 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
                     location_id,
                     document_date,
                     message_ref,
+                    vorgangsnummer,
                     validation_passed,
                     validation_errors,
                 }]
@@ -354,37 +404,74 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
 
             AbrechnungsdatenCommand::SendBearbeitungsstand {
                 antwort_code,
+                codeliste,
                 sendet_stammdatenaenderung,
                 bemerkung,
             } => {
                 let AbrechnungsdatenState::Eingegangen(data) = state else {
                     return Err(WorkflowError::invalid_state("Eingegangen", state.label()));
                 };
+                let baeume = bearbeitungsstand_baeume(data.pruefidentifikator.as_u32());
+                if !baeume.contains(&codeliste.as_str()) {
+                    return Err(WorkflowError::validation(format!(
+                        "{codeliste:?} does not answer {} (admitted: {baeume:?})",
+                        data.pruefidentifikator
+                    )));
+                }
+                let code =
+                    mako_pruefung::codes::lookup(&codeliste, &antwort_code).ok_or_else(|| {
+                        WorkflowError::validation(format!(
+                            "{antwort_code:?} is not published in {codeliste}"
+                        ))
+                    })?;
+                if code.sendet_stammdatenaenderung() != Some(sendet_stammdatenaenderung) {
+                    return Err(WorkflowError::validation(format!(
+                        "{antwort_code:?} of {codeliste} is clustered \"{}\", which the \
+                         Bearbeitungsstand's STS must state",
+                        code.cluster.label()
+                    )));
+                }
+                // `SG15 RFF+ACW` is Muss and names the Rückmeldung by its
+                // `IDE` DE 7402 — without it the LF cannot tell which of its
+                // Rückmeldungen the Bearbeitungsstand answers.
+                if data.vorgangsnummer.is_empty() {
+                    return Err(WorkflowError::rejected(
+                        "the Bearbeitungsstand names the Rückmeldung by its IDE Vorgangsnummer \
+                         (IFTSTA 21047 SG15 RFF+ACW), and none was recorded with it"
+                            .to_owned(),
+                    ));
+                }
                 let events = vec![AbrechnungsdatenEvent::BearbeitungsstandGesendet {
                     pid: BEARBEITUNGSSTAND_PID,
                     antwort_code: antwort_code.clone(),
+                    codeliste: codeliste.clone(),
                     sendet_stammdatenaenderung,
                     bemerkung: bemerkung.clone(),
                 }];
-                // The answer is a message, not just an event.
-                let outbox = vec![PendingOutbox::new(
-                    "IFTSTA",
-                    data.sender.as_str(),
-                    serde_json::json!({
-                        "pid":          BEARBEITUNGSSTAND_PID,
-                        "anfrage_pid":  data.pruefidentifikator.as_u32(),
-                        "sender":       data.receiver.as_str(),
-                        "receiver":     data.sender.as_str(),
-                        "malo":         data.location_id.as_str(),
-                        // `SG15 STS` — the E_0595 code and the tree it comes from.
-                        "antwort_code": antwort_code,
-                        "antwort_codeliste":  BESTELLUNG_EBD,
-                        // „Änderung der Daten" means a Stammdatenänderung
-                        // follows; the receiver needs to know one is coming.
-                        "sendet_stammdatenaenderung": sendet_stammdatenaenderung,
-                        "bemerkung":    bemerkung,
-                    }),
-                )];
+                // IFTSTA AHB 2.1 Kap. 7.7 (S. 61–63): `STS+Z43` with `Z47`
+                // „Änderung der Daten" or `Z48` „keine Änderung der Daten" —
+                // the code's own cluster — the code under `E_0595`, and
+                // `RFF+ACW` the Rückmeldung's `IDE` DE 7402 (`[535]`). No
+                // `LOC`: the column names no Lokation.
+                let payload = mako_engine::payload::IftstaPayload {
+                    pid: BEARBEITUNGSSTAND_PID,
+                    sender: Some(data.receiver.as_str().to_owned()),
+                    receiver: Some(data.sender.as_str().to_owned()),
+                    sts_code: Some(
+                        if sendet_stammdatenaenderung {
+                            "Z47"
+                        } else {
+                            "Z48"
+                        }
+                        .to_owned(),
+                    ),
+                    antwort_code: Some(antwort_code),
+                    antwort_codeliste: Some(codeliste),
+                    referenz_nachricht: Some(data.vorgangsnummer.clone()),
+                    bemerkung,
+                    ..Default::default()
+                };
+                let outbox = vec![PendingOutbox::typed(data.sender.as_str(), &payload)];
                 Ok(WorkflowOutput::with_outbox(events, outbox))
             }
 
@@ -414,6 +501,7 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
                 location_id,
                 document_date,
                 message_ref,
+                vorgangsnummer,
                 validation_passed,
                 validation_errors,
             } => {
@@ -425,6 +513,7 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
                         location_id: location_id.clone(),
                         document_date: document_date.clone(),
                         message_ref: message_ref.clone(),
+                        vorgangsnummer: vorgangsnummer.clone(),
                     })
                 } else {
                     AbrechnungsdatenState::Abgebrochen {
@@ -469,6 +558,7 @@ mod tests {
             location_id: MaLo::new("51238696012"),
             document_date: "20260304".to_owned(),
             message_ref: MessageRef::new("ABR-001"),
+            vorgangsnummer: "VG-0815".to_owned(),
             validation_passed: true,
             validation_errors: vec![],
         }
@@ -520,6 +610,7 @@ mod tests {
         let gesendet = AbrechnungsdatenEvent::BearbeitungsstandGesendet {
             pid: BEARBEITUNGSSTAND_PID,
             antwort_code: "A01".to_owned(),
+            codeliste: BESTELLUNG_EBD.to_owned(),
             sendet_stammdatenaenderung: false,
             bemerkung: None,
         };
@@ -546,6 +637,7 @@ mod tests {
             &eingegangen(55_156),
             AbrechnungsdatenCommand::SendBearbeitungsstand {
                 antwort_code: "A05".to_owned(),
+                codeliste: BESTELLUNG_EBD.to_owned(),
                 sendet_stammdatenaenderung: true,
                 bemerkung: None,
             },
@@ -560,7 +652,10 @@ mod tests {
         assert_eq!(iftsta.payload["pid"], BEARBEITUNGSSTAND_PID);
         assert_eq!(iftsta.payload["antwort_code"], "A05");
         assert_eq!(iftsta.payload["antwort_codeliste"], "E_0595");
-        assert_eq!(iftsta.payload["sendet_stammdatenaenderung"], true);
+        // „Änderung der Daten" is `STS+Z43+Z47`, and `RFF+ACW` names the
+        // Rückmeldung by its `IDE` (IFTSTA AHB 2.1 Kap. 7.7).
+        assert_eq!(iftsta.payload["sts_code"], "Z47");
+        assert_eq!(iftsta.payload["referenz_nachricht"], "VG-0815");
         // The answer goes back to the Lieferant that asked.
         assert_eq!(iftsta.payload["sender"], "9900357000004");
         assert_eq!(iftsta.payload["receiver"], "4012345000023");
@@ -575,6 +670,7 @@ mod tests {
                 &eingegangen(55_220),
                 AbrechnungsdatenCommand::SendBearbeitungsstand {
                     antwort_code: code.to_owned(),
+                    codeliste: BESTELLUNG_EBD.to_owned(),
                     sendet_stammdatenaenderung: sendet,
                     bemerkung: None,
                 },
@@ -609,6 +705,7 @@ mod tests {
                 &eingegangen(55_673),
                 AbrechnungsdatenCommand::SendBearbeitungsstand {
                     antwort_code: "A01".to_owned(),
+                    codeliste: BESTELLUNG_EBD.to_owned(),
                     sendet_stammdatenaenderung: false,
                     bemerkung: None,
                 },
@@ -653,6 +750,7 @@ mod tests {
             &state,
             AbrechnungsdatenCommand::SendBearbeitungsstand {
                 antwort_code: "A01".to_owned(),
+                codeliste: BESTELLUNG_EBD.to_owned(),
                 sendet_stammdatenaenderung: false,
                 bemerkung: None,
             },
@@ -670,6 +768,7 @@ mod tests {
         let gesendet = AbrechnungsdatenEvent::BearbeitungsstandGesendet {
             pid: BEARBEITUNGSSTAND_PID,
             antwort_code: "A01".into(),
+            codeliste: BESTELLUNG_EBD.to_owned(),
             sendet_stammdatenaenderung: true,
             bemerkung: None,
         };
@@ -684,5 +783,62 @@ mod tests {
             .antwort(),
             None
         );
+    }
+    /// A ÜNB's 55614 is answered towards the ÜNB out of `E_0618` or `E_0613`,
+    /// never `E_0595`, which IFTSTA AHB 2.1 Kap. 7.7 names for a LF only.
+    #[test]
+    fn a_uenb_rueckmeldung_is_answered_out_of_e_0618() {
+        for code in [55_614, 55_675] {
+            let out = GpkeAbrechnungsdatenWorkflow::handle(
+                &eingegangen(code),
+                AbrechnungsdatenCommand::SendBearbeitungsstand {
+                    antwort_code: "A01".to_owned(),
+                    codeliste: "E_0618".to_owned(),
+                    sendet_stammdatenaenderung: true,
+                    bemerkung: None,
+                },
+            )
+            .expect("E_0618 answers the ÜNB");
+            let iftsta = &out.outbox[0];
+            assert_eq!(iftsta.payload["antwort_codeliste"], "E_0618");
+            assert_eq!(iftsta.payload["sts_code"], "Z47");
+            let e_0595 = GpkeAbrechnungsdatenWorkflow::handle(
+                &eingegangen(code),
+                AbrechnungsdatenCommand::SendBearbeitungsstand {
+                    antwort_code: "A01".to_owned(),
+                    codeliste: BESTELLUNG_EBD.to_owned(),
+                    sendet_stammdatenaenderung: false,
+                    bemerkung: None,
+                },
+            );
+            assert!(e_0595.is_err(), "{code}: E_0595 is the LF's tree");
+        }
+        let bestellung = GpkeAbrechnungsdatenWorkflow::handle(
+            &eingegangen(55_614),
+            AbrechnungsdatenCommand::SendBearbeitungsstand {
+                antwort_code: "A03".to_owned(),
+                codeliste: "E_0613".to_owned(),
+                sendet_stammdatenaenderung: false,
+                bemerkung: None,
+            },
+        )
+        .expect("E_0613 answers the ÜNB's Bestellung");
+        assert_eq!(bestellung.outbox[0].payload["sts_code"], "Z48");
+    }
+
+    /// The STS cluster is the code's own: a caller that states the other one
+    /// is refused.
+    #[test]
+    fn the_cluster_is_the_codes_own() {
+        let out = GpkeAbrechnungsdatenWorkflow::handle(
+            &eingegangen(55_614),
+            AbrechnungsdatenCommand::SendBearbeitungsstand {
+                antwort_code: "A02".to_owned(),
+                codeliste: "E_0618".to_owned(),
+                sendet_stammdatenaenderung: true,
+                bemerkung: None,
+            },
+        );
+        assert!(out.is_err(), "A02 of E_0618 is „Keine Änderung der Daten\"");
     }
 }

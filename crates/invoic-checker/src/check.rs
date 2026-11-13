@@ -15,7 +15,7 @@
 //! |---|---|---|---|
 //! | 1 | Storno reference | [`FindingKind::StorniertWithoutReference`] | `Dispute` |
 //! | 2 | Period validity | [`FindingKind::PeriodInvalid`] | `Dispute` |
-//! | 3 | Zahlungsziel | [`FindingKind::ZahlungszielInvalid`] · [`FindingKind::ZahlungszielExceeded`] | `Dispute` · `Warn` |
+//! | 3 | Zahlungsziel | [`FindingKind::ZahlungszielInvalid`] · [`FindingKind::ZahlungszielUnterschritten`] · [`FindingKind::ZahlungszielUeberschritten`] · [`FindingKind::ZahlungszielExceeded`] | `Dispute` · `Dispute` · `Dispute` · `Warn` |
 //! | 3a | WiM 31003 send window | [`FindingKind::RechnungZuSpaet`] | `Warn` |
 //! | 4 | Currency agreement | [`FindingKind::WaehrungMismatch`] | `Dispute` |
 //! | 5 | Position arithmetic | [`FindingKind::ArithmeticError`] | `Dispute` |
@@ -24,8 +24,9 @@
 //! | 8 | Tariff / Angebot | [`FindingKind::TariffDeviation`] · [`FindingKind::TariffNotFound`] · [`FindingKind::AngebotDeviation`] · [`FindingKind::AngebotPositionUnknown`] | `Warn` or `Dispute` |
 //!
 //! Stage 8 is skipped for a Stornorechnung, which carries negated original
-//! amounts rather than tariff positions, and stage 3 is skipped when
-//! `CheckConfig::max_zahlungsziel_days` is zero.
+//! amounts rather than tariff positions. Stage 3's operator ceiling runs only
+//! when the operator sets `CheckConfig::max_zahlungsziel_days`; its published
+//! floor and its published Rückerstattung ceiling always run where they apply.
 //!
 //! # Outcome escalation
 //!
@@ -56,6 +57,7 @@
 //!     "9900357000004",
 //!     &Rechnung::default(),
 //!     &InMemoryPreisblattStore::new(),
+//!     time::macros::date!(2026 - 04 - 01), // Eingangsdatum
 //!     &CheckConfig::default(),
 //! );
 //! assert_eq!(report.outcome, CheckOutcome::Dispute);
@@ -69,6 +71,23 @@ use crate::{
     amount::{EuroAmount, WithinTolerance as _, euro_from_decimal, reduce_product},
     tariff::PreisblattStore,
 };
+
+// ── EmpfaengerSparte ──────────────────────────────────────────────────────────
+
+/// The Sparte of the invoice's recipient — INVOIC AHB 1.0b `[492]` „Wenn
+/// MP-ID in NAD+MR (Nachrichtenempfänger) aus Sparte Strom" and `[493]` the
+/// same for Gas.
+///
+/// A fact of the one invoice, which only the caller can know: the BO4E
+/// `Rechnung` does not carry it. Unknown, the rows the AHB conditions on
+/// `[493]` are not applied — see [`CheckConfig::empfaenger_sparte`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EmpfaengerSparte {
+    /// `[492]` — the recipient's MP-ID is a Strom one.
+    Strom,
+    /// `[493]` — the recipient's MP-ID is a Gas one.
+    Gas,
+}
 
 // ── CheckConfig ───────────────────────────────────────────────────────────────
 
@@ -99,14 +118,24 @@ pub struct CheckConfig {
     /// received PRICAT 27003 from all active NB counterparties.
     pub require_tariff: bool,
 
-    /// Maximum allowed payment term (Zahlungsziel) in days from the invoice date
-    /// (`rechnungsdatum`) to the due date (`faelligkeitsdatum`, DTM+265).
+    /// The longest payment term (Zahlungsziel) the operator accepts, in
+    /// calendar days from the invoice date (`rechnungsdatum`) to the due date
+    /// (`faelligkeitsdatum`, `SG8 DTM+265`). A longer one is a `Warn`.
     ///
-    /// Per §7 Allgemeine Festlegungen V6.1d: standard GPKE and WiM payment term
-    /// is **30 days**. Set to `0` to disable this check.
+    /// An operator's own reading, not a published rule: the Festlegungen set a
+    /// **floor** on the Zahlungsziel — 10 Werktage after receipt, which stage 3
+    /// enforces whatever this says — and no ceiling for an invoice the
+    /// recipient pays. `None` (the default) checks no ceiling.
+    pub max_zahlungsziel_days: Option<u16>,
+
+    /// The Sparte of **this invoice's** recipient, where the caller knows it.
     ///
-    /// Default: `30`.
-    pub max_zahlungsziel_days: u16,
+    /// Not an operator reading: a per-invoice fact the caller sets before each
+    /// check. INVOIC AHB 1.0b states the `[24]` floor and the `[25]` ceiling
+    /// of 31001–31003 only `[493]`, for a Gas recipient (S. 16), so with
+    /// `None` (the default) those rows are not applied; every row that holds
+    /// in both Sparten is.
+    pub empfaenger_sparte: Option<EmpfaengerSparte>,
 }
 
 impl Default for CheckConfig {
@@ -116,7 +145,8 @@ impl Default for CheckConfig {
             total_tolerance_ppm: 10_000,
             tariff_tolerance_ppm: 20_000,
             require_tariff: false,
-            max_zahlungsziel_days: 30,
+            max_zahlungsziel_days: None,
+            empfaenger_sparte: None,
         }
     }
 }
@@ -156,14 +186,40 @@ pub enum FindingKind {
     TariffNotFound,
     /// `ist_storno = true` but `original_rechnungsnummer` is absent.
     ///
-    /// Per BK6-24-174 §5: a Stornorechnung must reference the original invoice
-    /// number so the LF can reconcile it against the original receipt.
+    /// INVOIC AHB 1.0b Kap. 3.1.2 (Stornorechnung 31004, S. 29): `SG1 RFF+OI`,
+    /// the Ursprungsrechnungsnummer, is Muss and carries the `BGM` DE1004 of the
+    /// invoice being reversed, so the receiver can reconcile the two.
     StorniertWithoutReference,
-    /// `faelligkeitsdatum` (DTM+265) exceeds the maximum allowed payment term.
+    /// `faelligkeitsdatum` (DTM+265) lies further out than the operator's
+    /// [`CheckConfig::max_zahlungsziel_days`].
     ///
-    /// Basis: §7 Allgemeine Festlegungen V6.1d — standard GPKE/WiM payment
-    /// term is 30 days from invoice date.
+    /// An operator setting, not a published rule — see that field.
     ZahlungszielExceeded,
+    /// `faelligkeitsdatum` (DTM+265) lies fewer than
+    /// [`mako_fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT`] Werktage after the
+    /// invoice was received.
+    ///
+    /// Basis: „Das Zahlungsziel darf 10 WT nach Empfang der Rechnung nicht
+    /// unterschreiten" — GPKE Teil 2 Kap. 3.3.2 Nr. 1 (S. 90), stated the same
+    /// way for the MSB- and WiM-Rechnungen and in GeLi Gas 3.0 Kap. 4.5; see
+    /// the constant for every Fundstelle. `E_0406` Prüfschritt 31 answers it
+    /// with `A10` „Das Zahlungsziel ist unterschritten".
+    ///
+    /// Also raised for INVOIC AHB 1.0b `[24]` „Wert muss mindestens 10 WT nach
+    /// Wert aus DTM+137 DE2380 liegen", which counts from the Rechnungsdatum —
+    /// see [`InvoicCheckEngine::AHB_MINDESTFRIST_PIDS`] and
+    /// [`InvoicCheckEngine::AHB_MINDESTFRIST_GAS_PIDS`].
+    ZahlungszielUnterschritten,
+    /// `faelligkeitsdatum` (DTM+265) lies more than
+    /// [`mako_fristen::vorlauf::RUECKERSTATTUNG_ZAHLUNGSZIEL_HOECHST_WT`]
+    /// Werktage after the Rechnungsdatum, where a ceiling is published.
+    ///
+    /// Basis: INVOIC AHB 1.0b `SG8 DTM+265` Bedingung `[25]` „Wert darf maximal
+    /// 10 WT nach Wert aus DTM+137 DE2380 liegen" (S. 16, S. 39), and `E_0406`
+    /// Prüfschritt 34 (EBD 4.3 Kap. 6.10.1, S. 108), which answers it with
+    /// `A11` „Das Zahlungsziel ist überschritten." — see
+    /// [`InvoicCheckEngine::RUECKERSTATTUNG_HOECHSTFRIST_PIDS`] for where.
+    ZahlungszielUeberschritten,
     /// `faelligkeitsdatum` (DTM+265) is in the past or before `rechnungsdatum`.
     ZahlungszielInvalid,
     /// A WiM-Dienstleistungsrechnung (31003) was issued more than 20 Werktage
@@ -422,6 +478,8 @@ impl FindingKind {
             Self::StorniertWithoutReference => "Storno ohne Bezug auf die Ursprungsrechnung",
             Self::ZahlungszielExceeded => "Zahlungsziel zu lang",
             Self::ZahlungszielInvalid => "Zahlungsziel ungültig",
+            Self::ZahlungszielUnterschritten => "Zahlungsziel unterschritten",
+            Self::ZahlungszielUeberschritten => "Zahlungsziel der Rückerstattung überschritten",
             Self::RechnungZuSpaet => "Rechnung zu spät gestellt",
             Self::SteuerMissing => "Umsatzsteuer fehlt",
             Self::SteuerMismatch => "Brutto ist nicht Netto plus Steuer",
@@ -468,6 +526,9 @@ impl InvoicCheckEngine {
     ///   (identity-checked at transport layer; used for tariff lookups).
     /// - `rechnung` — BO4E invoice object stored in the event.
     /// - `tariff_store` — tariff database seeded from PRICAT 27003.
+    /// - `eingangsdatum` — the day the invoice was received, which the
+    ///   10-Werktage floor on its Zahlungsziel counts from. An issuer checking
+    ///   its own draft passes the earliest day the recipient can have it.
     /// - `config` — tolerance and policy configuration.
     #[must_use]
     pub fn check(
@@ -475,11 +536,13 @@ impl InvoicCheckEngine {
         sender_mp_id: &str,
         rechnung: &Rechnung,
         preisblatt_store: &dyn PreisblattStore,
+        eingangsdatum: time::Date,
         config: &CheckConfig,
     ) -> CheckReport {
         let mut findings: Vec<Finding> = Vec::new();
         let storno = is_stornierung(rechnung);
-        let computed_total = Self::document_stages(pid, rechnung, config, &mut findings);
+        let computed_total =
+            Self::document_stages(pid, rechnung, eingangsdatum, config, &mut findings);
 
         // ── Stage 8: Tariff check (PRICAT vs INVOIC unit price) ───────────────
         // Skipped for Stornorechnungen: they carry negated original amounts,
@@ -509,12 +572,13 @@ impl InvoicCheckEngine {
     fn document_stages(
         pid: u32,
         rechnung: &Rechnung,
+        eingangsdatum: time::Date,
         config: &CheckConfig,
         findings: &mut Vec<Finding>,
     ) -> Option<EuroAmount> {
         // ── Stage 1: Stornierung reference check ──────────────────────────────
         // When ist_storno=true, original_rechnungsnummer must be present.
-        // Source: BK6-24-174 §5; Allgemeine Festlegungen §8.
+        // Source: INVOIC AHB 1.0b Kap. 3.1.2, S. 29 — `SG1 RFF+OI` is Muss on 31004.
         if is_stornierung(rechnung)
             && rechnung
                 .original_rechnungsnummer
@@ -535,11 +599,11 @@ impl InvoicCheckEngine {
         Self::check_periods(rechnung, findings);
 
         // ── Stage 3: Zahlungsziel check ───────────────────────────────────────
-        // DTM+265 (faelligkeitsdatum) must not exceed max_zahlungsziel_days.
-        // Source: §7 Allgemeine Festlegungen V6.1d.
-        if config.max_zahlungsziel_days > 0 {
-            Self::check_zahlungsziel(rechnung, config, findings);
-        }
+        // DTM+265 (faelligkeitsdatum): not before the invoice date, not under
+        // the 10-Werktage floor after receipt, not over the 10-Werktage
+        // ceiling after the Rechnungsdatum where one is published, and — only
+        // where the operator set one — not beyond its own ceiling.
+        Self::check_zahlungsziel(pid, rechnung, eingangsdatum, config, findings);
 
         // ── Stage 3a: the WiM 31003 send window ───────────────────────────────
         // Only this PID: the 20 Werktage are WiM Teil 1 Kap. 3.7.2's, and no
@@ -570,11 +634,19 @@ impl InvoicCheckEngine {
     /// Checks:
     /// - If `faelligkeitsdatum < rechnungsdatum`: invalid (past due before issued).
     ///   Produces a `Dispute` finding (`ZahlungszielInvalid`).
-    /// - If `faelligkeitsdatum - rechnungsdatum > max_zahlungsziel_days`:
-    ///   exceeds contractual/regulatory payment term.
-    ///   Produces a `Warn` finding (`ZahlungszielExceeded`).
-    ///
-    /// Source: §7 Allgemeine Festlegungen V6.1d (30 days standard).
+    /// - If `faelligkeitsdatum` lies fewer than
+    ///   [`mako_fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT`] Werktage after
+    ///   `eingangsdatum`: the published floor is broken. Produces a `Dispute`
+    ///   finding (`ZahlungszielUnterschritten`) — see [`Self::ZAHLUNGSZIEL_MINDEST_PIDS`]
+    ///   for where it applies.
+    /// - If `faelligkeitsdatum` lies more than
+    ///   [`mako_fristen::vorlauf::RUECKERSTATTUNG_ZAHLUNGSZIEL_HOECHST_WT`]
+    ///   Werktage after `rechnungsdatum` where a ceiling is published: produces
+    ///   a `Dispute` finding (`ZahlungszielUeberschritten`) — see
+    ///   [`Self::RUECKERSTATTUNG_HOECHSTFRIST_PIDS`].
+    /// - If `faelligkeitsdatum - rechnungsdatum > max_zahlungsziel_days`, and
+    ///   the operator set that ceiling: produces a `Warn` finding
+    ///   (`ZahlungszielExceeded`).
     ///
     /// # Compared as calendar dates, not timestamps
     ///
@@ -586,11 +658,28 @@ impl InvoicCheckEngine {
     /// and one issued at `23:00Z` reads as 29. `rechnungsdatum_date()` and
     /// `faelligkeitsdatum_date()` take the date in the offset the payload
     /// carries, which is the comparison the rule is about.
-    fn check_zahlungsziel(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
+    fn check_zahlungsziel(
+        pid: u32,
+        rechnung: &Rechnung,
+        eingangsdatum: time::Date,
+        config: &CheckConfig,
+        findings: &mut Vec<Finding>,
+    ) {
         let Some(faellig) = rechnung.faelligkeitsdatum_date() else {
             return; // DTM+265 absent — not required on all PID types
         };
-        let Some(rechnungs_datum) = rechnung.rechnungsdatum_date() else {
+        let sparte = config.empfaenger_sparte;
+        let rechnungs_datum = rechnung.rechnungsdatum_date();
+        Self::check_zahlungsziel_mindestfrist(
+            pid,
+            rechnung,
+            faellig,
+            eingangsdatum,
+            rechnungs_datum,
+            sparte,
+            findings,
+        );
+        let Some(rechnungs_datum) = rechnungs_datum else {
             return; // Cannot compute term without invoice date
         };
 
@@ -608,10 +697,20 @@ impl InvoicCheckEngine {
             ));
             return;
         }
+        Self::check_zahlungsziel_hoechstfrist(
+            pid,
+            rechnung,
+            faellig,
+            rechnungs_datum,
+            sparte,
+            findings,
+        );
 
+        let Some(max) = config.max_zahlungsziel_days.map(i64::from) else {
+            return;
+        };
         let days = (faellig - rechnungs_datum).whole_days();
-        let max = config.max_zahlungsziel_days as i64;
-        if max > 0 && days > max {
+        if days > max {
             findings.push(Finding {
                 kind: FindingKind::ZahlungszielExceeded,
                 is_dispute: false, // Warn, not Dispute — give the NB a chance to correct
@@ -627,6 +726,219 @@ impl InvoicCheckEngine {
                 deviation_pct: Some(days as f64 - max as f64),
             });
         }
+    }
+
+    /// The Prüfidentifikatoren whose Zahlungsziel may not fall short of
+    /// [`mako_fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT`] Werktage after receipt.
+    ///
+    /// | PID | Rechnung | Fundstelle |
+    /// |---|---|---|
+    /// | 31001, 31002 | Abschlags-, Netznutzungsrechnung | GPKE Teil 2 Kap. 3.3.2 Nr. 1 (S. 90); GeLi Gas 3.0 Kap. 4.5 (S. 14) |
+    /// | 31003 | WiM-Rechnung | WiM Teil 1 Kap. 3.7.2 Nr. 1 |
+    /// | 31009 | MSB-Rechnung | GPKE Teil 3 Kap. 3.5.2 / 3.5.3 Nr. 1, WiM Teil 1 Kap. 3.6.3.8.2 / 6.2 Nr. 1, WiM Teil 2 Kap. 4.5.2 Nr. 1 |
+    ///
+    /// The MMM-, Storno-, Kapazitäts- and sonstige Rechnungen are not in it:
+    /// none of the process descriptions above states this floor for them. The
+    /// MMM-Rechnungen carry the AHB's own floor instead, counted from the
+    /// Rechnungsdatum — [`Self::AHB_MINDESTFRIST_PIDS`].
+    pub const ZAHLUNGSZIEL_MINDEST_PIDS: [u32; 4] = [31_001, 31_002, 31_003, 31_009];
+
+    /// The Prüfidentifikatoren INVOIC AHB 1.0b holds to `[24]` „Wert muss
+    /// mindestens 10 WT nach Wert aus DTM+137 DE2380 liegen" in either Sparte
+    /// (S. 39): 31005 (MMM-Rechnung) under `[20]`, a fälliger Betrag ≥ 0, and
+    /// 31007 (Aggreg. MMM-Rechnung) unconditionally.
+    pub const AHB_MINDESTFRIST_PIDS: [u32; 2] = [31_005, 31_007];
+
+    /// The Prüfidentifikatoren INVOIC AHB 1.0b holds to `[24]` only for a Gas
+    /// recipient: 31001–31003 under `[493] ∧ [20]` (S. 16). Applied only when
+    /// [`CheckConfig::empfaenger_sparte`] says Gas.
+    pub const AHB_MINDESTFRIST_GAS_PIDS: [u32; 3] = [31_001, 31_002, 31_003];
+
+    /// Whether INVOIC AHB 1.0b `[24]` — the floor counted from the
+    /// Rechnungsdatum — applies to an invoice of `pid`.
+    #[must_use]
+    pub fn ahb_mindestfrist_gilt(
+        pid: u32,
+        sparte: Option<EmpfaengerSparte>,
+        nicht_negativ: bool,
+    ) -> bool {
+        pid == 31_007
+            || (nicht_negativ
+                && (pid == 31_005
+                    || (sparte == Some(EmpfaengerSparte::Gas)
+                        && Self::AHB_MINDESTFRIST_GAS_PIDS.contains(&pid))))
+    }
+
+    /// The floor half of stage 3 — two published floors, one finding.
+    ///
+    /// - „Das Zahlungsziel darf 10 WT nach Empfang der Rechnung nicht
+    ///   unterschreiten" binds the sender of an invoice the recipient
+    ///   **pays**, counted from the **receipt**
+    ///   ([`Self::ZAHLUNGSZIEL_MINDEST_PIDS`]). A Rückerstattung — a negative
+    ///   fälliger Betrag — is the other direction: `E_0406` reaches
+    ///   Prüfschritt 31 („Ist die Frist der Fälligkeit unterschritten?") only
+    ///   from Prüfschritt 28 „Ist der fällige Betrag ≥ Null?" answered yes, so
+    ///   a refund is not measured against it.
+    /// - INVOIC AHB 1.0b `[24]`, counted from the **Rechnungsdatum**
+    ///   (`DTM+137`), where [`Self::ahb_mindestfrist_gilt`] says so.
+    ///
+    /// The receipt is never before the Rechnungsdatum, so where both apply the
+    /// receipt floor is the later date and is checked first. Ten Werktage is a
+    /// date the Zahlungsziel may equal: both rules forbid falling *short* of it.
+    fn check_zahlungsziel_mindestfrist(
+        pid: u32,
+        rechnung: &Rechnung,
+        faellig: time::Date,
+        eingangsdatum: time::Date,
+        rechnungs_datum: Option<time::Date>,
+        sparte: Option<EmpfaengerSparte>,
+        findings: &mut Vec<Finding>,
+    ) {
+        let mindest_wt = mako_fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT;
+        let cal = mako_fristen::HolidayCalendar::BdewMaKo;
+        let nicht_negativ = crate::rechnung::faelliger_betrag_nicht_negativ(rechnung);
+        if nicht_negativ && Self::ZAHLUNGSZIEL_MINDEST_PIDS.contains(&pid) {
+            let frueheste = mako_fristen::add_werktage(eingangsdatum, mindest_wt, cal);
+            if faellig < frueheste {
+                findings.push(Finding::dispute(
+                    FindingKind::ZahlungszielUnterschritten,
+                    format!(
+                        "Das Zahlungsziel {} liegt weniger als {mindest_wt} Werktage nach dem \
+                         Rechnungseingang am {} — frühestens zulässig ist der {}.",
+                        datum(faellig),
+                        datum(eingangsdatum),
+                        datum(frueheste),
+                    ),
+                    None,
+                    None,
+                    None,
+                ));
+                return;
+            }
+        }
+        let Some(rechnungs_datum) = rechnungs_datum else {
+            return;
+        };
+        if !Self::ahb_mindestfrist_gilt(pid, sparte, nicht_negativ) || is_stornierung(rechnung) {
+            return;
+        }
+        let frueheste = mako_fristen::add_werktage(rechnungs_datum, mindest_wt, cal);
+        if faellig >= frueheste {
+            return;
+        }
+        findings.push(Finding::dispute(
+            FindingKind::ZahlungszielUnterschritten,
+            format!(
+                "Das Zahlungsziel {} liegt weniger als {mindest_wt} Werktage nach dem \
+                 Rechnungsdatum {} — frühestens zulässig ist der {} (INVOIC AHB [24]).",
+                datum(faellig),
+                datum(rechnungs_datum),
+                datum(frueheste),
+            ),
+            None,
+            None,
+            None,
+        ));
+    }
+
+    /// The Prüfidentifikatoren whose Zahlungsziel may not exceed
+    /// [`mako_fristen::vorlauf::RUECKERSTATTUNG_ZAHLUNGSZIEL_HOECHST_WT`]
+    /// Werktage after the Rechnungsdatum **when the fälliger Betrag is
+    /// negative** — a Rückerstattung.
+    ///
+    /// | PID | Fundstelle |
+    /// |---|---|
+    /// | 31001, 31002 | `E_0406` Prüfschritt 34, reached from Prüfschritt 28 „Ist der fällige Betrag ≥ Null?" answered no (EBD 4.3 Kap. 6.10.1, S. 108); INVOIC AHB 1.0b `[493] ∧ [21] ∧ [25]` for a Gas recipient (S. 16) |
+    /// | 31005 | INVOIC AHB 1.0b `[21] ∧ [25]` (S. 39); `E_0406` Prüfschritt 34 |
+    ///
+    /// 31003 carries `[25]` for a Gas recipient only (`[493]`, S. 16) and no
+    /// tree applies it to a Strom one — see
+    /// [`Self::RUECKERSTATTUNG_HOECHSTFRIST_GAS_PIDS`]. A Stornorechnung
+    /// (31004) carries no `[25]`.
+    pub const RUECKERSTATTUNG_HOECHSTFRIST_PIDS: [u32; 3] = [31_001, 31_002, 31_005];
+
+    /// The Rückerstattung ceiling's Gas-only row: 31003 under
+    /// `[493] ∧ [21] ∧ [25]` (INVOIC AHB 1.0b S. 16). Applied only when
+    /// [`CheckConfig::empfaenger_sparte`] says Gas.
+    pub const RUECKERSTATTUNG_HOECHSTFRIST_GAS_PIDS: [u32; 1] = [31_003];
+
+    /// The Prüfidentifikatoren whose Zahlungsziel carries the ceiling whatever
+    /// the sign of the fälliger Betrag: INVOIC AHB 1.0b gives 31006 (MMM
+    /// selbst ausgestellte Rechnung) `[UB1] ∧ [25]` and 31008 (Aggreg. MMM
+    /// selbst ausgestellte Rechnung) `[UB1] ∧ [25]` with no `[20]`/`[21]`
+    /// branch (S. 39).
+    pub const ZAHLUNGSZIEL_HOECHSTFRIST_STETS_PIDS: [u32; 2] = [31_006, 31_008];
+
+    /// Whether an invoice of `pid` is held to the published ceiling of
+    /// [`mako_fristen::vorlauf::RUECKERSTATTUNG_ZAHLUNGSZIEL_HOECHST_WT`]
+    /// Werktage after its Rechnungsdatum.
+    ///
+    /// The one predicate behind [`FindingKind::ZahlungszielUeberschritten`],
+    /// public so an issuer choosing a Zahlungsziel asks the same question the
+    /// recipient's check will: `rueckerstattung` is a negative fälliger Betrag,
+    /// `storno` a Stornorechnung (31004 on the wire, no ceiling), `sparte`
+    /// the recipient's where known.
+    #[must_use]
+    pub fn zahlungsziel_hoechstfrist_gilt(
+        pid: u32,
+        sparte: Option<EmpfaengerSparte>,
+        rueckerstattung: bool,
+        storno: bool,
+    ) -> bool {
+        !storno
+            && (Self::ZAHLUNGSZIEL_HOECHSTFRIST_STETS_PIDS.contains(&pid)
+                || (rueckerstattung
+                    && (Self::RUECKERSTATTUNG_HOECHSTFRIST_PIDS.contains(&pid)
+                        || (sparte == Some(EmpfaengerSparte::Gas)
+                            && Self::RUECKERSTATTUNG_HOECHSTFRIST_GAS_PIDS.contains(&pid)))))
+    }
+
+    /// The ceiling half of stage 3.
+    ///
+    /// Counted from the Rechnungsdatum, not the receipt: `E_0406` Prüfschritt
+    /// 34 reads „Zahlungsziel > 10 WT zum Rechnungsdatum" and adds „Nach
+    /// NNV/LRV § 8 Abrechnung, Zahlung und Verzug ist bei Rückerstattungen das
+    /// Ausstellungsdatum der Rückerstattung entscheidend." The tenth Werktag
+    /// after it is admissible; the eleventh is not. A Stornorechnung is not
+    /// measured: it is PID 31004 on the wire, which publishes no ceiling.
+    fn check_zahlungsziel_hoechstfrist(
+        pid: u32,
+        rechnung: &Rechnung,
+        faellig: time::Date,
+        rechnungs_datum: time::Date,
+        sparte: Option<EmpfaengerSparte>,
+        findings: &mut Vec<Finding>,
+    ) {
+        if !Self::zahlungsziel_hoechstfrist_gilt(
+            pid,
+            sparte,
+            !crate::rechnung::faelliger_betrag_nicht_negativ(rechnung),
+            is_stornierung(rechnung),
+        ) {
+            return;
+        }
+        let hoechst_wt = mako_fristen::vorlauf::RUECKERSTATTUNG_ZAHLUNGSZIEL_HOECHST_WT;
+        let spaeteste = mako_fristen::add_werktage(
+            rechnungs_datum,
+            hoechst_wt,
+            mako_fristen::HolidayCalendar::BdewMaKo,
+        );
+        if faellig <= spaeteste {
+            return;
+        }
+        findings.push(Finding::dispute(
+            FindingKind::ZahlungszielUeberschritten,
+            format!(
+                "Das Zahlungsziel {} liegt mehr als {hoechst_wt} Werktage nach dem \
+                 Rechnungsdatum {} — spätestens zulässig ist der {}.",
+                datum(faellig),
+                datum(rechnungs_datum),
+                datum(spaeteste),
+            ),
+            None,
+            None,
+            None,
+        ));
     }
 
     /// The WiM Prüfidentifikator whose send window Kap. 3.7.2 Nr. 1 states.
@@ -1398,7 +1710,7 @@ impl InvoicCheckEngine {
     ///
     /// Its basis is the offer it accepted. UC 4.1.1 has the ESA asking for „die
     /// Übermittlung von Werten **und die damit verbundenen Kosten**"; QUOTES AHB
-    /// 1.1a §4.3 makes `SG4 CUX` and one `SG31 PRI+CAL` per `SG27 PIA+Z02`
+    /// 1.1a Kap. 4.3 makes `SG4 CUX` and one `SG31 PRI+CAL` per `SG27 PIA+Z02`
     /// Artikel-ID **Muss**; and the offer carries a Bindungsfrist because it
     /// binds. The invoice names the same Artikel-IDs back (`SG26 LIN` DE 7143
     /// `Z09`, INVOIC AHB 1.0b), so the two join exactly rather than by a
@@ -1424,13 +1736,15 @@ impl InvoicCheckEngine {
         sender_mp_id: &str,
         rechnung: &Rechnung,
         agreed: &[(String, EuroAmount)],
+        eingangsdatum: time::Date,
         config: &CheckConfig,
     ) -> CheckReport {
         let mut findings = Vec::new();
 
         // The document stages are the same as everywhere else; only the price
         // basis differs.
-        let computed_total = Self::document_stages(31009, rechnung, config, &mut findings);
+        let computed_total =
+            Self::document_stages(31009, rechnung, eingangsdatum, config, &mut findings);
 
         Self::check_against_angebot(rechnung, sender_mp_id, agreed, config, &mut findings);
 
@@ -1542,6 +1856,7 @@ impl InvoicCheckEngine {
         sender_mp_id: &str,
         rechnung: &Rechnung,
         preisblatt_messung: Option<&rubo4e::current::PreisblattMessung>,
+        eingangsdatum: time::Date,
         config: &CheckConfig,
     ) -> CheckReport {
         Self::check_msb_rechnung_with_aufabschlaege(
@@ -1550,6 +1865,7 @@ impl InvoicCheckEngine {
             rechnung,
             preisblatt_messung,
             &[],
+            eingangsdatum,
             config,
         )
     }
@@ -1576,6 +1892,7 @@ impl InvoicCheckEngine {
         rechnung: &Rechnung,
         preisblatt_messung: Option<&rubo4e::current::PreisblattMessung>,
         contracted_names: &[String],
+        eingangsdatum: time::Date,
         config: &CheckConfig,
     ) -> CheckReport {
         let mut findings = Vec::new();
@@ -1585,7 +1902,8 @@ impl InvoicCheckEngine {
         // Umsatzsteuer block (`TAX` 00058, Muss; § 14 Abs. 4 Nr. 8 UStG) among
         // them. Messstellenbetrieb is a taxable service at the regular rate, so
         // nothing about an MSB invoice exempts it from any of them.
-        let computed_total = Self::document_stages(pid, rechnung, config, &mut findings);
+        let computed_total =
+            Self::document_stages(pid, rechnung, eingangsdatum, config, &mut findings);
 
         // Stage 8, against `PreisblattMessung.preispositionen`.
         let billing_date: time::Date = rechnung
@@ -1754,11 +2072,17 @@ impl InvoicCheckEngine {
     ///     ..Default::default()
     /// }]);
     ///
-    /// let report = InvoicCheckEngine::check_storno(31004, &r, &CheckConfig::default());
+    /// let eingang = time::macros::date!(2026 - 04 - 01);
+    /// let report = InvoicCheckEngine::check_storno(31004, &r, eingang, &CheckConfig::default());
     /// assert_eq!(report.outcome, CheckOutcome::Ok);
     /// ```
     #[must_use]
-    pub fn check_storno(pid: u32, rechnung: &Rechnung, config: &CheckConfig) -> CheckReport {
+    pub fn check_storno(
+        pid: u32,
+        rechnung: &Rechnung,
+        eingangsdatum: time::Date,
+        config: &CheckConfig,
+    ) -> CheckReport {
         let mut findings = Vec::new();
 
         // Stage 1: Storno reference must be present.
@@ -1781,9 +2105,7 @@ impl InvoicCheckEngine {
         Self::check_periods(rechnung, &mut findings);
 
         // Stage 3: Zahlungsziel check.
-        if config.max_zahlungsziel_days > 0 {
-            Self::check_zahlungsziel(rechnung, config, &mut findings);
-        }
+        Self::check_zahlungsziel(pid, rechnung, eingangsdatum, config, &mut findings);
 
         // Stages 4-6: currency, arithmetic and total (still apply to Storno amounts).
         Self::check_waehrung(rechnung, &mut findings);
@@ -1925,6 +2247,8 @@ mod tests {
             K::StorniertWithoutReference,
             K::ZahlungszielExceeded,
             K::ZahlungszielInvalid,
+            K::ZahlungszielUnterschritten,
+            K::ZahlungszielUeberschritten,
             K::RechnungZuSpaet,
             K::SteuerMissing,
             K::SteuerMismatch,
@@ -1951,6 +2275,10 @@ mod tests {
     use rubo4e::current::{PreisblattNetznutzung, Preisposition, Preisstaffel};
 
     const SENDER: &str = "9900357000004";
+
+    /// A receipt day well before every fixture's Zahlungsziel, so the
+    /// 10-Werktage floor stays silent wherever a test is not about it.
+    const EINGANG: time::Date = time::macros::date!(2020 - 01 - 01);
 
     fn betrag(eur: EuroAmount) -> Betrag {
         Betrag {
@@ -2080,8 +2408,14 @@ mod tests {
     fn period_start_gte_end_is_dispute() {
         let mut r = make_rechnung(vec![], None);
         r.rechnungsperiode = Some(periode("2024-12-31", "2024-12-01"));
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(report.has_dispute());
         assert!(
             report
@@ -2094,8 +2428,14 @@ mod tests {
     #[test]
     fn period_valid_no_finding() {
         let r = make_rechnung(vec![], None);
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -2110,8 +2450,14 @@ mod tests {
         // Override the lieferungszeitraum to an invalid range (start > end).
         pos.lieferungszeitraum = Some(periode("2024-12-31", "2024-12-01"));
         let r = make_rechnung(vec![pos], None);
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(report.has_dispute());
         assert_eq!(report.findings[0].line_number, Some(1));
     }
@@ -2129,8 +2475,14 @@ mod tests {
             Some(EuroAmount::from_raw(3_456_000)),
         );
         let r = make_rechnung(vec![pos], None);
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -2150,8 +2502,14 @@ mod tests {
             Some(EuroAmount::from_raw(4_000_000)),
         );
         let r = make_rechnung(vec![pos], None);
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(report.has_dispute());
         assert!(
             report
@@ -2182,8 +2540,14 @@ mod tests {
             ..Default::default()
         });
         let r = make_rechnung(vec![pos.clone()], None);
-        let report =
-            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -2195,8 +2559,14 @@ mod tests {
         // Three months at 15 EUR stated as 15 EUR is a mismatch.
         pos.gesamtpreis = Some(betrag(EuroAmount::from_raw(1_500_000)));
         let r = make_rechnung(vec![pos], None);
-        let report =
-            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             report
                 .findings
@@ -2219,8 +2589,14 @@ mod tests {
             Some(EuroAmount::from_raw(15_000)),
         );
         let r = make_rechnung(vec![pos], None);
-        let report =
-            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -2246,7 +2622,7 @@ mod tests {
             ..Default::default()
         };
         let r = make_rechnung(vec![pos], None);
-        let report = InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &config);
+        let report = InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), EINGANG, &config);
         assert!(
             !report
                 .findings
@@ -2267,8 +2643,14 @@ mod tests {
             Some(EuroAmount::from_raw(3_456_000)),
         );
         let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(3_456_000)));
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -2287,8 +2669,14 @@ mod tests {
             Some(EuroAmount::from_raw(3_456_000)),
         );
         let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(5_000_000)));
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(!report.has_dispute()); // warn only
         assert!(
             report
@@ -2313,8 +2701,14 @@ mod tests {
         r.gesamtbrutto = None;
         r.steuerbetraege = None;
 
-        let report =
-            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(report.outcome, CheckOutcome::Dispute);
         assert!(
             report
@@ -2338,8 +2732,14 @@ mod tests {
             ..Default::default()
         }]);
 
-        let report =
-            InvoicCheckEngine::check(31005, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31005,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -2367,8 +2767,14 @@ mod tests {
             ..Default::default()
         }]);
 
-        let report =
-            InvoicCheckEngine::check(31005, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31005,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(report.outcome, CheckOutcome::Dispute);
         assert!(
             report
@@ -2388,8 +2794,14 @@ mod tests {
         let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
         r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(999_999)));
 
-        let report =
-            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(report.outcome, CheckOutcome::Dispute);
         assert!(
             report
@@ -2420,8 +2832,14 @@ mod tests {
             ..Default::default()
         }]);
 
-        let report =
-            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report.findings.iter().any(|f| {
                 matches!(
@@ -2450,8 +2868,14 @@ mod tests {
             Some(EuroAmount::from_raw(3_456_000)),
         );
         let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(3_456_000)));
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(!report.has_dispute());
         assert!(
             report
@@ -2468,7 +2892,7 @@ mod tests {
             ..Default::default()
         };
         let r = make_rechnung(vec![], None);
-        let report = InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &config);
+        let report = InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), EINGANG, &config);
         assert!(report.has_dispute());
     }
 
@@ -2488,6 +2912,7 @@ mod tests {
             SENDER,
             &r,
             &seeded_store(price),
+            EINGANG,
             &CheckConfig::default(),
         );
         assert!(
@@ -2546,8 +2971,14 @@ mod tests {
             Some(EuroAmount::from_raw(10_000_000)), // 500 × 0.20
         );
         let r = make_rechnung(vec![pos], None);
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &tiered_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &tiered_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             report
                 .findings
@@ -2569,8 +3000,14 @@ mod tests {
             Some(EuroAmount::from_raw(15_000_000)), // 500 × 0.30
         );
         let r = make_rechnung(vec![pos], None);
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &tiered_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &tiered_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -2593,8 +3030,14 @@ mod tests {
             Some(EuroAmount::from_raw(25_015_000)), // 1000.6 × 0.25
         );
         let r = make_rechnung(vec![pos], None);
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &tiered_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &tiered_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -2623,8 +3066,14 @@ mod tests {
             steuerwert: Some(Decimal::from(5)),
             ..Default::default()
         }]);
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             report
                 .findings
@@ -2658,8 +3107,14 @@ mod tests {
             ..Default::default()
         }]);
 
-        let report =
-            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(
             report.outcome,
             CheckOutcome::Dispute,
@@ -2690,8 +3145,14 @@ mod tests {
             steuerwert: Some(Decimal::from(1_900)),
             ..Default::default()
         }]);
-        let report =
-            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -2720,8 +3181,14 @@ mod tests {
             Some(EuroAmount::from_raw(100_000)),
         );
         let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
-        let report =
-            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             report
                 .findings
@@ -2757,6 +3224,7 @@ mod tests {
                 &r,
                 None,
                 &contracted,
+                EINGANG,
                 &CheckConfig::default(),
             )
             .findings
@@ -2801,6 +3269,7 @@ mod tests {
             SENDER,
             &r,
             None,
+            EINGANG,
             &CheckConfig::default(),
         );
         assert!(
@@ -2844,6 +3313,7 @@ mod tests {
             SENDER,
             &r,
             None,
+            EINGANG,
             &CheckConfig::default(),
         );
         assert!(
@@ -2870,6 +3340,7 @@ mod tests {
             SENDER,
             &r,
             None,
+            EINGANG,
             &CheckConfig::default(),
         );
         assert!(
@@ -2883,22 +3354,20 @@ mod tests {
         assert_eq!(report.outcome, CheckOutcome::Dispute);
     }
 
-    /// A payment term beyond the 30 days of §7 Allgemeine Festlegungen V6.1d
-    /// warns on the MSB path, as it does on the standard one — a warning, so
-    /// the MSB can correct it.
+    /// An operator's ceiling warns on the MSB path, as it does on the standard
+    /// one — a warning, so the MSB can correct it.
     #[test]
-    fn an_msb_invoice_with_an_overlong_zahlungsziel_warns() {
+    fn an_msb_invoice_beyond_the_operator_ceiling_warns() {
         let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(100_000)));
         r.rechnungsdatum = Some(parse_dt("2026-07-01"));
         r.faelligkeitsdatum = Some(parse_dt("2026-09-01")); // 62 days
 
-        let report = InvoicCheckEngine::check_msb_rechnung(
-            31_009,
-            SENDER,
-            &r,
-            None,
-            &CheckConfig::default(),
-        );
+        let config = CheckConfig {
+            max_zahlungsziel_days: Some(30),
+            ..Default::default()
+        };
+        let report =
+            InvoicCheckEngine::check_msb_rechnung(31_009, SENDER, &r, None, EINGANG, &config);
         let finding = report
             .findings
             .iter()
@@ -2994,6 +3463,7 @@ mod tests {
             &late,
             None,
             &[],
+            EINGANG,
             &CheckConfig::default(),
         );
         assert!(
@@ -3020,6 +3490,7 @@ mod tests {
             &r,
             None,
             &[],
+            EINGANG,
             &CheckConfig::default(),
         );
         assert!(
@@ -3079,8 +3550,14 @@ mod tests {
             ..Default::default()
         };
         r.steuerbetraege = Some(vec![entry(19, 100, 19), entry(7, 100, 7)]);
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
@@ -3107,6 +3584,7 @@ mod tests {
             SENDER,
             &r,
             &seeded_store(tariff_price),
+            EINGANG,
             &CheckConfig::default(),
         );
         assert!(report.has_dispute());
@@ -3156,6 +3634,7 @@ mod tests {
             SENDER,
             &r,
             &seeded_store(EuroAmount::from_raw(3_456)),
+            EINGANG,
             &CheckConfig::default(),
         );
         let f = report
@@ -3170,8 +3649,8 @@ mod tests {
     }
 
     /// Every finding the checker's own paths raise reads German: an arithmetic
-    /// error and a total mismatch, a missing tax, an invalid and an overlong
-    /// Zahlungsziel, an inverted period, a Storno without reference, a missing
+    /// error and a total mismatch, a missing tax, an invalid, an overlong and
+    /// a too-short Zahlungsziel, an inverted period, a Storno without reference, a missing
     /// Preisblatt and a late WiM invoice.
     #[test]
     fn every_finding_message_reads_german() {
@@ -3198,6 +3677,7 @@ mod tests {
             SENDER,
             &r,
             &empty_store(),
+            EINGANG,
             &cfg,
         ));
 
@@ -3213,15 +3693,35 @@ mod tests {
             SENDER,
             &r,
             &empty_store(),
+            EINGANG,
             &cfg,
         ));
 
-        // Overlong Zahlungsziel; Storno without reference; late WiM invoice.
+        // Overlong and too short a Zahlungsziel; Storno without reference;
+        // late WiM invoice.
         let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(100_000)));
         r.rechnungsdatum = Some(parse_dt("2026-07-01"));
         r.faelligkeitsdatum = Some(parse_dt("2026-09-01"));
+        let mit_obergrenze = CheckConfig {
+            max_zahlungsziel_days: Some(30),
+            ..CheckConfig::default()
+        };
         pruefe(InvoicCheckEngine::check_msb_rechnung(
-            31_009, SENDER, &r, None, &cfg,
+            31_009,
+            SENDER,
+            &r,
+            None,
+            EINGANG,
+            &mit_obergrenze,
+        ));
+        r.faelligkeitsdatum = Some(parse_dt("2026-07-02"));
+        pruefe(InvoicCheckEngine::check_msb_rechnung(
+            31_009,
+            SENDER,
+            &r,
+            None,
+            time::macros::date!(2026 - 07 - 01),
+            &cfg,
         ));
         let mut r = wim_dienstleistung("2026-06-30", "2026-07-01");
         r.ist_storno = Some(true);
@@ -3232,6 +3732,7 @@ mod tests {
             &r,
             None,
             &[],
+            EINGANG,
             &cfg,
         ));
         pruefe(InvoicCheckEngine::check(
@@ -3239,6 +3740,7 @@ mod tests {
             SENDER,
             &wim_dienstleistung("2026-06-30", "2026-09-30"),
             &empty_store(),
+            EINGANG,
             &cfg,
         ));
 
@@ -3249,6 +3751,7 @@ mod tests {
             "SteuerMissing",
             "ZahlungszielInvalid",
             "ZahlungszielExceeded",
+            "ZahlungszielUnterschritten",
             "PeriodInvalid",
             "StorniertWithoutReference",
         ] {
@@ -3267,6 +3770,7 @@ mod tests {
             SENDER,
             &r,
             &seeded_store(price),
+            EINGANG,
             &CheckConfig::default(),
         );
         assert_eq!(report.outcome, CheckOutcome::Ok);
@@ -3276,8 +3780,14 @@ mod tests {
     #[test]
     fn pid_is_carried_in_report() {
         let r = make_rechnung(vec![], None);
-        let report =
-            InvoicCheckEngine::check(31005, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31005,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(report.pid, 31005);
     }
 
@@ -3295,8 +3805,14 @@ mod tests {
         r.original_rechnungsnummer = Some("31001-2025-0042".to_owned());
 
         // Empty tariff store — would produce TariffNotFound if tariff stage ran.
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(
             report.outcome,
             CheckOutcome::Ok,
@@ -3318,8 +3834,14 @@ mod tests {
         r.ist_storno = Some(true);
         r.original_rechnungsnummer = None;
 
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(report.has_dispute());
         assert!(
             report
@@ -3349,7 +3871,7 @@ mod tests {
         r.ist_storno = Some(true);
         r.original_rechnungsnummer = Some("31001-2025-0042".to_owned());
 
-        let report = InvoicCheckEngine::check_storno(31004, &r, &CheckConfig::default());
+        let report = InvoicCheckEngine::check_storno(31004, &r, EINGANG, &CheckConfig::default());
         assert_eq!(report.outcome, CheckOutcome::Ok);
         assert!(report.findings.is_empty());
     }
@@ -3367,7 +3889,7 @@ mod tests {
             ..Default::default()
         };
 
-        let report = InvoicCheckEngine::check_storno(31_004, &r, &CheckConfig::default());
+        let report = InvoicCheckEngine::check_storno(31_004, &r, EINGANG, &CheckConfig::default());
         assert!(
             report
                 .findings
@@ -3397,7 +3919,7 @@ mod tests {
             ..Default::default()
         };
 
-        let report = InvoicCheckEngine::check_storno(31_004, &r, &CheckConfig::default());
+        let report = InvoicCheckEngine::check_storno(31_004, &r, EINGANG, &CheckConfig::default());
         assert!(
             !report
                 .findings
@@ -3438,7 +3960,7 @@ mod tests {
         r.ist_storno = Some(true);
         r.original_rechnungsnummer = None;
 
-        let report = InvoicCheckEngine::check_storno(31004, &r, &CheckConfig::default());
+        let report = InvoicCheckEngine::check_storno(31004, &r, EINGANG, &CheckConfig::default());
         assert!(report.has_dispute());
         assert!(
             report
@@ -3450,53 +3972,293 @@ mod tests {
 
     // ── Zahlungsziel tests ────────────────────────────────────────────────────
 
-    #[test]
-    fn zahlungsziel_within_limit_no_finding() {
-        let mut r = make_rechnung(vec![], None);
-        r.rechnungsdatum = Some(parse_dt("2026-07-01"));
-        r.faelligkeitsdatum = Some(parse_dt("2026-07-31")); // exactly 30 days
+    /// Received Wednesday 2026-07-01; the tenth Werktag after it is
+    /// Wednesday 2026-07-15 (no holiday in between).
+    const EINGANG_MI: time::Date = time::macros::date!(2026 - 07 - 01);
 
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+    fn unterschritten(report: &CheckReport) -> Option<&Finding> {
+        report
+            .findings
+            .iter()
+            .find(|f| f.kind == FindingKind::ZahlungszielUnterschritten)
+    }
+
+    fn mit_zahlungsziel(rechnungsdatum: &str, faellig: &str) -> Rechnung {
+        let mut r = make_rechnung(vec![], None);
+        r.rechnungsdatum = Some(parse_dt(rechnungsdatum));
+        r.faelligkeitsdatum = Some(parse_dt(faellig));
+        r
+    }
+
+    /// GPKE Teil 2 Kap. 3.3.2 Nr. 1: „Das Zahlungsziel darf 10 WT nach Empfang
+    /// der Rechnung nicht unterschreiten" — nine Werktage falls short of it.
+    #[test]
+    fn a_zahlungsziel_nine_werktage_after_receipt_is_disputed() {
+        let r = mit_zahlungsziel("2026-07-01", "2026-07-14");
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG_MI,
+            &CheckConfig::default(),
+        );
+        let finding = unterschritten(&report)
+            .unwrap_or_else(|| panic!("no ZahlungszielUnterschritten in {:#?}", report.findings));
+        assert!(finding.is_dispute, "a broken floor is a refusal");
+        assert!(
+            finding.message.contains("15.07.2026"),
+            "{}",
+            finding.message
+        );
+    }
+
+    /// Ten Werktage is the floor itself, which the Zahlungsziel may equal.
+    #[test]
+    fn a_zahlungsziel_ten_werktage_after_receipt_passes() {
+        let r = mit_zahlungsziel("2026-07-01", "2026-07-15");
+        for pid in InvoicCheckEngine::ZAHLUNGSZIEL_MINDEST_PIDS {
+            let report = InvoicCheckEngine::check(
+                pid,
+                SENDER,
+                &r,
+                &empty_store(),
+                EINGANG_MI,
+                &CheckConfig::default(),
+            );
+            assert!(
+                unterschritten(&report).is_none(),
+                "{pid}: {:#?}",
+                report.findings
+            );
+        }
+    }
+
+    /// The floor counts from the **receipt**, not from the Rechnungsdatum: an
+    /// invoice dated 01.07. and due on its tenth Werktag still falls short when
+    /// it arrives two days later.
+    #[test]
+    fn the_zahlungsziel_floor_counts_from_the_receipt() {
+        let r = mit_zahlungsziel("2026-07-01", "2026-07-15");
+        let report = InvoicCheckEngine::check_msb_rechnung(
+            31_009,
+            SENDER,
+            &r,
+            None,
+            time::macros::date!(2026 - 07 - 03),
+            &CheckConfig::default(),
+        );
+        assert!(unterschritten(&report).is_some(), "{:#?}", report.findings);
+    }
+
+    /// A Rückerstattung is not measured: `E_0406` reaches Prüfschritt 31 only
+    /// from „Ist der fällige Betrag ≥ Null?" answered yes.
+    #[test]
+    fn a_refund_is_not_held_to_the_zahlungsziel_floor() {
+        let mut r = mit_zahlungsziel("2026-07-01", "2026-07-02");
+        r.zu_zahlen = Some(betrag(EuroAmount::from_raw(-100_000)));
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG_MI,
+            &CheckConfig::default(),
+        );
+        assert!(unterschritten(&report).is_none(), "{:#?}", report.findings);
+    }
+
+    fn mit_sparte(sparte: Option<EmpfaengerSparte>) -> CheckConfig {
+        CheckConfig {
+            empfaenger_sparte: sparte,
+            ..CheckConfig::default()
+        }
+    }
+
+    fn pruefe(pid: u32, r: &Rechnung, eingang: time::Date, config: &CheckConfig) -> CheckReport {
+        InvoicCheckEngine::check(pid, SENDER, r, &empty_store(), eingang, config)
+    }
+
+    /// INVOIC AHB 1.0b `[24]` „Wert muss mindestens 10 WT nach Wert aus DTM+137
+    /// DE2380 liegen" (S. 39): 31005 with a fälliger Betrag ≥ 0 (`[20]`) and
+    /// 31007 — in either Sparte. Dated Wednesday 01.07.2026, the tenth Werktag
+    /// is 15.07.; the ninth falls short.
+    #[test]
+    fn the_ahb_floor_holds_an_mmm_rechnung_to_ten_werktage_after_its_date() {
+        for pid in InvoicCheckEngine::AHB_MINDESTFRIST_PIDS {
+            for sparte in [
+                None,
+                Some(EmpfaengerSparte::Strom),
+                Some(EmpfaengerSparte::Gas),
+            ] {
+                let cfg = mit_sparte(sparte);
+                let r = mit_zahlungsziel("2026-07-01", "2026-07-14");
+                let report = pruefe(pid, &r, EINGANG_MI, &cfg);
+                let finding = unterschritten(&report).unwrap_or_else(|| {
+                    panic!(
+                        "{pid} {sparte:?}: no ZahlungszielUnterschritten in {:#?}",
+                        report.findings
+                    )
+                });
+                assert!(finding.is_dispute, "{pid}");
+                assert!(
+                    finding.message.contains("Rechnungsdatum"),
+                    "{}",
+                    finding.message
+                );
+
+                let r = mit_zahlungsziel("2026-07-01", "2026-07-15");
+                assert!(
+                    unterschritten(&pruefe(pid, &r, EINGANG_MI, &cfg)).is_none(),
+                    "{pid} {sparte:?}: ten Werktage is the floor itself"
+                );
+            }
+        }
+    }
+
+    /// The AHB floor counts from the Rechnungsdatum (`DTM+137`), not the
+    /// receipt: an MMM-Rechnung received a week late is still measured from
+    /// the date it bears.
+    #[test]
+    fn the_ahb_floor_counts_from_the_rechnungsdatum() {
+        let r = mit_zahlungsziel("2026-07-01", "2026-07-15");
+        let report = pruefe(
+            31_005,
+            &r,
+            time::macros::date!(2026 - 07 - 08),
+            &CheckConfig::default(),
+        );
+        assert!(unterschritten(&report).is_none(), "{:#?}", report.findings);
+    }
+
+    /// `[20]` gates 31005's floor on a fälliger Betrag ≥ 0; 31007 has no sign
+    /// branch.
+    #[test]
+    fn the_ahb_floor_follows_the_sign_where_the_ahb_branches_on_it() {
+        let mut r = mit_zahlungsziel("2026-07-01", "2026-07-02");
+        r.zu_zahlen = Some(betrag(EuroAmount::from_raw(-100_000)));
+        let cfg = CheckConfig::default();
+        assert!(unterschritten(&pruefe(31_005, &r, EINGANG_MI, &cfg)).is_none());
+        assert!(unterschritten(&pruefe(31_007, &r, EINGANG_MI, &cfg)).is_some());
+    }
+
+    /// 31001–31003 carry `[24]` only for a Gas recipient (`[493]`, S. 16). A
+    /// 31003 is not in the receipt-anchored floor's process descriptions for
+    /// this case, so it isolates the AHB row: Gas is held to it, Strom and an
+    /// unknown Sparte are not.
+    #[test]
+    fn the_gas_rows_of_the_ahb_floor_apply_only_to_a_known_gas_recipient() {
+        // Received before it is dated, so the receipt floor (31003 is on it)
+        // is met and only the Rechnungsdatum anchor can fall short.
+        let frueh = time::macros::date!(2026 - 06 - 01);
+        let r = mit_zahlungsziel("2026-07-01", "2026-07-14");
+        for pid in InvoicCheckEngine::AHB_MINDESTFRIST_GAS_PIDS {
+            assert!(
+                unterschritten(&pruefe(
+                    pid,
+                    &r,
+                    frueh,
+                    &mit_sparte(Some(EmpfaengerSparte::Gas))
+                ))
+                .is_some(),
+                "{pid}: Gas"
+            );
+            for sparte in [None, Some(EmpfaengerSparte::Strom)] {
+                assert!(
+                    unterschritten(&pruefe(pid, &r, frueh, &mit_sparte(sparte))).is_none(),
+                    "{pid}: {sparte:?}"
+                );
+            }
+        }
+    }
+
+    /// `[493] ∧ [21] ∧ [25]` (S. 16): a 31003 Rückerstattung to a Gas
+    /// recipient is held to the ceiling; to a Strom or unknown one it is not.
+    #[test]
+    fn a_31003_refund_carries_the_ceiling_for_a_gas_recipient() {
+        let r = rueckerstattung("2026-07-01", "2026-07-16");
+        assert!(
+            ueberschritten(&pruefe(
+                31_003,
+                &r,
+                EINGANG_MI,
+                &mit_sparte(Some(EmpfaengerSparte::Gas))
+            ))
+            .is_some()
+        );
+        for sparte in [None, Some(EmpfaengerSparte::Strom)] {
+            assert!(
+                ueberschritten(&pruefe(31_003, &r, EINGANG_MI, &mit_sparte(sparte))).is_none(),
+                "{sparte:?}"
+            );
+        }
+    }
+
+    /// No ceiling is published for an invoice the recipient pays, so none is
+    /// checked unless the operator sets one.
+    #[test]
+    fn no_zahlungsziel_ceiling_is_checked_by_default() {
+        let r = mit_zahlungsziel("2026-07-01", "2026-09-01");
+        let report = InvoicCheckEngine::check(
+            31002,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG_MI,
+            &CheckConfig::default(),
+        );
         assert!(
             !report
                 .findings
                 .iter()
                 .any(|f| f.kind == FindingKind::ZahlungszielExceeded),
-            "Exactly 30 days is within the default limit"
+            "{:#?}",
+            report.findings
         );
     }
 
     #[test]
-    fn zahlungsziel_exceeded_is_warn() {
-        let mut r = make_rechnung(vec![], None);
-        r.rechnungsdatum = Some(parse_dt("2026-07-01"));
-        r.faelligkeitsdatum = Some(parse_dt("2026-09-01")); // 62 days — exceeds 30
-
+    fn an_operator_ceiling_warns_beyond_it() {
+        let r = mit_zahlungsziel("2026-07-01", "2026-09-01"); // 62 days
+        let config = CheckConfig {
+            max_zahlungsziel_days: Some(30),
+            ..Default::default()
+        };
         let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), EINGANG_MI, &config);
         let finding = report
             .findings
             .iter()
-            .find(|f| f.kind == FindingKind::ZahlungszielExceeded);
+            .find(|f| f.kind == FindingKind::ZahlungszielExceeded)
+            .unwrap_or_else(|| panic!("no ZahlungszielExceeded in {:#?}", report.findings));
         assert!(
-            finding.is_some(),
-            "62-day payment term must produce ZahlungszielExceeded"
-        );
-        assert!(
-            !finding.unwrap().is_dispute,
+            !finding.is_dispute,
             "ZahlungszielExceeded is Warn, not Dispute"
+        );
+
+        let r = mit_zahlungsziel("2026-07-01", "2026-07-31"); // exactly 30 days
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), EINGANG_MI, &config);
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ZahlungszielExceeded),
+            "the ceiling itself is within it"
         );
     }
 
     #[test]
     fn zahlungsziel_before_invoice_date_is_dispute() {
-        let mut r = make_rechnung(vec![], None);
-        r.rechnungsdatum = Some(parse_dt("2026-07-15"));
-        r.faelligkeitsdatum = Some(parse_dt("2026-07-01")); // before invoice date
-
-        let report =
-            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let r = mit_zahlungsziel("2026-07-15", "2026-07-01");
+        let report = InvoicCheckEngine::check(
+            31001,
+            SENDER,
+            &r,
+            &empty_store(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(report.has_dispute());
         assert!(
             report
@@ -3507,24 +4269,157 @@ mod tests {
         );
     }
 
-    #[test]
-    fn zahlungsziel_check_disabled_at_zero() {
-        let mut r = make_rechnung(vec![], None);
-        r.rechnungsdatum = Some(parse_dt("2026-01-01"));
-        r.faelligkeitsdatum = Some(parse_dt("2026-12-31")); // 364 days — would normally trigger
+    fn ueberschritten(report: &CheckReport) -> Option<&Finding> {
+        report
+            .findings
+            .iter()
+            .find(|f| f.kind == FindingKind::ZahlungszielUeberschritten)
+    }
 
-        let config = CheckConfig {
-            max_zahlungsziel_days: 0,
-            ..Default::default()
-        };
-        let report = InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &config);
-        assert!(
-            !report.findings.iter().any(|f| matches!(
-                f.kind,
-                FindingKind::ZahlungszielExceeded | FindingKind::ZahlungszielInvalid
-            )),
-            "Zahlungsziel check must be skipped when max_zahlungsziel_days = 0"
+    fn rueckerstattung(rechnungsdatum: &str, faellig: &str) -> Rechnung {
+        let mut r = mit_zahlungsziel(rechnungsdatum, faellig);
+        r.zu_zahlen = Some(betrag(EuroAmount::from_raw(-100_000)));
+        r
+    }
+
+    /// `E_0406` Prüfschritt 34: „Zahlungsziel > 10 WT zum Rechnungsdatum".
+    /// Dated Wednesday 01.07.2026, the eleventh Werktag is Thursday 16.07.
+    #[test]
+    fn a_refund_due_eleven_werktage_after_its_date_is_disputed() {
+        let r = rueckerstattung("2026-07-01", "2026-07-16");
+        for pid in InvoicCheckEngine::RUECKERSTATTUNG_HOECHSTFRIST_PIDS {
+            let report = InvoicCheckEngine::check(
+                pid,
+                SENDER,
+                &r,
+                &empty_store(),
+                EINGANG_MI,
+                &CheckConfig::default(),
+            );
+            let finding = ueberschritten(&report).unwrap_or_else(|| {
+                panic!(
+                    "{pid}: no ZahlungszielUeberschritten in {:#?}",
+                    report.findings
+                )
+            });
+            assert!(finding.is_dispute, "{pid}: a broken ceiling is a refusal");
+            assert!(
+                finding.message.contains("15.07.2026"),
+                "{pid}: {}",
+                finding.message
+            );
+        }
+    }
+
+    /// The tenth Werktag after the Rechnungsdatum is the ceiling itself.
+    #[test]
+    fn a_refund_due_ten_werktage_after_its_date_passes() {
+        let r = rueckerstattung("2026-07-01", "2026-07-15");
+        for pid in InvoicCheckEngine::RUECKERSTATTUNG_HOECHSTFRIST_PIDS
+            .into_iter()
+            .chain(InvoicCheckEngine::ZAHLUNGSZIEL_HOECHSTFRIST_STETS_PIDS)
+        {
+            let report = InvoicCheckEngine::check(
+                pid,
+                SENDER,
+                &r,
+                &empty_store(),
+                EINGANG_MI,
+                &CheckConfig::default(),
+            );
+            assert!(
+                ueberschritten(&report).is_none(),
+                "{pid}: {:#?}",
+                report.findings
+            );
+        }
+    }
+
+    /// The ceiling counts from the Rechnungsdatum, not the receipt: a refund
+    /// received a week after it is dated is measured from the date it bears.
+    #[test]
+    fn the_refund_ceiling_counts_from_the_rechnungsdatum() {
+        let r = rueckerstattung("2026-07-01", "2026-07-16");
+        let report = InvoicCheckEngine::check(
+            31_002,
+            SENDER,
+            &r,
+            &empty_store(),
+            time::macros::date!(2026 - 07 - 08),
+            &CheckConfig::default(),
         );
+        assert!(ueberschritten(&report).is_some(), "{:#?}", report.findings);
+    }
+
+    /// An invoice the recipient pays has a floor, not this ceiling — except
+    /// where the AHB states `[25]` without a sign branch (31006, 31008).
+    #[test]
+    fn the_ceiling_follows_the_sign_where_the_ahb_branches_on_it() {
+        let r = mit_zahlungsziel("2026-07-01", "2026-07-16");
+        for pid in InvoicCheckEngine::RUECKERSTATTUNG_HOECHSTFRIST_PIDS {
+            let report = InvoicCheckEngine::check(
+                pid,
+                SENDER,
+                &r,
+                &empty_store(),
+                EINGANG_MI,
+                &CheckConfig::default(),
+            );
+            assert!(
+                ueberschritten(&report).is_none(),
+                "{pid}: {:#?}",
+                report.findings
+            );
+        }
+        for pid in InvoicCheckEngine::ZAHLUNGSZIEL_HOECHSTFRIST_STETS_PIDS {
+            let report = InvoicCheckEngine::check(
+                pid,
+                SENDER,
+                &r,
+                &empty_store(),
+                EINGANG_MI,
+                &CheckConfig::default(),
+            );
+            assert!(
+                ueberschritten(&report).is_some(),
+                "{pid}: {:#?}",
+                report.findings
+            );
+        }
+    }
+
+    /// Neither a Stornorechnung nor a PID without `[25]` is measured.
+    #[test]
+    fn a_storno_and_an_unlisted_pid_carry_no_refund_ceiling() {
+        let mut storno = rueckerstattung("2026-07-01", "2026-08-31");
+        storno.ist_storno = Some(true);
+        storno.original_rechnungsnummer = Some("R-1".to_owned());
+        let report = InvoicCheckEngine::check(
+            31_002,
+            SENDER,
+            &storno,
+            &empty_store(),
+            EINGANG_MI,
+            &CheckConfig::default(),
+        );
+        assert!(ueberschritten(&report).is_none(), "{:#?}", report.findings);
+
+        let r = rueckerstattung("2026-07-01", "2026-08-31");
+        for pid in [31_003, 31_009, 31_011] {
+            let report = InvoicCheckEngine::check(
+                pid,
+                SENDER,
+                &r,
+                &empty_store(),
+                EINGANG_MI,
+                &CheckConfig::default(),
+            );
+            assert!(
+                ueberschritten(&report).is_none(),
+                "{pid}: {:#?}",
+                report.findings
+            );
+        }
     }
 
     // ── The ESA's price basis is its accepted Angebot ─────────────────────────
@@ -3563,8 +4458,13 @@ mod tests {
             ],
             Some(cents(2_501)),
         );
-        let report =
-            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check_esa_rechnung(
+            SENDER,
+            &r,
+            &agreed(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(
             report.outcome,
             CheckOutcome::Ok,
@@ -3585,8 +4485,13 @@ mod tests {
             vec![esa_pos(1, "9990001100001", cents(4_000))],
             Some(cents(4_000)),
         );
-        let report =
-            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check_esa_rechnung(
+            SENDER,
+            &r,
+            &agreed(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(report.outcome, CheckOutcome::Dispute);
         let f = report
             .findings
@@ -3607,8 +4512,13 @@ mod tests {
             vec![esa_pos(1, "9990009900009", cents(500))],
             Some(cents(500)),
         );
-        let report =
-            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check_esa_rechnung(
+            SENDER,
+            &r,
+            &agreed(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(report.outcome, CheckOutcome::Dispute);
         assert!(
             report
@@ -3626,8 +4536,13 @@ mod tests {
     #[test]
     fn a_missing_angebot_warns_rather_than_disputing() {
         let r = make_rechnung(vec![esa_pos(1, "9990001100002", cents(1))], Some(cents(1)));
-        let report =
-            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &[], &CheckConfig::default());
+        let report = InvoicCheckEngine::check_esa_rechnung(
+            SENDER,
+            &r,
+            &[],
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(report.outcome, CheckOutcome::Warn);
         let f = report
             .findings
@@ -3653,8 +4568,13 @@ mod tests {
             )],
             Some(cents(999)),
         );
-        let report =
-            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check_esa_rechnung(
+            SENDER,
+            &r,
+            &agreed(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert_eq!(report.outcome, CheckOutcome::Warn);
         assert!(
             report
@@ -3675,8 +4595,13 @@ mod tests {
             }],
             Some(cents(500)),
         );
-        let report =
-            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        let report = InvoicCheckEngine::check_esa_rechnung(
+            SENDER,
+            &r,
+            &agreed(),
+            EINGANG,
+            &CheckConfig::default(),
+        );
         assert!(
             report
                 .findings

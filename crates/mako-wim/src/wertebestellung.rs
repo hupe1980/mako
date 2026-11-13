@@ -64,11 +64,11 @@ pub const WORKFLOW_NAME: &str = "wim-wertebestellung";
 
 /// REQOTE — "Anfrage von Werten" (ESA → MSB), UC 4.1 Nr. 1.
 ///
-/// ESA-specific. REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and
+/// ESA-specific. REQOTE AHB 1.1 Kap. 4.3 gives the Kommunikation as *ESA an MSB* and
 /// labels the `SG1 RFF+Z13` text "35003 Anfrage von Werten für ESA"; the PID
 /// overview 4.0 lists it under WiM Strom Teil 2 and nowhere else.
 ///
-/// Do not confuse it with **35002**, which is §4.2 "Anfrage zur Rechnungsabwicklung
+/// Do not confuse it with **35002**, which is Kap. 4.2 "Anfrage zur Rechnungsabwicklung
 /// des Messstellenbetriebs über den LF" — a different process, LF → MSB, in WiM
 /// Teil 1. The two never collide: each belongs to one process, so nothing needs
 /// a sender-role classifier to tell them apart.
@@ -743,7 +743,7 @@ pub enum WertebestellungCommand {
         ///
         /// `SG4 CUX`, the `SG27 PIA+Z02` Artikel-IDs, the `SG31 PRI+CAL` prices
         /// and one to 23 `PIA+5 …:SRW` OBIS-Kennzahlen are all **Muss** on the
-        /// 15003 (QUOTES AHB 1.1a §4.3). UC 4.1.1 has the ESA asking for „die
+        /// 15003 (QUOTES AHB 1.1a Kap. 4.3). UC 4.1.1 has the ESA asking for „die
         /// Übermittlung von Werten **und die damit verbundenen Kosten**", so an
         /// offer that prices nothing is not an offer — and pricing is exactly
         /// what distinguishes the Angebot from the Ablehnung, since `DTM+273`
@@ -780,7 +780,7 @@ pub enum WertebestellungCommand {
     /// UC 4.1 Nr. 4 — answer the Bestellung (ORDRSP 19011/19012).
     ///
     /// The answer is a **published Antwortcode**, not a boolean: `SG2 AJT` is
-    /// Muss on this PID and conditions `[17]`/`[18]` of ORDRSP AHB 1.1b §4.15
+    /// Muss on this PID and conditions `[17]`/`[18]` of ORDRSP AHB 1.1b Kap. 4.15
     /// require the code to sit in the tree's Zustimmungs- resp.
     /// Ablehnungs-Cluster. The cluster therefore selects the PID — deriving it
     /// from a separate `accept` flag lets the two disagree.
@@ -917,6 +917,31 @@ const fn default_start_abo() -> Abonnement {
 }
 
 /// Format a datetime as `CCYYMMDD` for a DTM segment value (format code 102).
+/// The QUOTES 15003 Ablehnung der Anfrage: the reason (`FTX`) and no
+/// Bindungsfrist — its absence is what tells the ESA this is a rejection.
+fn quotes_ablehnung(
+    msb: &MarktpartnerCode,
+    esa: &MarktpartnerCode,
+    message_ref: Option<&str>,
+    lokations_id: &str,
+    korrelation_ref: Option<&str>,
+    reason: String,
+) -> PendingOutbox {
+    PendingOutbox::typed(
+        esa.as_str(),
+        &mako_engine::payload::QuotesPayload {
+            pid: Some(ANGEBOT_PID.as_u32()),
+            sender: Some(msb.as_str().to_owned()),
+            receiver: Some(esa.as_str().to_owned()),
+            message_ref: message_ref.map(str::to_owned),
+            location: Some(lokations_id.to_owned()),
+            korrelation_ref: korrelation_ref.map(str::to_owned),
+            reason: Some(reason),
+            ..Default::default()
+        },
+    )
+}
+
 fn ccyymmdd(dt: OffsetDateTime) -> String {
     format!("{:04}{:02}{:02}", dt.year(), u8::from(dt.month()), dt.day())
 }
@@ -1226,7 +1251,7 @@ impl Workflow for WimWertebestellungWorkflow {
         //
         // Both also carry `IMD+7081` and an `AJT` naming the EBD the
         // Prüfschritt code belongs to — Muss on all four (ORDRSP AHB 1.1b
-        // §4.15). An ORDRSP carries **no LOC**, so no location travels here.
+        // Kap. 4.15). An ORDRSP carries **no LOC**, so no location travels here.
         /// The `de.mako.process.initiated` notification an inbound ESA step
         /// owes its observers.
         ///
@@ -1285,12 +1310,10 @@ impl Workflow for WimWertebestellungWorkflow {
         }
 
         fn esa_answer(
-            message_type: &'static str,
             pid: Pruefidentifikator,
             data: &WertebestellungData,
             message_ref: &MessageRef,
             antwort: Option<(&'static str, &mako_pruefung::codes::AntwortCode)>,
-            reason: Option<&str>,
         ) -> PendingOutbox {
             let ist_storno_antwort = pid == STORNO_BESTAETIGUNG_PID || pid == STORNO_ABLEHNUNG_PID;
             let korrelation_ref = if ist_storno_antwort {
@@ -1301,30 +1324,30 @@ impl Workflow for WimWertebestellungWorkflow {
             let abo = data
                 .offene_antwort_abo
                 .unwrap_or(data.gegenstand.abonnement);
-            PendingOutbox::new(
-                message_type,
+            // ORDRSP AHB 1.1b Kap. 4.15 (S. 61–62) has no free text beside
+            // `AJT`; a reason stays in the process's event.
+            PendingOutbox::typed(
                 data.esa.as_str(),
-                serde_json::json!({
-                    "pid": pid,
-                    "sender": data.msb.as_str(),
-                    "receiver": data.esa.as_str(),
-                    "message_ref": message_ref.as_str(),
-                    "korrelation_ref": korrelation_ref,
-                    "abonnement": abo.imd_code(),
+                &mako_engine::payload::OrdrspPayload {
+                    pid: Some(pid.as_u32()),
+                    sender: Some(data.msb.as_str().to_owned()),
+                    receiver: Some(data.esa.as_str().to_owned()),
+                    message_ref: Some(message_ref.as_str().to_owned()),
+                    korrelation_ref,
+                    abonnement: Some(abo.imd_code().to_owned()),
                     // `SG2 AJT` — DE 4465 the Prüfschritt code, DE 1082 the
                     // tree that publishes it. Muss on all four answer PIDs.
-                    "antwort_code": antwort.map(|(_, c)| c.code),
-                    "antwort_codeliste": antwort.map(|(t, _)| t),
-                    "reason": reason,
-                    "messprodukt": data.gegenstand.messprodukt,
-                }),
+                    antwort_code: antwort.map(|(_, c)| c.code.to_owned()),
+                    antwort_codeliste: antwort.map(|(t, _)| t.to_owned()),
+                    ..Default::default()
+                },
             )
         }
 
         /// Resolve an `AJT` code against the tree that publishes it, and let
         /// its **Cluster** pick the answer PID.
         ///
-        /// This is the rule ORDRSP AHB 1.1b §4.15 conditions `[17]`/`[18]` state.
+        /// This is the rule ORDRSP AHB 1.1b Kap. 4.15 conditions `[17]`/`[18]` state.
         /// A code off the Zustimmung/Ablehnung axis, or one the tree does not
         /// publish, is refused rather than guessed at.
         fn resolve_antwort(
@@ -1397,21 +1420,16 @@ impl Workflow for WimWertebestellungWorkflow {
                 // with a QUOTES 15003 Ablehnung built from the command's parties
                 // (state is still New, so there is no `data` to draw from yet).
                 if let Some(reason) = consent_block {
-                    let outbox = PendingOutbox::new(
-                        "QUOTES",
-                        esa.as_str(),
-                        serde_json::json!({
-                            "pid": ANGEBOT_PID,
-                            "sender": msb.as_str(),
-                            "receiver": esa.as_str(),
-                            "message_ref": message_ref.as_str(),
-                            "location": lokations_id,
-                            // QUOTES AHB 1.1a §4.3: `RFF+AAV` echoes the
-                            // REQOTE's Belegnummer — the Angebot's published
-                            // Zuordnungsschlüssel, and equally the Ablehnung's.
-                            "korrelation_ref": message_ref.as_str(),
-                            "reason": reason.clone(),
-                        }),
+                    // QUOTES AHB 1.1a Kap. 4.3: `RFF+AAV` echoes the REQOTE's
+                    // Belegnummer — the Angebot's published
+                    // Zuordnungsschlüssel, and equally the Ablehnung's.
+                    let outbox = quotes_ablehnung(
+                        &msb,
+                        &esa,
+                        Some(message_ref.as_str()),
+                        &lokations_id,
+                        Some(message_ref.as_str()),
+                        reason.clone(),
                     );
                     return Ok(WorkflowOutput::with_outbox(
                         vec![E::AnfrageAbgelehnt { reason }],
@@ -1423,18 +1441,13 @@ impl Workflow for WimWertebestellungWorkflow {
                 // Fehlerfälle, and answering it with an Angebot would commit
                 // the MSB to a delivery it cannot make.
                 if let Err(e) = gegenstand.validate(ebene) {
-                    let outbox = PendingOutbox::new(
-                        "QUOTES",
-                        esa.as_str(),
-                        serde_json::json!({
-                            "pid": ANGEBOT_PID,
-                            "sender": msb.as_str(),
-                            "receiver": esa.as_str(),
-                            "message_ref": message_ref.as_str(),
-                            "location": lokations_id,
-                            "korrelation_ref": message_ref.as_str(),
-                            "reason": e.to_string(),
-                        }),
+                    let outbox = quotes_ablehnung(
+                        &msb,
+                        &esa,
+                        Some(message_ref.as_str()),
+                        &lokations_id,
+                        Some(message_ref.as_str()),
+                        e.to_string(),
                     );
                     return Ok(WorkflowOutput::with_outbox(
                         vec![E::AnfrageAbgelehnt {
@@ -1506,7 +1519,7 @@ impl Workflow for WimWertebestellungWorkflow {
                 // from an Anfrage-Ablehnung (which carries none).
                 //
                 // `DTM+273` is a **duration**, not a date (QUOTES AHB 1.1a
-                // §4.3: DE 2380 „Zeitraum“, DE 2379 ∈ {802 Monat, 803 Woche,
+                // Kap. 4.3: DE 2380 „Zeitraum“, DE 2379 ∈ {802 Monat, 803 Woche,
                 // 804 Tag}). The workflow holds the absolute end it will
                 // enforce and hands the renderer the day count to the wire.
                 //
@@ -1523,7 +1536,7 @@ impl Workflow for WimWertebestellungWorkflow {
                 if angebot.ist_leer() {
                     return Err(WorkflowError::rejected(
                         "Angebot ohne Preisangabe — SG31 PRI und die OBIS-Kennzahlen sind Muss \
-                         auf der QUOTES 15003 (QUOTES AHB 1.1a §4.3); eine Anfrage ohne Angebot \
+                         auf der QUOTES 15003 (QUOTES AHB 1.1a Kap. 4.3); eine Anfrage ohne Angebot \
                          wird mit RejectAnfrage abgelehnt",
                     ));
                 }
@@ -1536,36 +1549,34 @@ impl Workflow for WimWertebestellungWorkflow {
                     }
                     ids
                 };
-                let preise: Vec<serde_json::Value> = angebot
+                let preise = angebot
                     .preise
                     .iter()
-                    .map(|p| {
-                        serde_json::json!({
-                            "betrag": p.betrag,
-                            "art": p.preistyp.pri_code(),
-                            "einheit": p.einheit,
-                        })
+                    .map(|p| mako_engine::payload::QuotesPreis {
+                        betrag: p.betrag.clone(),
+                        art: Some(p.preistyp.pri_code().to_owned()),
+                        einheit: Some(p.einheit.clone()),
                     })
                     .collect();
-                let outbox = PendingOutbox::new(
-                    "QUOTES",
+                let outbox = PendingOutbox::typed(
                     data.esa.as_str(),
-                    serde_json::json!({
-                        "pid": ANGEBOT_PID,
-                        "sender": data.msb.as_str(),
-                        "receiver": data.esa.as_str(),
-                        "location": data.lokations_id,
-                        "message_ref": message_ref.as_str(),
+                    &mako_engine::payload::QuotesPayload {
+                        pid: Some(ANGEBOT_PID.as_u32()),
+                        sender: Some(data.msb.as_str().to_owned()),
+                        receiver: Some(data.esa.as_str().to_owned()),
+                        location: Some(data.lokations_id.clone()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
                         // `RFF+AAV` — the REQOTE this answers (`ZG-T16`).
-                        "korrelation_ref": data.anfrage_ref,
-                        "bindungsfrist_tage": bindungsfrist_tage,
-                        "fruehester_start": ccyymmdd(start),
-                        "messprodukt": data.gegenstand.messprodukt,
-                        "currency": angebot.waehrung.as_deref().unwrap_or("EUR"),
-                        "artikel_ids": artikel_ids,
-                        "obis": angebot.obis_kennzahlen,
-                        "preise": preise,
-                    }),
+                        korrelation_ref: data.anfrage_ref.clone(),
+                        bindungsfrist_tage: u32::try_from(bindungsfrist_tage).ok(),
+                        fruehester_start: Some(ccyymmdd(start)),
+                        messprodukt: Some(data.gegenstand.messprodukt.clone()),
+                        currency: Some(angebot.waehrung.as_deref().unwrap_or("EUR").to_owned()),
+                        artikel_ids: artikel_ids.into_iter().map(str::to_owned).collect(),
+                        obis: angebot.obis_kennzahlen.clone(),
+                        preise,
+                        ..Default::default()
+                    },
                 );
                 Ok(WorkflowOutput {
                     events: vec![E::AngebotAbgegeben {
@@ -1594,17 +1605,13 @@ impl Workflow for WimWertebestellungWorkflow {
                 // Ablehnung der Anfrage: QUOTES 15003 with the reason (FTX) and
                 // *no* Bindungsfrist — its absence is what tells the ESA this is
                 // a rejection, not an Angebot.
-                let outbox = PendingOutbox::new(
-                    "QUOTES",
-                    data.esa.as_str(),
-                    serde_json::json!({
-                        "pid": ANGEBOT_PID,
-                        "sender": data.msb.as_str(),
-                        "receiver": data.esa.as_str(),
-                        "location": data.lokations_id,
-                        "korrelation_ref": data.anfrage_ref,
-                        "reason": reason.clone(),
-                    }),
+                let outbox = quotes_ablehnung(
+                    &data.msb,
+                    &data.esa,
+                    None,
+                    &data.lokations_id,
+                    data.anfrage_ref.as_deref(),
+                    reason.clone(),
                 );
                 Ok(WorkflowOutput::with_outbox(
                     vec![E::AnfrageAbgelehnt { reason }],
@@ -1646,14 +1653,7 @@ impl Workflow for WimWertebestellungWorkflow {
                     let tree = crate::esa::EBD_ESA_BESTELLUNG;
                     let code = mako_pruefung::codes::lookup(tree, "A08")
                         .expect("A08 is published in E_0256");
-                    let outbox = esa_answer(
-                        "ORDRSP",
-                        ABLEHNUNG_PID,
-                        data,
-                        &message_ref,
-                        Some((tree, code)),
-                        Some(reason.as_str()),
-                    );
+                    let outbox = esa_answer(ABLEHNUNG_PID, data, &message_ref, Some((tree, code)));
                     return Ok(WorkflowOutput::with_outbox(
                         vec![E::BestellungAbgelehnt {
                             reason,
@@ -1712,14 +1712,7 @@ impl Workflow for WimWertebestellungWorkflow {
                         code.code, code.bedeutung
                     )));
                 }
-                let outbox = esa_answer(
-                    "ORDRSP",
-                    pid,
-                    data,
-                    &message_ref,
-                    Some((tree, code)),
-                    reason.as_deref(),
-                );
+                let outbox = esa_answer(pid, data, &message_ref, Some((tree, code)));
                 let event = if zustimmung {
                     E::BestellungBestaetigt {
                         message_ref,
@@ -1799,14 +1792,7 @@ impl Workflow for WimWertebestellungWorkflow {
                     STORNO_BESTAETIGUNG_PID,
                     STORNO_ABLEHNUNG_PID,
                 )?;
-                let outbox = esa_answer(
-                    "ORDRSP",
-                    pid,
-                    data,
-                    &message_ref,
-                    Some((tree, code)),
-                    reason.as_deref(),
-                );
+                let outbox = esa_answer(pid, data, &message_ref, Some((tree, code)));
                 let event = if zustimmung {
                     E::StornierungBestaetigt {
                         message_ref,
@@ -1874,14 +1860,7 @@ impl Workflow for WimWertebestellungWorkflow {
                 let tree = crate::esa::EBD_ESA_BEENDIGUNG;
                 let (pid, code, zustimmung) =
                     resolve_antwort(tree, &antwort_code, BESTAETIGUNG_PID, ABLEHNUNG_PID)?;
-                let outbox = esa_answer(
-                    "ORDRSP",
-                    pid,
-                    data,
-                    &message_ref,
-                    Some((tree, code)),
-                    reason.as_deref(),
-                );
+                let outbox = esa_answer(pid, data, &message_ref, Some((tree, code)));
                 let event = if zustimmung {
                     E::AbbestellungBestaetigt {
                         message_ref,
@@ -1909,12 +1888,22 @@ impl Workflow for WimWertebestellungWorkflow {
                         state.label(),
                     ));
                 };
-                let intervals = reads.as_array().filter(|a| !a.is_empty()).ok_or_else(|| {
-                    WorkflowError::rejected(
+                // Each interval is a `SG10` value of the MSCONS 13027: a key it
+                // does not declare is refused here, at the command, not at
+                // render.
+                let intervals: Vec<mako_engine::payload::MsconsRead> =
+                    serde_json::from_value(reads).map_err(|e| {
+                        WorkflowError::rejected(format!(
+                            "Werteübermittlung: reads ist keine Liste von Intervallwerten \
+                             (dtm_from, dtm_to, quantity_kwh, obis_code, ersatzwert): {e}"
+                        ))
+                    })?;
+                if intervals.is_empty() {
+                    return Err(WorkflowError::rejected(
                         "Werteübermittlung ohne Intervallwerte — reads muss ein nicht-leeres \
                          Array sein",
-                    )
-                })?;
+                    ));
+                }
                 let interval_count = u32::try_from(intervals.len()).unwrap_or(u32::MAX);
                 // How far this batch reaches. `E_0254` Prüfschritt 4 refuses a
                 // Beendigung dated before it, so the answer to that Prüfschritt
@@ -1922,7 +1911,7 @@ impl Workflow for WimWertebestellungWorkflow {
                 let bis = intervals
                     .iter()
                     .filter_map(|iv| {
-                        let raw = iv.get("dtm_to").or_else(|| iv.get("bis"))?.as_str()?;
+                        let raw = iv.dtm_to.as_str();
                         // Both `CCYYMMDD…` from the wire and ISO from the API.
                         let digits: String =
                             raw.chars().filter(char::is_ascii_digit).take(8).collect();
@@ -1936,23 +1925,22 @@ impl Workflow for WimWertebestellungWorkflow {
                     })
                     .max();
                 // Outbound MSCONS 13027 addressed to the ESA (NAD+MR = ESA).
-                let outbox = PendingOutbox::new(
-                    "MSCONS",
+                let outbox = PendingOutbox::typed(
                     data.esa.as_str(),
-                    serde_json::json!({
-                        "pid": WERTE_UEBERMITTLUNG_PID,
-                        "sender_mp_id": data.msb.as_str(),
-                        "receiver_mp_id": data.esa.as_str(),
-                        "malo_id": data.lokations_id,
-                        "message_ref": message_ref.as_str(),
+                    &mako_engine::payload::MsconsPayload {
+                        pid: Some(WERTE_UEBERMITTLUNG_PID.as_u32()),
+                        sender_mp_id: Some(data.msb.as_str().to_owned()),
+                        receiver_mp_id: Some(data.esa.as_str().to_owned()),
+                        malo_id: Some(data.lokations_id.clone()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
                         // `SG1 RFF+AGI` — hint `[574]`: the Belegnummer of the
                         // ORDERS that ordered the values. It is what lets the
                         // ESA tie a delivery to the subscription that
                         // authorised it, since a MaLo may carry several.
-                        "korrelation_ref": data.bestellung_ref,
-                        "messprodukt": data.gegenstand.messprodukt,
-                        "reads": reads,
-                    }),
+                        korrelation_ref: data.bestellung_ref.clone(),
+                        reads: intervals,
+                        ..Default::default()
+                    },
                 );
                 Ok(WorkflowOutput::with_outbox(
                     vec![E::WerteUebermittelt {
@@ -1993,22 +1981,23 @@ impl Workflow for WimWertebestellungWorkflow {
                 let data = state
                     .data()
                     .expect("lieferung_erlaubt() implies process data is present");
-                let outbox = PendingOutbox::new(
-                    "IFTSTA",
+                let outbox = PendingOutbox::typed(
                     data.esa.as_str(),
-                    serde_json::json!({
-                        "pid": BEENDIGUNG_MSB_PID,
-                        "sender": data.msb.as_str(),
-                        "receiver": data.esa.as_str(),
-                        "message_ref": message_ref.as_str(),
-                        "sts_code": STS_BEENDET,
+                    &mako_engine::payload::IftstaPayload {
+                        pid: BEENDIGUNG_MSB_PID.as_u32(),
+                        sender: Some(data.msb.as_str().to_owned()),
+                        receiver: Some(data.esa.as_str().to_owned()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        sts_code: Some(STS_BEENDET.to_owned()),
                         // `SG15 RFF+AGI` — „Aus ORDERS BGM DE1004" (`ZG-T47`),
                         // i.e. the Bestellung, which is what the ESA indexed
                         // its process under. The IFTSTA carries no LOC.
-                        "korrelation_ref": data.bestellung_ref,
-                        "beendigung_zum": beendigung_zum,
-                        "reason": reason,
-                    }),
+                        korrelation_ref: data.bestellung_ref.clone(),
+                        // The German day delivery stops; the renderer puts out
+                        // the instant it begins.
+                        beendigung_zum: Some(mako_fristen::berlin_date(beendigung_zum).to_string()),
+                        ..Default::default()
+                    },
                 );
                 Ok(WorkflowOutput::with_outbox(
                     vec![E::BeendetDurchMsb {

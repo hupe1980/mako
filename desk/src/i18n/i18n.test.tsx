@@ -3,6 +3,7 @@ import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import checklisteJson from "../../fixtures/einrichtung-checkliste.json?raw";
+import vorschlagJson from "../../fixtures/einrichtung-vorschlag.json?raw";
 import { DIENST } from "../app/dienste";
 import { PROBEN, zeigen } from "../app/proben";
 import { RolleProvider } from "../app/rollen";
@@ -356,6 +357,13 @@ describe("the Einrichtung view speaks only through the catalogue", () => {
       punkte: { befunde: { text: string; pfad: string; quelle?: string }[] }[];
       berichte: { grund?: string; roh?: string }[];
     };
+    const vorschlag = JSON.parse(vorschlagJson) as {
+      dateien: { datei: string; dienst: string; zeilen: { text: string; quelle?: string }[] }[];
+      vorbelegt: {
+        rollen?: { mp_id?: string | null }[];
+        dienste?: { name: string; url: string }[];
+      };
+    };
     katalogErsetzen(pseudo<Katalog>(de));
     vi.stubGlobal(
       "fetch",
@@ -364,9 +372,11 @@ describe("the Einrichtung view speaks only through the catalogue", () => {
         const result =
           m.method === "tools/call" && m.params.name === "einrichtung_checkliste"
             ? { structuredContent: liste }
-            : m.method === "tools/call"
-              ? { structuredContent: { freigaben: [], count: 0, saturated: false } }
-              : {};
+            : m.method === "tools/call" && m.params.name === "einrichtung_vorschlag"
+              ? { structuredContent: vorschlag }
+              : m.method === "tools/call"
+                ? { structuredContent: { freigaben: [], count: 0, saturated: false } }
+                : {};
         return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
           headers: { "content-type": "application/json", "mcp-session-id": "s" },
         });
@@ -378,6 +388,15 @@ describe("the Einrichtung view speaks only through the catalogue", () => {
     const data = [
       ...liste.punkte.flatMap((p) => p.befunde.flatMap((b) => [b.text, b.pfad, b.quelle ?? ""])),
       ...liste.berichte.flatMap((b) => [b.grund ?? "", b.roh ?? ""]),
+      // makod's proposal — its files, lines and sources, and the answers it
+      // pre-fills — before the service names, so a file name is taken whole.
+      ...vorschlag.dateien.flatMap((d) => [
+        d.datei,
+        d.dienst,
+        ...d.zeilen.flatMap((z) => [z.text, z.quelle ?? "", `# ${z.quelle ?? ""}`]),
+      ]),
+      ...(vorschlag.vorbelegt.rollen ?? []).map((r) => r.mp_id ?? ""),
+      ...(vorschlag.vorbelegt.dienste ?? []).flatMap((d) => [d.name, d.url]),
       ...liste.dienste.flatMap((d) => [d.dienst, d.version ?? ""]),
       ...Object.values(DIENST),
       // The Probelauf's example facts, the profile's values as JSON.

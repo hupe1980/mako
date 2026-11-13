@@ -18,7 +18,14 @@
 //! 3. On success, upserts the discovered base URL into the [`SlateDbPartnerStore`]
 //!    as a `CommunicationChannel` with qualifier `"AW"` (API-Webdienste).
 //! 4. On `Error::NotFound` the entry is left untouched (partner may not yet be
-//!    registered). On `Error::Redirect` the redirect URL is followed once.
+//!    registered).
+//!
+//! A record is used only when its signature verifies against one of the
+//! partner's EMT.API signature certificates configured in
+//! `[maloid] verzeichnisdienst_signing_certs` (Regelungen zum Verzeichnisdienst
+//! 1.1, Kap. 2.2, S. 6); `get_record` follows a directory redirect itself and
+//! verifies the record it leads to. A partner with no configured certificate has
+//! every record refused, and the stored endpoint is left as it was.
 //!
 //! ## Discovery on demand
 //!
@@ -33,10 +40,13 @@
 //! which requires the `client` feature of the `energy-api` crate.  That
 //! feature is already enabled in `makod/Cargo.toml`.
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use energy_api::directory::DirectoryServiceClient;
 use energy_api::error::Error as ApiError;
+use energy_api::transport::jws::RecordVerifyingKey;
 use mako_engine::ids::TenantId;
 use mako_engine::partner::{CommunicationChannel, PartnerRecord, PartnerStore as _};
 use mako_engine::store_slatedb::SlateDbPartnerStore;
@@ -70,20 +80,26 @@ pub struct VerzeichnisdienstLookup {
     client: DirectoryServiceClient,
     partner_store: SlateDbPartnerStore,
     tenant_id: TenantId,
+    signers: Arc<HashMap<String, Vec<RecordVerifyingKey>>>,
 }
 
 impl VerzeichnisdienstLookup {
     /// Create a new lookup helper.
+    ///
+    /// `signers` holds each partner's EMT.API signature keys, keyed by MP-ID;
+    /// a record is used only when its signature verifies against one of them.
     #[must_use]
     pub fn new(
         client: DirectoryServiceClient,
         partner_store: SlateDbPartnerStore,
         tenant_id: TenantId,
+        signers: HashMap<String, Vec<RecordVerifyingKey>>,
     ) -> Self {
         Self {
             client,
             partner_store,
             tenant_id,
+            signers: Arc::new(signers),
         }
     }
 
@@ -155,12 +171,13 @@ impl VerzeichnisdienstLookup {
         mp_id: &str,
         mp_id_code: &MarktpartnerCode,
     ) -> Result<Option<Url>, mako_engine::error::EngineError> {
+        let signers = self.signers.get(mp_id).map_or(&[][..], Vec::as_slice);
         match self
             .client
-            .get_record(mp_id, MALO_IDENT_API_ID, MALO_IDENT_MAJOR_VERSION)
+            .get_record(mp_id, MALO_IDENT_API_ID, MALO_IDENT_MAJOR_VERSION, signers)
             .await
         {
-            Ok((record, _cert, _sig)) => {
+            Ok(record) => {
                 let api_url = record.url.clone();
                 info!(
                     mp_id,
@@ -181,21 +198,14 @@ impl VerzeichnisdienstLookup {
                 );
                 Ok(None)
             }
-            Err(ApiError::Redirect { url }) => {
-                // Follow a single redirect level: re-issue using the redirect URL.
-                info!(mp_id, redirect_to = %url, "Verzeichnisdienst: received 307 redirect — following");
-                match Url::parse(url.as_ref()) {
-                    Ok(redirected_url) => {
-                        // Store the redirect target URL as the partner's API-Webdienste endpoint.
-                        self.persist_api_webdienste_url(mp_id, mp_id_code, redirected_url.as_str())
-                            .await;
-                        Ok(Some(redirected_url))
-                    }
-                    Err(e) => {
-                        warn!(mp_id, redirect = %url, error = %e, "Verzeichnisdienst: redirect URL is invalid");
-                        Ok(None)
-                    }
-                }
+            Err(ApiError::UnverifiedRecord(why)) => {
+                warn!(
+                    mp_id,
+                    reason = %why,
+                    "Verzeichnisdienst: record refused — not verified as the partner's own; \
+                     the stored endpoint is left as it was",
+                );
+                Ok(None)
             }
             Err(e) => {
                 warn!(mp_id, error = %e, "Verzeichnisdienst: lookup failed — using no URL");
@@ -283,7 +293,7 @@ impl VerzeichnisdienstLookup {
 /// Spawn with [`tokio::spawn`]:
 ///
 /// ```rust,ignore
-/// let lookup = VerzeichnisdienstLookup::new(client, partner_store, tenant_id);
+/// let lookup = VerzeichnisdienstLookup::new(client, partner_store, tenant_id, signers);
 /// tokio::spawn(verzeichnisdienst_refresh_task(
 ///     lookup,
 ///     Duration::from_secs(300),
@@ -399,7 +409,14 @@ mod refresh_tests {
 
     const MP_ID: &str = "9900001000001";
 
-    /// A Verzeichnisdienst answering every record lookup with `url`.
+    /// The partner's EMT.API signature key in these tests.
+    fn partner_key() -> energy_api::transport::jws::RecordSigningKey {
+        energy_api::transport::jws::RecordSigningKey::from_slice(&[0x11; 32])
+            .expect("a valid P-256 scalar")
+    }
+
+    /// A Verzeichnisdienst answering every record lookup with `url`, signed
+    /// by [`partner_key`].
     async fn directory(url: &'static str) -> Url {
         let record = serde_json::json!({
             "providerId": MP_ID,
@@ -410,9 +427,13 @@ mod refresh_tests {
             "revision": 2,
             "status": "Online",
         });
+        let typed: energy_api::directory::ApiRecord =
+            serde_json::from_value(record.clone()).expect("record");
+        let signature = energy_api::transport::jws::sign(&typed, &partner_key()).expect("sign");
         let app = axum::Router::new().fallback(move || {
             let record = record.clone();
-            async move { axum::Json(record) }
+            let signature = signature.clone();
+            async move { ([("x-bdew-signature", signature)], axum::Json(record)) }
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -450,7 +471,8 @@ mod refresh_tests {
 
         let base = directory("https://new.partner.example/maloId/").await;
         let client = DirectoryServiceClient::new(base, reqwest::Client::new());
-        let lookup = VerzeichnisdienstLookup::new(client, partners.clone(), tenant);
+        let signers = HashMap::from([(MP_ID.to_owned(), vec![*partner_key().verifying_key()])]);
+        let lookup = VerzeichnisdienstLookup::new(client, partners.clone(), tenant, signers);
 
         refresh_cycle(&lookup).await;
 

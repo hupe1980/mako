@@ -256,7 +256,7 @@ pub fn parse(input: &[u8]) -> Result<AnyMessage, Error> {
 /// Parse a single message using an explicit registry.
 ///
 /// Used by [`Platform::parse`] to avoid the global-registry singleton.
-/// Enforce BDEW Allgemeine Festlegungen §2.13 on one message.
+/// Enforce BDEW Allgemeine Festlegungen Kap. 2.13 on one message.
 ///
 /// > "Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten
 /// > MP-ID sind identisch."
@@ -304,7 +304,7 @@ pub(crate) fn parse_with_registry(
     let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(input.as_ref(), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
-    // §2.13 — read the envelope parties before `dispatch_message` consumes the
+    // Kap. 2.13 — read the envelope parties before `dispatch_message` consumes the
     // segments; an interchange-less message simply has no UNB and is skipped.
     let (unb_sender, unb_receiver) = segments
         .iter()
@@ -661,7 +661,7 @@ impl Parser {
     /// Independent of whether the messages inside parse. The envelope carries
     /// the facts a receiver has to act on before it looks at any message: who
     /// sent it, its control reference, and `DE 0035` — the test indicator a
-    /// production endpoint must refuse (Allgemeine Festlegungen § 3). Deciding
+    /// production endpoint must refuse (Allgemeine Festlegungen Kap. 3). Deciding
     /// those from a full parse makes them conditional on every message being
     /// well formed, so one malformed message inside a test interchange would
     /// let the whole thing through.
@@ -769,7 +769,7 @@ impl Iterator for InterchangeIter {
                 let window = window_result.map_err(Error::Parse)?;
                 let message =
                     dispatch_message_on_date(window.segments, &self.registry, self.reference_date)?;
-                // §2.13 is an authorisation boundary, so it holds on every path
+                // Kap. 2.13 is an authorisation boundary, so it holds on every path
                 // that yields a message.
                 check_interchange_party_identity(
                     self.header.sender_id.as_ref(),
@@ -936,7 +936,7 @@ fn parse_interchange_full_from_segments_with_registry(
     .entered();
 
     // DE 0035: test indicator.  "1" = test message; absent or any other value = production.
-    // Per Allgemeine Festlegungen V6.1d §3: test messages must not be processed as production.
+    // Per Allgemeine Festlegungen V6.1d Kap. 3: test messages must not be processed as production.
     let test_indicator = unb.element_str(10).is_some_and(|v| v.trim() == "1");
 
     let header = InterchangeHeader {
@@ -987,7 +987,7 @@ fn parse_interchange_full_from_segments_with_registry(
         });
     }
 
-    // §2.13 — every message's NAD parties must match the envelope.
+    // Kap. 2.13 — every message's NAD parties must match the envelope.
     for (index, envelope) in messages.iter().enumerate() {
         check_interchange_party_identity(
             header.sender_id.as_ref(),

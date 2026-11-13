@@ -42,6 +42,7 @@ command through `Process::run`; `makod` is that host.
 | `eog`                       | `gpke-eog`                       | PID 55013 (Anmeldung/Zuordnung EOG §36/§38 EnWG) + 55014/55015 derived |
 | `lf_anmeldung`              | `gpke-lf-anmeldung`              | PIDs 55001/55004/55016/55077 (LF outbound) + 55002-55003/55005-55006/55017-55018/55078/55080 (LF-role receive NB ANTWORT) |
 | `lf_abmeldung`              | `gpke-lf-abmeldung`              | PID 55007 (Lieferende von NB an LF) + 55008/55009 derived     |
+| `nb_lieferende`             | `gpke-nb-lieferende`             | NB side of the Lieferende von NB an LF: 55007 out, 55008/55009 in; on silence the 55007 `BGM+Z90` between 05:00 and 06:00 Uhr des 1. WT (GPKE Teil 2 Kap. 2.5.2.2 Nr. 3) |
 | `stammdatenaenderung`       | `gpke-stammdatenaenderung`       | GPKE Teil 4 Stammdatenänderung 55615–55694, 55109/55110 — inbound MaLo change → apply to marktd + Rückmeldung A01/A02 (quality feedback, tacit acceptance after 2 WT) |
 | `neuanlage`                 | `gpke-neuanlage`                 | PIDs 55600/55601 (Neuanlage MaLo, LF → NB) + 55602–55605 derived   |
 | `messwerte`                 | `gpke-messwerte`                 | MSCONS PIDs 13005/13006/13015–13019/13025/13027 (Messwerte NB/MSB → LF) |
@@ -65,7 +66,7 @@ command through `Process::run`; `makod` is that host.
 
 Two clocks apply, both from `mako_fristen`. The APERAK is due 45 Minuten after
 a UTILMD or ORDERS arrives, Sunday 12:00 for a Saturday arrival (APERAK AHB 1.1
-§ 2.4.1). The business answer is a wall-clock instant per PID —
+Kap. 2.4.1). The business answer is a wall-clock instant per PID —
 11:00 / 06:00 / 05:00 / 09:00 Uhr des 1. WT nach dem ÜT for the GPKE Teil 2
 core processes (`mako_fristen::antwort`). There is no 24-hour message window.
 

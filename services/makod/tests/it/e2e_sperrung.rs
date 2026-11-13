@@ -34,7 +34,7 @@
 //! - **PID 17117**: Entsperrauftrag
 //! - **Deadline**: the NB's ORDRSP by the **1. Werktag nach dem ÜT**; execution
 //!   within **6 WT nach dem frühestmöglichen Sperrtermin** and the IFTSTA within
-//!   1 WT nach Abschluss (BK6-24-174 GPKE Teil 2 § 3.5)
+//!   1 WT nach Abschluss (BK6-24-174 GPKE Teil 2 Kap. 3.5)
 //!   (BNetzA BK6-22-024).
 //! - The workflow state machine:
 //!   `New → AnweisungErhalten → ValidationPassed → Ausgefuehrt` (success)

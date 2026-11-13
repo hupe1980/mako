@@ -72,7 +72,7 @@ fn the_orders_pid_sets_of_the_wim_workflows_are_disjoint() {
 /// Weiterverpflichtung (`E_0203`), not the Technikänderung (`E_0249`/`E_0250`,
 /// which answers on 19005/19006).
 ///
-/// Source: ORDRSP AHB 1.1b §§ 4.9.2, 4.10, 4.11, 4.12.
+/// Source: ORDRSP AHB 1.1b Kap. 4.9.2, 4.10, 4.11, 4.12.
 #[test]
 fn the_ordrsp_answers_follow_their_own_orders() {
     use mako_wim::geraeteubernahme::{ABLEHNUNG_PID, BESTAETIGUNG_PID, GERAETEWECHSELABSICHT_PIDS};

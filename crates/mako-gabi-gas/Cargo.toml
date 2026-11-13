@@ -17,6 +17,7 @@ dvgw-edi     = { workspace = true }
 mako-engine  = { workspace = true }
 mako-fristen = { workspace = true }
 mako-invoic  = { workspace = true }
+mako-pruefung = { workspace = true }
 rust_decimal = { workspace = true }
 serde        = { workspace = true, features = ["derive"] }
 serde_json   = { workspace = true }

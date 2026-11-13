@@ -19,6 +19,20 @@ export interface InvoicdTools {
       saturated: boolean;
     };
   };
+  list_held_receipts: {
+    input: {};
+    output: {
+      /**
+       * The nearest Zahlungsziel first.
+       */
+      gehalten: GehalteneRechnung[];
+      count: number;
+      /**
+       * At least 200 receipts matched.
+       */
+      saturated: boolean;
+    };
+  };
 }
 /**
  * One disputed INVOIC receipt.
@@ -87,6 +101,32 @@ export interface DisputBefund {
    * The checker's sentence.
    */
   text: string;
+}
+/**
+ * One invoice the Entscheidungsbaum left open.
+ */
+export interface GehalteneRechnung {
+  /**
+   * The receipt — the id `POST /api/v1/receipts/{id}/feststellungen` takes.
+   */
+  id: string;
+  process_id: string;
+  pid: number;
+  sender_mp_id: string;
+  rechnungsnummer: string | null;
+  /**
+   * `SG1 RFF+ACE` — the order a Leistungsnachweis names.
+   */
+  bestellung_ref: string | null;
+  /**
+   * The end of the Berlin day of the Zahlungsziel, when there is one.
+   */
+  frist: string | null;
+  /**
+   * The Prüfschritte the walk reached and no record answered: `pruefschritt`,
+   * `ebene` (with the Positionsnummer on the Positionsebene) and `detail`.
+   */
+  offen: unknown[];
 }
 
 /** Tools invoicd serves without an output schema: no view may read them. */

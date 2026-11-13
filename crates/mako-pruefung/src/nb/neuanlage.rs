@@ -2,7 +2,7 @@
 //!
 //! A Lieferant registers a Marktlokation that is being commissioned for the
 //! first time (UTILMD **55600** verbrauchend / **55601** erzeugend, GPKE Teil 2
-//! § 2.2). The NB answers 55602/55604 or 55603/55605.
+//! Kap. 2.2). The NB answers 55602/55604 or 55603/55605.
 //!
 //! # The tree has a third outcome
 //!

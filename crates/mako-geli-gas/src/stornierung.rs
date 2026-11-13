@@ -42,7 +42,7 @@
 //! ```
 //!
 //! No APERAK accompanies a processable 44022: in the Sparte Gas the APERAK
-//! reports only a Verarbeitbarkeitsfehler (APERAK AHB 1.1 § 2.3).
+//! reports only a Verarbeitbarkeitsfehler (APERAK AHB 1.1 Kap. 2.3).
 //!
 //! # BGM qualifier semantics
 //!
@@ -58,7 +58,7 @@
 //! - **BNetzA BK7-24-01-009** — Geschäftsprozesse Lieferantenwechsel Gas 3.0 (eff. 2025-09-24)
 //! - **APERAK**: Gas knows only the Verarbeitbarkeitsfehlermeldung — nächster
 //!   Werktag 12:00 Uhr for a Folgeprozess, 3 Werktage for an Initialprozess
-//!   (APERAK AHB 1.1 §2.3.1). 44022 is `ZG-T26`, hence a Folgeprozess.
+//!   (APERAK AHB 1.1 Kap. 2.3.1). 44022 is `ZG-T26`, hence a Folgeprozess.
 
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
@@ -582,7 +582,7 @@ impl Workflow for GeliGasStornierungWorkflow {
                         message_ref: message_ref.clone(),
                     });
                     // No APERAK: Gas reports only a Verarbeitbarkeitsfehler
-                    // (APERAK AHB 1.1 § 2.3). The answer is the 44023/44024
+                    // (APERAK AHB 1.1 Kap. 2.3). The answer is the 44023/44024
                     // that `SendAntwort` queues.
                     Ok(WorkflowOutput::events(events))
                 } else {
@@ -590,9 +590,9 @@ impl Workflow for GeliGasStornierungWorkflow {
                     events.push(GeliGasStornierungEvent::ValidationFailed {
                         errors: validation_errors,
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 Kap. 2.1.1.
                     // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr
-                    // (APERAK AHB 1.1 §2.3.1) — a clock separate from the
+                    // (APERAK AHB 1.1 Kap. 2.3.1) — a clock separate from the
                     // answer window STORNIERUNG_RESPONSE_WINDOW_LABEL carries.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
@@ -737,7 +737,7 @@ mod tests {
     }
 
     /// A processable 44022 puts nothing on the wire: Gas has no
-    /// Anerkennungsmeldung (APERAK AHB 1.1 § 2.3).
+    /// Anerkennungsmeldung (APERAK AHB 1.1 Kap. 2.3).
     #[test]
     fn a_processable_44022_sends_no_aperak() {
         let out = GeliGasStornierungWorkflow::handle(

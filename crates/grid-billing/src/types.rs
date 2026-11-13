@@ -336,7 +336,7 @@ pub enum SettlementType {
     MmmGas,
     /// Mehr-/Mindermengen Mehrmenge, selbst ausgestellte Rechnung (Lieferung) — PID 31006.
     ///
-    /// Per INVOIC AHB §3.x, PID 31006 covers the Mehrmenge leg when the Mehr-/
+    /// Per INVOIC AHB Kap. 3.x, PID 31006 covers the Mehrmenge leg when the Mehr-/
     /// Mindermenge is treated as a „Lieferung“ and the invoice is self-issued.
     MmmSelbstausstellt,
     /// Messstellenbetrieb settlement — PID 31009 (MSB → NB / LF / ESA).
@@ -346,7 +346,9 @@ pub enum SettlementType {
     /// Rechnung sonstige Leistung: bills the LF (LFG/LFA) for abrechnungswürdige
     /// Handlungen (AWH) performed by the GNB/VNB during Sperrung/Entsperrung.
     GasAwhSperrung,
-    /// Redispatch 2.0 Einsatzkosten (NB → ÜNB, BK6-20-061).
+    /// Redispatch 2.0 Einsatzkosten (NB → ÜNB). BK6-20-061, which set the
+    /// Kostenblatt, is aufgehoben (BK6-23-241 Tenor Ziff. 3); its windows are
+    /// the operator's until the Tenor Ziff. 7 processes are published.
     RedispatchKostenblatt,
     /// Entgelt für dezentrale Erzeugung — §18 StromNEV, NB → Anlagenbetreiber.
     ///

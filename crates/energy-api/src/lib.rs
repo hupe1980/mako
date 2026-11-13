@@ -42,8 +42,10 @@
 //!
 //! let base = Url::parse("https://verzeichnisdienst.example.de/")?;
 //! let client = DirectoryServiceClient::new_insecure(base)?;
-//! let (record, _cert, _sig) = client
-//!     .get_record("1234567890723", "controlMeasuresV1", 1)
+//! // The provider's EMT.API signature key, from the issuing Sub-CA.
+//! # let provider_key: energy_api::transport::jws::RecordVerifyingKey = todo!();
+//! let record = client
+//!     .get_record("1234567890723", "controlMeasuresV1", 1, &[provider_key])
 //!     .await?;
 //! println!("{}", record.url);
 //! # Ok(())

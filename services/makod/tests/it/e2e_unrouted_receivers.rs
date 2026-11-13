@@ -9,6 +9,9 @@
 //! | 55553 | MSB an NB / LF / weiterer MSB (24300, 24450, 24580) | `gpke-stammdatenaenderung` — answered by 55555, GPKE Teil 4 Kap. 1.4.4 Nr. 2 |
 //! | 55194 | NB (Strom) an MSB (Gas) (25620) | `geli-gas-datenabruf`, resuming the 17104 it answers |
 //! | 13013 | NB an LF, Gas (12060) | `gabi-gas-mmma` on a `lf-gas` deployment |
+//! | 17110 | LF an NB, Gas (12040) | `gabi-gas-mmma` on a `nb-gas` deployment, refused on 19110 out of `G_0001` |
+//! | 44143 · 44147 · 44148 | LF an NB [Verteiler] · NB an MSB (Gas) | `geli-gas-stammdatenaenderung`, the receiver's Anfrage |
+//! | 55614 · 55675 | ÜNB an NB | `gpke-abrechnungsdaten`, answered on IFTSTA 21047 out of `E_0618` / `E_0613` |
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -25,6 +28,8 @@ use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004";
 const NB_MP: &str = "9900000000003";
+const GNB_MP: &str = "9807317000007";
+const LF_GAS_MP: &str = "9870012345678";
 
 /// The router a deployment declaring `rollen` builds under `roles`.
 fn router_for(rollen: &[Rolle], roles: &DeploymentRoles) -> PidRouter {
@@ -38,6 +43,11 @@ fn router_for(rollen: &[Rolle], roles: &DeploymentRoles) -> PidRouter {
 
 /// The newest profile's skeleton of `pid`, from `NB_MP` to this deployment.
 fn skeleton(pid: u32) -> String {
+    skeleton_between(pid, NB_MP, OWN_MP)
+}
+
+/// The newest profile's skeleton of `pid`, from `sender` to `receiver`.
+fn skeleton_between(pid: u32, sender: &str, receiver: &str) -> String {
     use edi_energy::profile::SkeletonParties;
     let code = edi_energy::Pruefidentifikator::new(pid).expect("five digits");
     let profile = edi_energy::ReleaseRegistry::global()
@@ -51,8 +61,8 @@ fn skeleton(pid: u32) -> String {
         .skeleton_interchange(
             af,
             &SkeletonParties {
-                sender: NB_MP.to_owned(),
-                receiver: OWN_MP.to_owned(),
+                sender: sender.to_owned(),
+                receiver: receiver.to_owned(),
             },
         )
         .expect("skeleton");
@@ -199,4 +209,246 @@ async fn a_55194_resumes_the_msb_gas_anfrage_it_answers() {
     );
     let state = process.state().await.expect("state");
     assert_eq!(state.label(), "DatenErhalten");
+}
+
+/// The commands door over the dispatcher's store, for `own` in `rolle`.
+fn commands_state(
+    store: &SlateDbStore,
+    own: &str,
+    rolle: &str,
+) -> makod::commands_api::CommandsApiState {
+    use makod::{
+        cedar_authz::{CedarAuthorizer, DefaultPolicy},
+        commands_api::CommandsApiState,
+        malo_cache::{MaloIdentResultCache, SlateDbMaloCache},
+    };
+    CommandsApiState {
+        tenant_id: TenantId::from_party_id(own),
+        sender_party_id: own.to_owned(),
+        configured_marktrollen: vec![rolle.to_owned()],
+        max_body_bytes: 1_048_576,
+        snapshot_interval: 100,
+        cedar: Arc::new(
+            CedarAuthorizer::new(vec![], None, None, None, DefaultPolicy::PermitAll)
+                .expect("cedar build"),
+        ),
+        snapshot_store: store.as_snapshot_store(),
+        malo_cache: Arc::new(SlateDbMaloCache::new(
+            store.clone(),
+            TenantId::from_party_id(own),
+        )),
+        maloid_result_cache: MaloIdentResultCache::new(store.clone()),
+        store: Arc::new(store.clone()),
+        marktd_client: None,
+    }
+}
+
+/// A `nb-gas` deployment routes the LF's Anforderung der Allokationsliste
+/// (ORDERS 17110, ORDERS AHB 1.1b Kap. 4.2, „LF an NB") to `gabi-gas-mmma`,
+/// and a `nb-strom` one does not; the GNB refuses a Start Abo on ORDRSP 19110
+/// out of `E_0803` / `G_0001` (EBD 4.3 Kap. 11.1.1, S. 696), echoing the
+/// 17110's `BGM` DE 1004 in `SG1 RFF+ON`.
+#[tokio::test]
+async fn an_nb_gas_deployment_receives_the_anforderung_allokationsliste() {
+    let gnb = router_for(&[Rolle::NbGas], &DeploymentRoles::nb());
+    assert_eq!(gnb.route(17_110), Some(mako_gabi_gas::MMMA_WORKFLOW_NAME));
+    let lf = router_for(&[Rolle::LfGas], &DeploymentRoles::lf());
+    assert_eq!(lf.route(17_110), None, "the LF sends the 17110");
+
+    let store = SlateDbStore::open_in_memory()
+        .await
+        .expect("in-memory store");
+    let dispatcher = EdifactIngestDispatcher::new(
+        Arc::new(store.clone()),
+        store.as_snapshot_store(),
+        100,
+        TenantId::from_party_id(GNB_MP),
+    );
+    let wire = set_element(
+        &skeleton_between(17_110, LF_GAS_MP, GNB_MP),
+        "BGM+Z24+",
+        "ABO-17110-1",
+    );
+    let wire = set_element(&wire, "IMD++", "Z01");
+    let msg = edi_energy::parse(wire.as_bytes()).expect("parses");
+    let outcome = dispatcher
+        .dispatch(
+            &msg,
+            mako_gabi_gas::MMMA_WORKFLOW_NAME,
+            17_110,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await;
+    assert!(
+        matches!(outcome, Ok(IngestOutcome::Spawned { .. })),
+        "17110: {outcome:?}"
+    );
+
+    let key = mako_gabi_gas::mmma::anforderung_key(LF_GAS_MP, "ABO-17110-1");
+    let ids: Vec<_> = {
+        use mako_engine::registry::ProcessRegistry as _;
+        store
+            .as_process_registry()
+            .lookup_correlated(TenantId::from_party_id(GNB_MP), &key)
+            .await
+            .expect("lookup")
+    };
+    assert_eq!(ids.len(), 1, "one process per Anforderung");
+    let process = Process::<mako_gabi_gas::GaBiGasMmmaWorkflow, _>::from_identity(
+        Arc::new(store.clone()),
+        ids[0].clone(),
+    );
+    let mako_gabi_gas::MmmaState::Eingegangen { anforderung } =
+        process.state().await.expect("state")
+    else {
+        panic!("the Anforderung is held");
+    };
+    assert_eq!(anforderung.abo, "Z01");
+    let out = process
+        .run(
+            mako_gabi_gas::MmmaCommand::SendAblehnung {
+                antwortcode: "Z34".to_owned(),
+                message_ref: MessageRef::new("ABL-1"),
+            },
+            RunOptions::new(),
+        )
+        .await;
+    assert!(out.is_ok(), "{out:?}");
+    use mako_engine::outbox::OutboxStore as _;
+    let pending = store.pending_now(10).await.expect("outbox");
+    let ordrsp = pending
+        .iter()
+        .find(|p| p.payload["pid"] == 19_110)
+        .expect("the 19110 is written");
+    assert_eq!(ordrsp.payload["antwort_codeliste"], "G_0001");
+    assert_eq!(ordrsp.payload["order_reference"], "ABO-17110-1");
+    assert_eq!(&*ordrsp.recipient, LF_GAS_MP);
+}
+
+/// A `nb-strom` deployment routes the ÜNB's Rückmeldung / Bestellung on the
+/// Abrechnungsdaten Bilanzkreisabrechnung (55614, 55675; GPKE Teil 2 Kap.
+/// 3.1.2.2 Nr. 5, S. 76 and 3.1.3.3 Nr. 1, S. 81) to `gpke-abrechnungsdaten`,
+/// and the NB answers the ÜNB on IFTSTA 21047 out of `E_0618` (IFTSTA AHB 2.1
+/// Kap. 7.7, S. 62).
+#[tokio::test]
+async fn a_uenb_rueckmeldung_reaches_the_nb_and_is_answered_out_of_e_0618() {
+    const UENB_MP: &str = "9900000000010";
+    let nb = router_for(&[Rolle::NbStrom], &DeploymentRoles::nb());
+    for pid in [55_614, 55_675] {
+        assert_eq!(nb.route(pid), Some("gpke-abrechnungsdaten"), "{pid}");
+    }
+    for pid in [55_614_u32, 55_675] {
+        let (store, dispatcher) = store_and_dispatcher().await;
+        let wire = skeleton_between(pid, UENB_MP, OWN_MP);
+        let msg = edi_energy::parse(wire.as_bytes()).expect("parses");
+        let outcome = dispatcher
+            .dispatch(
+                &msg,
+                "gpke-abrechnungsdaten",
+                pid,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await;
+        assert!(
+            matches!(outcome, Ok(IngestOutcome::Spawned { .. })),
+            "{pid}: {outcome:?}"
+        );
+        let malo = makod::ingest_dispatcher::extract_malo_from_msg(&msg);
+        let state = commands_state(&store, OWN_MP, "NB");
+        let answered = makod::commands_api::dispatch_command(
+            &state,
+            "gpke.abrechnungsdaten.bearbeitungsstand",
+            &serde_json::json!({
+                "malo_id": malo.as_str(),
+                "codeliste": "E_0618",
+                "antwort_code": "A01",
+            }),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{pid} is answerable: {e:?}"));
+        assert!(
+            matches!(
+                answered,
+                makod::commands_api::DispatchOutcome::Dispatched { .. }
+            ),
+            "{answered:?}"
+        );
+        use mako_engine::outbox::OutboxStore as _;
+        let pending = store.pending_now(10).await.expect("outbox");
+        let iftsta = pending
+            .iter()
+            .find(|p| p.payload["pid"] == 21_047)
+            .expect("the 21047 is written");
+        assert_eq!(iftsta.payload["antwort_codeliste"], "E_0618");
+        assert_eq!(iftsta.payload["sts_code"], "Z47");
+        assert_eq!(&*iftsta.recipient, UENB_MP);
+    }
+}
+
+/// The Anfragen an MSB mit Abhängigkeiten (UTILMD AHB Gas 1.2 Kap. 5.12.6):
+/// the GNB as Verteiler receives the LF's 44143 (S. 179), the gMSB the GNB's
+/// 44147 / 44148 (S. 192). Each opens the receiver's Anfrage process instead of
+/// being applied as an Änderung; the answers 44145 / 44146 / 44149 reach no
+/// requester side and are refused by name.
+#[tokio::test]
+async fn the_gas_anfragen_an_msb_reach_their_receivers() {
+    const MSB_GAS_MP: &str = "9800357000011";
+    let gnb = router_for(&[Rolle::NbGas], &DeploymentRoles::nb());
+    assert_eq!(gnb.route(44_143), Some("geli-gas-stammdatenaenderung"));
+    let gmsb = router_for(&[Rolle::MsbGas], &DeploymentRoles::msb());
+    for pid in [44_147, 44_148] {
+        assert_eq!(
+            gmsb.route(pid),
+            Some("geli-gas-stammdatenaenderung"),
+            "{pid}"
+        );
+    }
+    for (pid, sender, receiver) in [
+        (44_143_u32, LF_GAS_MP, GNB_MP),
+        (44_147, GNB_MP, MSB_GAS_MP),
+        (44_148, GNB_MP, MSB_GAS_MP),
+    ] {
+        let store = SlateDbStore::open_in_memory()
+            .await
+            .expect("in-memory store");
+        let dispatcher = EdifactIngestDispatcher::new(
+            Arc::new(store.clone()),
+            store.as_snapshot_store(),
+            100,
+            TenantId::from_party_id(receiver),
+        );
+        let msg =
+            edi_energy::parse(skeleton_between(pid, sender, receiver).as_bytes()).expect("parses");
+        let outcome = dispatcher
+            .dispatch(
+                &msg,
+                "geli-gas-stammdatenaenderung",
+                pid,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await;
+        assert!(
+            matches!(outcome, Ok(IngestOutcome::Spawned { .. })),
+            "{pid}: {outcome:?}"
+        );
+    }
+    for pid in [44_145_u32, 44_146, 44_149, 44_164] {
+        let (_, dispatcher) = store_and_dispatcher().await;
+        let msg =
+            edi_energy::parse(skeleton_between(pid, GNB_MP, LF_GAS_MP).as_bytes()).expect("parses");
+        let refused = dispatcher
+            .dispatch(
+                &msg,
+                "geli-gas-stammdatenaenderung",
+                pid,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await;
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("no requester side")),
+            "{pid}: an answer is never applied as an Änderung: {refused:?}"
+        );
+    }
 }

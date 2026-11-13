@@ -439,6 +439,140 @@ pub fn zuschlag_ct_kwh(input: &KwkZuschlagInput) -> Option<Decimal> {
     Some(summe / input.kwk_leistung_kw)
 }
 
+// ── § 6 Abs. 1 Satz 1 Nr. 1 — which plants have a claim at all ─────────────
+
+/// Last day a plant may take up Dauerbetrieb and hold the claim on that date
+/// alone — § 6 Abs. 1 Satz 1 Nr. 1 lit. a KWKG: „bis zum 31. Dezember 2026 in
+/// Dauerbetrieb genommen".
+///
+/// The KWKG in force (Stand: Art. 24 G v. 18.12.2025, BGBl. 2025 I Nr. 347)
+/// carries no later date, and § 35 extends none. A plant taking up Dauerbetrieb
+/// later has a claim only under lit. b or c; anything else waits for a
+/// promulgated Novelle, and [`zuschlag_anspruch`] refuses it until then.
+pub const DAUERBETRIEB_SPAETESTENS: Date = time::macros::date!(2026 - 12 - 31);
+
+/// Years after a lit. c Genehmigung or Bestellung within which the plant must
+/// take up Dauerbetrieb — „bis zum Ablauf des vierten Jahres nach der
+/// Erteilung der Genehmigung" / „nach der verbindlichen Bestellung".
+pub const LIT_C_REALISIERUNG_JAHRE: i32 = 4;
+
+/// What opens § 6 Abs. 1 Satz 1 Nr. 1 KWKG for a plant that took up Dauerbetrieb
+/// after [`DAUERBETRIEB_SPAETESTENS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum KwkAnspruchsgrundlage {
+    /// lit. b — a Zuschlag „in einem Zuschlagsverfahren nach § 11 der
+    /// KWK-Ausschreibungsverordnung", not entwertet under § 16 KWKAusV.
+    Ausschreibungszuschlag,
+    /// lit. c aa — a Genehmigung nach dem Bundes-Immissionsschutzgesetz,
+    /// erteilt on this day.
+    BimschgGenehmigung(Date),
+    /// lit. c bb — the verbindliche Bestellung of the plant (or, for a
+    /// Modernisierung, of its effizienzbestimmende Anlagenteile) on this day,
+    /// where no BImSchG-Genehmigung is required.
+    VerbindlicheBestellung(Date),
+}
+
+/// Why a plant has no § 6 Abs. 1 Satz 1 Nr. 1 KWKG claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum KwkAnspruchError {
+    /// Dauerbetrieb after 31.12.2026 and no lit. b or c basis.
+    #[error(
+        "§ 6 Abs. 1 Satz 1 Nr. 1 KWKG: Dauerbetrieb am {dauerbetrieb} liegt nach dem \
+         31.12.2026, und weder ein KWKAusV-Zuschlag (lit. b) noch eine Genehmigung oder \
+         verbindliche Bestellung bis 31.12.2026 (lit. c) ist erfasst — kein Zuschlag, bis \
+         eine Novelle des KWKG verkündet ist"
+    )]
+    NachStichtag {
+        /// Day the plant took up Dauerbetrieb.
+        dauerbetrieb: Date,
+    },
+    /// The lit. c Genehmigung or Bestellung lies after 31.12.2026.
+    #[error(
+        "§ 6 Abs. 1 Satz 1 Nr. 1 lit. c KWKG: Genehmigung bzw. Bestellung am {am} liegt \
+         nach dem 31.12.2026"
+    )]
+    GrundlageNachStichtag {
+        /// Day of the Genehmigung or Bestellung.
+        am: Date,
+    },
+    /// Dauerbetrieb later than four years after the lit. c Genehmigung or
+    /// Bestellung.
+    #[error(
+        "§ 6 Abs. 1 Satz 1 Nr. 1 lit. c KWKG: Dauerbetrieb am {dauerbetrieb} nach Ablauf \
+         des vierten Jahres nach dem {am} ({frist})"
+    )]
+    RealisierungsfristUeberschritten {
+        /// Day of the Genehmigung or Bestellung.
+        am: Date,
+        /// Last day Dauerbetrieb could be taken up.
+        frist: Date,
+        /// Day the plant took up Dauerbetrieb.
+        dauerbetrieb: Date,
+    },
+}
+
+/// Whether a plant that took up Dauerbetrieb on `dauerbetrieb` holds the
+/// § 6 Abs. 1 Satz 1 Nr. 1 KWKG claim.
+///
+/// Up to [`DAUERBETRIEB_SPAETESTENS`] the date alone opens it (lit. a). Later,
+/// only `grundlage` can: a KWKAusV-Zuschlag (lit. b), or a BImSchG-Genehmigung
+/// or verbindliche Bestellung by 31.12.2026 with Dauerbetrieb by the end of the
+/// [`LIT_C_REALISIERUNG_JAHRE`]-th year after it (lit. c). The other
+/// Voraussetzungen of § 6 Abs. 1 (Nr. 2–7, the BAFA-Zulassung among them) are
+/// the register's and are not decided here.
+///
+/// ```rust
+/// use eeg_billing::kwkg::{KwkAnspruchsgrundlage, zuschlag_anspruch};
+/// use time::macros::date;
+///
+/// assert!(zuschlag_anspruch(date!(2026 - 12 - 31), None).is_ok());
+/// assert!(zuschlag_anspruch(date!(2027 - 01 - 01), None).is_err());
+/// assert!(zuschlag_anspruch(
+///     date!(2027 - 01 - 01),
+///     Some(KwkAnspruchsgrundlage::Ausschreibungszuschlag)
+/// )
+/// .is_ok());
+/// ```
+///
+/// # Errors
+///
+/// The [`KwkAnspruchError`] naming the missing basis.
+pub fn zuschlag_anspruch(
+    dauerbetrieb: Date,
+    grundlage: Option<KwkAnspruchsgrundlage>,
+) -> Result<(), KwkAnspruchError> {
+    if dauerbetrieb <= DAUERBETRIEB_SPAETESTENS {
+        return Ok(());
+    }
+    let am = match grundlage {
+        None => return Err(KwkAnspruchError::NachStichtag { dauerbetrieb }),
+        Some(KwkAnspruchsgrundlage::Ausschreibungszuschlag) => return Ok(()),
+        Some(
+            KwkAnspruchsgrundlage::BimschgGenehmigung(am)
+            | KwkAnspruchsgrundlage::VerbindlicheBestellung(am),
+        ) => am,
+    };
+    if am > DAUERBETRIEB_SPAETESTENS {
+        return Err(KwkAnspruchError::GrundlageNachStichtag { am });
+    }
+    // § 188 Abs. 2 BGB: a year-Frist from an event ends with the day of the
+    // last year that bears the event's date; § 188 Abs. 3 moves a missing
+    // 29 February to the 28th.
+    let jahr = am.year() + LIT_C_REALISIERUNG_JAHRE;
+    let frist = Date::from_calendar_date(jahr, am.month(), am.day())
+        .or_else(|_| Date::from_calendar_date(jahr, am.month(), am.day() - 1))
+        .unwrap_or(Date::MAX);
+    if dauerbetrieb > frist {
+        return Err(KwkAnspruchError::RealisierungsfristUeberschritten {
+            am,
+            frist,
+            dauerbetrieb,
+        });
+    }
+    Ok(())
+}
+
 // ── § 8 — Dauer der Zuschlagzahlung ───────────────────────────────────────────
 
 /// Everything § 8 needs to decide a plant's Förderdauer in Vollbenutzungsstunden.
@@ -589,6 +723,45 @@ pub fn jahreskontingent_kwh(kwk_leistung_kw: Decimal, kalenderjahr: i32) -> Opti
 mod statutory_kwkg_tests {
     use super::*;
     use time::macros::date;
+
+    /// **§ 6 Abs. 1 Satz 1 Nr. 1 KWKG** — the claim on the date alone ends with
+    /// Dauerbetrieb by 31.12.2026; after it only lit. b or c opens it.
+    #[test]
+    fn a_plant_in_dauerbetrieb_after_2026_needs_lit_b_or_c() {
+        use KwkAnspruchsgrundlage as G;
+        assert_eq!(zuschlag_anspruch(date!(2026 - 12 - 31), None), Ok(()));
+        assert_eq!(
+            zuschlag_anspruch(date!(2027 - 01 - 01), None),
+            Err(KwkAnspruchError::NachStichtag {
+                dauerbetrieb: date!(2027 - 01 - 01)
+            })
+        );
+        assert_eq!(
+            zuschlag_anspruch(date!(2027 - 01 - 01), Some(G::Ausschreibungszuschlag)),
+            Ok(())
+        );
+        // lit. c aa: Genehmigung by 31.12.2026, Dauerbetrieb by the end of the
+        // fourth year after it.
+        let genehmigt = G::BimschgGenehmigung(date!(2026 - 06 - 15));
+        assert_eq!(
+            zuschlag_anspruch(date!(2030 - 06 - 15), Some(genehmigt)),
+            Ok(())
+        );
+        assert!(matches!(
+            zuschlag_anspruch(date!(2030 - 06 - 16), Some(genehmigt)),
+            Err(KwkAnspruchError::RealisierungsfristUeberschritten { .. })
+        ));
+        // lit. c bb: a Bestellung after 31.12.2026 opens nothing.
+        assert_eq!(
+            zuschlag_anspruch(
+                date!(2027 - 06 - 01),
+                Some(G::VerbindlicheBestellung(date!(2027 - 01 - 02)))
+            ),
+            Err(KwkAnspruchError::GrundlageNachStichtag {
+                am: date!(2027 - 01 - 02)
+            })
+        );
+    }
 
     const IBN: Date = date!(2024 - 03 - 01);
 

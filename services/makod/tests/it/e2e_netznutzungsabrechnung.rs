@@ -7,14 +7,14 @@
 //! whether the billing was settled, disputed, or timed out.
 //!
 //! **Note**: PID 31004 ("Stornorechnung") is a Sparte-neutral, cross-process
-//! universal Storno (INVOIC AHB §3.1.2) — not a GPKE-specific billing PID. It is
+//! universal Storno (INVOIC AHB Kap. 3.1.2) — not a GPKE-specific billing PID. It is
 //! checked generically by `invoicd`, so it is not registered by this workflow.
 //! **Note**: PID 31009 ("MSB-Rechnung") is registered by `mako-wim`'s
 //! `wim-invoic` workflow, not here — see `crates/mako-wim/src/invoic.rs`.
 //!
 //! # Regulatory basis
 //!
-//! - **APERAK AHB 1.1 § 2.4.1** — 45 Minuten for UTILMD/ORDERS;
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — 45 Minuten for UTILMD/ORDERS;
 //!   the INVOIC answer itself is owed zum Zahlungsziel (`SG8 DTM+265`)
 //! - **INVOIC AHB 1.0 / MIG 2.8e** — German energy-market invoice format
 //! - **PIDs 31001/31002** — Abschlagsrechnung / NN-Rechnung (Netznutzungsabrechnung)
@@ -243,7 +243,7 @@ async fn e2e_gpke_abrechnung_31005_mmm_settle() {
 /// Validates that `GPKE_INVOIC_PIDS` = {31001, 31002, 31005, 31006, 31007,
 /// 31008, 31009} all produce `ValidationPassed` (no PID-guard rejections).
 /// PID 31004 is excluded here — it is the Sparte-neutral universal Storno
-/// (INVOIC AHB §3.1.2), checked generically by `invoicd`, not a GPKE billing PID.
+/// (INVOIC AHB Kap. 3.1.2), checked generically by `invoicd`, not a GPKE billing PID.
 #[tokio::test]
 async fn e2e_gpke_abrechnung_all_pids_accepted() {
     for &pid in GPKE_INVOIC_PIDS {

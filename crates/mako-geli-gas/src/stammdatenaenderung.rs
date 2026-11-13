@@ -11,11 +11,11 @@
 //! and **ZE2** Ablehnung Kapazitätsproblem (EBD 4.3 Kap. 13.10–13.12). A
 //! Zustimmung applies the change to `marktd`; on a *bilanzierungsrelevante*
 //! change dated other than a Monatserster it goes out as **E17** (GeLiGas AWH
-//! V1.2 §4.3.2: bila.rel. changes only zum Monatserster with a one-month lead).
+//! V1.2 Kap. 4.3.2: bila.rel. changes only zum Monatserster with a one-month lead).
 //! Non-bila.rel. changes may take effect unverzüglich.
 //!
 //! Frist for the Antwort: „unverzüglich, spätestens jedoch bis zum Ablauf des
-//! **10. WT** nach Eingang der Änderung" (AWH GeLi Gas § 4.3.2 Nr. 2 / Nr. 4),
+//! **10. WT** nach Eingang der Änderung" (AWH GeLi Gas Kap. 4.3.2 Nr. 2 / Nr. 4),
 //! published as `mako_fristen::antwort::STAMMDATEN_ANTWORT_WERKTAGE_GAS`. Five
 //! times the Strom window, and genuinely so — not the LFW24 regime.
 //!
@@ -41,7 +41,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **GeLiGas AWH V1.2 (26.03.2026)** § 4.3 (Stammdatenänderung), § 4.3.2 Nr. 2/4 (Frist)
+//! - **GeLiGas AWH V1.2 (26.03.2026)** Kap. 4.3 (Stammdatenänderung), Kap. 4.3.2 Nr. 2/4 (Frist)
 //! - **UTILMD AHB Gas 1.1** — object → PID map
 //! - **EBD 4.3** Kap. 13.10–13.12 (E_3010–E_3012, E_3021, E_3023 and their
 //!   Codelisten `G_0016`–`G_0030`)
@@ -102,8 +102,10 @@ pub const STAMMDATEN_PAIRS: &[(u32, u32, bool)] = &[
 
 /// The Stammdatenänderung PIDs a gMSB receives: the NB's 44113 („an MSB mit
 /// Prüfidentifikator 44113", UTILMD AHB Gas 1.2 Kap. 5.10.1, S. 97), answered
-/// 44115.
-pub const MSB_EMPFANGENE_PIDS: &[u32] = &[44_113];
+/// 44115; and the NB's Anfragen an MSB — 44147 / 44148 („Der MSB antwortet mit
+/// dem Prüfidentifikator 44149", Kap. 5.12.6.2, S. 192) and 44165 / 44166
+/// („Der MSB antwortet mit dem Prüfidentifikator 44167", Kap. 5.12.7, S. 206).
+pub const MSB_EMPFANGENE_PIDS: &[u32] = &[44_113, 44_147, 44_148, 44_165, 44_166];
 
 /// G8–G10 Anfrage-family PIDs — the full set routed to this workflow (requests
 /// plus their Antwort/Ablehnung PIDs). The request PIDs we answer as data owner
@@ -143,7 +145,17 @@ pub const ANFRAGE_ANTWORT_PAIRS: &[(u32, u32)] = &[
     (44162, 44163), // LF → NB (Ablehnung 44164)
     (44165, 44167), // NB [Verteiler] → MSB
     (44166, 44167), // NB [Berechtigt] → MSB
+    // Kap. 5.12.6 — Anfrage an MSB mit Abhängigkeiten. The NB answers the LF's
+    // 44143 as Verteiler after the MSB has answered its 44147 (S. 179).
+    (44143, 44145), // LF → NB [Verteiler] (Ablehnung 44146)
+    (44147, 44149), // NB [Verteiler] → MSB
+    (44148, 44149), // NB [Berechtigt] → MSB
 ];
+
+/// The Ablehnungen a Verteiler sends the LF on an Anfrage an MSB — 44146 to
+/// the 44143 (UTILMD AHB Gas 1.2 Kap. 5.12.6.1, S. 179) and 44164 to the 44162
+/// (Kap. 5.12.7, S. 206). Answers, never Anfragen.
+pub const ANFRAGE_ABLEHNUNG_PIDS: &[u32] = &[44_146, 44_164];
 
 /// One Antwort column of UTILMD AHB Gas 1.2 Kap. 5.12 — the PID an Anfrage is
 /// answered with on a code, and the Codeliste its `SG4 STS+E01` DE 1131 names.
@@ -341,6 +353,7 @@ pub fn is_anfrage_request_pid(pid: u32) -> bool {
 pub fn is_anfrage_response_pid(pid: u32) -> bool {
     ANFRAGE_ANTWORT_PAIRS.iter().any(|(_, r)| *r == pid)
         || ANFRAGE_ANTWORTEN.iter().any(|r| r.antwort_pid == pid)
+        || ANFRAGE_ABLEHNUNG_PIDS.contains(&pid)
 }
 
 /// Return `(Antwort PID, bilanzierungsrelevant)` for an inbound Änderung PID.
@@ -1196,7 +1209,7 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                     message_ref: message_ref.clone(),
                 });
                 // No APERAK: in der Sparte Gas the APERAK carries only the
-                // Verarbeitbarkeitsfehler (APERAK AHB 1.1 §2.3); processability
+                // Verarbeitbarkeitsfehler (APERAK AHB 1.1 Kap. 2.3); processability
                 // follows from the Frist passing without one. So no APERAK
                 // delivery window either — it would watch a message that never
                 // goes out.
@@ -1268,7 +1281,7 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                 // first and answers „Unverzüglich, spätestens jedoch bis zum
                 // Ablauf des 10. WT nach Eingang der Nachricht" (AWH GeLi Gas
                 // V1.2 Kap. 4.4.2 Nr. 2, S. 87). No APERAK either — a Gas APERAK
-                // is a Verarbeitbarkeitsfehlermeldung only (APERAK AHB 1.1 §2.3).
+                // is a Verarbeitbarkeitsfehlermeldung only (APERAK AHB 1.1 Kap. 2.3).
                 let deadlines = vec![PendingDeadline::new(
                     ANTWORT_WINDOW_LABEL,
                     deadline_at_werktage(
@@ -1744,7 +1757,7 @@ mod tests {
 
     /// A processable Gas Änderung is answered by no APERAK.
     ///
-    /// APERAK AHB 1.1 §2.3: „In der Sparte Gas wird dem Absender eines
+    /// APERAK AHB 1.1 Kap. 2.3: „In der Sparte Gas wird dem Absender eines
     /// Geschäftsvorfalls … nur eines der beiden Ergebnisse … via APERAK
     /// mitgeteilt: Das Ergebnis, dass der geprüfte Geschäftsvorfall einen
     /// Verarbeitbarkeitsfehler enthält." Processability follows from the

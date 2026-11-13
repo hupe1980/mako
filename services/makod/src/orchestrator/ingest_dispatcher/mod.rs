@@ -233,8 +233,8 @@ impl IngestOutcome {
 /// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
 ///
 /// A parameter rather than a `W::State: OccupiesBusinessKey` bound because only
-/// 54 of the 65 workflow names dispatched here supply a verdict at all — 39
-/// through that trait, 15 through an inherent terminal-state closure — and the
+/// 56 of the 65 workflow names dispatched here supply a verdict at all — 40
+/// through that trait, 16 through an inherent terminal-state closure — and the
 /// verdict is domain knowledge that belongs in the workflow's own crate — makod
 /// only *consumes* what a crate has already published (that trait, or an
 /// inherent `is_terminal()`). The four INVOIC families and the Redispatch
@@ -307,8 +307,8 @@ impl<'a> Inbound<'a> {
 /// The APERAK the door owes a message its workflow does not answer with one
 /// of its own.
 ///
-/// An AHB-Fehler (§ 2.1.1, S. 10) is rejected with its Verarbeitbarkeitsfehler-
-/// meldung in both Sparten — in Gas it is the one result reported (§ 2.3,
+/// An AHB-Fehler (Kap. 2.1.1, S. 10) is rejected with its Verarbeitbarkeitsfehler-
+/// meldung in both Sparten — in Gas it is the one result reported (Kap. 2.3,
 /// S. 21); a processable Strom message gets its Anerkennungsmeldung; a
 /// processable Gas message and a finding the APERAK has no code for get none.
 /// Formatbedingung findings count only where `formatbedingungen` says their
@@ -331,8 +331,8 @@ fn door_aperak(
 
 /// The Verarbeitbarkeitsfehlermeldung naming `fehler`, and who it goes to:
 /// one `SG4 ERC` group per AHB-Fehler, each with its Ortsangabe
-/// (APERAK AHB 1.1 § 2.1.1, S. 10: „Es sind alle AHB-Fehler anzugeben";
-/// § 2.1.2.2, S. 12). `None` when `fehler` is empty or `msg` names no
+/// (APERAK AHB 1.1 Kap. 2.1.1, S. 10: „Es sind alle AHB-Fehler anzugeben";
+/// Kap. 2.1.2.2, S. 12). `None` when `fehler` is empty or `msg` names no
 /// `NAD+MS` / `NAD+MR` to answer.
 fn fehlermeldung_of(
     msg: &AnyMessage,
@@ -381,9 +381,9 @@ fn ftx_text(text: &str) -> String {
 /// The Anerkennungsmeldung (`BGM+312`, APERAK 29002) a processable Strom
 /// message is owed.
 ///
-/// APERAK AHB 1.1 § 2.4, S. 23: „Ist der Geschäftsvorfall verarbeitbar, so wird
+/// APERAK AHB 1.1 Kap. 2.4, S. 23: „Ist der Geschäftsvorfall verarbeitbar, so wird
 /// diese Information über eine Anerkennungsmeldung mitgeteilt", within the
-/// window of § 2.4.1. It references the message by `UNH` DE 0062
+/// window of Kap. 2.4.1. It references the message by `UNH` DE 0062
 /// (`SG2 RFF+ACE`), `BGM` DE 1004 (`SG2 RFF+AGO`) and `DTM+137` (`SG2 DTM+171`)
 /// — Kap. 3, S. 26. It goes from the message's `NAD+MR` back to its `NAD+MS`;
 /// a message naming neither cannot be answered and gets none.
@@ -422,7 +422,7 @@ fn anerkennung_of(msg: &AnyMessage) -> Option<mako_engine::outbox::PendingOutbox
 /// Geschäftsvorfall to its predecessor („Zuordnung zu einem Geschäftsvorfall")
 /// and where that assignment is checked („Stelle der Zuordnungsprüfung":
 /// `V` the Verarbeitbarkeitsprüfung, `E` the Entscheidungsbaum). APERAK AHB 1.1
-/// § 2.1.3 (S. 14): only a `V` assignment „kann und muss" be refused with a
+/// Kap. 2.1.3 (S. 14): only a `V` assignment „kann und muss" be refused with a
 /// Zuordnungsfehler. So `Z33` is owed when the PID names a Geschäftsvorfall
 /// tuple and every row that names one marks `V`. Read from the tracked
 /// `pid-overview.json` (`cargo xtask import-pid-overview`).
@@ -472,13 +472,13 @@ pub(crate) struct AperakWindow {
 /// The APERAK delivery window an inbound message opens, from its message type,
 /// Sparte and Prüfidentifikator.
 ///
-/// * **Strom** (APERAK AHB 1.1 § 2.4.1, S. 24): the result of the
+/// * **Strom** (APERAK AHB 1.1 Kap. 2.4.1, S. 24): the result of the
 ///   Verarbeitbarkeitsprüfung of every Geschäftsvorfall is owed — an
 ///   Anerkennungsmeldung or a Verarbeitbarkeitsfehlermeldung —
 ///   „spätestens bis zum nächsten Werktag 12 Uhr"; a UTILMD or an ORDERS
 ///   „spätestens 45 Minuten nach Eingang", on a Samstag „bis zum Sonntag,
 ///   12 Uhr". Owed for every message, so the window opens unconditionally.
-/// * **Gas** (§ 2.3, S. 21; § 2.3.1, S. 22): only a Verarbeitbarkeitsfehler is
+/// * **Gas** (Kap. 2.3, S. 21; Kap. 2.3.1, S. 22): only a Verarbeitbarkeitsfehler is
 ///   reported, by the next Werktag 12 Uhr in a Folgeprozess and within
 ///   3 Werktage in an Initialprozess, chosen by the PID
 ///   ([`fristen::aperak_gas_due_at`]). The window opens only beside an APERAK
@@ -565,7 +565,7 @@ pub struct EdifactIngestDispatcher {
     /// Prüfidentifikator in both Sparten, and the message body says nothing
     /// about which. What decides it is the **recipient MP-ID** — one of our own
     /// parties, and each covers exactly one Sparte (BDEW Allgemeine
-    /// Festlegungen §2.13). The MP-ID's issuing agency is *not* the
+    /// Festlegungen Kap. 2.13). The MP-ID's issuing agency is *not* the
     /// discriminator: a BDEW `99…` code and a DVGW `98…` code both appear under
     /// NAD DE 3055 = 9 or 332 depending on the party, so the registry is the
     /// only sound source.
@@ -682,6 +682,7 @@ impl EdifactIngestDispatcher {
         "gpke-lf-abmeldung",
         "gpke-lf-anmeldung",
         "gpke-messwerte",
+        "gpke-nb-lieferende",
         "gpke-neuanlage",
         "gpke-partin",
         "gpke-sperrung",
@@ -746,8 +747,8 @@ impl EdifactIngestDispatcher {
     /// AHB-Fehler of a refused class — the message is then answered at the
     /// door and handed to no workflow, whether or not its adapter would have
     /// validated it. Every AHB-Fehler of the message is named, refused class
-    /// or not (§ 2.1.1, S. 10). `None` for an APERAK or a CONTRL, which no
-    /// APERAK answers (§ 2, S. 9), and for a message with nothing refused.
+    /// or not (Kap. 2.1.1, S. 10). `None` for an APERAK or a CONTRL, which no
+    /// APERAK answers (Kap. 2, S. 9), and for a message with nothing refused.
     fn door_refusal(&self, msg: &AnyMessage) -> Option<mako_engine::outbox::OutboxMessage> {
         use crate::adapters::AhbBefund;
         if self.abgewiesene_klassen.is_empty()
@@ -803,7 +804,7 @@ impl EdifactIngestDispatcher {
     /// The Sparte of an inbound interchange, from the recipient MP-ID.
     ///
     /// `NAD+MR` is guaranteed equal to `UNB` DE 0010 — `edi-energy` enforces
-    /// the §2.13 party-identity rule at parse — so reading the recipient off
+    /// the Kap. 2.13 party-identity rule at parse — so reading the recipient off
     /// the message is reading the interchange's own addressee.
     pub(super) fn sparte_of(&self, msg: &AnyMessage) -> mako_engine::types::Sparte {
         use crate::core::party_registry::RoleSparte;
@@ -846,7 +847,7 @@ impl EdifactIngestDispatcher {
     /// the 4. WT before the Zahlungsziel (WiM Teil 1 Kap. 6.2 Nr. 2), the
     /// **ESA** by the 4. WT before it too (WiM Teil 2 Kap. 4.5.2 Nr. 2), and
     /// the LF *zum* Zahlungsziel (Kap. 3.6.3.8.2). BDEW Allgemeine
-    /// Festlegungen §2.13 gives every Marktrolle its own MP-ID, so the
+    /// Festlegungen Kap. 2.13 gives every Marktrolle its own MP-ID, so the
     /// interchange recipient is what identifies it.
     ///
     /// Anything that matches none of our role codes falls to the LF/MSB arm,
@@ -1177,7 +1178,7 @@ impl EdifactIngestDispatcher {
     /// Geschäftsvorfall-Tupel nicht vorhanden" (APERAK AHB 1.1 Kap. 4.3, S. 43)
     /// — where the PID-Übersicht puts its assignment into the
     /// Verarbeitbarkeitsprüfung ([`z33_owed`]). In both Sparten: a
-    /// Verarbeitbarkeitsfehler is the one result Gas reports too (§ 2.3).
+    /// Verarbeitbarkeitsfehler is the one result Gas reports too (Kap. 2.3).
     ///
     /// No process exists to carry it, so the answer is the one write the
     /// door makes for the message.
@@ -1291,7 +1292,7 @@ impl EdifactIngestDispatcher {
     /// already owns the invoice it answers.
     ///
     /// **INVOIC 31004 needs no override yet.** The Stornorechnung is
-    /// Sparte-neutral (INVOIC AHB §3.1.2) and cancels an invoice from any
+    /// Sparte-neutral (INVOIC AHB Kap. 3.1.2) and cancels an invoice from any
     /// billing family, so it looks like the same collision — but today it is
     /// single-owner: only `mako_wim::invoic` registers it (`WIM_INVOIC_PIDS`),
     /// and `wim-invoic` is the one arm that dispatches it. An override becomes
@@ -2661,7 +2662,7 @@ mod aperak_window_tests {
     /// Tue 2026-07-07 12:00 CEST.
     const AT: time::OffsetDateTime = time::macros::datetime!(2026-07-07 10:00 UTC);
 
-    /// APERAK AHB 1.1 § 2.4.1 names UTILMD and ORDERS for the 45 minutes — an
+    /// APERAK AHB 1.1 Kap. 2.4.1 names UTILMD and ORDERS for the 45 minutes — an
     /// ORDCHG is neither and falls to the next Werktag 12 Uhr.
     #[test]
     fn strom_utilmd_and_orders_take_45_minutes_and_the_rest_the_next_werktag() {
@@ -2691,8 +2692,8 @@ mod aperak_window_tests {
         }
     }
 
-    /// Gas: the PID decides Initial- vs. Folgeprozess (§ 2.3.1), and the window
-    /// exists only beside an APERAK (§ 2.3).
+    /// Gas: the PID decides Initial- vs. Folgeprozess (Kap. 2.3.1), and the window
+    /// exists only beside an APERAK (Kap. 2.3).
     #[test]
     fn gas_follows_the_pid_and_only_rides_an_aperak() {
         let initial = aperak_window(Some(MessageType::Utilmd), Sparte::Gas, 44_001, AT)

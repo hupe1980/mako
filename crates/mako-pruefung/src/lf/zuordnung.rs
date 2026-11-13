@@ -56,7 +56,7 @@ pub enum ZuordnungsFall {
 /// Which of a supplier's Bilanzkreise an announced Zuordnung is balanced in.
 ///
 /// A Lieferant holds several, and the answer is a **choice** among those the
-/// BKV has authorised: MaBiS (BK6-24-174 § 10.2.1) grants the
+/// BKV has authorised: MaBiS (BK6-24-174 Anlage 3) Kap. 10.2.1 grants the
 /// Zuordnungsermächtigung „je ZRT, BG, BK und LF", so for one Zeitreihentyp in
 /// one Bilanzierungsgebiet a supplier may have more than one admissible BK.
 ///

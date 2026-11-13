@@ -94,7 +94,7 @@ whichever the profile declares, and demands a *plausible* code in each, since
 The PID is what everything else is keyed on: `mako_engine::PidRouter` routes it
 to a workflow, `mako_fristen::antwort` resolves its answer Frist, and
 `mako-pruefung` picks the decision tree the answer must come from. `makod`
-routes **494** PIDs across **76** workflows
+routes **498** PIDs across **77** workflows
 (`services/makod/tests/it/published_counts.rs` holds this page to the count).
 
 ### AHB and MIG
@@ -189,7 +189,7 @@ type; each message declares its own PID.
 One company can hold several roles (a DSO may be its own MSB), with one MP-ID
 per role and Sparte.
 
-> **Source:** RME V2.2 §3.1
+> **Source:** RME V2.2 Kap. 3.1
 
 | Abbr. | German Name | English | Strom | Gas | Definition |
 |---|---|---|:---:|:---:|---|
@@ -242,7 +242,7 @@ purpose.
 
 The entities processes act on. The NB creates and closes them in its grid area.
 
-> **Source:** RME V2.2 §3.2; Allgemeine Festlegungen 6.1d §2.15, §2.19
+> **Source:** RME V2.2 Kap. 3.2; Allgemeine Festlegungen 6.1d Kap. 2.15, Kap. 2.19
 
 | Abbr. | German | English | Strom | Gas | Definition |
 |---|---|---|:---:|:---:|---|
@@ -278,7 +278,7 @@ reference the **MeLo-ID** in MSCONS. Same site, different objects.
 Territories are spatial containers. Each DSO operates one or more grid areas.
 Each TSO operates one control zone.
 
-> **Source:** RME V2.2 §3.2
+> **Source:** RME V2.2 Kap. 3.2
 
 | Abbr. | German | English | Strom | Gas | Definition |
 |---|---|---|:---:|:---:|---|
@@ -323,11 +323,17 @@ qualifier is what says which:
 | BDEW-Codenummer (`99…`) | 13 numeric | `293` | Strom LF, NB, MSB, BKV |
 | DVGW-Codenummer (`98…`) | 13 numeric | `332` | Gas market participants |
 | GS1 **GLN** | 13 numeric | `9` | rare in German MaKo |
-| ENTSO-E **EIC** | 16 alphanumeric | `305` (`AgencyCode::Etso`) | ÜNB, Regelzonen, cross-border |
+
+These three are the whole NAD DE 3055 code list of the MIGs (UTILMD MIG Strom
+S2.2 S. 32–33, UTILMD MIG Gas G1.2 S. 17–18). An ENTSO-E **EIC** (16
+alphanumeric) is not an MP-ID and no MIG puts one on a NAD: it travels in `CCI`
+DE 7037 (Bilanzkreis, Marktgebiet) or `LOC` DE 3225 (Bilanzkreis, Regelzone),
+which carry no DE 3055.
 
 `MarktpartnerCode` stores the value **without** the agency qualifier;
 `edi_energy::AgencyCode::for_mp_id` derives the right one when rendering an
-outbound NAD segment.
+outbound NAD segment, and answers `None` for an identifier that is no 13-digit
+MP-ID, which the builder refuses by name.
 
 **Segments:** `UNB DE0004` (sender), `UNB DE0010` (recipient), `NAD DE3035 = MS`
 (message sender), `NAD DE3035 = MR` (message recipient).
@@ -444,10 +450,10 @@ BDEW names two procedures, and they are the **same arithmetic** over different
 character sets. Weight the base by position, sum, and take the difference to the
 next multiple of ten.
 
-> **Source:** Identifikatoren V1.2 §8.1 and §8.2
+> **Source:** Identifikatoren V1.2 Kap. 8.1 and Kap. 8.2
 
 1. Map each character of the base to a number. Digits map to themselves;
-   under §8.2 an uppercase letter maps to its ASCII value (`A` = 65 … `Z` = 90).
+   under Kap. 8.2 an uppercase letter maps to its ASCII value (`A` = 65 … `Z` = 90).
 2. Sum the values at **odd** 1-indexed positions (1, 3, 5, …).
 3. Sum the values at **even** positions and multiply that sum by **2**.
 4. Check digit = the difference from (2) + (3) to the next multiple of ten —
@@ -465,8 +471,8 @@ doubling falls on the even positions rather than alternating from the left.
 BDEW's two worked examples, which `rubo4e` asserts:
 
 ```text
-§8.1  4137355924  →  (4+3+3+5+2) + (1+7+5+9+4)*2 = 69  →  70−69 = 1  →  41373559241
-§8.2  A113735592  →  A = 65, same steps                            →  A1137355925
+Kap. 8.1  4137355924  →  (4+3+3+5+2) + (1+7+5+9+4)*2 = 69  →  70−69 = 1  →  41373559241
+Kap. 8.2  A113735592  →  A = 65, same steps                            →  A1137355925
 ```
 
 Never derive one by hand — `makotest` exposes `malo_from_base` and
@@ -475,12 +481,12 @@ Never derive one by hand — `makotest` exposes `malo_from_base` and
 ### An MP-ID in a fixture is deliberately not check-digit-valid
 
 **A check-digit-valid MP-ID is an assigned one**: publication in the BDEW resp.
-DVGW code database is what makes an MP-ID usable (Identifikatoren V1.2 §2.1), so
+DVGW code database is what makes an MP-ID usable (Identifikatoren V1.2 Kap. 2.1), so
 a valid code names a real company. Fixtures, demos and examples therefore use
 codes satisfying *neither* procedure — `makotest id 9900357000004` reports
 neither, which is the expected answer.
 
-Nothing in mako validates an MP-ID check digit: §2.3 defines two procedures and
+Nothing in mako validates an MP-ID check digit: Kap. 2.3 defines two procedures and
 the prefix does not decide which applies, so `MarktpartnerId::new` checks
 thirteen decimal digits and stops. MaLo-IDs and EIC codes are the other case —
 `metering::MaloId` and `meterstore::encode::parse_malo` refuse a bad one at the
@@ -493,7 +499,7 @@ validity where something validates.
 
 Key segment positions where identifiers appear in EDI@Energy messages.
 
-> **Source:** Allgemeine Festlegungen 6.1d §2.13, §2.15, §2.16, §2.19
+> **Source:** Allgemeine Festlegungen 6.1d Kap. 2.13, Kap. 2.15, Kap. 2.16, Kap. 2.19
 
 ### Interchange level (UNB)
 
@@ -512,8 +518,8 @@ The MP-ID in UNB **must be identical** to the MP-ID in the corresponding NAD+MS
 | `MS` | Message sender (Nachrichtenabsender) — always the same party as UNB DE0004 |
 | `MR` | Message receiver (Nachrichtenempfänger) — always the same party as UNB DE0010 |
 
-Code scheme (DE 3055): `293` BDEW-Code, `332` DVGW-Code, `9` GS1 GLN, `305` ENTSO-E EIC —
-see [MP-ID](#mp-id-marktpartner-13-digits).
+Code scheme (DE 3055): `293` BDEW-Code, `332` DVGW-Code, `9` GS1 GLN — see
+[MP-ID](#mp-id-marktpartner-13-digits).
 
 ### Market / metering location — `SG5 LOC`, not `IDE`
 
@@ -565,7 +571,7 @@ for the workflow to reject it.
 
 ### File naming convention
 
-Per Allgemeine Festlegungen 6.1d §2.12:
+Per Allgemeine Festlegungen 6.1d Kap. 2.12:
 
 ```
 {type}_{anwendungsref}_{sender-MP-ID}_{receiver-MP-ID}_{yyyymmdd}_{DAR}.txt

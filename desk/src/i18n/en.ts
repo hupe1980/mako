@@ -230,6 +230,123 @@ export const en: Katalog = {
       leer: "No rehearsal yet.",
       leerText: "Choose a message, check the facts, start the rehearsal.",
     },
+    befragung: {
+      titel: "Proposal",
+      text: "A few questions about the deployment — from them the Marktkommunikation proposes each service's configuration, every line with its source. What stays open is a gap in it. Nothing is applied: you copy or download the file and put it in place yourself.",
+      satz: {
+        titel: "From one sentence",
+        feld: "The deployment in one sentence",
+        platzhalter:
+          "We are Lieferant Strom und Gas, Strom under 9900357000004, Gas under 9800357000005.",
+        vorbelegen: "Pre-fill",
+        liest: "reading …",
+        hinweis:
+          "The assistant proposes answers; you take each one yourself. The interview works the same without it.",
+        nichtErreichbar: "The assistant cannot be reached",
+        nichtErreichbarText: "The interview works without it — answer the questions directly.",
+        abgelehnt: "The assistant did not read the sentence",
+        keine: "The sentence held no answer that could be taken.",
+        vorgeschlagen: "Proposed answers",
+        uebernehmen: "Take",
+        uebernommen: "taken",
+        verwerfen: "Discard",
+        alleUebernehmen: "Take all",
+        rolle: (rolle: string, mpId: string | null) =>
+          mpId ? `${rolle} under ${mpId}` : `${rolle} — MP-ID open`,
+        primaer: (mpId: string) => `Primary MP-ID ${mpId}`,
+        bilanzkreis: (sparte: string, bk: string) => `Bilanzkreis ${sparte}: ${bk}`,
+        verbunden: (liste: string) =>
+          liste ? `Affiliated Lieferanten: ${liste}` : "No affiliated Lieferanten",
+      },
+      rollen: {
+        titel: "Rollen and MP-IDs",
+        text: "Which Rollen does the deployment play, and under which MP-ID? Strom needs a BDEW-Codenummer (99…), Gas a DVGW-Codenummer (98…).",
+        mpId: (rolle: string) => `MP-ID ${rolle}`,
+        namen: {
+          "lf-strom": "Lieferant Strom",
+          "lf-gas": "Lieferant Gas",
+          "nb-strom": "Netzbetreiber Strom",
+          "nb-gas": "Netzbetreiber Gas",
+          "msb-strom": "Messstellenbetreiber Strom",
+          "msb-gas": "Messstellenbetreiber Gas",
+          "esa-strom": "Energieserviceanbieter",
+        } as Record<string, string>,
+      },
+      primaer: {
+        titel: "Primary MP-ID",
+        text: "The storage key of every event stream — once chosen, it stays.",
+      },
+      bilanzkreise: {
+        titel: "Bilanzkreise",
+        text: "The ones the Lieferant assigns to, separated by commas.",
+        feld: (sparte: string) => `Bilanzkreise ${sparte}`,
+        sparten: { strom: "Strom", gas: "Gas" } as Record<string, string>,
+        keinLieferant: "Asked once a Lieferant Rolle is chosen.",
+      },
+      verbunden: {
+        titel: "Affiliated Lieferanten",
+        text: "The MP-IDs of the Lieferanten of the same undertaking, separated by commas.",
+        feld: "MP-IDs of affiliated Lieferanten",
+        keine: "There are none",
+      },
+      as4: {
+        titel: "AS4 key material",
+        text: "Only the paths the files live at — never their content.",
+        angeben: "Give the paths",
+        domain: "Domain of the message ids",
+        anker: "SM-PKI root (path)",
+        sperrliste: "CRL signer (path)",
+        schluessel: (mpId: string) => `Key pairs of ${mpId}`,
+        keineMpId: "Asked once an MP-ID is given.",
+        felder: {
+          signing_cert_pem_file: "Signing certificate",
+          signing_key_pem_file: "Signing key",
+          encryption_cert_pem_file: "Encryption certificate",
+          encryption_key_pem_file: "Encryption key",
+          tls_cert_pem_file: "TLS certificate",
+          tls_key_pem_file: "TLS key",
+        } as Record<string, string>,
+      },
+      dienste: {
+        titel: "Other services",
+        text: "Where the other services run; the checklist asks each of them.",
+        name: "Service",
+        url: "Address",
+        schluessel: "Key file (path, optional)",
+        hinzufuegen: "Add a service",
+        entfernen: (n: string) => `Remove ${n || "service"}`,
+      },
+      ergebnis: {
+        titel: "Proposed configuration",
+        rechnet: "updating …",
+        leer: "No answer yet.",
+        leerText: "Choose a Rolle — the proposal appears here.",
+        vollstaendig: "Complete",
+        vollstaendigText: "No gap and no refused answer.",
+        unvollstaendig: "Not complete yet",
+        summe: (aenderungen: number, luecken: number, a: string, l: string) =>
+          `${aenderungen === 1 ? "1 change" : `${a} changes`} · ${luecken === 1 ? "1 gap" : `${l} gaps`}`,
+        abgelehnt: "Refused answers",
+        nichtAbgeglichen: (dienst: string) =>
+          `${dienst} does not report these settings — every line is shown as new.`,
+        dateien: "Files",
+        kopieren: (datei: string) => `Copy ${datei}`,
+        kopiert: "Copied",
+        herunterladen: (datei: string) => `Download ${datei}`,
+        zeilen: (datei: string) => `Lines of ${datei}`,
+        art: {
+          gleich: "unchanged",
+          neu: "new",
+          weg: "removed",
+          fehlt: "gap",
+          abschnitt: "section",
+        } as Record<string, string>,
+        zurFrage: "To the question",
+        nichtsAngewendet: "Nothing is written to any server.",
+        fehler: "The proposal could not be computed",
+        imVorschlag: "Fix in the proposal",
+      },
+    },
   },
   quickLook: {
     titel: (typ, pid) => `${typ} ${pid}`,
@@ -460,6 +577,11 @@ export const en: Katalog = {
     ausgestellt: "Issued and put up for review; a correction goes out as a Stornorechnung.",
     freigeben: "Release",
     geprueft: "Reviewed",
+    gehaltenVerweigert: "The invoice receipt does not let you state anything here",
+    offeneSchritte: "Open Prüfschritte",
+    nichtFeststellbar: "Not stated here — a record is missing, not a judgement",
+    gehaltenText:
+      "Held: the Entscheidungsbaum reached Prüfschritte no record answers; no answer has gone out yet.",
   },
   tasten: {
     gruppe: { ueberall: "Everywhere", listen: "Lists", entscheiden: "Deciding" },
@@ -469,8 +591,9 @@ export const en: Katalog = {
     naechste: "Next entry",
     vorige: "Previous entry",
     freigeben:
-      "Choose approve — settle on a Disput, checked on a Prüfposten, rebook on a parked booking",
-    ablehnen: "Choose reject — send the rejection on a Disput, discard on a parked booking",
+      "Choose approve — settle on a Disput, checked on a Prüfposten, rebook on a parked booking, state on a held invoice",
+    ablehnen:
+      "Choose reject — send the rejection on a Disput, discard on a parked booking, Leistungsnachweis on a held invoice",
     uebernehmen: "Take the assistant's proposal",
     warum: "Why is this entry here? Ask the assistant",
     undo: "Take back the last decision",
@@ -658,6 +781,7 @@ export const en: Katalog = {
       disput: "Invoice dispute",
       pruefposten: "Invoice review",
       buchung: "Parked booking",
+      gehalten: "Held invoice",
     },
     bemerkung: "Note (optional)",
     freigabe: {
@@ -697,6 +821,38 @@ export const en: Katalog = {
       verwerfenWas:
         "Discards it for good once the hold ends; the reason stays with it in the audit trail.",
       verworfen: "Booking discarded",
+    },
+    gehalten: {
+      feststellen: "State",
+      begruendung: "What does the statement rest on? (reason, required)",
+      feststellenWas:
+        "Records the answers with your reason and checks the invoice again at once — when the Entscheidungsbaum reaches a result, the answer goes out as an automatic one would.",
+      festgestellt: "Statement recorded",
+      nachweis: "Leistungsnachweis",
+      nachweisText: "What does the evidence rest on? (required)",
+      nachweisWas: (bestellung: string) =>
+        `Records the Leistungsnachweis for order ${bestellung}; every invoice of this Messstellenbetreiber held on it is checked again at once.`,
+      nachgewiesen: "Leistungsnachweis recorded",
+      schritt: (pruefschritt: string, position: string | null, detail: string) =>
+        `Prüfschritt ${pruefschritt}${position ? ` · position ${position}` : ""} — ${detail}`,
+      ja: {
+        "310": "performed",
+        "320": "as offered",
+        "330": "tax rate correct",
+        "80": "version valid",
+      } as Record<string, string>,
+      nein: {
+        "310": "not performed",
+        "320": "differs",
+        "330": "tax rate wrong",
+        "80": "version invalid",
+      } as Record<string, string>,
+      artikel: "Artikel-ID",
+      von: "From (YYYY-MM-DD)",
+      bis: "To, inclusive (YYYY-MM-DD)",
+      erbracht: "Service over the whole period",
+      erbrachtJa: "performed",
+      erbrachtNein: "not performed",
     },
   },
   rollenNamen: {
@@ -788,6 +944,11 @@ export const en: Katalog = {
     buchungsdatum: (d) => `Booking date ${d}`,
     geparktSeit: (s) => `parked since ${s}`,
     hinweis: "Note from the assistant",
+    gehalten: "Held invoices",
+    gehaltenGrund: (n: number, text: string, erster: string) =>
+      n === 1 ? `1 Prüfschritt open: ${erster}` : `${text} Prüfschritte open, first: ${erster}`,
+    gehaltenOhneSchritt: "Held — open Prüfschritte",
+    bestellung: (ref: string) => `Order ${ref}`,
   },
   buchungsarten: {
     art: {

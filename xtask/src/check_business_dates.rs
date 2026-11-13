@@ -25,8 +25,8 @@
 //! ## What is deliberately not a business date
 //!
 //! A timestamp **on the EDIFACT wire** is UTC by rule: Allgemeine Festlegungen
-//! §3 states „Die Angabe von Zeiten in einer EDIFACT Nachricht erfolgt in
-//! koordinierter Weltzeit", DTM format 303 fixes DE 2380 to `+00`, and §2.12
+//! Kap. 3 states „Die Angabe von Zeiten in einer EDIFACT Nachricht erfolgt in
+//! koordinierter Weltzeit", DTM format 303 fixes DE 2380 to `+00`, and Kap. 2.12
 //! dates the Content-Disposition filename „bei Erzeugung der Datei in UTC".
 //! The modules that encode those values are exempt by path; everything else
 //! reading a calendar component off the clock is a business date.
@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 type Finding = (PathBuf, usize, String);
 
 /// Paths whose UTC calendar components are the EDIFACT wire encoding, not a
-/// business date (Allgemeine Festlegungen §3 and §2.12).
+/// business date (Allgemeine Festlegungen Kap. 3 and Kap. 2.12).
 const WIRE_ENCODERS: &[&str] = &[
     "crates/edi-energy/src/builders",
     "services/makod/src/transport/as4_sender.rs",

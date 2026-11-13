@@ -21,7 +21,7 @@
 //!
 //! - BK6-24-174 Anlage 2b, WiM Strom Teil 2 Kap. 4
 //! - *Entscheidungsbaum-Diagramme und Codelisten* 4.3, Kap. 8.25–8.27
-//! - ORDRSP AHB 1.1b §4.15, REMADV AHB 1.0a §3, COMDIS AHB 1.0h
+//! - ORDRSP AHB 1.1b Kap. 4.15, REMADV AHB 1.0a Kap. 3, COMDIS AHB 1.0h
 
 pub mod rechnung;
 pub mod wertebestellung;

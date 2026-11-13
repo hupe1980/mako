@@ -13,6 +13,7 @@
 //!      └IFTSTA 21031 Bestandsschutz / Eigenausbau (A01/A02/A04)
 //! gMSB ──IFTSTA 21029 Vorabinformation──── 3 Monate vor dem ÜZ ──────────▶ LF, NB
 //! gMSB ◀─IFTSTA 21027 Information über das Scheitern ────────────────────  wMSB
+//!   NB ◀─IFTSTA 21027, LF ◀─IFTSTA 21025, the same Scheitermeldung ──────  wMSB
 //! gMSB ──IFTSTA 21025 / 21027 „kein Ersteinbau" ─────────────────────────▶ LF, NB
 //! ```
 //!
@@ -52,6 +53,9 @@
 use std::collections::HashMap;
 
 use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
+use mako_engine::payload::IftstaPayload;
+
+use crate::geraetewechsel::IftstaReferenz;
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
@@ -78,10 +82,18 @@ pub use mako_pruefung::msb::ersteinbau::{ABLEHNUNG_PID, ZUSTIMMUNG_PID};
 /// Nr. 6), and „Information kein Ersteinbau", gMSB → NB (Nr. 10).
 ///
 /// Shared with the Messlokationsänderung, where it carries `E_0286`; here it
-/// carries no code at all.
+/// carries `Z74`/`Z75` with no Codeliste ([`SCHEITERN_GRUENDE`]).
 pub const SCHEITERN_PID: u32 = 21_027;
 
-/// IFTSTA 21025 — „Information kein Ersteinbau", gMSB → LF (Kap. 3.5.2 Nr. 9).
+/// The grounds a 21027 between two MSB names in `SG15 STS` DE 9013: `Z74`
+/// „kein Zugang", `Z75` „Kommunikationsstörung". The `E_0286` codes ride only
+/// a Messlokationsänderung to an NB (Bedingungen `[155]`, `[26]`), so the
+/// wMSB's Scheitermeldung names no Codeliste (IFTSTA AHB 2.1 Kap. 6.4,
+/// S. 25–26, Bedingungen `[103]`/`[537]`).
+pub const SCHEITERN_GRUENDE: &[&str] = &["Z74", "Z75"];
+
+/// IFTSTA 21025 — „Information kein Ersteinbau", gMSB → LF (Kap. 3.5.2 Nr. 9),
+/// and the wMSB's Scheitermeldung to the LF (IFTSTA AHB 2.1 Kap. 6.4, S. 24).
 pub const KEIN_ERSTEINBAU_LF_PID: u32 = 21_025;
 
 /// Every Prüfidentifikator this workflow routes.
@@ -114,8 +126,12 @@ pub enum ErsteinbauEvent {
         wmsb: MarktpartnerCode,
         /// The planned Umstellungszeitpunkt the Vorabinformation names.
         umstellungszeitpunkt: String,
-        /// Reference of the inbound IFTSTA, echoed by the answer.
+        /// Reference of the inbound IFTSTA.
         message_ref: MessageRef,
+        /// The 21029's `BGM` DE 1004 and `CNI` DE 1490 — what the answer
+        /// names in `SG15 RFF+ACW` / `RFF+ADY`.
+        #[serde(default)]
+        referenz: Option<IftstaReferenz>,
     },
     /// A Vorabinformation went out — this party is the gMSB.
     VorabinformationGesendet {
@@ -267,6 +283,10 @@ pub struct ErsteinbauData {
     pub umstellungszeitpunkt: String,
     /// Reference of the IFTSTA that opened the Vorgang.
     pub message_ref: MessageRef,
+    /// The received 21029's `BGM` and `CNI`, which the 21030/21031 name in
+    /// `SG15 RFF+ACW` / `RFF+ADY` (IFTSTA AHB 2.1 Kap. 6.7, S. 33).
+    #[serde(default)]
+    pub vorabinformation: Option<IftstaReferenz>,
 }
 
 /// State of an Ersteinbau process.
@@ -391,6 +411,8 @@ pub enum ErsteinbauCommand {
         umstellungszeitpunkt: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The 21029's `BGM` DE 1004 and `CNI` DE 1490.
+        referenz: Option<IftstaReferenz>,
         /// `true` if the IFTSTA passed AHB validation.
         validation_passed: bool,
         /// Validation issues, for the `Rejected` event.
@@ -435,8 +457,16 @@ pub enum ErsteinbauCommand {
     },
     /// The rollout failed on site — IFTSTA 21027 (Kap. 3.5.2 Nr. 6).
     MeldeScheitern {
-        /// Why.
+        /// `SG15 STS` DE 9013 — [`SCHEITERN_GRUENDE`]: `Z74` kein Zugang or
+        /// `Z75` Kommunikationsstörung.
+        grund: String,
+        /// Why, for the audit trail.
         reason: String,
+        /// The NB of the Messlokation — a 21027 goes to it too; `None` when
+        /// nobody resolved it, which escalates by name.
+        nb: Option<MarktpartnerCode>,
+        /// The LF of its Marktlokation — the 21025; `None` escalates.
+        lf: Option<MarktpartnerCode>,
     },
     /// A registered deadline fired.
     TimeoutExpired {
@@ -516,7 +546,9 @@ impl Workflow for WimErsteinbauWorkflow {
                 wmsb,
                 umstellungszeitpunkt,
                 message_ref,
+                referenz,
             } => ErsteinbauState::Angekuendigt(ErsteinbauData {
+                vorabinformation: referenz.clone(),
                 seite: Seite::Wmsb,
                 melo_id: melo_id.clone(),
                 gmsb: gmsb.clone(),
@@ -531,6 +563,7 @@ impl Workflow for WimErsteinbauWorkflow {
                 message_ref,
                 gmsb,
             } => ErsteinbauState::Angekuendigt(ErsteinbauData {
+                vorabinformation: None,
                 seite: Seite::Gmsb,
                 melo_id: melo_id.clone(),
                 gmsb: gmsb.clone(),
@@ -599,6 +632,7 @@ impl Workflow for WimErsteinbauWorkflow {
                 melo_id,
                 umstellungszeitpunkt,
                 message_ref,
+                referenz,
                 validation_passed,
                 validation_errors,
             } => {
@@ -623,6 +657,7 @@ impl Workflow for WimErsteinbauWorkflow {
                     wmsb,
                     umstellungszeitpunkt,
                     message_ref,
+                    referenz,
                 }]
                 .into())
             }
@@ -637,13 +672,14 @@ impl Workflow for WimErsteinbauWorkflow {
                 if !matches!(state, ErsteinbauState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                let payload = serde_json::json!({
-                    "pid":                  VORABINFORMATION_PID,
-                    "sender":               gmsb.as_str(),
-                    "receiver":             wmsb.as_str(),
-                    "melo":                 melo_id.as_str(),
-                    "umstellungszeitpunkt": umstellungszeitpunkt,
-                });
+                let payload = IftstaPayload {
+                    pid: VORABINFORMATION_PID,
+                    sender: Some(gmsb.as_str().to_owned()),
+                    receiver: Some(wmsb.as_str().to_owned()),
+                    melo: Some(melo_id.as_str().to_owned()),
+                    umstellungszeitpunkt: Some(umstellungszeitpunkt.clone()),
+                    ..Default::default()
+                };
                 Ok(WorkflowOutput::with_outbox(
                     vec![ErsteinbauEvent::VorabinformationGesendet {
                         melo_id,
@@ -652,7 +688,7 @@ impl Workflow for WimErsteinbauWorkflow {
                         umstellungszeitpunkt,
                         message_ref,
                     }],
-                    vec![PendingOutbox::new("IFTSTA", wmsb.as_str(), payload).caused_by(0)],
+                    vec![PendingOutbox::typed(wmsb.as_str(), &payload).caused_by(0)],
                 ))
             }
 
@@ -669,22 +705,37 @@ impl Workflow for WimErsteinbauWorkflow {
                     ));
                 }
                 let (code, antwort_pid) = antwort_pid(&antwort_code)?;
-                let payload = serde_json::json!({
-                    "pid":              antwort_pid,
-                    "sender":           data.wmsb.as_str(),
-                    "receiver":         data.gmsb.as_str(),
-                    "melo":             data.melo_id.as_str(),
-                    "antwort_code":     code.code,
-                    "antwort_codeliste":      ERSTEINBAU_EBD,
-                    "orig_message_ref": data.message_ref.as_str(),
-                });
+                // `SG15 RFF+ACW` / `RFF+ADY` — Muss: the answer names the
+                // 21029 by its `BGM` and `CNI` (IFTSTA AHB 2.1 Kap. 6.7, S. 33).
+                let Some(ref vorab) = data.vorabinformation else {
+                    return Err(WorkflowError::rejected(
+                        "the answer names the Vorabinformation by its BGM and CNI \
+                         (SG15 RFF+ACW / RFF+ADY), and none was recorded with it",
+                    ));
+                };
+                let payload = IftstaPayload {
+                    pid: antwort_pid,
+                    sender: Some(data.wmsb.as_str().to_owned()),
+                    receiver: Some(data.gmsb.as_str().to_owned()),
+                    melo: Some(data.melo_id.as_str().to_owned()),
+                    antwort_code: Some(code.code.to_owned()),
+                    antwort_codeliste: Some(ERSTEINBAU_EBD.to_owned()),
+                    referenz_nachricht: Some(vorab.dokumentennummer.clone()),
+                    referenz_vorgang: Some(vorab.vorgangsnummer.clone()),
+                    // `SG15 DTM+76` — the planned Umstellungszeitpunkt the
+                    // 21029 named: Muss on the Zustimmung 21030, not in the
+                    // 21031 column (Kap. 6.7, S. 33).
+                    umstellungszeitpunkt: (antwort_pid == ZUSTIMMUNG_PID)
+                        .then(|| data.umstellungszeitpunkt.clone()),
+                    ..Default::default()
+                };
                 Ok(WorkflowOutput::with_outbox(
                     vec![ErsteinbauEvent::AntwortGesendet {
                         pruefidentifikator: Pruefidentifikator::new(antwort_pid)
                             .map_err(WorkflowError::rejected)?,
                         antwort_code: code.code.to_owned(),
                     }],
-                    vec![PendingOutbox::new("IFTSTA", data.gmsb.as_str(), payload).caused_by(0)],
+                    vec![PendingOutbox::typed(data.gmsb.as_str(), &payload).caused_by(0)],
                 ))
             }
 
@@ -720,7 +771,12 @@ impl Workflow for WimErsteinbauWorkflow {
                 .into())
             }
 
-            ErsteinbauCommand::MeldeScheitern { reason } => {
+            ErsteinbauCommand::MeldeScheitern {
+                grund,
+                reason,
+                nb,
+                lf,
+            } => {
                 // Kap. 3.5.2 Nr. 6: „Der MSB teilt das Scheitern seines
                 // Gerätewechsels auf ein iMS mit" — the wMSB's own Selbsteinbau,
                 // announced by `A02`. After `A03` the wMSB waived it and has no
@@ -735,16 +791,65 @@ impl Workflow for WimErsteinbauWorkflow {
                         "the Scheitermeldung 21027 is the wMSB's (WiM Teil 1 Kap. 3.5.2 Nr. 6)",
                     ));
                 }
-                let payload = serde_json::json!({
-                    "pid":      SCHEITERN_PID,
-                    "sender":   data.wmsb.as_str(),
-                    "receiver": data.gmsb.as_str(),
-                    "melo":     data.melo_id.as_str(),
-                    "grund":    reason,
-                });
+                // `STS+Z15+Z13+<grund>` with no Codeliste, and no `SG25`:
+                // that group rides only beside `A99:E_0286` (IFTSTA AHB 2.1
+                // Kap. 6.4, S. 25–26, `[103]`, `[154]`).
+                if !SCHEITERN_GRUENDE.contains(&grund.as_str()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "the 21027 between two MSB states its ground as one of \
+                         {SCHEITERN_GRUENDE:?}, not {grund:?}"
+                    )));
+                }
+                // „Wird die Scheitermeldung im Rahmen des Ersteinbaus eines iMS
+                // verwendet, ist diese Statusmeldung an alle im Prozess
+                // genannten Marktrollen zu senden" (IFTSTA AHB 2.1 Kap. 6.4,
+                // S. 24) — MSB, NB and LF (WiM Teil 1 Kap. 3.5.1, S. 60): the
+                // gMSB and the NB by 21027 „MSB an NB / MSB", the LF by 21025
+                // „MSB an LF". A party nobody resolved is escalated by name.
+                let mut outbox = Vec::new();
+                for (rolle, pid, mp_id) in [
+                    ("gMSB", SCHEITERN_PID, Some(data.gmsb.clone())),
+                    ("NB", SCHEITERN_PID, nb),
+                    ("LF", KEIN_ERSTEINBAU_LF_PID, lf),
+                ] {
+                    match mp_id {
+                        Some(mp_id) => outbox.push(
+                            PendingOutbox::typed(
+                                mp_id.as_str(),
+                                &IftstaPayload {
+                                    pid,
+                                    sender: Some(data.wmsb.as_str().to_owned()),
+                                    receiver: Some(mp_id.as_str().to_owned()),
+                                    melo: Some(data.melo_id.as_str().to_owned()),
+                                    antwort_code: Some(grund.clone()),
+                                    ..Default::default()
+                                },
+                            )
+                            .caused_by(0),
+                        ),
+                        None => outbox.push(
+                            PendingOutbox::new(
+                                mako_engine::outbox::PROCESS_FAILED,
+                                "",
+                                serde_json::json!({
+                                    "pid":    pid,
+                                    "reason": format!(
+                                        "IFTSTA {pid} an den {rolle} nicht versandt: kein {rolle} \
+                                         zur Messlokation {} ermittelt (IFTSTA AHB 2.1 Kap. 6.4, \
+                                         S. 24)",
+                                        data.melo_id.as_str(),
+                                    ),
+                                    "undelivered_message_type": "IFTSTA",
+                                    "recipient_role": rolle,
+                                }),
+                            )
+                            .caused_by(0),
+                        ),
+                    }
+                }
                 Ok(WorkflowOutput::with_outbox(
                     vec![ErsteinbauEvent::ScheiternGemeldet { reason }],
-                    vec![PendingOutbox::new("IFTSTA", data.gmsb.as_str(), payload).caused_by(0)],
+                    outbox,
                 ))
             }
 
@@ -854,6 +959,10 @@ mod tests {
             melo_id: melo(),
             umstellungszeitpunkt: "20261201".to_owned(),
             message_ref: MessageRef::new("MSG-1"),
+            referenz: Some(IftstaReferenz {
+                dokumentennummer: "IFT-21029".to_owned(),
+                vorgangsnummer: "1".to_owned(),
+            }),
             validation_passed: true,
             validation_errors: vec![],
         }
@@ -1085,7 +1194,10 @@ mod tests {
     #[test]
     fn a_scheitermeldung_follows_only_the_wmsbs_own_selbsteinbau() {
         let melde = || ErsteinbauCommand::MeldeScheitern {
+            grund: "Z74".to_owned(),
             reason: "kein Zugang".to_owned(),
+            nb: None,
+            lf: None,
         };
         assert!(
             WimErsteinbauWorkflow::handle(&angekuendigt(), melde()).is_err(),
@@ -1111,6 +1223,28 @@ mod tests {
         let gescheitert =
             WimErsteinbauWorkflow::handle(&nach("A02"), melde()).expect("A02 then 21027");
         assert_eq!(gescheitert.outbox[0].payload["pid"], SCHEITERN_PID);
+        // The IFTSTA reads back as its typed payload, the ground in DE 9013
+        // with no Codeliste and no free text.
+        use mako_engine::payload::OutboundPayload as _;
+        let typed =
+            IftstaPayload::from_payload(&gescheitert.outbox[0].payload).expect("an IFTSTA payload");
+        assert_eq!(typed.antwort_code.as_deref(), Some("Z74"));
+        assert!(typed.antwort_codeliste.is_none() && typed.bemerkung.is_none());
+        // NB and LF unresolved: each is escalated by name, never skipped
+        // (IFTSTA AHB 2.1 Kap. 6.4, S. 24: „an alle im Prozess genannten
+        // Marktrollen").
+        let eskaliert: Vec<_> = gescheitert
+            .outbox
+            .iter()
+            .filter(|o| &*o.message_type == mako_engine::outbox::PROCESS_FAILED)
+            .map(|o| {
+                o.payload["recipient_role"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(eskaliert, ["NB", "LF"]);
     }
 
     #[test]
@@ -1186,6 +1320,7 @@ mod verlauf_tests {
             wmsb: MarktpartnerCode::new("9900000000002"),
             umstellungszeitpunkt: "20270101".into(),
             message_ref: MessageRef::new("IFT-1"),
+            referenz: None,
         };
         assert_eq!(
             empfangen.verlauf(),

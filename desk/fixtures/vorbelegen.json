@@ -1,0 +1,29 @@
+{
+  "run": "vorbelegen",
+  "status": "succeeded",
+  "disclosure": "AI-generated.",
+  "saetze": [],
+  "vorschlag": null,
+  "angaben": {
+    "rollen": [
+      {
+        "rolle": "lf-strom",
+        "mp_id": "9900357000004"
+      },
+      {
+        "rolle": "lf-gas",
+        "mp_id": null
+      }
+    ],
+    "primaer": null,
+    "bilanzkreise": [
+      {
+        "sparte": "strom",
+        "standard": ["11XBK-STD------Y"]
+      }
+    ],
+    "verbundene_lieferanten": []
+  },
+  "schritte": [],
+  "hilfreich": null
+}

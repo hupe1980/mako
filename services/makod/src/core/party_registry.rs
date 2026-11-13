@@ -1,8 +1,8 @@
 //! MP-ID registry — maps BDEW Marktrollen to their operator MP-IDs for this instance.
 //!
-//! ## BDEW §2.13 — Marktpartneridentifikation
+//! ## Allgemeine Festlegungen Kap. 2.13 — Marktpartneridentifikation
 //!
-//! Per the BDEW EDI@Energy General Provisions (§2.13, V6.1d 01.04.2026):
+//! Per the BDEW EDI@Energy General Provisions (Kap. 2.13, V6.1d 01.04.2026):
 //!
 //! > "Marktteilnehmer benötigen für jede Marktrolle eine gesonderte Codenummer."
 //! > "Identifiziert sich ein Marktteilnehmer über MP-ID und ist er in beiden
@@ -16,10 +16,15 @@
 //!
 //! ## NAD agency code
 //!
-//! Derived from the MP-ID unless `agency` overrides it: `99…` → `293` (BDEW),
-//! `98…` → `332` (DVGW), any other 13 digits → `9` (GS1), 16 characters →
-//! `ZEW` (EIC). Source: BDEW-AWH Identifikatoren V1.2 §2.2; Allgemeine
-//! Festlegungen V6.1d §2.13; UTILMD AHB Gas 1.2 NAD+MS/MR tables.
+//! Derived from the MP-ID unless `agency` overrides it, by
+//! `edi_energy::AgencyCode::for_mp_id` — the derivation that renders the NAD:
+//! `99…` → `293` (BDEW), `98…` → `332` (DVGW), any other 13 digits → `9` (GS1),
+//! and no code for anything else. The MIGs list exactly `9`, `293` and `332` on
+//! a NAD (UTILMD MIG Strom S2.2 S. 32–33, UTILMD MIG Gas G1.2 S. 17–18) and none
+//! for an EIC, which is not an MP-ID (BDEW-AWH Identifikatoren V1.2 Kap. 1 and
+//! Kap. 2.1, S. 4) and is refused as a `[[party]] mp_id`.
+//! An `agency` override outside that list is refused. Prefixes: BDEW-AWH
+//! Identifikatoren V1.2 Kap. 2.2, S. 4–5.
 //!
 //! A role may be declared by its BDEW sub-qualifier (`ANB`, `VNB` for a
 //! Netzbetreiber Strom; `GNB`, `LFG`, `GMSB`, `FNB` for Gas). Lookups resolve
@@ -83,10 +88,8 @@ struct RoleEntry {
 
 /// Authoritative BDEW role table — single source of truth.
 ///
-/// Replaces the previous trio of `KNOWN_ROLES`, `STROM_ROLES`, `GAS_ROLES`
-/// arrays that required manual three-way sync on every role addition.  All
-/// validation, §2.13 sparte checks, and `deployment_role_strings` now derive
-/// from this table automatically.
+/// Role validation, the Sparte checks and `deployment_role_strings` all
+/// derive from this table.
 ///
 /// Source: BDEW Rollenmodell V2.2 (08.01.2026) — only roles with
 /// `Marktkommunikation: zur Verwendung freigegeben`, plus EDIFACT AHB
@@ -203,6 +206,29 @@ fn find_role(upper: &str) -> Option<&'static RoleEntry> {
     ROLE_TABLE.iter().find(|e| e.abbrev == upper)
 }
 
+/// A `[[party]]` role in the spelling the AHBs use for a role Bedingung: a
+/// sub-qualifier names its role (`VNB`/`ANB`/`GNB` → `NB`, `LFG` → `LF`,
+/// `GMSB`/`NMSB`/`AMSB` → `MSB`, `UNB`/`FNB` → `ÜNB`). `None` for an unknown
+/// abbreviation.
+#[must_use]
+pub fn ahb_rolle(role: &str) -> Option<&'static str> {
+    Some(match role.trim().to_uppercase().as_str() {
+        "NB" | "VNB" | "ANB" | "GNB" => "NB",
+        "LF" | "LFG" => "LF",
+        "MSB" | "GMSB" | "NMSB" | "AMSB" => "MSB",
+        "UNB" | "ÜNB" | "UENB" | "FNB" => "ÜNB",
+        "BKV" => "BKV",
+        "BIKO" => "BIKO",
+        "ESA" => "ESA",
+        "MGV" => "MGV",
+        "KN" => "KN",
+        "DP" => "DP",
+        "EIV" => "EIV",
+        "RB" => "RB",
+        _ => return None,
+    })
+}
+
 /// Returns the [`RoleSparte`] for the given role abbreviation (case-insensitive).
 ///
 /// Returns `None` when the abbreviation is not a known BDEW Marktrolle.
@@ -215,25 +241,16 @@ pub fn sparte_for_role(abbrev: &str) -> Option<RoleSparte> {
 
 // ── NAD agency derivation ─────────────────────────────────────────────────────
 
-/// Derive the NAD DE3055 agency code from the MP-ID prefix.
+/// Derive the NAD DE3055 agency code from the MP-ID.
 ///
-/// Implements BDEW-AWH Identifikatoren V1.2 §2.2:
-///
-/// | Length | Prefix | NAD DE3055 | Meaning |
-/// |--------|--------|------------|---------|
-/// | 13 | `99` | `"293"` | BDEW-Codenummer Strom |
-/// | 13 | `98` | `"332"` | DVGW-Codenummer Gas |
-/// | 13 | other | `"9"` | GS1 GLN |
-/// | 16 | — | `"ZEW"` | EIC (ENTSO-E) |
+/// `edi_energy::AgencyCode::for_mp_id` is the one derivation: it is what renders
+/// the NAD, so the AS4 `<eb:PartyId type=…>` taken from this registry names the
+/// same issuing office as the message it carries.
 ///
 /// Note: UNB DE0007 codes differ — `500` (BDEW), `502` (DVGW), `14` (GS1).
-fn derive_agency(mp_id: &str) -> &'static str {
-    match mp_id.len() {
-        13 if mp_id.starts_with("99") => "293",
-        13 if mp_id.starts_with("98") => "332",
-        13 => "9",
-        _ => "ZEW",
-    }
+/// `None` for an identifier that is no MP-ID.
+fn derive_agency(mp_id: &str) -> Option<&'static str> {
+    edi_energy::AgencyCode::for_mp_id(mp_id).map(edi_energy::AgencyCode::as_str)
 }
 
 // ── MpIdRegistry ───────────────────────────────────────────────────────────────
@@ -260,10 +277,10 @@ pub struct MpIdRegistry {
     mp_id_to_agency: HashMap<Arc<str>, Arc<str>>,
     /// Own MP-ID → [`RoleSparte`] of the `[[party]]` entry.
     ///
-    /// Every `[[party]]` covers exactly one Sparte (BDEW §2.13, enforced in
+    /// Every `[[party]]` covers exactly one Sparte (Allgemeine Festlegungen Kap. 2.13, enforced in
     /// [`from_config`]), so this is the authoritative Sparte of any interchange
     /// addressed to one of our own MP-IDs — the signal used to decide the Gas-only
-    /// CONTRL Empfangsbestätigung obligation (CONTRL AHB 1.0 §2.3.1).
+    /// CONTRL Empfangsbestätigung obligation (CONTRL AHB 1.0 Kap. 2.3.1).
     ///
     /// [`from_config`]: MpIdRegistry::from_config
     mp_id_to_sparte: HashMap<Arc<str>, RoleSparte>,
@@ -319,6 +336,22 @@ impl MpIdRegistry {
                 out.push(ident(format!("party[{i}].mp_id"), e.to_string()));
             }
 
+            if let Some(agency) = party.agency.as_deref()
+                && edi_energy::AgencyCode::parse(agency).is_none()
+            {
+                out.push(
+                    ident(
+                        format!("party[{i}].agency"),
+                        format!(
+                            "agency {agency:?} is not a NAD DE 3055 code: the MIGs list `9` \
+                             (GS1), `293` (BDEW) and `332` (DVGW). Omit `agency` to derive it \
+                             from the MP-ID."
+                        ),
+                    )
+                    .quelle("UTILMD MIG Strom S2.2 S. 32–33; UTILMD MIG Gas G1.2 S. 17–18"),
+                );
+            }
+
             if !seen_glns.insert(party.mp_id.as_str()) {
                 out.push(ident(
                     format!("party[{i}].mp_id"),
@@ -368,7 +401,7 @@ impl MpIdRegistry {
                 }
             }
 
-            // §2.13: a single [[party]] entry must not mix Strom and Gas roles.
+            // Kap. 2.13: a single [[party]] entry must not mix Strom and Gas roles.
             if !strom_roles.is_empty() && !gas_roles.is_empty() {
                 out.push(
                     ident(
@@ -376,7 +409,7 @@ impl MpIdRegistry {
                         format!(
                             "[[party]] mp_id = {:?} mixes Strom roles {strom_roles:?} with Gas \
                              roles {gas_roles:?}.\n\
-                             Per BDEW §2.13 (Allgemeine Festlegungen V6.1d), each Marktrolle \
+                             Per Allgemeine Festlegungen V6.1d Kap. 2.13, each Marktrolle \
                              requires a separate MP-ID, and an operator identifying itself \
                              by GLN and active in both sectors must use a different GLN per \
                              energy type and role. Use separate \
@@ -399,12 +432,14 @@ impl MpIdRegistry {
     /// Returns an error when:
     ///
     /// - `parties` is empty.
-    /// - An MP-ID is not a valid 13-digit BDEW/DVGW/GS1 code or 16-char EIC.
+    /// - An MP-ID is not a 13-digit BDEW-/DVGW-Codenummer or GLN (an EIC is
+    ///   not an MP-ID).
     /// - Two entries share the same MP-ID (each Marktrolle requires its own code).
     /// - A role appears in more than one entry.
     /// - More than one entry has `primary = true`.
     /// - A role string is not a known BDEW Marktrolle.
-    /// - A single entry mixes Strom roles with Gas roles (BDEW §2.13).
+    /// - A single entry mixes Strom roles with Gas roles (Allgemeine Festlegungen Kap. 2.13).
+    /// - An `agency` override is not on the MIGs' NAD DE 3055 code list.
     ///
     /// # Primary selection
     ///
@@ -435,7 +470,8 @@ impl MpIdRegistry {
         let primary_agency: Arc<str> = primary
             .agency
             .as_deref()
-            .unwrap_or_else(|| derive_agency(&primary.mp_id))
+            .or_else(|| derive_agency(&primary.mp_id))
+            .expect("a validated MP-ID has an agency")
             .into();
 
         let mut own_mp_ids: HashSet<Arc<str>> = HashSet::new();
@@ -449,12 +485,13 @@ impl MpIdRegistry {
             let agency: Arc<str> = party
                 .agency
                 .as_deref()
-                .unwrap_or_else(|| derive_agency(&party.mp_id))
+                .or_else(|| derive_agency(&party.mp_id))
+                .expect("a validated MP-ID has an agency")
                 .into();
             own_mp_ids.insert(Arc::clone(&mp_id_arc));
             mp_id_to_agency.insert(Arc::clone(&mp_id_arc), agency);
 
-            // Aggregate the party's Sparte from its roles. §2.13 (enforced above)
+            // Aggregate the party's Sparte from its roles. Kap. 2.13 (enforced above)
             // guarantees a party never mixes Strom and Gas roles, so the first
             // sector-specific role decides; a party with only sparte-neutral roles
             // (e.g. RB) is `Both`.
@@ -499,9 +536,9 @@ impl MpIdRegistry {
 
     /// Returns the NAD DE3055 agency code for the primary MP-ID.
     ///
-    /// Auto-derived from the MP-ID prefix when not set explicitly in config:
-    /// `99…` → `"293"` (BDEW), `98…` → `"332"` (DVGW), other 13-digit → `"9"` (GS1),
-    /// 16-char → `"ZEW"` (EIC).
+    /// Auto-derived from the MP-ID when not set explicitly in config, by
+    /// `edi_energy::AgencyCode::for_mp_id`: `99…` → `"293"` (BDEW), `98…` →
+    /// `"332"` (DVGW), other 13-digit → `"9"` (GS1), anything else → `"293"`.
     #[must_use]
     pub fn primary_agency(&self) -> &str {
         &self.primary_agency
@@ -509,7 +546,7 @@ impl MpIdRegistry {
 
     /// Returns the [`RoleSparte`] of one of our own MP-IDs.
     ///
-    /// Because every `[[party]]` entry covers exactly one Sparte (BDEW §2.13),
+    /// Because every `[[party]]` entry covers exactly one Sparte (Allgemeine Festlegungen Kap. 2.13),
     /// the Sparte of an inbound interchange is authoritatively the Sparte of the
     /// own MP-ID it is addressed to (UNB DE0010 receiver). This is the primary
     /// signal for the Gas-only CONTRL Empfangsbestätigung obligation — far more
@@ -534,7 +571,7 @@ impl MpIdRegistry {
     /// [`mp_id_for_role_or_primary`] then silently substituted the primary
     /// MP-ID: in a multi-party deployment that put a *different Marktrolle's*
     /// code into NAD+MS and the UNB sender, which is precisely the identity
-    /// confusion BDEW §2.13 exists to prevent.
+    /// confusion Allgemeine Festlegungen Kap. 2.13 exists to prevent.
     ///
     /// The Sparte guard is what keeps the widening safe: `GNB` also
     /// canonicalises to `NB`, but it is a Gas role with its own DVGW code, so a
@@ -601,7 +638,7 @@ impl MpIdRegistry {
                         configured_roles = ?self.all_roles,
                         "no [[party]] entry declares Marktrolle {role}; falling back to the \
                          primary MP-ID, which belongs to a different Marktrolle. The outbound \
-                         message will carry the wrong sender identity (BDEW §2.13). Add a \
+                         message will carry the wrong sender identity (Allgemeine Festlegungen Kap. 2.13). Add a \
                          [[party]] entry for {role}.",
                     );
                 }
@@ -623,12 +660,48 @@ impl MpIdRegistry {
     /// holding a DVGW `98…` code with the BDEW party type; the receiving MSH
     /// resolves its P-Mode from those fields, so the mismatch is visible to the
     /// counterparty, not just internally.
+    ///
+    /// `None` for an identifier that is no MP-ID — the caller refuses it by
+    /// name.
     #[must_use]
-    pub fn agency_for_mp_id(&self, mp_id: &str) -> &str {
+    pub fn agency_for_mp_id(&self, mp_id: &str) -> Option<&str> {
         self.mp_id_to_agency
             .get(mp_id)
             .map(Arc::as_ref)
-            .unwrap_or_else(|| derive_agency(mp_id))
+            .or_else(|| derive_agency(mp_id))
+    }
+
+    /// The Marktrolle `mp_id` holds in this deployment, in the AHB's spelling
+    /// (`LF`, `NB`, `MSB`, `ÜNB`, …) — `None` for a counterparty, or for an own
+    /// MP-ID declared with roles of more than one AHB role.
+    ///
+    /// Each MP-ID identifies one Marktrolle („Für jede Sparte (Gas bzw. Strom)
+    /// und jede Rolle hat ein Markteilnehmer genau eine MP-ID", Identifikatoren
+    /// AWH V1.2 Kap. 2.1, S. 4), so an MP-ID declared with two cannot say which
+    /// one a message speaks as, and its role Bedingungen stay undecided.
+    #[must_use]
+    pub fn ahb_rolle(&self, mp_id: &str) -> Option<&'static str> {
+        let mut rollen = self
+            .role_to_gln
+            .iter()
+            .filter(|(_, id)| id.as_ref() == mp_id)
+            .filter_map(|(r, _)| ahb_rolle(r));
+        let erste = rollen.next()?;
+        rollen.all(|r| r == erste).then_some(erste)
+    }
+
+    /// The [`edi_energy::profile::Parteirollen`] of a message from `absender`
+    /// to `empfaenger`, as far as this registry knows them — own MP-IDs only.
+    #[must_use]
+    pub fn parteirollen(
+        &self,
+        absender: &str,
+        empfaenger: &str,
+    ) -> edi_energy::profile::Parteirollen {
+        edi_energy::profile::Parteirollen {
+            absender: self.ahb_rolle(absender).map(str::to_owned),
+            empfaenger: self.ahb_rolle(empfaenger).map(str::to_owned),
+        }
     }
 
     /// Returns `true` when the given MP-ID belongs to this operator.
@@ -773,7 +846,7 @@ impl MpIdRegistry {
 
             _ => {
                 // Not a silent fallback. In a single-MP-ID deployment the
-                // primary is trivially right; in the VIU configuration §2.13
+                // primary is trivially right; in the VIU configuration Kap. 2.13
                 // mandates — one MP-ID per Marktrolle per Sparte — it is a
                 // wrong `NAD+MS` on the wire, and that is the defect this
                 // table exists to prevent, so it is logged.
@@ -813,22 +886,24 @@ impl MpIdRegistry {
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
-/// Validate a BDEW/DVGW MP-ID (13 ASCII digits) or EIC (16 alphanumeric chars).
+/// Validate an MP-ID: a BDEW-Codenummer, a DVGW-Codenummer or a GLN, all 13
+/// digits (BDEW-AWH Identifikatoren V1.2 Kap. 2.1–2.2, S. 4–5). An EIC is not
+/// one (Kap. 1, S. 4).
 fn validate_mp_id(mp_id: &str) -> anyhow::Result<()> {
-    match mp_id.len() {
-        13 if mp_id.bytes().all(|b| b.is_ascii_digit()) => Ok(()),
-        16 if mp_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-') =>
-        {
-            Ok(())
-        }
-        _ => anyhow::bail!(
-            "MP-ID {:?} is not a valid 13-digit BDEW/DVGW/GS1 code or 16-char EIC.\n\
-             Examples: BDEW \"9900001000001\", DVGW \"9800001000001\", GS1 \"4012345000023\"",
-            mp_id
-        ),
+    if mp_id.len() == 13 && mp_id.bytes().all(|b| b.is_ascii_digit()) {
+        return Ok(());
     }
+    if mp_id.len() == 16 {
+        anyhow::bail!(
+            "MP-ID {mp_id:?} is a 16-character EIC, and an EIC is not an MP-ID: a market role \
+             is identified by a BDEW-Codenummer, a DVGW-Codenummer or a GLN (BDEW-AWH \
+             Identifikatoren V1.2 Kap. 2.1, S. 4), all 13 digits"
+        );
+    }
+    anyhow::bail!(
+        "MP-ID {mp_id:?} is not a 13-digit BDEW-/DVGW-Codenummer or GS1 GLN.\n\
+         Examples: BDEW \"9900001000001\", DVGW \"9800001000001\", GS1 \"4012345000023\""
+    )
 }
 
 /// Validate that `upper_role` is a known BDEW Marktrolle (already uppercased).
@@ -870,7 +945,7 @@ mod role_resolution_tests {
     /// This was the live defect: the lookup matched only the literal string, so
     /// `mp_id_for_role("NB")` returned `None`, and the ORDERS sender fell back
     /// to the primary MP-ID — the *MSB's* code — putting the wrong Marktrolle
-    /// into NAD+MS and the UNB sender (BDEW §2.13).
+    /// into NAD+MS and the UNB sender (Allgemeine Festlegungen Kap. 2.13).
     #[test]
     fn a_sub_qualifier_answers_its_canonical_role() {
         let parties = vec![
@@ -890,7 +965,7 @@ mod role_resolution_tests {
 
     /// `GNB` canonicalises to `NB` as well, but it is a Gas role with its own
     /// DVGW code. A Strom `NB` lookup must never resolve to it — that would put
-    /// a Gas code on a Strom interchange, the §2.13 violation in the other
+    /// a Gas code on a Strom interchange, the Kap. 2.13 violation in the other
     /// direction.
     #[test]
     fn the_canonical_widening_does_not_cross_sparten() {
@@ -1075,9 +1150,61 @@ mod tests {
         p.agency = Some("9".to_owned()); // force GS1 code despite 99-prefix
         let reg = MpIdRegistry::from_config(&[p]).unwrap();
         assert_eq!(reg.primary_agency(), "9");
-        assert_eq!(reg.agency_for_mp_id("9900001000001"), "9");
+        assert_eq!(reg.agency_for_mp_id("9900001000001"), Some("9"));
         // Unknown MP-IDs — every counterparty — derive from the prefix.
-        assert_eq!(reg.agency_for_mp_id("9900001000099"), "293"); // BDEW Strom
+        assert_eq!(reg.agency_for_mp_id("9900001000099"), Some("293")); // BDEW Strom
+    }
+
+    /// An EIC is not an MP-ID (BDEW-AWH Identifikatoren V1.2 Kap. 1 and
+    /// Kap. 2.1, S. 4), so it cannot name an own market role: a blocking
+    /// finding at its path.
+    #[test]
+    fn an_eic_is_refused_as_an_own_mp_id() {
+        let befunde = MpIdRegistry::pruefe(&[party("10XDE-EON-NETZ-C", &["NB"], true)]);
+        let b = befunde
+            .iter()
+            .find(|b| b.pfad == "party[0].mp_id")
+            .unwrap_or_else(|| panic!("no finding at party[0].mp_id: {befunde:?}"));
+        assert!(b.ist_blockiert());
+        assert!(b.text.contains("EIC"), "{}", b.text);
+        assert!(MpIdRegistry::from_config(&[party("10XDE-EON-NETZ-C", &["NB"], true)]).is_err());
+    }
+
+    /// An override must be a code the MIGs list on a NAD.
+    #[test]
+    fn an_agency_override_off_the_mig_list_is_refused() {
+        for unlisted in ["305", "500", "x"] {
+            let mut p = party("9900001000001", &["NB"], true);
+            p.agency = Some(unlisted.to_owned());
+            let err = MpIdRegistry::from_config(&[p]).unwrap_err().to_string();
+            assert!(err.contains("not a NAD DE 3055 code"), "{unlisted}: {err}");
+        }
+    }
+
+    /// The registry's DE 3055 is `edi-energy`'s, for every identifier shape.
+    ///
+    /// The NAD a message carries is rendered by `edi_energy::AgencyCode::for_mp_id`,
+    /// and the AS4 `<eb:PartyId type=…>` follows this registry. Two derivations
+    /// would let one party be named by two issuing offices on one exchange, and
+    /// a registry-only code no MIG lists on a NAD reaches the AS4 header
+    /// unchecked.
+    #[test]
+    fn the_registry_agency_is_edi_energys() {
+        let reg = MpIdRegistry::from_config(&[party("9900001000001", &["NB"], true)]).unwrap();
+        for mp_id in [
+            "9900001000001",
+            "9812345678901",
+            "4012345000023",
+            "10XDE-EON-NETZ-C",
+            "11XMUSTERXY----G",
+        ] {
+            assert_eq!(
+                reg.agency_for_mp_id(mp_id),
+                edi_energy::AgencyCode::for_mp_id(mp_id).map(edi_energy::AgencyCode::as_str),
+                "{mp_id}",
+            );
+        }
+        assert_eq!(reg.agency_for_mp_id("10XDE-EON-NETZ-C"), None);
     }
 
     /// A counterparty's agency must be derived from its own MP-ID.
@@ -1101,11 +1228,10 @@ mod tests {
             ("9812345678901", "332", "DVGW-Codenummer Gas"),
             ("9912345678901", "293", "BDEW-Codenummer Strom"),
             ("4012345000023", "9", "GS1 GLN"),
-            ("10XDE-EON-NETZ-C", "ZEW", "EIC"),
         ] {
             assert_eq!(
                 reg.agency_for_mp_id(counterparty),
-                expected,
+                Some(expected),
                 "{counterparty} is a {what}; answering with our own default \
                  would put the wrong PartyId type on every message to them",
             );
@@ -1181,15 +1307,15 @@ mod tests {
         assert!(reg.deployment_role_strings().is_empty());
     }
 
-    // ── §2.13 sparte enforcement ──────────────────────────────────────────────
+    // ── Kap. 2.13 sparte enforcement ──────────────────────────────────────────────
 
     #[test]
     fn err_mixed_sparte_roles() {
         let p = party("9900001000001", &["NB", "GNB"], true);
         let err = MpIdRegistry::from_config(&[p]).unwrap_err();
         assert!(
-            err.to_string().contains("§2.13"),
-            "must reference §2.13: {err}"
+            err.to_string().contains("Kap. 2.13"),
+            "must reference Kap. 2.13: {err}"
         );
     }
 
@@ -1201,11 +1327,11 @@ mod tests {
 
     #[test]
     fn rb_is_sparte_neutral() {
-        // RB alongside Strom roles must not trigger §2.13.
+        // RB alongside Strom roles must not trigger Kap. 2.13.
         let r = MpIdRegistry::from_config(&[party("9900001000001", &["NB", "RB"], true)]);
         assert!(r.is_ok(), "NB+RB should be ok: {r:?}");
 
-        // RB alongside Gas roles must not trigger §2.13.
+        // RB alongside Gas roles must not trigger Kap. 2.13.
         let r = MpIdRegistry::from_config(&[party("9800001000001", &["GNB", "RB"], true)]);
         assert!(r.is_ok(), "GNB+RB should be ok: {r:?}");
     }
@@ -1300,7 +1426,7 @@ mod orders_sender_coverage {
     /// — the whole MaBiS 17201–17211 block, the Redispatch Ausfallarbeit
     /// request, and the GeLi Gas Geschäftsdatenanfrage — fell through it. In a
     /// single-MP-ID deployment that is invisible; in the VIU configuration
-    /// Allgemeine Festlegungen §2.13 mandates, where every Marktrolle has its
+    /// Allgemeine Festlegungen Kap. 2.13 mandates, where every Marktrolle has its
     /// own MP-ID, it is the wrong `NAD+MS` on the wire. That is the same defect
     /// class as the role-lookup fallback this table already had fixed once, and
     /// a table nothing reconciles against the router will drift again.

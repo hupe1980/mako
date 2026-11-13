@@ -18,8 +18,9 @@
 //! 3. Enriches the event with `marktrole` and emits to all subscribers
 //! 4. Derives `VersorgungsStatus` for the Anmeldung PIDs 55001/55077/44001
 //!    (announce), their confirmations 55002/55078/44002, their rejections
-//!    55003/55080/44003 (clear the announcement), 55005/44005 (end + gap
-//!    detection) and 55013/44013 (begin Ersatz-/Grundversorgung)
+//!    55003/55080/44003 (clear the announcement), 55005/44005 and the NB's
+//!    Lieferende 55008 / 55007 ohne Antwort (end + gap detection) and
+//!    55013/44013 (begin Ersatz-/Grundversorgung)
 //!
 //! Idempotency: duplicate event IDs return `202 Accepted` without re-processing.
 
@@ -172,7 +173,10 @@ pub async fn ingest_event(
     //   process.completed  + PID 55003/55080/44003 (Ablehnung Anmeldung)
     //     → clear_lf_next: delete the `Angekuendigt` rows
     //
-    //   process.completed  + PID 55005/44005 (Bestätigung Lieferende)
+    //   process.completed  + PID 55005/44005 (Bestätigung Lieferende), 55008
+    //                        (Zustimmung zum Lieferende von NB an LF) or 55007
+    //                        with ohne_antwort (Beendigung aufgrund fehlender
+    //                        Antwort, GPKE Teil 2 Kap. 2.5.2.2 Nr. 3)
     //     → end_supply: delete the `Aktiv` rows, lieferstatus = Unbeliefert
     //       (any `Angekuendigt` row survives for the pending transition);
     //       when no successor is announced, emit de.markt.versorgung.gap-detected
@@ -444,6 +448,29 @@ fn gap_detected(
     })
 }
 
+/// Whether a completion with `pid` ends a Lieferant's Zuordnung.
+///
+/// 55005 / 44005 confirm the Lieferant's own Abmeldung. The NB ends one of its
+/// own accord with a 55007 (GPKE Teil 2 Kap. 2.5.2.2, S. 60–62): „Im Fall der
+/// Zustimmung des LF beendet der NB die Zuordnung … zum Zuordnungsende" — the
+/// 55008 — and „Antwortet der LF in Prozessschritt 2 nicht fristgerecht, beendet
+/// der NB die Zuordnung" — the 55007 the NB sends `ohne_antwort`. A 55009 leaves
+/// the LF zugeordnet, and a completion whose verdict is a refusal ends nothing.
+fn ends_supply(pid: u32, data: &serde_json::Value) -> bool {
+    if data.get("accepted").and_then(serde_json::Value::as_bool) == Some(false) {
+        return false;
+    }
+    match pid {
+        55005 | 44005 | 55008 => true,
+        55007 => {
+            data.get("ohne_antwort")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        }
+        _ => false,
+    }
+}
+
 /// Apply the supply-state transition an inbound makod CloudEvent implies, on the
 /// caller's transaction.
 ///
@@ -581,7 +608,7 @@ pub async fn derive_supply_state(
                 Some(beginn),
             ));
         }
-    } else if is_completed && matches!(pid, 55005 | 44005) {
+    } else if is_completed && ends_supply(pid, data) {
         // Bestätigung Lieferende — active LF removed; the pending transition is
         // preserved. The Lieferende is the *contractual* end date carried by the
         // process, not the day the confirmation happened to be ingested; billing

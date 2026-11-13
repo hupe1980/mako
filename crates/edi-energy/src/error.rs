@@ -248,7 +248,7 @@ pub enum Error {
 
     /// A message's `NAD` party MP-ID disagrees with the interchange envelope.
     ///
-    /// BDEW Allgemeine Festlegungen V6.1d §2.13:
+    /// BDEW Allgemeine Festlegungen V6.1d Kap. 2.13:
     ///
     /// > "Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten
     /// > MP-ID sind identisch."
@@ -260,7 +260,7 @@ pub enum Error {
     /// authenticated the envelope.
     #[error(
         "interchange party mismatch: UNB {qualifier} is {unb_id:?} but NAD+{nad_qualifier} \
-         is {nad_id:?} (message {message_index}) — BDEW Allgemeine Festlegungen §2.13 \
+         is {nad_id:?} (message {message_index}) — BDEW Allgemeine Festlegungen Kap. 2.13 \
          requires them to be identical"
     )]
     InterchangePartyMismatch {

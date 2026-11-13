@@ -242,7 +242,6 @@ fn wim_stoerungsmeldung_renders_to_ahb_valid_insrpt() {
         "INSRPT",
         LFN,
         serde_json::json!({
-            "type":          "Stoerungsmeldung",
             "pid":           23001,
             "melo":          "DE00056266802AO6G56M11SN51G21M24S",
             "receiver":      LFN,
@@ -503,6 +502,162 @@ fn an_unreported_msb_wechsel_renders_a_sendable_21013() {
     );
 }
 
+/// **The 21011 reaches the MSBN, the MSBA and the LF, and each is sendable.**
+///
+/// IFTSTA AHB 2.1 Kap. 6.2 (S. 19) addresses the 21011 „NB an MSBN / MSBA /
+/// LF"; WiM Teil 1 Kap. 2.3.2 Nr. 8, 14, 15 (S. 28–29) send it to the MSBN
+/// and, parallel, the MSBA and the LF.
+#[test]
+fn a_refused_zuordnung_renders_a_sendable_21011_to_three_recipients() {
+    use mako_engine::types::{DeviceId, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow;
+    use mako_wim::geraetewechsel::{
+        DeviceChangeCommand as C, DeviceChangeState, IftstaReferenz, Informationsempfaenger,
+        WimDeviceChangeWorkflow as W,
+    };
+
+    const NB: &str = "9900357000004";
+    const MSBN: &str = "9900077000006";
+    const MSBA: &str = "9900000000010";
+    const LF: &str = "9900000000027";
+    let step = |state: DeviceChangeState, cmd: C| {
+        let out = W::handle(&state, cmd).expect("accepted");
+        let state = out.events.iter().fold(state, W::apply);
+        (state, out)
+    };
+    let (state, _) = step(
+        DeviceChangeState::default(),
+        C::ReceiveUtilmd {
+            transaktionsgrund: Some("E03".to_owned()),
+            pid: Pruefidentifikator::new(55_042).expect("valid"),
+            sender: MarktpartnerCode::new(MSBN),
+            receiver: MarktpartnerCode::new(NB),
+            melo_id: MeLo::new(MELO),
+            device_id: DeviceId::new("ZHR-1"),
+            document_date: "20261102".to_owned(),
+            message_ref: MessageRef::new("UTILMD-1"),
+            vorgangsnummer: Some("VG-1".to_owned()),
+            process_date: Some("20261201".to_owned()),
+            validation_passed: true,
+            validation_errors: vec![],
+            received_at: time::macros::datetime!(2026-11-02 09:00 UTC),
+        },
+    );
+    let (state, _) = step(
+        state,
+        C::DispatchAntwort {
+            bestaetigt: true,
+            antwort_code: "E15".to_owned(),
+            bemerkung: None,
+            abweichender_termin: None,
+        },
+    );
+    let (state, _) = step(
+        state,
+        C::RecordInformationsempfaenger {
+            empfaenger: Informationsempfaenger {
+                msba: Some(MarktpartnerCode::new(MSBA)),
+                lf: Some(MarktpartnerCode::new(LF)),
+            },
+        },
+    );
+    let (state, _) = step(
+        state,
+        C::ReceiveGesamtvorgang {
+            pid: Pruefidentifikator::new(21_010).expect("valid"),
+            zuordnungsbeginn: Some("20261201".to_owned()),
+            referenz: Some(IftstaReferenz {
+                dokumentennummer: "IFT-0815".to_owned(),
+                vorgangsnummer: "1".to_owned(),
+            }),
+            message_ref: MessageRef::new("IFT-UNH-1"),
+            received_at: time::macros::datetime!(2026-12-01 09:00 UTC),
+        },
+    );
+    let (_, out) = step(state, C::DispatchZuordnung { zugeordnet: false });
+    let mut recipients = Vec::new();
+    for entry in out
+        .outbox
+        .iter()
+        .filter(|o| o.message_type.as_ref() == "IFTSTA")
+    {
+        let text = sendable_iftsta(entry.recipient.as_ref(), entry.payload.clone());
+        assert!(text.contains("RFF+Z13:21011"), "{text}");
+        assert!(text.contains("RFF+ACW:IFT-0815"), "{text}");
+        assert!(
+            text.contains(&format!("NAD+MR+{}", entry.recipient)),
+            "{text}"
+        );
+        recipients.push(entry.recipient.to_string());
+    }
+    assert_eq!(recipients, [MSBN, MSBA, LF]);
+}
+
+/// **The GPKE Bearbeitungsstandsmeldung 21047 renders its own column.**
+///
+/// IFTSTA AHB 2.1 Kap. 7.7 (S. 61–63): `BGM+Z33`, `STS+Z43+Z47` resp.
+/// `Z48` with the `E_0595` code, `RFF+Z13:21047` and `RFF+ACW` the answered
+/// UTILMD's `IDE` DE 7402. The workflow's own outbox entry is what renders.
+#[test]
+fn a_bearbeitungsstand_renders_a_sendable_21047() {
+    use mako_engine::types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow;
+    use mako_gpke::abrechnungsdaten::{
+        AbrechnungsdatenCommand as C, AbrechnungsdatenState, GpkeAbrechnungsdatenWorkflow as W,
+    };
+
+    const NB: &str = "9900357000004";
+    const LF: &str = "9900000000027";
+    for (code, sendet, status) in [("A02", true, "Z47"), ("A01", false, "Z48")] {
+        let out = W::handle(
+            &AbrechnungsdatenState::default(),
+            C::ReceiveRueckmeldung {
+                pid: Pruefidentifikator::new(55_220).expect("valid"),
+                sender: MarktpartnerCode::new(LF),
+                receiver: MarktpartnerCode::new(NB),
+                location_id: MaLo::new("51238696012"),
+                document_date: "20261102".to_owned(),
+                message_ref: MessageRef::new("UTILMD-1"),
+                vorgangsnummer: "VG-4711".to_owned(),
+                validation_passed: true,
+                validation_errors: vec![],
+            },
+        )
+        .expect("received");
+        let state = out
+            .events
+            .iter()
+            .fold(AbrechnungsdatenState::default(), W::apply);
+        let out = W::handle(
+            &state,
+            C::SendBearbeitungsstand {
+                antwort_code: code.to_owned(),
+                codeliste: "E_0595".to_owned(),
+                sendet_stammdatenaenderung: sendet,
+                bemerkung: None,
+            },
+        )
+        .expect("answered");
+        let entry = out
+            .outbox
+            .iter()
+            .find(|o| o.message_type.as_ref() == "IFTSTA")
+            .expect("the 21047");
+        let text = sendable_iftsta(entry.recipient.as_ref(), entry.payload.clone());
+        assert!(text.contains("BGM+Z33"), "{text}");
+        assert!(
+            text.contains(&format!("STS+Z43+{status}+{code}:E_0595")),
+            "{text}"
+        );
+        assert!(text.contains("RFF+Z13:21047"), "{text}");
+        assert!(text.contains("RFF+ACW:VG-4711"), "{text}");
+        assert!(
+            !text.contains("LOC+"),
+            "the column names no Lokation:\n{text}"
+        );
+    }
+}
+
 /// Render `payload` as an IFTSTA and hold it against the pre-send gate.
 fn sendable_iftsta(recipient: &str, payload: serde_json::Value) -> String {
     use edi_energy::EdiEnergyMessage as _;
@@ -627,6 +782,8 @@ fn the_ersteinbau_answers_carry_their_status_and_their_e_0233_code() {
                 "melo": MELO,
                 "antwort_code": code,
                 "antwort_codeliste": "E_0233",
+                "referenz_nachricht": "IFT-21029-1",
+                "referenz_vorgang": "1",
             }),
         );
         let wire = render_to_wire_bytes(&msg, &registry()).expect("renders");
@@ -926,4 +1083,209 @@ fn a_mabis_gesamtablehnung_renders_to_parseable_utilmd() {
         text.contains("STS+E01++"),
         "the Antwortcode is on the wire:\n{text}"
     );
+}
+
+/// **A Zählerstand Anfrage is answered with a sendable 13017.**
+///
+/// A 17102 with `IMD++Z12` asks for Zählerstände (ORDERS AHB 1.1b Kap.
+/// 4.1.2.1, S. 14); its answer is MSCONS 13017 (Anwendungsübersicht 4.0 lfd.
+/// Nr. 25700), whose column (MSCONS AHB 3.2 Kap. 6.3.1, S. 23–29) names the
+/// Messlokation in `SG6 LOC+172` with its Zähler in `SG7 RFF+MG` — or, for a
+/// value from the iMS, no ID and the Konfigurations-ID in `SG7 RFF+AGK` —
+/// one `SG9 LIN`/`PIA` per OBIS, `SG10 QTY` with the Gültigkeitsdatum `DTM+7`
+/// (a day boundary, `[UB1]`) and on a wahrer Wert the Ablesedatum `DTM+9`.
+#[test]
+fn a_zaehlerstand_anfrage_is_answered_with_a_sendable_13017() {
+    use edi_energy::EdiEnergyMessage as _;
+    use mako_engine::payload::MsconsZaehlerstand;
+    use mako_engine::types::{MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow;
+    use mako_gpke::datenabruf_msb::{
+        DatenabrufMsbCommand as C, DatenabrufMsbState, GpkeDatenabrufMsbWorkflow as W, WerteAnfrage,
+    };
+
+    const MSB: &str = "9900555000005";
+    const LF: &str = "9900357000004";
+    let stand = |obis: &str, ersatz: bool, ablesung: bool| MsconsZaehlerstand {
+        obis_code: obis.to_owned(),
+        quantity: "12345.000".to_owned(),
+        gueltig: "2026-11-01".to_owned(),
+        ablesedatum: ablesung.then(|| "2026-11-01".to_owned()),
+        ersatzwert: ersatz,
+        ersatzwert_verfahren: ersatz.then(|| "Z88".to_owned()),
+        ersatzwert_grund: ersatz.then(|| "Z74".to_owned()),
+    };
+    for (geraet, konfiguration, staende) in [
+        (
+            Some("ZHR-4711"),
+            None,
+            vec![
+                stand("1-1:1.8.1", false, true),
+                stand("1-1:1.8.2", true, false),
+            ],
+        ),
+        (None, Some("KONF-1"), vec![stand("1-1:1.8.0", false, false)]),
+    ] {
+        let out = W::handle(
+            &DatenabrufMsbState::default(),
+            C::ReceiveAnfrage {
+                pid: Pruefidentifikator::new(17_102).expect("valid"),
+                anfrage: WerteAnfrage {
+                    anfragender: MarktpartnerCode::new(LF),
+                    empfaenger: MarktpartnerCode::new(MSB),
+                    bgm: "7".to_owned(),
+                    leistung: Some("Z12".to_owned()),
+                    dokumentennummer: "ANF-4712".to_owned(),
+                    lokation_id: MELO.to_owned(),
+                    message_ref: MessageRef::new("ORD-2"),
+                },
+                validation_passed: true,
+                validation_errors: vec![],
+            },
+        )
+        .expect("received");
+        let state = out
+            .events
+            .iter()
+            .fold(DatenabrufMsbState::default(), W::apply);
+        let out = W::handle(
+            &state,
+            C::SendZaehlerstaende {
+                geraetenummer: geraet.map(str::to_owned),
+                konfigurations_id: konfiguration.map(str::to_owned),
+                staende,
+                message_ref: MessageRef::new("MSC-2"),
+            },
+        )
+        .expect("answered");
+        let ende = out.events.iter().fold(state, W::apply);
+        assert!(ende.is_terminal(), "{ende:?}");
+        let entry = out
+            .outbox
+            .iter()
+            .find(|o| o.message_type.as_ref() == "MSCONS")
+            .expect("the Zählerstände ride an MSCONS");
+        let msg = outbox("MSCONS", entry.recipient.as_ref(), entry.payload.clone());
+        let wire = render_to_wire_bytes(&msg, &registry()).expect("renders");
+        let text = String::from_utf8_lossy(&wire.bytes).into_owned();
+        assert_eq!(pid_of(&wire.bytes), 13_017, "{text}");
+        assert!(text.contains("BGM+7+"), "{text}");
+        assert!(text.contains("RFF+AGI:ANF-4712"), "{text}");
+        assert!(
+            text.contains("DTM+7:202610312300?+00:303"),
+            "Gültigkeit 01.11. 00:00 MEZ:\n{text}"
+        );
+        match geraet {
+            Some(g) => {
+                assert!(text.contains(&format!("LOC+172+{MELO}")), "{text}");
+                assert!(text.contains(&format!("RFF+MG:{g}")), "{text}");
+                assert!(text.contains("DTM+9:20261101:102"), "{text}");
+                assert!(text.contains("QTY+67:12345.000"), "{text}");
+                assert!(text.contains("STS+Z32++Z88"), "{text}");
+            }
+            None => {
+                assert!(!text.contains(&format!("LOC+172+{MELO}")), "{text}");
+                assert!(text.contains("RFF+AGK:KONF-1"), "{text}");
+            }
+        }
+        let report = edi_energy::parse(&wire.bytes)
+            .expect("parses")
+            .validate_on_date(mako_fristen::heute())
+            .expect("validation runs");
+        assert!(
+            report.is_sendable(),
+            "the pre-send gate refuses the 13017: {:?}\n{text}",
+            report.sending_refusals().collect::<Vec<_>>()
+        );
+    }
+}
+
+/// **The values of an Anfrage von Werten render as a sendable Lastgang.**
+///
+/// The MSB answers a 17102 asking for Lastgangdaten (`BGM+7`, `IMD++Z11`) with
+/// MSCONS 13018 and one for `BGM+Z48` with 13025 (Anwendungsübersicht der
+/// Prüfidentifikatoren 4.0 lfd. Nr. 25670; ORDERS AHB 1.1b Kap. 4.1.2.1,
+/// S. 14). MSCONS AHB 3.2 Kap. 7.2.2 (S. 69–75): `UNB` DE 0026 `TL`, `BGM+7`,
+/// `SG1 RFF+AGI` the 17102's `BGM` DE 1004, `SG6 LOC+172` and the
+/// Messperiode `DTM+163`/`164`. The workflow's own entry is what renders.
+#[test]
+fn an_anfrage_von_werten_is_answered_with_a_sendable_lastgang() {
+    use edi_energy::EdiEnergyMessage as _;
+    use mako_engine::types::{MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow;
+    use mako_gpke::datenabruf_msb::{
+        DatenabrufMsbCommand as C, DatenabrufMsbState, GpkeDatenabrufMsbWorkflow as W, WerteAnfrage,
+    };
+
+    const MSB: &str = "9900555000005";
+    const LF: &str = "9900357000004";
+    for (bgm, leistung, lokation, mscons) in [
+        ("7", Some("Z11"), MELO, 13_018_u32),
+        ("Z48", None, "51238696012", 13_025),
+    ] {
+        let out = W::handle(
+            &DatenabrufMsbState::default(),
+            C::ReceiveAnfrage {
+                pid: Pruefidentifikator::new(17_102).expect("valid"),
+                anfrage: WerteAnfrage {
+                    anfragender: MarktpartnerCode::new(LF),
+                    empfaenger: MarktpartnerCode::new(MSB),
+                    bgm: bgm.to_owned(),
+                    leistung: leistung.map(str::to_owned),
+                    dokumentennummer: "ANF-4711".to_owned(),
+                    lokation_id: lokation.to_owned(),
+                    message_ref: MessageRef::new("ORD-1"),
+                },
+                validation_passed: true,
+                validation_errors: vec![],
+            },
+        )
+        .expect("received");
+        let state = out
+            .events
+            .iter()
+            .fold(DatenabrufMsbState::default(), W::apply);
+        let wert = |from: &str, to: &str| mako_engine::payload::MsconsRead {
+            quantity_kwh: "1.250".to_owned(),
+            dtm_from: from.to_owned(),
+            dtm_to: to.to_owned(),
+            obis_code: Some("1-1:1.29.0".to_owned()),
+            ersatzwert: false,
+        };
+        let out = W::handle(
+            &state,
+            C::SendWerte {
+                werte: vec![
+                    wert("202611012300+00", "202611012315+00"),
+                    wert("202611012315+00", "202611012330+00"),
+                ],
+                message_ref: MessageRef::new("MSC-1"),
+            },
+        )
+        .expect("answered");
+        let ende = out.events.iter().fold(state, W::apply);
+        assert!(ende.is_terminal(), "{ende:?}");
+        let entry = out
+            .outbox
+            .iter()
+            .find(|o| o.message_type.as_ref() == "MSCONS")
+            .expect("the values ride an MSCONS");
+        let msg = outbox("MSCONS", entry.recipient.as_ref(), entry.payload.clone());
+        let wire = render_to_wire_bytes(&msg, &registry()).expect("renders");
+        let text = String::from_utf8_lossy(&wire.bytes).into_owned();
+        assert_eq!(pid_of(&wire.bytes), mscons, "{text}");
+        assert!(text.contains("RFF+AGI:ANF-4711"), "{text}");
+        assert!(text.contains(&format!("LOC+172+{lokation}")), "{text}");
+        assert!(text.contains("DTM+163:202611012300?+00:303"), "{text}");
+        assert!(text.contains("DTM+164:202611012330?+00:303"), "{text}");
+        let report = edi_energy::parse(&wire.bytes)
+            .expect("parses")
+            .validate_on_date(mako_fristen::heute())
+            .expect("validation runs");
+        assert!(
+            report.is_sendable(),
+            "the pre-send gate refuses the {mscons}: {:?}\n{text}",
+            report.sending_refusals().collect::<Vec<_>>()
+        );
+    }
 }

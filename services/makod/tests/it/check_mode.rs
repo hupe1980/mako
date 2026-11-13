@@ -68,7 +68,7 @@ primary = true
     );
 }
 
-/// A §2.13 violation (mixed Strom+Gas roles in one [[party]] entry) fails
+/// A Kap. 2.13 violation (mixed Strom+Gas roles in one [[party]] entry) fails
 /// `--check` with a non-zero exit code and names the violation.
 #[test]
 fn check_exits_nonzero_on_mixed_sparte_party() {
@@ -97,7 +97,7 @@ primary = true
         "--check must exit non-zero on a mixed Strom+Gas party entry"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("2.13"), "error names §2.13: {stderr}");
+    assert!(stderr.contains("2.13"), "error names Kap. 2.13: {stderr}");
 }
 
 /// Without `--allow-volatile` and without `--data-dir`, the daemon refuses to
@@ -836,4 +836,27 @@ primary = true
         String::from_utf8_lossy(&out.stderr),
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("makod"));
+}
+
+/// A § 20b EnWG platform endpoint is refused at startup: no interface is
+/// published, and the endpoint would receive mako's internal request JSON.
+#[test]
+fn check_refuses_a_netzzugang_endpoint() {
+    let body = r#"
+[deployment]
+rollen = ["nb-strom"]
+
+[[party]]
+mp_id = "9900001000001"
+roles = ["NB"]
+primary = true
+"#;
+    let (ok, stderr) = check(
+        body,
+        &["--netzzugang-endpoint-url", "https://nzp.example.com/api"],
+    );
+    assert!(!ok, "a configured § 20b endpoint must be refused");
+    assert!(stderr.contains("§ 20b"), "{stderr}");
+    let (ok, stderr) = check(body, &[]);
+    assert!(ok, "without it the same configuration starts: {stderr}");
 }

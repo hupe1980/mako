@@ -581,11 +581,6 @@ pub(crate) struct WorkersConfig {
     pub erp_webhook_secret: Option<SecretString>,
     // ── EDIFACT outbox webhook (dev/no-AS4 mode) ─────────────────────────
     pub edifact_outbox_webhook_url: Option<String>,
-    // ── §20b EnWG Netzzugangsplattform adapter ───────────────────────────
-    /// Platform endpoint URL — absent until a §20b interface exists; the
-    /// sender then falls back to the ERP webhook (operator submits via the
-    /// NB Webportal).
-    pub netzzugang_endpoint_url: Option<String>,
     /// marktd client for the `netzzugang_antraege` projection.
     pub marktd_client: Option<Arc<mako_markt::marktd_client::MarktdClient>>,
     /// Shared durable dead-letter sink (backed by the same SlateDB store and
@@ -692,6 +687,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
                 vz_client,
                 vz_partner_store,
                 vz_tenant_id,
+                cfg.checked.verzeichnisdienst_signers.clone(),
             );
             let refresh_lookup = lookup.clone();
             handles.push(tokio::spawn(
@@ -717,15 +713,15 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
 
     // ── AS4 clients (built by the preflight) ─────────────────────────────
     if let Some(clients) = &cfg.checked.as4 {
-        let partners: Vec<&str> = clients.partners().iter().map(|(id, _)| id).collect();
-        let identities: Vec<&str> = clients.iter().map(|(id, _)| id).collect();
+        let directory = clients.partners();
+        let partners: Vec<&str> = directory.iter().map(|(id, _)| id).collect();
+        let identities = clients.mp_ids();
         info!(identities = ?identities, partners = ?partners, "AS4 clients built");
     }
 
     // ── §20b Netzzugangsplattform sender (shared by both outbox senders) ──
     let netzzugang_sender = Arc::new(crate::netzzugang::NetzzugangSender::new(
         cfg.http_client.clone(),
-        cfg.netzzugang_endpoint_url.clone(),
         cfg.erp_webhook_url.clone(),
         cfg.erp_webhook_secret.clone(),
         cfg.marktd_client.clone(),

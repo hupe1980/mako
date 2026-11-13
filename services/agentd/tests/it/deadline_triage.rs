@@ -74,7 +74,7 @@ impl ToolClient for ProcessdWith {
                 "state": "AWAITING_ANSWER",
                 "partner_mp_id": "9900357000004",
                 "deadline_at": at.format(&Rfc3339).expect("rfc3339"),
-                "deadline_source": "GPKE Teil 2 § 3.5",
+                "deadline_source": "GPKE Teil 2 Kap. 3.5",
             }],
             "saturated": false,
         }))
@@ -116,7 +116,7 @@ fn event(offset_secs: i64) -> Value {
         "pid": "55001",
         "partner_mp_id": "9900357000004",
         "due_at": at.format(&Rfc3339).expect("rfc3339"),
-        "deadline_source": "GPKE Teil 2 § 3.5",
+        "deadline_source": "GPKE Teil 2 Kap. 3.5",
     })
 }
 

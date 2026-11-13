@@ -701,4 +701,4 @@ fn the_silent_permit_is_measured_per_pruefidentifikator() {
 /// The budget only falls. It is not the count of unreadable Bedingungen: one
 /// of those can gate many places in one Anwendungsfall and none in the next,
 /// which is why the figure that matters is per place and is reported per PID.
-const SILENT_PERMIT_BUDGET: usize = 2203;
+const SILENT_PERMIT_BUDGET: usize = 1794;

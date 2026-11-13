@@ -1236,8 +1236,9 @@ impl BankStatementEntry {
 /// Calculate default interest (Verzugszinsen) per §288 BGB.
 ///
 /// ## §288 BGB reference rates
-/// - B2C (§288 Abs. 1): ECB Basiszinssatz + 5 percentage points
-/// - B2B (§288 Abs. 2): ECB Basiszinssatz + 9 percentage points
+/// - § 288 Abs. 1: Basiszinssatz + 5 Prozentpunkte
+/// - § 288 Abs. 2 (`abs2`, an Entgeltforderung from a Rechtsgeschäft „an
+///   denen ein Verbraucher nicht beteiligt ist"): Basiszinssatz + 9
 ///
 /// Formula: `interest_ct = principal_ct × annual_rate × days / 36500`
 /// (using 365-day year, integer arithmetic, no f64)
@@ -1247,13 +1248,13 @@ impl BankStatementEntry {
 pub fn calculate_interest_ct(
     principal_ct: i64,
     ecb_base_rate_pct: rust_decimal::Decimal,
-    is_b2b: bool,
+    abs2: bool,
     days: i64,
 ) -> (i64, rust_decimal::Decimal) {
     use rust_decimal::dec;
     use rust_decimal::prelude::*;
 
-    let premium = if is_b2b { dec!(9) } else { dec!(5) };
+    let premium = if abs2 { dec!(9) } else { dec!(5) };
     let annual_rate = ecb_base_rate_pct + premium;
     // Formula: interest = principal × annual_rate × days / (100 × 365)
     // = principal × annual_rate × days / 36500

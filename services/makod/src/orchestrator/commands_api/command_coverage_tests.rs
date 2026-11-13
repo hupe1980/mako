@@ -27,10 +27,6 @@ const RECORD_ONLY: &[(&str, &str)] = &[
         "an ALOCAT Allokation is recorded; the receiver answers it with no business message",
     ),
     (
-        "gabi-gas-mmma",
-        "routing only: a 13013 resumes the Lieferant's `gpke-allokationsliste` process",
-    ),
-    (
         "geli-gas-mscons",
         "Gas Messwerte are recorded; the receiver owes no business answer",
     ),

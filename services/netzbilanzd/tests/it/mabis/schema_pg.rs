@@ -177,7 +177,7 @@ async fn a_retry_does_not_re_file_what_the_biko_already_acked() {
     );
 }
 
-/// A correction (§9.8.1) re-files an acked territory on purpose, and a retry of
+/// A correction (Kap. 9.8.1) re-files an acked territory on purpose, and a retry of
 /// that correction must not.
 ///
 /// Both are keyed on the same fact: every run answering one negative

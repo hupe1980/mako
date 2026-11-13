@@ -48,7 +48,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         workflow: Some("gpke-supplier-change"),
         dispatch: cmd_gpke_lieferbeginn_ablehnen,
     },
-    // GPKE Teil 2 § 2.2 Neuanlage. The answer window is 00:00 Uhr des 61. WT
+    // GPKE Teil 2 Kap. 2.2 Neuanlage. The answer window is 00:00 Uhr des 61. WT
     // nach dem ÜT — `E_0608` Prüfschritte 110/590 run a daily identification
     // Prüflauf for 60 Werktage before a refusal is admissible.
     CommandDescriptor {
@@ -72,7 +72,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         workflow: Some("gpke-neuanlage"),
         dispatch: cmd_gpke_neuanlage_ablehnen,
     },
-    // GPKE Teil 2 § 3.1 Bearbeitungsstand Abrechnungsdaten. One command: the
+    // GPKE Teil 2 Kap. 3.1 Bearbeitungsstand Abrechnungsdaten. One command: the
     // `E_0595` clusters say whether a Stammdatenänderung follows, not whether
     // the LF's Bestellung was granted, and IFTSTA 21047 carries both.
     CommandDescriptor {
@@ -158,6 +158,16 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         workflow: Some("gpke-lf-abmeldung"),
         dispatch: cmd_gpke_nb_lieferende_ablehnen,
     },
+    // The NB's own side: it sends the 55007, and the LF's 55008 / 55009
+    // resume the process. On silence the NB ends the Zuordnung itself between
+    // 05:00 and 06:00 Uhr des 1. WT (GPKE Teil 2 Kap. 2.5.2.2 Nr. 3).
+    CommandDescriptor {
+        name: "gpke.nb-lieferende.ankuendigen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55007),
+        workflow: Some("gpke-nb-lieferende"),
+        dispatch: cmd_gpke_nb_lieferende_ankuendigen,
+    },
     // ── GPKE Beendigung der Zuordnung (PID 55010 NB→LFA, EBD E_0624) ─────────
     // The NB asks the LFA to end the network assignment; the LFA answers 55011
     // (Bestätigung) or 55012 (Ablehnung) inside 55010's published Antwortfrist.
@@ -191,7 +201,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     // ── GPKE Zuordnungs-Meldungen (PIDs 55036/55037/55038) ────────────────────
     // The three **Meldepflichten** around the Lieferbeginn: one-way messages the
-    // NB owes to third parties, with no Antwortnachricht. GPKE Teil 2 § 2.1.2
+    // NB owes to third parties, with no Antwortnachricht. GPKE Teil 2 Kap. 2.1.2
     // SD Lieferbeginn Nr. 2 / 10 / 13 — 07:00 and twice 12:00 Uhr des 1. WT nach
     // dem ÜT der Anmeldung. `processd` issues them; whether they are owed at all
     // turns on the Versorgungsstatus, which only it can see.
@@ -292,7 +302,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     //     gpke.sperrung.fehlgeschlagen → not executed  → IFTSTA 21039 + reason
     //
     // `processd` calls the NB-side pair after field-service confirmation
-    // (GPKE Teil 2 § 3.5, BK6-24-174 Anlage 1b).
+    // (GPKE Teil 2 Kap. 3.5, BK6-24-174 Anlage 1b).
     CommandDescriptor {
         name: "gpke.sperrung.beauftragen",
         permitted_roles: &[Marktrolle::Lf],
@@ -356,6 +366,16 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         workflow: Some("gpke-datenabruf-msb"),
         dispatch: cmd_gpke_datenabruf_ablehnen,
     },
+    // The positive answer to an Anfrage von Werten 17102: the Lastgang on
+    // MSCONS 13018 / 13025 (Anwendungsübersicht der Prüfidentifikatoren 4.0
+    // lfd. Nr. 25670; MSCONS AHB 3.2 Kap. 7.2.2).
+    CommandDescriptor {
+        name: mako_markt::commands::GPKE_DATENABRUF_WERTE_SENDEN,
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(13018),
+        workflow: Some("gpke-datenabruf-msb"),
+        dispatch: cmd_gpke_datenabruf_werte_senden,
+    },
     // The requesting side of the Anforderung von Werten (ORDERS 17004, ORDERS
     // AHB 1.1b Kap. 4.13): keyed on its BGM DE 1004, which the MSB's ORDRSP
     // 19007 echoes in SG1 RFF+ON.
@@ -366,11 +386,11 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         workflow: Some("gpke-datenabruf"),
         dispatch: cmd_gpke_datenabruf_anfordern,
     },
-    // The recipient MSB's answer to a GPKE Teil 3 ORDERS (ORDRSP AHB 1.1b
-    // Kap. 4.4, 4.6).
+    // The recipient's answer to a GPKE Teil 3 ORDERS (ORDRSP AHB 1.1b Kap.
+    // 4.4–4.7): the MSB's, and the NB's 19121 / 19124 to a LF.
     CommandDescriptor {
         name: mako_markt::commands::GPKE_KONFIGURATION_BEANTWORTEN,
-        permitted_roles: &[Marktrolle::Msb],
+        permitted_roles: &[Marktrolle::Msb, Marktrolle::Nb],
         primary_pid: pid(19132),
         workflow: Some("gpke-konfiguration-aenderung"),
         dispatch: cmd_gpke_konfiguration_beantworten,
@@ -768,7 +788,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     // ── Rechnungsabwicklung MSB über LF (WiM Strom Teil 1) ────────────────────
     // `.beenden` spawns an outbound ORDERS 17006; either side may end the
-    // arrangement (AWH AD WiM V1.3 §§2.9/2.11), hence both roles. `.zustimmen`
+    // arrangement (AWH AD WiM V1.3 Kap. 2.9/2.11), hence both roles. `.zustimmen`
     // / `.ablehnen` answer an inbound Beendigung with ORDRSP 19009/19010 —
     // the decision the counterparty's EBD (E_0206/E_0209) then checks.
     CommandDescriptor {
@@ -912,7 +932,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         dispatch: cmd_wim_geraetewechsel_ablehnen,
     },
     // The **technical** acknowledgement, on its own command because it is on
-    // its own clock: 45 minutes for Strom UTILMD (APERAK AHB 1.1 §2.4.1),
+    // its own clock: 45 minutes for Strom UTILMD (APERAK AHB 1.1 Kap. 2.4.1),
     // against 3 / 5 / 7 / 1 Werktage for the business answer above.
     CommandDescriptor {
         name: "wim.geraetewechsel.aperak",
@@ -953,6 +973,15 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // measurement against the cap of Kap. 2.4.2 Nr. 4, and the Cluster the code
     // sits in — not the caller — picks 19003 or 19004.
     // ── WiM Änderung der Technik (ORDERS 17011 → ORDRSP 19005/19006) ────────
+    // The Besteller's 17011 `Z12` (ORDERS AHB 1.1b Kap. 4.12): keyed on its BGM
+    // DE 1004, which the MSB's 19005/19006 echoes in SG1 RFF+ON.
+    CommandDescriptor {
+        name: mako_markt::commands::WIM_TECHNIK_AENDERUNG_BESTELLEN,
+        permitted_roles: &[Marktrolle::Nb, Marktrolle::Lf],
+        primary_pid: pid(17011),
+        workflow: Some("wim-technik-aenderung"),
+        dispatch: cmd_wim_technik_aenderung_bestellen,
+    },
     // The MSB's answer to a received Auftrag. The Besteller's Marktrolle and the
     // Auftrag's BGM DE 1001 pick the tree; the code's Cluster the PID.
     CommandDescriptor {
@@ -1060,6 +1089,15 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         workflow: Some("wim-ersteinbau"),
         dispatch: cmd_wim_ersteinbau_beantworten,
     },
+    // The wMSB's Scheitermeldung after its `A02` Eigenausbau: 21027 to the
+    // gMSB and the NB, 21025 to the LF (IFTSTA AHB 2.1 Kap. 6.4, S. 24).
+    CommandDescriptor {
+        name: "wim.ersteinbau.scheitern-melden",
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(21027),
+        workflow: Some("wim-ersteinbau"),
+        dispatch: cmd_wim_ersteinbau_scheitern_melden,
+    },
     // ── WiM Steuerungsauftrag ─────────────────────────────────────────────────
     CommandDescriptor {
         name: "wim.steuerungsauftrag.bestaetigen",
@@ -1138,7 +1176,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // anything. Likewise `wim.rechnung.*` settles 31009, 31003 and 31004, and
     // `geli.stornierung.*` owns 44022–44024 for both Use-Cases.
     // PID 31004 Stornorechnung: a single **Sparte-neutral, cross-process** universal
-    // Storno (INVOIC AHB §3.1.2 — GPKE/MMM/WiM Strom+Gas/Kapazität/AWH/GeLi). invoicd
+    // Storno (INVOIC AHB Kap. 3.1.2 — GPKE/MMM/WiM Strom+Gas/Kapazität/AWH/GeLi). invoicd
     // runs the arithmetic-only check (AcceptedPartial) and dispatches settle/dispute.
     // The receiver can hold any of the storno-facing roles, so permitted_roles spans
     // both Sparten (NB/GNB, LF variants, MSB, MGV, ESA for WiM Strom Teil 2).
@@ -1248,6 +1286,16 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(31007),
         workflow: Some("gabi-gas-invoic"),
         dispatch: cmd_gabi_gas_rechnung_ablehnen,
+    },
+    // GNB side of the Abonnement der Allokationsliste Gas: the Ablehnung of a
+    // received ORDERS 17110 Start Abo on ORDRSP 19110 out of `E_0803` /
+    // `G_0001` (ORDRSP AHB 1.1b Kap. 4.2; EBD 4.3 Kap. 11.1.1).
+    CommandDescriptor {
+        name: mako_markt::commands::GABI_ALLOKATIONSLISTE_ABLEHNEN,
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(19110),
+        workflow: Some("gabi-gas-mmma"),
+        dispatch: cmd_gabi_allokationsliste_ablehnen,
     },
     // ── GaBi Gas nomination (DVGW NOMINT/NOMRES) ───────────────────────────────
     // The Transportkunde nominates and the NB/MGV answers, so the two commands
@@ -1591,7 +1639,7 @@ mod tests {
 
     /// The storno commands are `invoic.stornorechnung.*`, bound to PID 31004 and
     /// reachable by both Strom (NB) and Gas (GNB) receivers. PID 31004 is
-    /// Sparte-neutral (INVOIC AHB §3.1.2), so a `wim.gas.*` name would mislabel
+    /// Sparte-neutral (INVOIC AHB Kap. 3.1.2), so a `wim.gas.*` name would mislabel
     /// every Strom storno as Gas.
     #[test]
     fn storno_command_is_sparte_neutral() {

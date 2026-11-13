@@ -35,8 +35,12 @@ use serde::{Deserialize, Serialize};
 pub struct BillingRunRequest {
     /// Invoice issue date.
     pub invoice_date: time::Date,
-    /// Payment due date (Zahlungsziel, §271 BGB).
-    pub due_date: time::Date,
+    /// Payment due date (Zahlungsziel, §271 BGB). Absent, each invoice falls
+    /// due [`zahlungsziel_werktage`](crate::config::NetzbilanzConfig::zahlungsziel_werktage)
+    /// Werktage after `invoice_date` ([`crate::zahlungsziel::faellig`]).
+    /// Stated or not, it is held to the published floor and ceiling.
+    #[serde(default)]
+    pub due_date: Option<time::Date>,
     /// Optional Rechnungskreis — a short prefix for the generated invoice
     /// numbers (e.g. `"NNE"`). The running number itself is allocated by the
     /// database, never by the caller: §14 Abs. 4 Nr. 4 UStG requires an

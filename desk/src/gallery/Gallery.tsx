@@ -20,6 +20,7 @@ import { Table } from "../design/Table";
 import { Tile } from "../design/Tile";
 import type { BusinessDate, Instant } from "../format/brands";
 import { epochMs } from "../format/date";
+import { DateiAnsicht } from "../views/Befragung";
 import { GeparktEntscheiden } from "../views/Buchungen";
 import { AmpelZeichen, BefundZeile, DienstChip } from "../views/Einrichtung";
 import { SpurAnsicht } from "../views/Spur";
@@ -591,6 +592,49 @@ function Specimens() {
               }}
             />
           </ul>
+        </div>
+      </Specimen>
+
+      <Specimen title="Vorschlag">
+        <div className="w-full max-w-xl">
+          <DateiAnsicht
+            datei={{
+              dienst: "processd",
+              datei: "processd.toml",
+              abgeglichen: false,
+              aenderungen: 2,
+              luecken: 1,
+              toml: "",
+              diff: "",
+              zeilen: [
+                { art: "abschnitt", text: "[identity]" },
+                {
+                  art: "neu",
+                  text: 'own_mp_id = "9900357000004"',
+                  quelle: "processd [identity] own_mp_id",
+                  frage: "primaer",
+                },
+                {
+                  art: "gleich",
+                  text: "verbundene_lieferanten = []",
+                  quelle: "BDEW-AWH Identifikatoren V1.2, Kap. 2.1",
+                  frage: "verbundene_lieferanten",
+                },
+                {
+                  art: "weg",
+                  text: 'own_mp_id = "9900001000001"',
+                  quelle: "processd [identity] own_mp_id",
+                  frage: "primaer",
+                },
+                {
+                  art: "fehlt",
+                  text: '# FEHLT: [[lf.bilanzkreise]] sparte = "gas"',
+                  quelle: "processd [[lf.bilanzkreise]]",
+                  frage: "bilanzkreise.gas",
+                },
+              ],
+            }}
+          />
         </div>
       </Specimen>
 

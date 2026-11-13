@@ -255,6 +255,7 @@ async fn an_answered_abrechnungsdaten_rueckmeldung_does_not_block_the_next_one()
         vec![
             mako_gpke::abrechnungsdaten::AbrechnungsdatenCommand::SendBearbeitungsstand {
                 antwort_code: "A05".to_owned(),
+                codeliste: "E_0595".to_owned(),
                 sendet_stammdatenaenderung: true,
                 bemerkung: None,
             },

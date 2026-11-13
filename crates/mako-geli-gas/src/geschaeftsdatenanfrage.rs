@@ -503,16 +503,16 @@ impl CommandPayload for GdaGasCommand {}
 // ── Outbound messages ─────────────────────────────────────────────────────────
 
 fn anfrage_outbox(anfrage: &GdaGasAnfrage) -> PendingOutbox {
-    PendingOutbox::new(
-        "ORDERS",
+    PendingOutbox::typed(
         anfrage.netzbetreiber.as_str(),
-        serde_json::json!({
-            "pid": anfrage.anfragender_rolle.anfrage_pid(),
-            "sender": anfrage.anfragender.as_str(),
-            "document_code": anfrage.anfragender_rolle.bgm(),
-            "document_id": anfrage.anfrage_nummer.as_str(),
-            "location": anfrage.lokation_id,
-        }),
+        &mako_engine::payload::OrdersPayload {
+            pid: Some(anfrage.anfragender_rolle.anfrage_pid()),
+            sender: Some(anfrage.anfragender.as_str().to_owned()),
+            document_code: Some(anfrage.anfragender_rolle.bgm().to_owned()),
+            document_id: Some(anfrage.anfrage_nummer.as_str().to_owned()),
+            location: Some(anfrage.lokation_id.clone()),
+            ..Default::default()
+        },
     )
 }
 
@@ -542,20 +542,20 @@ fn ablehnung_outbox(
     antwortcode: &str,
     message_ref: &MessageRef,
 ) -> PendingOutbox {
-    PendingOutbox::new(
-        "ORDRSP",
+    PendingOutbox::typed(
         anfrage.anfragender.as_str(),
-        serde_json::json!({
-            "pid": ABLEHNUNG_PID,
-            "sender": anfrage.netzbetreiber.as_str(),
-            "receiver": anfrage.anfragender.as_str(),
-            "message_ref": message_ref.as_str(),
-            "document_code": BGM_ANTWORT,
-            "document_id": message_ref.as_str(),
-            "order_reference": anfrage.anfrage_nummer.as_str(),
-            "antwort_code": antwortcode,
-            "antwort_codeliste": anfrage.anfragender_rolle.codeliste(),
-        }),
+        &mako_engine::payload::OrdrspPayload {
+            pid: Some(ABLEHNUNG_PID),
+            sender: Some(anfrage.netzbetreiber.as_str().to_owned()),
+            receiver: Some(anfrage.anfragender.as_str().to_owned()),
+            message_ref: Some(message_ref.as_str().to_owned()),
+            document_code: Some(BGM_ANTWORT.to_owned()),
+            document_id: Some(message_ref.as_str().to_owned()),
+            order_reference: Some(anfrage.anfrage_nummer.as_str().to_owned()),
+            antwort_code: Some(antwortcode.to_owned()),
+            antwort_codeliste: Some(anfrage.anfragender_rolle.codeliste().to_owned()),
+            ..Default::default()
+        },
     )
 }
 

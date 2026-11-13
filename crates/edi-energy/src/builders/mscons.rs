@@ -55,6 +55,11 @@ struct QuantitySpec {
     /// A Summenzeitreihe quantity without one has no time reference at all: the
     /// receiver cannot place it on the settlement grid.
     period: Option<(String, String)>,
+    /// `SG10 DTM+9` Ablesedatum, `CCYYMMDD` (format 102) — a Zählerstand's.
+    ablesedatum: Option<String>,
+    /// `SG10 DTM+7` Gültigkeitsdatum, a UTC instant `CCYYMMDDHHMM` (format
+    /// 303) — a Zählerstand's.
+    gueltig: Option<String>,
 }
 
 /// Period a `DTM+306` Leistungsperiode covers, with its EDIFACT format code.
@@ -95,11 +100,14 @@ struct MeteringPointSpec {
     ///
     /// `MaBiS` identifies a Summenzeitreihe by (`MaBiS`-Zählpunkt,
     /// Bilanzierungsmonat, Version) and requires the version to ascend
-    /// (BK6-24-174 Anlage 3 §3.8.2). It is the only thing distinguishing a
+    /// (BK6-24-174 Anlage 3 Kap. 3.8.2). It is the only thing distinguishing a
     /// correction from the original, since `BGM` DE 1225 is always `9`.
     version: Option<String>,
     /// `SG7 RFF+MG` Gerätenummer — the Zähler the values were read from.
     geraetenummer: Option<String>,
+    /// `SG7 RFF+AGK` Konfigurations-ID — values from an iMS, which name no
+    /// Lokation in `SG6 LOC+172`.
+    konfigurations_id: Option<String>,
     /// `SG6 DTM+163`/`DTM+164` — the period the whole Übertragung covers, as
     /// EDIFACT format 303.
     messperiode: Option<(String, String)>,
@@ -283,6 +291,7 @@ impl<S, R> MsconsBuilder<S, R> {
                 balancing_period: None,
                 version: None,
                 geraetenummer: None,
+                konfigurations_id: None,
                 messperiode: None,
                 line_items: Vec::new(),
             },
@@ -353,7 +362,7 @@ impl<S, R> MsconsBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
@@ -361,7 +370,7 @@ impl<S, R> MsconsBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
         if !self.inner.metering_points.is_empty() {
@@ -375,7 +384,14 @@ impl<S, R> MsconsBuilder<S, R> {
                     // keeps a caller that set no separate location from emitting
                     // a message the profile rejects for a missing segment.
                     let loc_id = mp.location_id.as_deref().unwrap_or(mp.malo_id.as_str());
-                    emit_seg!(w, "LOC", "172", loc_id);
+                    // Values from an iMS name no Lokation: `SG6 LOC+172`
+                    // without DE 3225, the Konfigurations-ID in `SG7 RFF+AGK`
+                    // instead (MSCONS AHB 3.2 Kap. 6.3.1, `[131]`).
+                    if loc_id.is_empty() {
+                        emit_seg!(w, "LOC", "172");
+                    } else {
+                        emit_seg!(w, "LOC", "172", loc_id);
+                    }
                     // `SG6 DTM+163`/`+164` — the period of the *Übertragung*,
                     // distinct from the per-`QTY` pair in `SG10`: the first
                     // says what the message covers, the second where each
@@ -404,6 +420,9 @@ impl<S, R> MsconsBuilder<S, R> {
                     if let Some(geraet) = &mp.geraetenummer {
                         emit_comp!(w, "RFF", ["MG", geraet]);
                     }
+                    if let Some(konfiguration) = &mp.konfigurations_id {
+                        emit_comp!(w, "RFF", ["AGK", konfiguration]);
+                    }
                     for item in &mp.line_items {
                         let ln = item.line_number.to_string();
                         emit_seg!(w, "LIN", &ln);
@@ -430,6 +449,18 @@ impl<S, R> MsconsBuilder<S, R> {
                             // DE 2005 163/164 = Beginn/Ende Messperiode. Emitted
                             // immediately after the QTY they bound, which is what
                             // associates them with that quantity.
+                            // A Zählerstand's `DTM+9` Ablesedatum (Nr 00029)
+                            // and `DTM+7` Gültigkeitsdatum (Nr 00030).
+                            if let Some(tag) = &qty.ablesedatum {
+                                emit_comp!(w, "DTM", ["9", tag, "102"]);
+                            }
+                            if let Some(instant) = &qty.gueltig {
+                                emit_comp!(
+                                    w,
+                                    "DTM",
+                                    ["7", &super::ccyymmddhhmm_utc("7", instant)?, "303"]
+                                );
+                            }
                             if let Some((start, end)) = &qty.period {
                                 emit_comp!(
                                     w,
@@ -540,6 +571,37 @@ impl<S, R> MeteringPointBuilder<S, R> {
         self
     }
 
+    /// `SG7 RFF+AGK` — the Konfigurations-ID of values from an iMS (MSCONS
+    /// AHB 3.2 Kap. 6.3.1); pair it with an empty
+    /// [`location_id`](Self::location_id), since such values name no Lokation.
+    pub fn konfigurations_id(mut self, id: impl Into<String>) -> Self {
+        self.spec.konfigurations_id = Some(id.into());
+        self
+    }
+
+    /// Add a Zählerstand to the current line item: `QTY` with its `DTM+9`
+    /// Ablesedatum (`CCYYMMDD`, where stated) and `DTM+7` Gültigkeitsdatum (a
+    /// UTC instant `CCYYMMDDHHMM`) — MSCONS 13017.
+    pub fn zaehlerstand(
+        mut self,
+        qualifier: impl Into<String>,
+        value: impl Into<String>,
+        gueltig: impl Into<String>,
+        ablesedatum: Option<String>,
+    ) -> Self {
+        if let Some(item) = &mut self.current_item {
+            item.quantities.push(QuantitySpec {
+                qualifier: qualifier.into(),
+                value: value.into(),
+                unit: String::new(),
+                period: None,
+                ablesedatum,
+                gueltig: Some(gueltig.into()),
+            });
+        }
+        self
+    }
+
     /// Set the grid location / Messlokation ID (LOC+172).
     pub fn location_id(mut self, id: impl Into<String>) -> Self {
         self.flush_item();
@@ -635,6 +697,8 @@ impl<S, R> MeteringPointBuilder<S, R> {
                 value: value.into(),
                 unit: unit.into(),
                 period: None,
+                ablesedatum: None,
+                gueltig: None,
             });
         }
         self
@@ -672,6 +736,8 @@ impl<S, R> MeteringPointBuilder<S, R> {
                 value: value.into(),
                 unit: unit.into(),
                 period: Some((start.into(), end.into())),
+                ablesedatum: None,
+                gueltig: None,
             });
         }
         self

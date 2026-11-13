@@ -307,10 +307,55 @@ pub struct UpdateAccountRequest {
     /// leaves the stored value alone — the same shape as every other field here.
     #[serde(default)]
     pub address: crate::sepa::AddressParts,
-    /// § 13 BGB — whether the customer is a Verbraucher. `false` arms the
-    /// § 288 Abs. 5 BGB Pauschale; omitted leaves the stored value alone.
-    #[serde(default)]
-    pub verbraucher: Option<bool>,
+}
+
+/// `PUT /api/v1/accounts/{malo_id}/verbraucher` — the § 13 BGB status as the
+/// vertragd contract records it. `null` is „not recorded" and clears a status
+/// an earlier contract on the MaLo set; the field is required, so an empty body
+/// cannot be read as either.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetVerbraucherRequest {
+    #[serde(deserialize_with = "present")]
+    pub verbraucher: Option<Option<bool>>,
+}
+
+/// A field that is present — `null` included — deserializes to `Some`; a
+/// missing one is refused by `SetVerbraucherRequest` having no default.
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<bool>>, D::Error> {
+    Option::<bool>::deserialize(d).map(Some)
+}
+
+/// Write the account's § 13 BGB status — the one writer is vertragd's
+/// contract command (Cedar `sync-verbraucher`), so the § 288 BGB rate and the
+/// Abs. 5 Pauschale read the contract's fact and nothing else.
+///
+/// # Errors
+///
+/// Returns an error when the statement matches no row.
+pub async fn set_verbraucher(
+    executor: impl sqlx::PgExecutor<'_>,
+    malo_id: &str,
+    lf_mp_id: &str,
+    tenant: &str,
+    verbraucher: Option<bool>,
+) -> anyhow::Result<()> {
+    let rows = sqlx::query(
+        "UPDATE accounts SET verbraucher = $4, updated_at = now()
+          WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
+    )
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .bind(tenant)
+    .bind(verbraucher)
+    .execute(executor)
+    .await
+    .context("set_verbraucher")?
+    .rows_affected();
+    if rows == 0 {
+        anyhow::bail!("account not found: malo_id={malo_id} lf_mp_id={lf_mp_id} tenant={tenant}");
+    }
+    Ok(())
 }
 
 /// The lookup hash written alongside a new `accounts.iban`. `None` when the
@@ -359,7 +404,6 @@ pub async fn update_account_tenanted(
               addr_building_number = COALESCE($12, addr_building_number),
               addr_post_code       = COALESCE($13, addr_post_code),
               addr_country_subdivision = COALESCE($14, addr_country_subdivision),
-              verbraucher = COALESCE($15, verbraucher),
               updated_at  = now()
           WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
     )
@@ -377,7 +421,6 @@ pub async fn update_account_tenanted(
     .bind(req.address.building_number)
     .bind(req.address.post_code)
     .bind(req.address.country_subdivision)
-    .bind(req.verbraucher)
     .execute(executor)
     .await
     .context("update_account_tenanted")?
@@ -4595,7 +4638,6 @@ pub struct InterestChargeRow {
     pub interest_ct: i64,
     pub rate_pct: rust_decimal::Decimal,
     pub ecb_base_rate_pct: rust_decimal::Decimal,
-    pub customer_type: String,
     pub period_from: time::Date,
     pub period_to: time::Date,
     pub legal_basis: String,
@@ -4700,6 +4742,13 @@ pub async fn fetch_ecb_base_rate_segments(
 
 /// Create a Verzugszinsen (§ 288 BGB) charge and its linked ledger entry.
 ///
+/// The rate is read from `accounts.verbraucher` (§ 13 BGB), the same fact the
+/// § 288 Abs. 5 Pauschale reads, so the two cannot disagree: nine Prozentpunkte
+/// über dem Basiszinssatz (Abs. 2) only where the account records „kein
+/// Verbraucher", otherwise five (Abs. 1). Abs. 2 applies „bei
+/// Rechtsgeschäften, an denen ein Verbraucher nicht beteiligt ist", so an
+/// unrecorded status is not charged the higher rate.
+///
 /// The period is split at every § 247 BGB Stichtag it crosses and each segment
 /// is charged at the rate in force for it; the row's `rate_pct` is the
 /// resulting effective annual rate and `rate_segments` carries the breakdown a
@@ -4717,7 +4766,6 @@ pub async fn create_interest_charge(
     lf_mp_id: &str,
     invoice_reference: Option<&str>,
     principal_ct: i64,
-    is_b2b: bool,
     period_from: time::Date,
     period_to: time::Date,
 ) -> anyhow::Result<InterestChargeRow> {
@@ -4725,6 +4773,16 @@ pub async fn create_interest_charge(
     if days <= 0 {
         anyhow::bail!("interest period_to must be after period_from");
     }
+    let verbraucher: Option<bool> = sqlx::query_scalar(
+        "SELECT verbraucher FROM accounts WHERE account_id = $1 AND tenant = $2",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .context("create_interest_charge: account")?
+    .flatten();
+    let abs2 = verbraucher == Some(false);
 
     let segments = fetch_ecb_base_rate_segments(pool, period_from, period_to).await?;
     let mut interest_ct: i64 = 0;
@@ -4732,7 +4790,7 @@ pub async fn create_interest_charge(
     for (seg_from, seg_to, ecb) in &segments {
         let seg_days = (*seg_to - *seg_from).whole_days();
         let (seg_ct, seg_rate) =
-            crate::sepa::calculate_interest_ct(principal_ct, *ecb, is_b2b, seg_days);
+            crate::sepa::calculate_interest_ct(principal_ct, *ecb, abs2, seg_days);
         interest_ct += seg_ct;
         breakdown.push(serde_json::json!({
             "from": seg_from.to_string(),
@@ -4768,12 +4826,11 @@ pub async fn create_interest_charge(
         .first()
         .map_or(rust_decimal::Decimal::ZERO, |(_, _, r)| *r);
 
-    let legal_basis = if is_b2b {
+    let legal_basis = if abs2 {
         "\u{00a7}288 Abs. 2 BGB"
     } else {
         "\u{00a7}288 Abs. 1 BGB"
     };
-    let customer_type = if is_b2b { "B2B" } else { "B2C" };
 
     // `VERZUGSZINSEN`, not `MAHNGEBUEHR`: both are Verzugsschaden and stay out of
     // the § 41f Abs. 3 arrears, but § 275 HGB reports Zinsen und ähnliche Erträge
@@ -4801,9 +4858,9 @@ pub async fn create_interest_charge(
     let row = sqlx::query_as::<_, InterestChargeRow>(
         r"INSERT INTO interest_charges
               (account_id, tenant, invoice_reference, principal_ct, interest_ct, rate_pct,
-               ecb_base_rate_pct, customer_type, period_from, period_to, legal_basis,
+               ecb_base_rate_pct, period_from, period_to, legal_basis,
                ledger_entry_id, rate_segments)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
           ON CONFLICT (tenant, account_id, period_from, period_to) DO NOTHING
           RETURNING *",
     )
@@ -4814,7 +4871,6 @@ pub async fn create_interest_charge(
     .bind(interest_ct)
     .bind(annual_rate)
     .bind(ecb_rate)
-    .bind(customer_type)
     .bind(period_from)
     .bind(period_to)
     .bind(legal_basis)
@@ -4855,7 +4911,6 @@ pub async fn create_interest_charge(
             "interest_ct":       interest_ct,
             "interest_eur":      crate::handlers::format_ct_as_eur(interest_ct),
             "rate_pct":          annual_rate.normalize().to_string(),
-            "customer_type":     customer_type,
             "period_from":       period_from.to_string(),
             "period_to":         period_to.to_string(),
             "rechtsgrundlage":   legal_basis,

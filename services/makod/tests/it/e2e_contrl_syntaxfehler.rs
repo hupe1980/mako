@@ -1,9 +1,9 @@
 //! The CONTRL Syntaxfehlermeldung — the half of the CONTRL both Sparten owe.
 //!
-//! CONTRL AHB 1.0 §2.3 uses the message two ways in Gas (Empfangsbestätigung and
-//! Syntaxfehlermeldung) and §2.4 one way in Strom: „In der Sparte Strom wird die
+//! CONTRL AHB 1.0 Kap. 2.3 uses the message two ways in Gas (Empfangsbestätigung and
+//! Syntaxfehlermeldung) and Kap. 2.4 one way in Strom: „In der Sparte Strom wird die
 //! CONTRL **ausschließlich** als Syntaxfehlermeldung eingesetzt." Sending it says
-//! two things at once (§2.3.2 / §2.4.2): the Übertragungsdatei arrived, and it
+//! two things at once (Kap. 2.3.2 / Kap. 2.4.2): the Übertragungsdatei arrived, and it
 //! „wird nicht weiterbearbeitet".
 //!
 //! These tests drive the service that produces it and the renderer that puts it
@@ -19,7 +19,7 @@ use mako_engine::store_slatedb::SlateDbStore;
 use makod::contrl_ack::{ContrlAckService, SyntaxFehler};
 use makod::party_registry::MpIdRegistry;
 
-/// A Strom own party, so §2.4 applies.
+/// A Strom own party, so Kap. 2.4 applies.
 const OWN_STROM: &str = "9900357000004";
 const COUNTERPARTY: &str = "9900123456789";
 
@@ -57,7 +57,7 @@ async fn service(own: &str, role: &str) -> (ContrlAckService, SlateDbStore, Tena
 /// The Syntaxfehlermeldung is owed in **Strom**, where no Empfangsbestätigung is.
 ///
 /// This is the case that reached the counterparty as silence: a Strom sender
-/// whose file did not parse got no CONTRL at all, and §2.4 gives the CONTRL no
+/// whose file did not parse got no CONTRL at all, and Kap. 2.4 gives the CONTRL no
 /// other use in that Sparte.
 #[tokio::test]
 async fn a_strom_interchange_that_did_not_parse_is_answered() {
@@ -96,7 +96,7 @@ async fn a_strom_interchange_that_did_not_parse_is_answered() {
     );
 }
 
-/// §2.4.1 gives a Strom UTILMD or ORDERS its own window — 15 minutes, and six
+/// Kap. 2.4.1 gives a Strom UTILMD or ORDERS its own window — 15 minutes, and six
 /// hours when it arrived on a Saturday — and the message type is read off the
 /// `UNH` of the file that did not parse.
 ///
@@ -138,13 +138,13 @@ async fn a_strom_utilmd_earns_its_own_window() {
     let drift = (window.due_at() - expected).abs();
     assert!(
         drift < time::Duration::seconds(5),
-        "the window must be the one §2.4.1 gives a Strom UTILMD — expected \
+        "the window must be the one Kap. 2.4.1 gives a Strom UTILMD — expected \
          {expected}, got {}",
         window.due_at()
     );
 }
 
-/// §2.2.2.2: „Als Antwort auf eine empfangene CONTRL-Nachricht darf weder eine
+/// Kap. 2.2.2.2: „Als Antwort auf eine empfangene CONTRL-Nachricht darf weder eine
 /// CONTRL-Nachricht noch eine andere UN/EDIFACT-Nachricht gesendet werden."
 #[tokio::test]
 async fn a_broken_contrl_is_not_answered_with_a_contrl() {
@@ -174,7 +174,7 @@ UNH+1+CONTRL:D:3:UN:2.0b'UCI+IC0'UNT+3+1'UNZ+1+IC1'"
     );
 }
 
-/// §2.2.2.1: without a readable `UNB` the CONTRL's Muss-Datenelemente cannot be
+/// Kap. 2.2.2.1: without a readable `UNB` the CONTRL's Muss-Datenelemente cannot be
 /// filled, so „der Fehler muss dann durch andere Mittel als durch die CONTRL
 /// mitgeteilt werden." The sender is what the envelope would have supplied.
 #[tokio::test]

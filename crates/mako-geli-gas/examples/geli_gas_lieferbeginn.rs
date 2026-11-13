@@ -252,7 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Two clocks run on this message and they are not interchangeable. The
     // **APERAK** says the UTILMD could be processed at all — in Gas, „nächster
     // Werktag 12:00" for a Folgeprozess and 3 Werktage for an Initialprozess
-    // (APERAK AHB 1.1 § 2.3), which `mako_fristen::aperak_gas_*` computes. The
+    // (APERAK AHB 1.1 Kap. 2.3), which `mako_fristen::aperak_gas_*` computes. The
     // **Antwortfrist** is when the NB owes its business answer, and for 44001
     // the AWH GeLi Gas publishes „Ablauf des 4. Werktags"
     // (BNetzA BK7-24-01-009). Neither is ten Werktage: that figure is the LFN's

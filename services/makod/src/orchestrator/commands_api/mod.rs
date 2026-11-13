@@ -410,7 +410,7 @@ fn current_workflow_id() -> WorkflowId {
 ///
 /// Not simply the registry's newest: a profile is compiled in as soon as BDEW
 /// publishes it, six months before its Anwendungszeitpunkt (Allgemeine
-/// Festlegungen 6.1d § 2.5). EDIFACT has no Übergangsfrist, so a message
+/// Festlegungen 6.1d Kap. 2.5). EDIFACT has no Übergangsfrist, so a message
 /// stamped with the next release before its Stichtag is refused by the
 /// counterparty — the registry is filtered to `valid_from <= heute()` first.
 pub(crate) fn latest_format_version() -> mako_engine::version::FormatVersion {
@@ -1016,7 +1016,7 @@ mod tests {
     /// The Sparte-neutral Storno must be answerable by everyone it can reach.
     ///
     /// PID 31004 cancels an invoice from *any* billing family (INVOIC AHB
-    /// § 3.1.2 — GPKE, MMM, WiM Strom + Gas, Kapazität, AWH, GeLi), so whoever
+    /// Kap. 3.1.2 — GPKE, MMM, WiM Strom + Gas, Kapazität, AWH, GeLi), so whoever
     /// could receive the original can receive its cancellation. Its permitted
     /// set is the union of the families' own sets, derived here rather than
     /// trusted: a role missing from the hand-written list cannot answer a
@@ -1175,7 +1175,10 @@ mod tests {
             snapshot_interval: 100,
             cedar,
             snapshot_store: store.as_snapshot_store(),
-            malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+            malo_cache: Arc::new(SlateDbMaloCache::new(
+                store.clone(),
+                TenantId::from_party_id("4033872000022"),
+            )),
             maloid_result_cache: MaloIdentResultCache::new(store.clone()),
             store: Arc::new(store),
             marktd_client: None,

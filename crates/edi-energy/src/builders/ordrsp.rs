@@ -39,6 +39,9 @@ struct OrdrespBuilderInner {
     line_item: bool,
     /// `DTM+203` Ausführungsdatum — a `303` instant.
     execution_date: Option<String>,
+    /// `DTM+Z02` verschobener Abmeldetermin — a `303` instant.
+    verschobener_abmeldetermin: Option<String>,
+    behebungszeitpunkt: Option<String>,
     /// `SG6 CTA+IC` name and its `COM`s as `(DE 3148 address, DE 3155 code)`.
     contact: Option<(String, Vec<(String, String)>)>,
     /// `SG3 NAD+VY` — the MP-ID of a beteiligter Marktpartner.
@@ -115,6 +118,8 @@ impl OrdrespBuilder<Unset, Unset> {
                 item_description: false,
                 line_item: false,
                 execution_date: None,
+                verschobener_abmeldetermin: None,
+                behebungszeitpunkt: None,
                 contact: None,
                 involved_party: None,
                 delivery_address: None,
@@ -199,7 +204,7 @@ impl<S, R> OrdrespBuilder<S, R> {
     /// Set the BGM DE 1001 document code. Defaults to `7`.
     ///
     /// The ESA Wertebestellung answers use `Z57` („Übermittlung von Werten an
-    /// ESA“, ORDRSP AHB 1.1b §4.15).
+    /// ESA“, ORDRSP AHB 1.1b Kap. 4.15).
     pub fn document_code(mut self, code: impl Into<String>) -> Self {
         self.inner.document_code = Some(code.into());
         self
@@ -271,6 +276,22 @@ impl<S, R> OrdrespBuilder<S, R> {
         self
     }
 
+    /// Set `DTM+Z02` verschobener Abmeldetermin — a UTC instant `CCYYMMDDHHMM`
+    /// (format `303`), Muss on the Weiterverpflichtung answers 19003/19004
+    /// (ORDRSP AHB 1.1b Kap. 4.11, S. 48, Nr 00005).
+    pub fn verschobener_abmeldetermin(mut self, instant: impl Into<String>) -> Self {
+        self.inner.verschobener_abmeldetermin = Some(instant.into());
+        self
+    }
+
+    /// Set `DTM+292` geplanter Behebungszeitpunkt — a UTC instant
+    /// `CCYYMMDDHHMM` (format `303`), Muss on a 19130 with `A06` (ORDRSP AHB
+    /// 1.1b Kap. 4.7, S. 37, Nr 00006).
+    pub fn behebungszeitpunkt(mut self, instant: impl Into<String>) -> Self {
+        self.inner.behebungszeitpunkt = Some(instant.into());
+        self
+    }
+
     /// Set the `SG6` Ansprechpartner of the sender — emits `CTA+IC+:<name>`
     /// and one `COM+<address>:<code>` per channel (`EM`, `TE`, `FX`, `AJ`,
     /// `AL`), after `NAD+MS`.
@@ -327,7 +348,7 @@ impl<S, R> OrdrespBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
         // `SG6 CTA`/`COM` belong to the sender's `SG3`.
@@ -342,11 +363,11 @@ impl<S, R> OrdrespBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
         if let Some(id) = &self.inner.involved_party {
-            emit_comp!(w, "NAD", ["VY"], [id, "", super::agency_for(None, id)]);
+            emit_comp!(w, "NAD", ["VY"], [id, "", super::agency_for(None, id)?]);
         }
         if let Some(a) = &self.inner.delivery_address {
             w.write_composites(
@@ -415,6 +436,20 @@ impl<S, R> OrdrespBuilder<S, R> {
                 w,
                 "DTM",
                 ["203", &super::ccyymmddhhmm_utc("203", instant)?, "303"]
+            );
+        }
+        if let Some(instant) = &self.inner.verschobener_abmeldetermin {
+            emit_comp!(
+                w,
+                "DTM",
+                ["Z02", &super::ccyymmddhhmm_utc("Z02", instant)?, "303"]
+            );
+        }
+        if let Some(instant) = &self.inner.behebungszeitpunkt {
+            emit_comp!(
+                w,
+                "DTM",
+                ["292", &super::ccyymmddhhmm_utc("292", instant)?, "303"]
             );
         }
         // Abonnement — `IMD++<7081>` (DE 7081 sits in C272, element 2).

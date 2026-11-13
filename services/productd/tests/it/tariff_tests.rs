@@ -594,7 +594,7 @@ mod eeg_kwkg_product_tests {
         // EEG_MANAGEMENTPRAEMIE: a Preistyp productd carries; EEG 2023 Anlage 1 adds
         // no Managementprämie to the Marktprämie
         let eeg_mgmt = "EEG_MANAGEMENTPRAEMIE";
-        // §7 KWKG 2023: KWK-Zuschlag
+        // §7 KWKG: KWK-Zuschlag
         let kwkg = "KWKG_ZUSCHLAG";
         // Direktvermarktung: Marktwert + Vermarktungsgebühr
         let marktwert = "MARKTWERT";

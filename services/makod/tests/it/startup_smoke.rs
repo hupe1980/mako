@@ -140,9 +140,9 @@ async fn migration_dispatch_table_covers_active_fv_transitions() {
     }
 }
 
-// ── D4 Party registry §2.13 compliance tests ─────────────────────────────────
+// ── D4 Party registry Kap. 2.13 compliance tests ─────────────────────────────────
 
-/// BDEW §2.13 (Allgemeine Festlegungen V6.1d): a single `[[party]]` entry must
+/// Allgemeine Festlegungen V6.1d Kap. 2.13: a single `[[party]]` entry must
 /// not mix Strom roles with Gas roles.  The `MpIdRegistry` must reject such a
 /// config at startup.  A violation here would produce wrong NAD agency codes
 /// and incorrect UNB DE0004 sender identities in all EDIFACT messages.
@@ -152,7 +152,7 @@ fn party_registry_rejects_mixed_strom_gas_roles() {
     use makod::party_registry::MpIdRegistry;
 
     // A single party entry claiming both NB (Strom) and GNB (Gas) on the same GLN.
-    // Per BDEW §2.13 these must be two separate entries with different GLNs.
+    // Per Allgemeine Festlegungen Kap. 2.13 these must be two separate entries with different GLNs.
     let parties = vec![PartyConfig {
         mp_id: "9900000000001".to_owned(),
         roles: vec!["NB".to_owned(), "GNB".to_owned()],
@@ -165,13 +165,13 @@ fn party_registry_rejects_mixed_strom_gas_roles() {
     assert!(
         result.is_err(),
         "MpIdRegistry must reject a [[party]] entry that mixes Strom role NB \
-         with Gas role GNB on the same GLN — BDEW §2.13 requires separate GLNs \
+         with Gas role GNB on the same GLN — Allgemeine Festlegungen Kap. 2.13 requires separate GLNs \
          per Marktrolle per Sparte (Allgemeine Festlegungen V6.1d)"
     );
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("§2.13") || err.contains("Gas") || err.contains("Strom"),
-        "Error message should cite §2.13 or explain the Strom/Gas conflict; got: {err}"
+        err.contains("Kap. 2.13") || err.contains("Gas") || err.contains("Strom"),
+        "Error message should cite Kap. 2.13 or explain the Strom/Gas conflict; got: {err}"
     );
 }
 
@@ -203,7 +203,7 @@ fn party_registry_accepts_valid_viu_strom_gas_split() {
     assert!(
         result.is_ok(),
         "MpIdRegistry must accept Strom NB + Gas GNB as separate entries \
-         with different GLNs — this is a valid VIU configuration per §2.13; \
+         with different GLNs — this is a valid VIU configuration per Kap. 2.13; \
          got error: {:?}",
         result.err()
     );
@@ -245,7 +245,7 @@ fn party_registry_rejects_duplicate_role() {
     assert!(
         result.is_err(),
         "MpIdRegistry must reject the same role in two different party entries; \
-         each Marktrolle must have exactly one GLN (BDEW §2.13)"
+         each Marktrolle must have exactly one GLN (Allgemeine Festlegungen Kap. 2.13)"
     );
 }
 

@@ -27,7 +27,6 @@
 //! - APERAK MIG 2.1i / 2.2 — `SG4 ERC` C901 DE 9321, the code table
 //! - APERAK AHB 1.0 / 1.1 — which codes each Anwendungsfall admits, and the
 //!   Bedingungen that oblige the `SG5 FTX+Z02` Ortsangabe
-//! - Allgemeine Festlegungen V6.1d (01.04.2026) — §4 rejection handling
 //!
 //! # Example
 //!
@@ -99,7 +98,7 @@ impl From<&str> for ErcCode {
 /// This is **advice**, not a hard rule.  The ERP decides whether to follow
 /// it based on local policy, retry budget, and operator escalation settings.
 ///
-/// Source: BDEW APERAK AHB 1.1; CONTRL AHB 1.0; Allgemeine Festlegungen V6.1d §4.
+/// Source: BDEW APERAK AHB 1.1; CONTRL AHB 1.0.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErcAction {
     /// Correct the named field and re-submit the process.

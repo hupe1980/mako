@@ -12,7 +12,7 @@
 
 use edi_energy::EdiEnergyMessage as _;
 
-/// Build a conformant MSCONS 13027 „Werte nach Typ 2" (MSCONS AHB 3.2 §11.2).
+/// Build a conformant MSCONS 13027 „Werte nach Typ 2" (MSCONS AHB 3.2 Kap. 11.2).
 fn mscons_13027(document_number: &str) -> Vec<u8> {
     edi_energy::builders::MsconsBuilder::new(edi_energy::Release::new("2.4c"))
         .sender("9900357000004")

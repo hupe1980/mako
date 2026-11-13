@@ -102,6 +102,14 @@ pub struct AnlageUpsertRequest {
     /// defaults to `false` and the uplift is not paid until an operator records
     /// the publication.
     pub kwk_bmwk_feststellung: Option<bool>,
+    /// § 6 Abs. 1 Satz 1 Nr. 1 lit. c aa KWKG — day the BImSchG-Genehmigung was
+    /// erteilt (ISO 8601). Keeps the claim of a plant in Dauerbetrieb after
+    /// 31.12.2026 when dated by then and the plant runs within four years of it.
+    pub kwk_bimschg_genehmigung: Option<String>,
+    /// § 6 Abs. 1 Satz 1 Nr. 1 lit. c bb KWKG — day of the verbindliche
+    /// Bestellung (ISO 8601), where no BImSchG-Genehmigung is required. Not
+    /// together with `kwk_bimschg_genehmigung`.
+    pub kwk_verbindliche_bestellung: Option<String>,
     /// § 8 Abs. 2/3 KWKG — the cost of the Modernisierung or Nachrüstung as a
     /// share of the cost of building the plant new (`0.25` = 25 %).
     ///
@@ -283,6 +291,10 @@ pub struct AnlageRow {
     pub kwk_verwendung: Option<String>,
     /// § 7 Abs. 1 Satz 2 KWKG — whether the BMWK Feststellung is published.
     pub kwk_bmwk_feststellung: bool,
+    /// § 6 Abs. 1 Satz 1 Nr. 1 lit. c aa KWKG — BImSchG-Genehmigung erteilt am.
+    pub kwk_bimschg_genehmigung: Option<Date>,
+    /// § 6 Abs. 1 Satz 1 Nr. 1 lit. c bb KWKG — verbindliche Bestellung am.
+    pub kwk_verbindliche_bestellung: Option<Date>,
     pub kwk_kostenanteil: Option<Decimal>,
     pub kwk_foerderdauer_h: Option<i32>,
     pub kwk_strom_kwh_gesamt: Option<Decimal>,
@@ -422,6 +434,19 @@ pub async fn upsert_anlage(
         .transpose()
         .context("parse repowering_datum")?;
 
+    let kwk_bimschg_genehmigung = req
+        .kwk_bimschg_genehmigung
+        .as_deref()
+        .map(|s| Date::parse(s, &Iso8601::DEFAULT))
+        .transpose()
+        .context("parse kwk_bimschg_genehmigung")?;
+    let kwk_verbindliche_bestellung = req
+        .kwk_verbindliche_bestellung
+        .as_deref()
+        .map(|s| Date::parse(s, &Iso8601::DEFAULT))
+        .transpose()
+        .context("parse kwk_verbindliche_bestellung")?;
+
     let ursprungs_inbetriebnahme = req
         .ursprungs_inbetriebnahme
         .as_deref()
@@ -545,7 +570,7 @@ pub async fn upsert_anlage(
                ist_repowering, ursprungs_inbetriebnahme, repowering_datum,
                parent_tr_id,
                kwk_foerderdauer_h, kwk_anlagenart, kwk_verwendung, kwk_kostenanteil,
-               kwk_bmwk_feststellung,
+               kwk_bmwk_feststellung, kwk_bimschg_genehmigung, kwk_verbindliche_bestellung,
                flex_leistung_kw, flex_praemie_ct_kwh,
                mastr_registriert, mastr_nummer, mastr_datum, mastr_violation_start,
                einspeiser_id,
@@ -564,7 +589,7 @@ pub async fn upsert_anlage(
                $17, $18, $19,
                $20,
                $21, $22, $44, $45,
-               $46,
+               $46, $50, $51,
                $23, $24,
                $25, $26, $27, CASE WHEN $25 THEN NULL ELSE heute() END,
                $28,
@@ -612,6 +637,8 @@ pub async fn upsert_anlage(
                kwk_anlagenart            = EXCLUDED.kwk_anlagenart,
                kwk_verwendung            = EXCLUDED.kwk_verwendung,
                kwk_bmwk_feststellung     = EXCLUDED.kwk_bmwk_feststellung,
+               kwk_bimschg_genehmigung   = EXCLUDED.kwk_bimschg_genehmigung,
+               kwk_verbindliche_bestellung = EXCLUDED.kwk_verbindliche_bestellung,
                kwk_kostenanteil          = EXCLUDED.kwk_kostenanteil,
                flex_leistung_kw          = EXCLUDED.flex_leistung_kw,
                flex_praemie_ct_kwh       = EXCLUDED.flex_praemie_ct_kwh,
@@ -683,6 +710,8 @@ pub async fn upsert_anlage(
     .bind(req.sect9_begrenzung_60) // $47
     .bind(req.wechselrichterleistung_va) // $48
     .bind(gebotstermin) // $49
+    .bind(kwk_bimschg_genehmigung) // $50
+    .bind(kwk_verbindliche_bestellung) // $51
     .execute(pool)
     .await
     .map_err(|e| {
@@ -895,6 +924,10 @@ pub struct SettleInput {
     pub kwk_verwendung: Option<String>,
     /// § 7 Abs. 1 Satz 2 KWKG — whether the BMWK Feststellung is published.
     pub kwk_bmwk_feststellung: bool,
+    /// § 6 Abs. 1 Satz 1 Nr. 1 lit. c aa KWKG — BImSchG-Genehmigung erteilt am.
+    pub kwk_bimschg_genehmigung: Option<Date>,
+    /// § 6 Abs. 1 Satz 1 Nr. 1 lit. c bb KWKG — verbindliche Bestellung am.
+    pub kwk_verbindliche_bestellung: Option<Date>,
     /// Derived from `mastr_registriert` in `run_settlement` — not set by caller.
     pub sanktion: Option<eeg_billing::SanktionAlt>,
     pub kwh_during_negative_epex: Option<Decimal>,
@@ -1946,6 +1979,8 @@ pub fn build_settle_input(
         kwk_anlagenart: anlage.kwk_anlagenart.clone(),
         kwk_verwendung: anlage.kwk_verwendung.clone(),
         kwk_bmwk_feststellung: anlage.kwk_bmwk_feststellung,
+        kwk_bimschg_genehmigung: anlage.kwk_bimschg_genehmigung,
+        kwk_verbindliche_bestellung: anlage.kwk_verbindliche_bestellung,
         sanktion: None, // derived from mastr_registriert in run_settlement
         mastr_registriert: anlage.mastr_registriert,
         kwh_during_negative_epex: overrides.kwh_during_negative_epex,
@@ -2732,6 +2767,18 @@ pub async fn run_settlement(
             .as_deref()
             .map(parse_kwk_verwendung)
             .transpose()?;
+        // § 6 Abs. 1 Satz 1 Nr. 1 KWKG decides whether there is a claim at all,
+        // before § 7 prices it — and it needs the Dauerbetrieb date to decide.
+        crate::validate::kwkg_anspruch(
+            &input.tr_id,
+            input.inbetriebnahme,
+            crate::validate::KwkLitC {
+                ausschreibungszuschlag: input.ausschreibungs_zuschlag_id.is_some(),
+                bimschg_genehmigung: input.kwk_bimschg_genehmigung,
+                verbindliche_bestellung: input.kwk_verbindliche_bestellung,
+            },
+        )
+        .map_err(anyhow::Error::msg)?;
         let statutory =
             verwendung
                 .zip(input.inbetriebnahme)

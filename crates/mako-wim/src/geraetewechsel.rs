@@ -13,7 +13,7 @@
 //!
 //! | Clock | Window | Basis |
 //! |---|---|---|
-//! | **APERAK** — technical acknowledgement | 45 minutes (Strom UTILMD) | APERAK AHB §2.4.1 |
+//! | **APERAK** — technical acknowledgement | 45 minutes (Strom UTILMD) | APERAK AHB Kap. 2.4.1 |
 //! | **Antwort** — business Bestätigung/Ablehnung | **1 / 3 / 5 / 7 WT, per PID** | WiM Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2 |
 //!
 //! The business window is never flat: see [`antwort_frist_werktage`]. Sizing all
@@ -31,7 +31,7 @@
 use std::collections::HashMap;
 
 use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
-use mako_engine::payload::AperakPayload;
+use mako_engine::payload::{AperakPayload, IftstaPayload, UtilmdPayload};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     envelope::EventEnvelope,
@@ -56,7 +56,7 @@ pub const WORKFLOW_NAME: &str = "wim-device-change";
 ///
 /// | Clock | Window | Label |
 /// |---|---|---|
-/// | Technical acknowledgement (APERAK) | **45 minutes**, Strom UTILMD (APERAK AHB §2.4.1) | `mako_fristen::APERAK_STROM_WINDOW_LABEL` |
+/// | Technical acknowledgement (APERAK) | **45 minutes**, Strom UTILMD (APERAK AHB Kap. 2.4.1) | `mako_fristen::APERAK_STROM_WINDOW_LABEL` |
 /// | Business answer (Bestätigung/Ablehnung) | **1 / 3 / 5 / 7 WT**, per PID | this label |
 ///
 /// Size it with [`antwort_frist_werktage`] — never a flat window:
@@ -229,7 +229,7 @@ pub const fn zuordnungs_stunde(sparte: Sparte) -> u8 {
 /// and raises the breach alert against.
 ///
 /// Distinct from the APERAK window, which is **45 minutes** for UTILMD in Strom
-/// (APERAK AHB §2.4.1) — see [`ANTWORT_FRIST_WINDOW_LABEL`].
+/// (APERAK AHB Kap. 2.4.1) — see [`ANTWORT_FRIST_WINDOW_LABEL`].
 ///
 /// Returns `None` when `request_pid` is not a WiM MSB-Wechsel request.
 #[must_use]
@@ -387,7 +387,7 @@ pub fn antwort_pid_for(request_pid: u32, bestaetigt: bool) -> Option<u32> {
 /// 2.1 Änd-ID 27061 removes the Anwendungsfall („wird gemäß AWH WiM Gas 2.0
 /// nicht mehr benötigt"), so it is in neither Anwendungsübersicht 4.0 nor the
 /// `fv20261001` profile. EDIFACT has no Übergangsfrist (Allgemeine
-/// Festlegungen §2.5) — an interchange is entirely on one format version — so a
+/// Festlegungen Kap. 2.5) — an interchange is entirely on one format version — so a
 /// counterparty on FV2025-10-01 may still send one, and dropping it would
 /// dead-letter a conformant message. It goes when `fv20251001` does.
 ///
@@ -427,7 +427,7 @@ pub const IFTSTA_PIDS: &[u32] = &[
 /// | 21012 | Statusmeldung (**erfolgreich**) | NB → MSBN |
 /// | 21013 | Statusmeldung (gescheitert) | NB → MSBN / MSBA / LF |
 ///
-/// Source: IFTSTA AHB 2.1 § 6.2. Note that 21009 is the *failure* report and
+/// Source: IFTSTA AHB 2.1 Kap. 6.2. Note that 21009 is the *failure* report and
 /// 21010 the success — the numeric order is the reverse of the reading order.
 pub const GESAMTVORGANG_PIDS: &[u32] = &[21_009, 21_010, 21_011, 21_012, 21_013];
 
@@ -538,7 +538,7 @@ fn parse_yyyymmdd(raw: &str) -> Option<time::Date> {
 
 /// The Gas APERAK *sending* deadline for a Verarbeitbarkeitsfehlermeldung
 /// decided after the order's arrival — nächster Werktag **12:00** in a
-/// Folgeprozess, **3 Werktage** in an Initialprozess (APERAK AHB 1.1 §2.3.1).
+/// Folgeprozess, **3 Werktage** in an Initialprozess (APERAK AHB 1.1 Kap. 2.3.1).
 ///
 /// The Prüfidentifikator picks the window, because that is what the BDEW made
 /// the discriminator — see [`mako_fristen::GAS_INITIALPROZESS_PIDS`]. Every
@@ -602,7 +602,7 @@ pub enum DeviceChangeEvent {
     },
     /// A positive or negative APERAK was dispatched.
     ///
-    /// The **technical** acknowledgement only (APERAK AHB 1.1 §2.1.1,
+    /// The **technical** acknowledgement only (APERAK AHB 1.1 Kap. 2.1.1,
     /// BGM+312 / BGM+313), due 45 minutes after receipt for Strom UTILMD. It
     /// says the message could be processed — it decides nothing. The business
     /// decision is [`Self::AntwortGesendet`].
@@ -1184,7 +1184,7 @@ pub enum DeviceChangeCommand {
     /// Strom: **45 Minuten** for a UTILMD (Sonntag 12:00 on a Saturday), both
     /// polarities. Gas: **only** the Verarbeitbarkeitsfehlermeldung, by the
     /// next Werktag 12:00 or, on an Initialprozess, within 3 Werktagen
-    /// (APERAK AHB 1.1 §2.3.1/§2.4.1). A `positive: true` in Gas is refused.
+    /// (APERAK AHB 1.1 Kap. 2.3.1/Kap. 2.4.1). A `positive: true` in Gas is refused.
     DispatchAperak {
         /// `true` for positive APERAK, `false` for negative.
         positive: bool,
@@ -1642,19 +1642,17 @@ impl Workflow for WimDeviceChangeWorkflow {
                     )));
                 }
 
-                // Key set required by `edifact_renderer::render_utilmd` for a WiM
-                // UTILMD: pid, sender, receiver, melo, process_date.
-                let outbox = PendingOutbox::new(
-                    "UTILMD",
+                let outbox = PendingOutbox::typed(
                     receiver.as_str(),
-                    serde_json::json!({
-                        "pid":          pid.as_u32(),
-                        "sender":       sender.as_str(),
-                        "receiver":     receiver.as_str(),
-                        "melo":         melo_id.as_str(),
-                        "process_date": process_date,
-                        "message_ref":  message_ref.as_str(),
-                    }),
+                    &UtilmdPayload {
+                        pid: pid.as_u32(),
+                        sender: sender.as_str().to_owned(),
+                        receiver: Some(receiver.as_str().to_owned()),
+                        melo: Some(melo_id.as_str().to_owned()),
+                        process_date: Some(process_date.clone()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        ..Default::default()
+                    },
                 )
                 .caused_by(0);
 
@@ -1846,9 +1844,9 @@ impl Workflow for WimDeviceChangeWorkflow {
                     //
                     // Deadlines registered atomically with the events:
                     //   1. Strom only: the APERAK *sending* deadline (APERAK AHB
-                    //      1.1 §2.4.1) — 45 min, a Saturday arrival = Sunday
+                    //      1.1 Kap. 2.4.1) — 45 min, a Saturday arrival = Sunday
                     //      noon — retired when the Anerkennungsmeldung goes out.
-                    //      Gas sends no APERAK for a processable message (§2.3),
+                    //      Gas sends no APERAK for a processable message (Kap. 2.3),
                     //      so a Gas window here could only fire.
                     //   2. The *business answer* deadline — Bestätigung or Ablehnung.
                     //      Sized per PID (3 / 5 / 7 / 1 WT), never flat: see
@@ -1871,7 +1869,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                     events.push(DeviceChangeEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1. The
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 Kap. 2.1.1. The
                     // ingest door opens its delivery window beside it.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
@@ -1905,7 +1903,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 //   positive = false → BGM+313 Verarbeitbarkeitsfehlermeldung
                 //
                 // **Only Strom has both.** In Gas the APERAK reports
-                // „ausschließlich" errors (APERAK AHB 1.1 §2.3): a processable
+                // „ausschließlich" errors (APERAK AHB 1.1 Kap. 2.3): a processable
                 // message is acknowledged by the Frist lapsing in silence. The
                 // decision is still recorded — the ERP made one — but the entry
                 // carries `suppress_wire` so nothing reaches the wire.
@@ -1942,7 +1940,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 // opened no Gas one — a processable Gas message is acknowledged
                 // by silence — so a Verarbeitbarkeitsfehlermeldung decided only
                 // now opens its window here, anchored on the order's arrival
-                // (APERAK AHB 1.1 §2.3.1).
+                // (APERAK AHB 1.1 Kap. 2.3.1).
                 let window: Vec<PendingDeadline> = data
                     .received_at
                     .filter(|_| sparte == Sparte::Gas && !positive)
@@ -2046,31 +2044,29 @@ impl Workflow for WimDeviceChangeWorkflow {
                         transaktionsgruende(request_pid)
                     )));
                 }
-                let mut payload = serde_json::json!({
-                    "pid":               antwort_pid,
+                let payload = UtilmdPayload {
+                    pid: antwort_pid,
                     // We answer, so the roles invert: the party that received
                     // the order is the sender of its answer.
-                    "sender":            data.grid_operator.as_str(),
-                    "receiver":          data.incoming_msb.as_str(),
-                    "melo":              data.melo_id.as_str(),
-                    "process_date":      process_date,
-                    "transaktionsgrund": grund,
-                    "antwort_code":      code.code,
-                    "antwort_codeliste": codeliste,
-                });
-                // `SG6 RFF+TN` „Referenz Vorgangsnummer (aus Anfragenachricht)",
-                // Muss on every answer column (UTILMD AHB Strom 2.2 Kap. 10, Gas
-                // 1.2 Kap. 6). The answer's own `IDE+24` is a fresh number: the
-                // MIG requires DE 7402 to be unique across every Vorgang sent.
-                if let Some(ref vn) = data.vorgangsnummer {
-                    payload["referenz_vorgangsnummer"] = serde_json::Value::String(vn.clone());
-                }
-                if let Some(ref text) = bemerkung {
-                    payload["bemerkung"] = serde_json::Value::String(text.clone());
-                }
+                    sender: data.grid_operator.as_str().to_owned(),
+                    receiver: Some(data.incoming_msb.as_str().to_owned()),
+                    melo: Some(data.melo_id.as_str().to_owned()),
+                    process_date: Some(process_date.clone()),
+                    transaktionsgrund: Some(grund),
+                    antwort_code: Some(code.code.to_owned()),
+                    antwort_codeliste: Some(codeliste.to_owned()),
+                    // `SG6 RFF+TN` „Referenz Vorgangsnummer (aus
+                    // Anfragenachricht)", Muss on every answer column (UTILMD
+                    // AHB Strom 2.2 Kap. 10, Gas 1.2 Kap. 6). The answer's own
+                    // `IDE+24` is a fresh number: the MIG requires DE 7402 to be
+                    // unique across every Vorgang sent.
+                    referenz_vorgangsnummer: data.vorgangsnummer.clone(),
+                    bemerkung: bemerkung.clone(),
+                    ..Default::default()
+                };
 
                 let outbox =
-                    PendingOutbox::new("UTILMD", data.incoming_msb.as_str(), payload).caused_by(0);
+                    PendingOutbox::typed(data.incoming_msb.as_str(), &payload).caused_by(0);
 
                 // A confirmed Anmeldung is *vorläufig*: the Zuordnung follows the
                 // MSBN's Gesamtvorgang report, due by the 10. WT after the
@@ -2128,19 +2124,20 @@ impl Workflow for WimDeviceChangeWorkflow {
                     )));
                 }
 
-                let mut payload = serde_json::json!({
-                    "pid": if erfolgreich {
+                let mut payload = IftstaPayload {
+                    pid: if erfolgreich {
                         GESAMTVORGANG_ERFOLG_PID
                     } else {
                         GESAMTVORGANG_SCHEITERN_PID
                     },
-                    "sender":   data.incoming_msb.as_str(),
-                    "receiver": data.grid_operator.as_str(),
-                    "melo":     data.melo_id.as_str(),
+                    sender: Some(data.incoming_msb.as_str().to_owned()),
+                    receiver: Some(data.grid_operator.as_str().to_owned()),
+                    melo: Some(data.melo_id.as_str().to_owned()),
                     // The takeover day on 21010's `DTM+293` begins at the
                     // Sparte's own boundary.
-                    "sparte":   wim_sparte(data.pruefidentifikator.as_u32()),
-                });
+                    sparte: wim_sparte(data.pruefidentifikator.as_u32()),
+                    ..Default::default()
+                };
 
                 if erfolgreich {
                     let Some(ref beginn) = zuordnungsbeginn else {
@@ -2177,7 +2174,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                             korridor.end(),
                         )));
                     }
-                    payload["zuordnungsbeginn"] = serde_json::Value::String(beginn.clone());
+                    payload.zuordnungsbeginn = Some(beginn.clone());
                 }
 
                 let message_ref = data.message_ref.clone();
@@ -2190,10 +2187,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                         fristverletzung: None,
                         referenz: None,
                     }],
-                    vec![
-                        PendingOutbox::new("IFTSTA", data.grid_operator.as_str(), payload)
-                            .caused_by(0),
-                    ],
+                    vec![PendingOutbox::typed(data.grid_operator.as_str(), &payload).caused_by(0)],
                 ))
             }
 
@@ -2290,15 +2284,16 @@ impl Workflow for WimDeviceChangeWorkflow {
                             .to_owned(),
                     ));
                 };
-                let mut payload = serde_json::json!({
-                    "pid":      pid,
-                    "sender":   data.grid_operator.as_str(),
-                    "receiver": data.incoming_msb.as_str(),
-                    "melo":     data.melo_id.as_str(),
-                    "sparte":   sparte,
-                    "referenz_nachricht": referenz.dokumentennummer.as_str(),
-                    "referenz_vorgang":   referenz.vorgangsnummer.as_str(),
-                });
+                let mut payload = IftstaPayload {
+                    pid,
+                    sender: Some(data.grid_operator.as_str().to_owned()),
+                    receiver: Some(data.incoming_msb.as_str().to_owned()),
+                    melo: Some(data.melo_id.as_str().to_owned()),
+                    sparte: Some(sparte),
+                    referenz_nachricht: Some(referenz.dokumentennummer.clone()),
+                    referenz_vorgang: Some(referenz.vorgangsnummer.clone()),
+                    ..Default::default()
+                };
                 if !zugeordnet {
                     // `Z66` „MSB-Scheitermeldung liegt vor" — the one code
                     // `E_0232` / `E_2003` publish, under `S_0057` / `G_0055`.
@@ -2306,13 +2301,15 @@ impl Workflow for WimDeviceChangeWorkflow {
                         Sparte::Strom => mako_pruefung::codes::EBD_GESAMTVORGANG,
                         Sparte::Gas => mako_pruefung::codes::EBD_GESAMTVORGANG_GAS,
                     };
-                    payload["antwort_code"] = "Z66".into();
-                    payload["antwort_codeliste"] = mako_pruefung::codes::wire_codeliste(
-                        tree,
-                        mako_pruefung::codes::Cluster::Ablehnung,
-                    )
-                    .unwrap_or(tree)
-                    .into();
+                    payload.antwort_code = Some("Z66".to_owned());
+                    payload.antwort_codeliste = Some(
+                        mako_pruefung::codes::wire_codeliste(
+                            tree,
+                            mako_pruefung::codes::Cluster::Ablehnung,
+                        )
+                        .unwrap_or(tree)
+                        .to_owned(),
+                    );
                 }
                 if zugeordnet {
                     let Some(ref beginn) = data.bestaetigter_zuordnungsbeginn else {
@@ -2347,11 +2344,54 @@ impl Workflow for WimDeviceChangeWorkflow {
                             korridor.end(),
                         )));
                     }
-                    payload["zuordnungsbeginn"] = serde_json::Value::String(beginn.clone());
+                    payload.zuordnungsbeginn = Some(beginn.clone());
                 }
-                let mut outbox = vec![
-                    PendingOutbox::new("IFTSTA", data.incoming_msb.as_str(), payload).caused_by(0),
-                ];
+                let mut outbox = Vec::new();
+                if zugeordnet {
+                    outbox.push(
+                        PendingOutbox::typed(data.incoming_msb.as_str(), &payload).caused_by(0),
+                    );
+                } else {
+                    // The 21011 is „NB an MSBN / MSBA / LF": the MSBN gets the
+                    // answer (Kap. 2.3.2 Nr. 8), the MSBA (Nr. 14) and the LF
+                    // (Nr. 15) the Information über das Scheitern der
+                    // Zuordnung, each the same message. A party nobody
+                    // resolved is escalated by name, never skipped.
+                    let empfaenger = data.informationsempfaenger.clone().unwrap_or_default();
+                    for (rolle, nr, mp_id) in [
+                        ("MSBN", 8, Some(data.incoming_msb.clone())),
+                        ("MSBA", 14, empfaenger.msba),
+                        ("LF", 15, empfaenger.lf),
+                    ] {
+                        match mp_id {
+                            Some(mp_id) => {
+                                let p = IftstaPayload {
+                                    receiver: Some(mp_id.as_str().to_owned()),
+                                    ..payload.clone()
+                                };
+                                outbox.push(PendingOutbox::typed(mp_id.as_str(), &p).caused_by(0));
+                            }
+                            None => outbox.push(
+                                PendingOutbox::new(
+                                    mako_engine::outbox::PROCESS_FAILED,
+                                    "",
+                                    serde_json::json!({
+                                        "pid":    ZUORDNUNG_SCHEITERN_PID,
+                                        "reason": format!(
+                                            "IFTSTA 21011 an den {rolle} nicht versandt: kein \
+                                             {rolle} zur Messlokation {} ermittelt (WiM Teil 1 \
+                                             Kap. 2.3.2 Nr. {nr})",
+                                            data.melo_id.as_str(),
+                                        ),
+                                        "undelivered_message_type": "IFTSTA",
+                                        "recipient_role": rolle,
+                                    }),
+                                )
+                                .caused_by(0),
+                            ),
+                        }
+                    }
+                }
                 // A confirmed Zuordnung is a market-data fact, not just a
                 // message: `marktd` derives the per-Messlokation MSB timeline
                 // from this event (`derive_msb_zuordnung`), which is why it
@@ -2509,15 +2549,15 @@ impl Workflow for WimDeviceChangeWorkflow {
                     ] {
                         match mp_id {
                             Some(mp_id) => outbox.push(
-                                PendingOutbox::new(
-                                    "IFTSTA",
+                                PendingOutbox::typed(
                                     mp_id.as_str(),
-                                    serde_json::json!({
-                                        "pid":      GESAMTVORGANG_AUSGEBLIEBEN_PID,
-                                        "sender":   data.grid_operator.as_str(),
-                                        "receiver": mp_id.as_str(),
-                                        "melo":     data.melo_id.as_str(),
-                                    }),
+                                    &IftstaPayload {
+                                        pid: GESAMTVORGANG_AUSGEBLIEBEN_PID,
+                                        sender: Some(data.grid_operator.as_str().to_owned()),
+                                        receiver: Some(mp_id.as_str().to_owned()),
+                                        melo: Some(data.melo_id.as_str().to_owned()),
+                                        ..Default::default()
+                                    },
                                 )
                                 .caused_by(0),
                             ),
@@ -3478,6 +3518,103 @@ mod tests {
         assert_eq!(p["antwort_codeliste"], "S_0057");
     }
 
+    /// The 21011 is addressed „NB an MSBN / MSBA / LF" (IFTSTA AHB 2.1 Kap.
+    /// 6.2, S. 19; WiM Teil 1 Kap. 2.3.2 Nr. 8, 14, 15): the MSBA and the LF
+    /// learn of the Scheitern as the MSBN does, each with the same report
+    /// reference and code. A party nobody resolved is escalated by name.
+    #[test]
+    fn the_21011_reaches_msbn_msba_and_lf_and_escalates_a_missing_one() {
+        let scheitern = |empfaenger: Option<Informationsempfaenger>| {
+            let state = answered_state(55_042);
+            let out = WimDeviceChangeWorkflow::handle(
+                &state,
+                DeviceChangeCommand::DispatchAntwort {
+                    bestaetigt: true,
+                    antwort_code: "E15".to_owned(),
+                    bemerkung: None,
+                    abweichender_termin: None,
+                },
+            )
+            .expect("Bestätigung");
+            let mut state = out
+                .events
+                .iter()
+                .fold(state, WimDeviceChangeWorkflow::apply);
+            if let Some(empfaenger) = empfaenger {
+                let out = WimDeviceChangeWorkflow::handle(
+                    &state,
+                    DeviceChangeCommand::RecordInformationsempfaenger { empfaenger },
+                )
+                .expect("recorded");
+                state = out
+                    .events
+                    .iter()
+                    .fold(state, WimDeviceChangeWorkflow::apply);
+            }
+            let out = WimDeviceChangeWorkflow::handle(
+                &state,
+                DeviceChangeCommand::ReceiveGesamtvorgang {
+                    pid: Pruefidentifikator::new(GESAMTVORGANG_ERFOLG_PID).expect("valid"),
+                    zuordnungsbeginn: Some("20250203".to_owned()),
+                    referenz: Some(IftstaReferenz {
+                        dokumentennummer: "IFT-0815".to_owned(),
+                        vorgangsnummer: "3".to_owned(),
+                    }),
+                    message_ref: MessageRef::new("UNH-1"),
+                    received_at: time::macros::datetime!(2025-02-03 09:00 UTC),
+                },
+            )
+            .expect("report");
+            let state = out
+                .events
+                .iter()
+                .fold(state, WimDeviceChangeWorkflow::apply);
+            WimDeviceChangeWorkflow::handle(
+                &state,
+                DeviceChangeCommand::DispatchZuordnung { zugeordnet: false },
+            )
+            .expect("21011")
+            .outbox
+        };
+        let empfaenger_von = |outbox: &[PendingOutbox]| {
+            outbox
+                .iter()
+                .filter(|o| &*o.message_type == "IFTSTA")
+                .map(|o| {
+                    assert_eq!(o.payload["pid"], ZUORDNUNG_SCHEITERN_PID);
+                    assert_eq!(o.payload["receiver"].as_str(), Some(&*o.recipient));
+                    assert_eq!(o.payload["referenz_nachricht"], "IFT-0815");
+                    assert_eq!(o.payload["antwort_code"], "Z66");
+                    o.recipient.to_string()
+                })
+                .collect::<Vec<_>>()
+        };
+        let eskaliert = |outbox: &[PendingOutbox]| {
+            outbox
+                .iter()
+                .filter(|o| &*o.message_type == mako_engine::outbox::PROCESS_FAILED)
+                .map(|o| {
+                    o.payload["recipient_role"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        let alle = scheitern(Some(Informationsempfaenger {
+            msba: Some(MarktpartnerCode::new("9900000000010")),
+            lf: Some(MarktpartnerCode::new("9900000000027")),
+        }));
+        assert_eq!(
+            empfaenger_von(&alle),
+            ["4012345000023", "9900000000010", "9900000000027"]
+        );
+        assert!(eskaliert(&alle).is_empty());
+        let nichts = scheitern(None);
+        assert_eq!(empfaenger_von(&nichts), ["4012345000023"]);
+        assert_eq!(eskaliert(&nichts), ["MSBA", "LF"]);
+    }
+
     /// A 21013 says no report arrived, so it meets the MSBN in
     /// `AuftragBestaetigt` and leaves the MSBA assigned (Kap. 2.3.2 Nr. 16);
     /// one transmitted after the 11. WT carries its Fristverletzung.
@@ -3689,7 +3826,7 @@ mod tests {
     }
 
     /// The numeric order of the IFTSTA PIDs is the reverse of the reading
-    /// order: 21009 is the failure and 21010 the success (IFTSTA AHB 2.1 § 6.2).
+    /// order: 21009 is the failure and 21010 the success (IFTSTA AHB 2.1 Kap. 6.2).
     #[test]
     fn the_gesamtvorgang_pids_are_not_in_reading_order() {
         assert_eq!(GESAMTVORGANG_SCHEITERN_PID, 21_009);

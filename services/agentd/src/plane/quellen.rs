@@ -200,8 +200,8 @@ impl Quellenindex {
 }
 
 /// An address in the index's own spelling: `§41f Abs.5` and `§ 41f Absatz 5`
-/// are `§ 41f Abs. 5`; a chapter is its number, so `Kap. 2.4.1` and the
-/// AHB's own `§ 2.4.1` are `2.4.1`.
+/// are `§ 41f Abs. 5`; a chapter is its number, so `Kap. 2.4.1` and a
+/// dotted `§ 2.4.1` written for it are `2.4.1`.
 #[must_use]
 pub fn normal_at(at: &str) -> String {
     let t = at.split_whitespace().collect::<Vec<_>>().join(" ");

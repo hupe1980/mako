@@ -1021,7 +1021,7 @@ fn aperak_frist_sentence() -> String {
         "Strom UTILMD/ORDERS {} min after arrival (a Saturday arrival: Sunday {}:00), \
          every other Strom message the next Werktag {}:00; Gas the next Werktag {}:00 \
          for a Folgeprozess, the end of the {}. Werktag for an Initialprozess \
-         (APERAK AHB 1.1 § 2.3.1 / § 2.4.1)",
+         (APERAK AHB 1.1 Kap. 2.3.1 / Kap. 2.4.1)",
         w.strom_minutes,
         w.strom_saturday_hour,
         w.strom_allgemein_hour,

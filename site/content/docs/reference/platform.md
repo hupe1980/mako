@@ -175,12 +175,12 @@ without changing the EDIFACT version — INVOIC `2.8e` appears in both
 
 ### Format boundaries
 
-**EDIFACT has no transition window.** Allgemeine Festlegungen 6.1 §2.5 gives the
+**EDIFACT has no transition window.** Allgemeine Festlegungen 6.1 Kap. 2.5 gives the
 EDIFACT formats a single *Anwendungszeitpunkt* — 1 April or 1 October — with no
 overlap around it: before that instant the old format applies, from it the new
 one does.
 
-The 15-*Werktage* Übergangszeitraum that does exist is §8.5, and it is the **XML**
+The 15-*Werktage* Übergangszeitraum that does exist is Kap. 8.5, and it is the **XML**
 rule. It starts *at* the Anwendungszeitpunkt rather than before it, runs in
 Werktage rather than calendar days, and picks the version by the *Erfüllungsdatum*
 in the message rather than by when it was sent. None of that carries over.

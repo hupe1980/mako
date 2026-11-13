@@ -288,29 +288,29 @@ pub const KONFIGURATIONSANGEBOT_WERKTAGE: u32 = 2;
 ///
 /// `E_0608` Prüfschritte 110 / 590 give the NB **60 Werktage** of daily
 /// re-identification before it may refuse a newly commissioned Marktlokation,
-/// and GPKE Teil 2 § 2.2.2 states the answer window as 00:00 Uhr des 61. WT.
+/// and GPKE Teil 2 Kap. 2.2.2 states the answer window as 00:00 Uhr des 61. WT.
 pub const NEUANLAGE_WERKTAGE: u32 = 61;
 
 /// Bearbeitungsstand / Rückmeldung on Abrechnungsdaten, in Werktage
-/// (GPKE Teil 2 §§ 3.1.1.2 / 3.1.2.2 / 3.1.3.2).
+/// (GPKE Teil 2 Kap. 3.1.1.2 / 3.1.2.2 / 3.1.3.2).
 pub const ABRECHNUNGSDATEN_WERKTAGE: u32 = 2;
 
 /// Rückmeldung auf eine Stammdatenänderung, in Werktage
-/// (GPKE Teil 4 §§ 1.4.2–1.4.5 Prozessschritte 2 / 5).
+/// (GPKE Teil 4 Kap. 1.4.2–1.4.5 Prozessschritte 2 / 5).
 ///
 /// The **Bestellung** einer Stammdatenänderung is a different window — GPKE
-/// Teil 4 § 1.5.2 gives the NB 10 Werktage for the Bearbeitungsstand — and the
+/// Teil 4 Kap. 1.5.2 gives the NB 10 Werktage for the Bearbeitungsstand — and the
 /// two must not be conflated.
 pub const STAMMDATEN_RUECKMELDUNG_WERKTAGE: u32 = 2;
 
 /// Bearbeitungsstand zur **Bestellung** einer Stammdatenänderung, in Werktage
-/// (GPKE Teil 4 § 1.5.2 Prozessschritte 2 / 4 / 6).
+/// (GPKE Teil 4 Kap. 1.5.2 Prozessschritte 2 / 4 / 6).
 pub const STAMMDATEN_BESTELLUNG_WERKTAGE: u32 = 10;
 
 /// Antwort auf eine **Gas** Stammdatenänderung, in Werktage.
 ///
 /// „Unverzüglich, spätestens jedoch bis zum Ablauf des 10. WT nach Eingang der
-/// Änderung" — AWH GeLi Gas § 4.3.2 Nr. 2 / Nr. 4, and likewise for the LF- and
+/// Änderung" — AWH GeLi Gas Kap. 4.3.2 Nr. 2 / Nr. 4, and likewise for the LF- and
 /// MSB-initiated directions. Five times the Strom window
 /// ([`STAMMDATEN_RUECKMELDUNG_WERKTAGE`]), and genuinely so: GeLi Gas gives the
 /// Berechtigter a real Zustimmung/Ablehnung rather than Strom's asynchronous
@@ -345,6 +345,8 @@ const fn at(hour: u8) -> Time {
 /// | 55156 | Rückmeldung/Bestellung Abr.-Daten BK-Abr. verb. MaLo | NB | 2. WT nach dem ÜT |
 /// | 55673 | Rückmeldung/Bestellung Abr.-Daten BK-Abr. erz. MaLo | NB | 2. WT nach dem ÜT |
 /// | 55220 | Rückmeldung/Bestellung Abr.-Daten NN-Abr. | NB | 2. WT nach dem ÜT |
+/// | 55614 | Rückmeldung/Bestellung Abr.-Daten BK-Abr. verb. MaLo (ÜNB → NB) | NB | 2. WT nach dem ÜT |
+/// | 55675 | Rückmeldung/Bestellung Abr.-Daten BK-Abr. erz. MaLo (ÜNB → NB) | NB | 2. WT nach dem ÜT |
 /// | 55109 | Stammdatenänderung vom LF (Änderung der MaLo) | NB | 2. WT nach dem ÜT |
 /// | 55230 | Änderung Blindabr.-Daten der NeLo (LF → NB) | NB | 2. WT nach dem ÜT |
 /// | 55693 | Änderung Daten der TR (LF → NB) | NB | 2. WT nach dem ÜT |
@@ -360,7 +362,7 @@ const fn at(hour: u8) -> Time {
 /// **The Neuanlage window is not a mistake.** `E_0608` Prüfschritte 110 and 590
 /// make the identification of a newly commissioned Marktlokation a *daily*
 /// re-check for up to 60 Werktage before the NB may answer `A07` / `A16`, so
-/// GPKE Teil 2 § 2.2.2 states the answer window as „spätester ÜZ ist 00:00 Uhr
+/// GPKE Teil 2 Kap. 2.2.2 states the answer window as „spätester ÜZ ist 00:00 Uhr
 /// des 61. WT nach dem ÜT". A 24-hour deadline on that process manufactures a
 /// rejection roughly three months early.
 pub const GPKE: &[AntwortObligation] = &[
@@ -445,7 +447,7 @@ pub const GPKE: &[AntwortObligation] = &[
         // 2-Werktage window and is listed separately.
         frist: FristShape::SameDayAt(at(15)),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 2.3.2.2 SD „Beginn der Ersatz-/Grundversorgung\" \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 2.3.2.2 SD „Beginn der Ersatz-/Grundversorgung\" \
                  Nr. 2 Fall I — „Unverzüglich, jedoch spätester ÜZ ist 15:00 Uhr am ÜT von \
                  Nr. 1\" (Fall II, Zuordnungsbeginn nicht in der Zukunft: 15:00 Uhr des \
                  1. WT nach dem ÜT)",
@@ -469,7 +471,7 @@ pub const GPKE: &[AntwortObligation] = &[
         // the LFN once communicated. Silence is consent here.
         frist: FristShape::SameDayAt(at(15)),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 2.4.2.2–2.4.2.5 SD „Herstellung einer 100% \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 2.4.2.2–2.4.2.5 SD „Herstellung einer 100% \
                  LF-Zuordnung zu einer erzeugenden Marktlokation\" Nr. 2 — „Unverzüglich, \
                  jedoch spätester ÜZ ist 15:00 Uhr am ÜT von Nr. 1\" (Fall II, \
                  Zuordnungsbeginn nicht in der Zukunft: 15:00 Uhr des 1. WT nach dem ÜT); \
@@ -496,7 +498,7 @@ pub const GPKE: &[AntwortObligation] = &[
             at: at(0),
         },
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 2.2.2, SD Neuanlage Prozessschritte 2/3 — \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 2.2.2, SD Neuanlage Prozessschritte 2/3 — \
                  „spätester ÜZ ist 00:00 Uhr des 61. WT nach dem ÜT von Nr. 1\"",
     },
     AntwortObligation {
@@ -510,7 +512,7 @@ pub const GPKE: &[AntwortObligation] = &[
             at: at(0),
         },
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 2.2.2, SD Neuanlage Prozessschritte 2/3",
+        source: "BK6-24-174 GPKE Teil 2 Kap. 2.2.2, SD Neuanlage Prozessschritte 2/3",
     },
     AntwortObligation {
         trigger_pid: 17_115,
@@ -520,7 +522,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0470"),
         frist: FristShape::EndOfWerktag(1),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Prozessschritt 2 — „spätester ÜT ist der \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 Prozessschritt 2 — „spätester ÜT ist der \
                  1. WT nach dem ÜT von Nr. 1\"",
     },
     AntwortObligation {
@@ -531,7 +533,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0497"),
         frist: FristShape::EndOfWerktag(1),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 3.5.2.2 Prozessschritt 2 — „spätester ÜT ist der \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.5.2.2 Prozessschritt 2 — „spätester ÜT ist der \
                  1. WT nach dem ÜT von Nr. 1\"",
     },
     AntwortObligation {
@@ -542,7 +544,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0468"),
         frist: FristShape::EndOfWerktag(1),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 3.5.3.2 Prozessschritt 2 — „spätester ÜT ist der \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.5.3.2 Prozessschritt 2 — „spätester ÜT ist der \
                  1. WT nach dem ÜT\"",
     },
     AntwortObligation {
@@ -553,7 +555,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: None,
         frist: FristShape::EndOfWerktag(3),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Prozessschritt 4 — „spätester ÜT ist der \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 Prozessschritt 4 — „spätester ÜT ist der \
                  3. WT nach dem ÜT von Nr. 3\"; Fristverstreichen gilt als Zustimmung",
     },
     AntwortObligation {
@@ -576,7 +578,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0595"),
         frist: FristShape::EndOfWerktag(ABRECHNUNGSDATEN_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 §§ 3.1.2.2 / 3.1.3.2 — Bearbeitungsstand \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.1.2.2 / 3.1.3.2 — Bearbeitungsstand \
                  „spätester ÜT ist der 2. WT nach dem ÜT\"",
     },
     AntwortObligation {
@@ -587,7 +589,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0595"),
         frist: FristShape::EndOfWerktag(ABRECHNUNGSDATEN_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 §§ 3.1.2.2 / 3.1.3.2",
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.1.2.2 / 3.1.3.2",
     },
     AntwortObligation {
         trigger_pid: 55_220,
@@ -597,7 +599,30 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0595"),
         frist: FristShape::EndOfWerktag(ABRECHNUNGSDATEN_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 §§ 3.1.1.2 / 3.1.3.2",
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.1.1.2 / 3.1.3.2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_614,
+        name: "Rückmeldung / Bestellung Abrechnungsdaten Bilanzkreisabrechnung vom ÜNB (verb. MaLo)",
+        answered_by: "NB",
+        antwort_pids: (21_047, 21_047),
+        // Two trees: `E_0618` on a Qualitätsrückmeldung, `E_0613` on a
+        // Bestellung (IFTSTA AHB 2.1 Kap. 7.7, S. 62).
+        ebd: None,
+        frist: FristShape::EndOfWerktag(ABRECHNUNGSDATEN_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.1.2.2 Nr. 6 (S. 76) / 3.1.3.3 Nr. 2 (S. 82) — \
+                 Bearbeitungsstand „spätester ÜT ist der 2. WT nach dem ÜT\"",
+    },
+    AntwortObligation {
+        trigger_pid: 55_675,
+        name: "Rückmeldung / Bestellung Abrechnungsdaten Bilanzkreisabrechnung vom ÜNB (erz. MaLo)",
+        answered_by: "NB",
+        antwort_pids: (21_047, 21_047),
+        ebd: None,
+        frist: FristShape::EndOfWerktag(ABRECHNUNGSDATEN_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.1.2.2 Nr. 6 (S. 76) / 3.1.3.3 Nr. 2 (S. 82)",
     },
     AntwortObligation {
         trigger_pid: 55_109,
@@ -607,7 +632,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0410"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.3 Prozessschritt 2 — „spätester ÜT ist der \
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.3 Prozessschritt 2 — „spätester ÜT ist der \
                  2. WT nach dem ÜT von Nr. 1\"",
     },
     AntwortObligation {
@@ -618,7 +643,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0410"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.3 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.3 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_693,
@@ -628,7 +653,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0410"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.3 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.3 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_557,
@@ -638,7 +663,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.4 Prozessschritt 2",
     },
     // 55555 carries two Use-Cases of GPKE Teil 4 under one Prüfidentifikator —
     // the Rückmeldung auf eine Änderung 55553 (Kap. 1.4.4 Prozessschritte 2/5/8,
@@ -658,8 +683,8 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0632"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 3 — „spätester ÜT ist der 2. WT \
-                 nach dem ÜT von Nr. 2\" (the Bestellung variant, § 1.5.4 Prozessschritt 2, \
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.4 Prozessschritt 3 — „spätester ÜT ist der 2. WT \
+                 nach dem ÜT von Nr. 2\" (the Bestellung variant, Kap. 1.5.4 Prozessschritt 2, \
                  has 10 WT; the tighter window is the one a PID-keyed table may publish)",
     },
     AntwortObligation {
@@ -670,7 +695,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_640,
@@ -680,7 +705,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_641,
@@ -690,7 +715,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_642,
@@ -700,7 +725,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_643,
@@ -710,7 +735,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 35_004,
@@ -722,7 +747,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: None,
         frist: FristShape::EndOfWerktag(KONFIGURATIONSANGEBOT_WERKTAGE),
         family: Family::Gpke,
-        source: "GPKE Teil 3 § 3.1 / § 3.2 SD Prozessschritt 2 — 2 Werktage",
+        source: "BK6-24-174 Anlage 1c (GPKE Teil 3) Kap. 1.3.3.2 / 1.3.3.3 Prozessschritt 2 — 2 Werktage",
     },
 ];
 
@@ -1158,7 +1183,7 @@ pub const WIM: &[AntwortObligation] = &[
         // One PID carries both the Angebot and the Ablehnung, and what tells
         // them apart is the **prices**: `SG31 PRI` is Muss inside the
         // `SG27 LIN` block of a priced offer, and a 15003 that prices nothing
-        // is the MSB declining. Never the Bindungsfrist — QUOTES AHB 1.1a §4.3
+        // is the MSB declining. Never the Bindungsfrist — QUOTES AHB 1.1a Kap. 4.3
         // makes `DTM+273` Muss on the only 15003 use case it publishes, so a
         // refusal carries one too.
         antwort_pids: (15_003, 15_003),
@@ -1271,7 +1296,7 @@ pub const RECHNUNGSABWICKLUNG_WERKTAGE: u32 = 8;
 pub const TECHNIKAENDERUNG_WERKTAGE: u32 = 10;
 
 /// Answer window on a Geschäftsdatenanfrage, in Werktage
-/// (GPKE Teil 4 § 3.2 Nr. 2/4).
+/// (GPKE Teil 4 Kap. 3.2 Nr. 2/4).
 ///
 /// One window for both legs: the Stammdaten anfrage an den NB and the Werte
 /// anfrage an den MSB are stated identically.
@@ -1890,7 +1915,7 @@ mod tests {
     /// is a constant rather than a comment.
     ///
     /// GPKE Teil 4 gives the same Prüfidentifikator 2 Werktage as a Rückmeldung
-    /// (§ 1.4.4) and 10 as a Bestellung (§ 1.5.4), and the message alone does
+    /// (Kap. 1.4.4) and 10 as a Bestellung (Kap. 1.5.4), and the message alone does
     /// not say which — only a preceding 55553 does. A PID-keyed table has to
     /// publish one, and it must be the tighter: sizing a queue by the looser
     /// window reports a lapsed Frist as still running.

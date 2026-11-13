@@ -52,6 +52,12 @@ export interface Answer {
   saetze: AnswerSentence[];
   /** A decision the assistant proposes for a Freigabe, a Disput or a geparkte Buchung — prefilled, never sent. */
   vorschlag: Vorschlag | null;
+  /**
+   * For a pre-fill run: the interview answers a sentence was read into, each
+   * identifier kept by agentd only where the sentence contains it — shown for
+   * confirmation, never used unconfirmed.
+   */
+  angaben?: Angaben | null;
   /** Every service read the run made, in order; `fertig` once it settled. */
   schritte: { quelle: string; fertig: boolean }[];
   /** The reader's own standing verdict — `true` for „hilfreich" — or null. */
@@ -76,6 +82,14 @@ export interface Vorschlag {
   /** The read the Begründung rests on, `server/tool`. */
   quelle: string | null;
   belegt: boolean;
+}
+
+/** The Einrichtung's answers as the pre-fill read them from a sentence. */
+export interface Angaben {
+  rollen: { rolle: string; mp_id: string | null }[];
+  primaer: string | null;
+  bilanzkreise: { sparte: string; standard: string[] }[];
+  verbundene_lieferanten: string[] | null;
 }
 
 /** What became of a proposal, as agentd records it beside the run. */
@@ -117,6 +131,20 @@ export async function fragen(frage: string, anker: Anker): Promise<string> {
       event_type: "manual",
       input: { frage, ...anker },
     }),
+  });
+  if (res.status !== 202) throw await failure(res, { dienst: "agentd", aktion: "fragen" });
+  const admitted = (await res.json()) as { run_id: string; refused?: string }[];
+  const run = admitted[0];
+  if (!run || run.refused) throw new AgentAbgelehnt(run?.refused ?? "kein Lauf zugelassen");
+  return run.run_id;
+}
+
+/** Read one sentence about the deployment into interview answers; resolves to the run id. */
+export async function vorbelegen(satz: string): Promise<string> {
+  const res = await reach(BASE, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: "einrichtung-assistent", event_type: "manual", input: { satz } }),
   });
   if (res.status !== 202) throw await failure(res, { dienst: "agentd", aktion: "fragen" });
   const admitted = (await res.json()) as { run_id: string; refused?: string }[];

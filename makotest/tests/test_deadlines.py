@@ -58,7 +58,7 @@ class TestTheThreeShapes:
         assert antwort_deadline(55001, MONDAY) != add_hours(MONDAY, 24)
 
     def test_the_neuanlage_window_is_the_same_shape_with_a_larger_n(self):
-        """GPKE Teil 2 § 2.2.2: „00:00 Uhr des 61. WT nach dem ÜT".
+        """GPKE Teil 2 Kap. 2.2.2: „00:00 Uhr des 61. WT nach dem ÜT".
 
         `E_0608` Prüfschritte 110/590 give the NB 60 Werktage of daily
         re-identification before it may refuse a newly commissioned

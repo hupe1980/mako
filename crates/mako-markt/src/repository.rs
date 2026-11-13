@@ -1017,7 +1017,7 @@ pub struct NbContractRecord {
 ///
 /// Used by `processd` to drive the LF's automated answers to the NB-initiated
 /// GPKE processes (inbound 55007 and 55010)
-/// without ERP involvement (GPKE Teil 1 §5).
+/// without ERP involvement (GPKE Teil 1 Kap. 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum LieferStatus {
@@ -1551,7 +1551,7 @@ impl BilanzierungRecord {
 ///
 /// A Netz-Element-Lokation (NeLo) is a network element location used in
 /// BDEW Redispatch 2.0 processes.  The `nelo_id` is typically a 16-char
-/// EIC code (ENTSO-E, NAD DE3055 = `ZEW`) or a 13-digit BDEW Codenummer.
+/// EIC code (ENTSO-E) or a 13-digit BDEW Codenummer.
 ///
 /// Source: BDEW Redispatch 2.0 Implementierungsleitfaden v2.x.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1628,7 +1628,7 @@ impl NeloStammdatenPatch {
 /// noun. So `data` is mako's own open-ended payload, not a Business Object, and
 /// it crosses no BO4E gate because there is no BO4E type to gate it against.
 ///
-/// Source: GPKE Teil 4 (BK6-22-024 Anlage 1d) §1.4.
+/// Source: GPKE Teil 4 (BK6-22-024 Anlage 1d) Kap. 1.4.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrancheRecord {
     /// Tranche identifier (e.g. `<MaLo>-T01`).
@@ -2109,7 +2109,7 @@ impl Lokationsbuendel {
                 befunde: vec![Buendelbefund::StrukturcodeFehlt],
             };
         };
-        // The check digit first: `Lokationsbuendelcode` enforces BDEW § 8.1, and
+        // The check digit first: `Lokationsbuendelcode` enforces Identifikatoren Kap. 8.1, and
         // all 42 published codes verify under it. A code that fails it cannot
         // name a structure, so there is nothing further to check.
         let code = match rubo4e::identifiers::Lokationsbuendelcode::new(raw) {
@@ -3587,7 +3587,7 @@ mod lokationsbuendel_tests {
         assert_eq!("SR".parse(), Ok(Lokationstyp::Sr));
     }
 
-    /// A 13-digit code with a valid BDEW § 8.1 check digit that names none of
+    /// A 13-digit code with a valid Identifikatoren Kap. 8.1 check digit that names none of
     /// the fifteen published structures.
     const UNPUBLISHED_BUT_WELL_FORMED: &str = "9992000009002";
 
@@ -3695,7 +3695,7 @@ mod lokationsbuendel_tests {
     /// as unpublished — the codelist's introduction says complex structures are
     /// agreed bilaterally, so this is a fact about the bundle, not a defect.
     ///
-    /// `9992000009996` is a fabricated code with a correct § 8.1 check digit.
+    /// `9992000009996` is a fabricated code with a correct Kap. 8.1 check digit.
     /// `9992000000125` looked like one and is not: it is *Summenmessung mit
     /// mindestens einer separat gemessenen Erzeugung*, which is why the fixture
     /// above uses it.

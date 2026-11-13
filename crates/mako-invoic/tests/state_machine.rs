@@ -139,6 +139,10 @@ async fn send_invoic_enqueues_the_message_it_carries() {
     assert_eq!(invoic[0].payload["receiver"], payer().as_str());
     assert_eq!(invoic[0].payload["sender"], issuer().as_str());
     assert_eq!(&*invoic[0].recipient, payer().as_str());
+    <mako_engine::payload::InvoicPayload as mako_engine::payload::OutboundPayload>::from_payload(
+        &invoic[0].payload,
+    )
+    .expect("the INVOIC reads back as its typed payload");
 }
 
 /// A `SendInvoic` that carries no message is refused: recording it as sent
@@ -289,7 +293,7 @@ async fn settling_and_disputing_both_complete_the_process() {
 #[tokio::test]
 async fn an_answered_invoice_puts_a_remadv_on_the_wire() {
     // Zahlungsavis: BGM `481`, PID 33001, and no AJT — agreement carries no
-    // Antwortcode (REMADV AHB 1.0a § 3.1.1).
+    // Antwortcode (REMADV AHB 1.0a Kap. 3.1.1).
     let p = process::<BothRoles>();
     p.run(receive(31002, true), RunOptions::new())
         .await
@@ -310,7 +314,10 @@ async fn an_answered_invoice_puts_a_remadv_on_the_wire() {
         .expect("a settled invoice answers the issuer");
     assert_eq!(avis.payload["pid"], 33_001);
     assert_eq!(avis.payload["document_code"], "481");
-    assert_eq!(avis.payload["invoice_ref"], "INV-2026-001");
+    <mako_engine::payload::RemadvPayload as mako_engine::payload::OutboundPayload>::from_payload(
+        &avis.payload,
+    )
+    .expect("the REMADV reads back as its typed payload");
     assert!(
         avis.payload.get("antwort_code").is_none(),
         "{:?}",
@@ -358,6 +365,46 @@ async fn an_answered_invoice_puts_a_remadv_on_the_wire() {
     assert_eq!(abweisung.payload["antwort_code"], "A70");
     assert_eq!(abweisung.payload["antwort_codeliste"], "E_0406");
     assert!(abweisung.payload["ablehnungsgrund"].is_string());
+}
+
+/// The payer's checking service learns of the COMDIS: the second round
+/// (`E_0266`) is walked there, so the COMDIS goes out as a `ProcessInitiated`
+/// for the same process, naming PID 29001, the invoice it answers and the
+/// COMDIS itself.
+#[tokio::test]
+async fn a_comdis_announces_the_second_round() {
+    let p = process::<BothRoles>();
+    p.run(receive(31002, true), RunOptions::new())
+        .await
+        .unwrap();
+    p.run(
+        InvoicCommand::DisputeInvoice {
+            message_ref: MessageRef::new("REMADV-1"),
+            reason: "Preis weicht ab".to_owned(),
+            antwort: None,
+        },
+        RunOptions::new(),
+    )
+    .await
+    .unwrap();
+    let ran = p
+        .run(
+            InvoicCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new("COMDIS-1"),
+            },
+            RunOptions::new(),
+        )
+        .await
+        .unwrap();
+    let initiated = ran
+        .outbox
+        .iter()
+        .find(|o| &*o.message_type == "ProcessInitiated")
+        .expect("the second round is announced");
+    assert_eq!(initiated.payload["pid"], 29001);
+    assert_eq!(initiated.payload["invoice_ref"], "INV-2026-001");
+    assert_eq!(initiated.payload["comdis_ref"], "COMDIS-1");
+    assert_eq!(initiated.payload["sender_mp_id"], issuer().as_str());
 }
 
 /// **The second round.** WiM Teil 2 Kap. 4.5.2 Nr. 3/4: the issuer answers a
@@ -512,7 +559,7 @@ async fn an_outbound_invoice_awaits_its_remadv() {
     assert_eq!(p.state().await.unwrap().label(), "InvoicSent");
 }
 
-/// **REMADV AHB 1.0a § 3 — settlement is „ganz oder gar nicht".** Only 33001
+/// **REMADV AHB 1.0a Kap. 3 — settlement is „ganz oder gar nicht".** Only 33001
 /// confirms; 33002, 33003 and 33004 are all Abweisungen.
 ///
 /// Losing the distinction books a refused invoice as paid, so the command

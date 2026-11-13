@@ -217,6 +217,9 @@ pub fn wim_ersteinbau_registry() -> AdapterRegistry<mako_wim::ersteinbau::WimErs
                         .and_then(|d| d.value.clone())
                         .unwrap_or_default(),
                     message_ref: MessageRef::new(msg.message_ref()),
+                    // `BGM` DE 1004 and `SG14 CNI` DE 1490 — what the
+                    // 21030/21031 name in `SG15 RFF+ACW` / `RFF+ADY`.
+                    referenz: super::iftsta_referenz(i),
                     validation_passed,
                     validation_errors,
                 });
@@ -634,7 +637,7 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
 /// Also the second half of the subscription's business key: several
 /// Kapitel-4.6 products exist for one Marktlokation.
 ///
-/// REQOTE AHB 1.2 §4.3 condition `[41]` restricts DE 7140 to the codes of
+/// REQOTE AHB 1.2 Kap. 4.3 condition `[41]` restricts DE 7140 to the codes of
 /// *Codeliste der Konfigurationen* Kapitel 4.6, so a code outside it is not a
 /// wrong product but an undefined one.
 pub fn extract_messprodukt(msg: &AnyMessage) -> Option<String> {
@@ -651,7 +654,7 @@ pub fn extract_messprodukt(msg: &AnyMessage) -> Option<String> {
 
 /// Read `SG2 AJT` — the published Antwortcode and the EBD it came from.
 ///
-/// **Muss** on every ORDRSP that answers an ESA order (ORDRSP AHB 1.1b §4.15,
+/// **Muss** on every ORDRSP that answers an ESA order (ORDRSP AHB 1.1b Kap. 4.15,
 /// PIDs 19011–19014), and the only structured statement of what the answer
 /// means: those four use cases publish no free-text segment at all. The one
 /// `FTX` a conformant 19011 may carry is `SG27 FTX+Z27`, which holds the MSB's
@@ -671,7 +674,7 @@ fn extract_antwort(msg: &AnyMessage) -> Option<mako_wim::esa::Antwort> {
 /// Read `SG27 FTX+Z27` (IP-Adresse) or `FTX+Z28` (IP-Range) off a confirming
 /// ORDRSP 19011.
 ///
-/// ORDRSP AHB 1.1b §4.15 conditions `[76]`/`[77]`: exactly one of the two is
+/// ORDRSP AHB 1.1b Kap. 4.15 conditions `[76]`/`[77]`: exactly one of the two is
 /// **Muss** when the confirmed order named a Kapitel-4.6.2 product. It is the
 /// source the ESA has to admit before the iMS can reach it, so a confirmed
 /// SMGW subscription without it can never deliver.
@@ -738,7 +741,7 @@ fn extract_dauer(msg: &AnyMessage, qualifier: &str) -> Option<time::OffsetDateTi
 /// Read the commercial substance of a QUOTES 15003 Angebot.
 ///
 /// UC 4.1.1: the ESA „fragt die Übermittlung von Werten **und die damit
-/// verbundenen Kosten**" beim MSB an. QUOTES AHB 1.1a §4.3 makes `SG4 CUX`,
+/// verbundenen Kosten**" beim MSB an. QUOTES AHB 1.1a Kap. 4.3 makes `SG4 CUX`,
 /// the `SG27 PIA+Z02` Artikel-IDs, the `SG31 PRI+CAL` prices and one to 23
 /// `PIA+5 …:SRW` OBIS-Kennzahlen all **Muss** — keeping only the Bindungsfrist
 /// reduced an offer to its expiry date. The ESA needs the prices to order
@@ -851,7 +854,7 @@ fn extract_dtm_date(msg: &AnyMessage, qualifier: &str) -> Option<time::Date> {
 
 /// Read `IMD++<7081>` — the Abonnement mode.
 ///
-/// **Muss** on ORDERS 17007/17008 (ORDERS AHB 1.1b §4.15). DE 7081 sits in
+/// **Muss** on ORDERS 17007/17008 (ORDERS AHB 1.1b Kap. 4.15). DE 7081 sits in
 /// C272, i.e. element 2 of the segment, with DE 7077 (element 1) empty.
 fn extract_abonnement(msg: &AnyMessage) -> Option<mako_wim::esa::Abonnement> {
     msg.segments()
@@ -965,7 +968,7 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
                 ABBESTELLUNG_PID => {
                     // UC 4.3 Nr. 1: the ESA ends a running delivery. The stop
                     // date is `DTM+203` Ausführungsdatum — **Muss** on 17008
-                    // (ORDERS AHB 1.1b §4.15); `Z11` is not a qualifier this
+                    // (ORDERS AHB 1.1b Kap. 4.15); `Z11` is not a qualifier this
                     // message uses.
                     let beendigung_zum = extract_dtm_date(msg, "203")
                         .map(|d| d.midnight().assume_utc())
@@ -1052,7 +1055,7 @@ pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkf
                         });
                     }
                     // `DTM+273` is a **duration**, not a date: QUOTES AHB 1.1a
-                    // §4.3 gives DE 2380 as „Zeitraum" with condition [908]
+                    // Kap. 4.3 gives DE 2380 as „Zeitraum" with condition [908]
                     // („Mögliche Werte: 1 bis n") and DE 2379 as `802` Monat /
                     // `803` Woche / `804` Tag. Read as `CCYYMMDD` it finds
                     // nothing in a conformant message.
@@ -1087,7 +1090,7 @@ pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkf
                     // IFTSTA 21042 (WiM Umsetzungsstatus, MSB → ESA, UC 4.4).
                     //
                     // The Beendigung date is `SG15 DTM+93` „Datum
-                    // Vertragsende" (IFTSTA AHB 2.1 §6.9) — **not** the first
+                    // Vertragsende" (IFTSTA AHB 2.1 Kap. 6.9) — **not** the first
                     // DTM in the message, which is `DTM+137`, the day the MSB
                     // wrote the notice.
                     let beendigung_zum = extract_dtm_date(msg, "93")
@@ -1447,24 +1450,35 @@ pub fn wim_weiterverpflichtung_registry(
                         .and_then(|n| n.party_id.as_deref())
                         .unwrap_or(""),
                 ),
-                // MeLo from the IDE segment (element 1, component 0 = object ID).
+                // The Messlokation is the `SG2 LOC+172` Meldepunkt (ORDERS AHB
+                // 1.1b Kap. 4.11, S. 81).
                 melo_id: MeLo::new(
                     o.segments()
                         .iter()
-                        .find(|s| s.tag == "IDE")
+                        .find(|s| s.tag == "LOC")
                         .and_then(|s| s.component_str(1, 0))
                         .unwrap_or(""),
                 ),
-                // The date the NB wants the Messstellenbetrieb continued to —
-                // the „verschobenes Zuordnungsende" the whole decision turns on.
-                verschobenes_zuordnungsende: o
-                    .segments()
-                    .iter()
-                    .find(|s| s.tag == "DTM")
-                    .and_then(|s| s.component_str(0, 1))
+                // `DTM+Z02` „Verschobener Abmeldetermin" — the date the NB
+                // wants the Messstellenbetrieb continued to, the German day it
+                // begins in the Sparte (`[UB3]`). The first `DTM` is the
+                // Dokumentendatum `137`, not this one.
+                verschobenes_zuordnungsende: super::prozesstag(
+                    o.dtm().iter().find(|d| d.qualifier == "Z02"),
+                    match sparte {
+                        mako_engine::types::Sparte::Strom => mako_fristen::Sparte::Strom,
+                        mako_engine::types::Sparte::Gas => mako_fristen::Sparte::Gas,
+                    },
+                )?
+                .unwrap_or_default(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                // `BGM` DE 1004 — the answer names the ORDERS by it in `SG1
+                // RFF+ON` (ORDRSP AHB 1.1b Kap. 4.11, S. 48).
+                dokumentennummer: o
+                    .bgm()
+                    .and_then(|b| b.document_id.as_deref())
                     .unwrap_or("")
                     .to_owned(),
-                message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
             })
@@ -1488,7 +1502,7 @@ pub fn wim_weiterverpflichtung_registry(
 ///   outbound 17006 opened.
 ///
 /// Directions verified against the BDEW PID overview 4.0 and AWH
-/// Aktivitätsdiagramme WiM V1.3 §§2.8–2.11 (EBDs `E_0206`/`E_0209`).
+/// Aktivitätsdiagramme WiM V1.3 Kap. 2.8–2.11 (EBDs `E_0206`/`E_0209`).
 ///
 /// [`RechnungsabwicklungCommand::ReceiveOrders`]: mako_wim::RechnungsabwicklungCommand::ReceiveOrders
 /// [`RechnungsabwicklungCommand::ReceiveAntwort`]: mako_wim::RechnungsabwicklungCommand::ReceiveAntwort
@@ -1527,6 +1541,18 @@ pub fn wim_rechnungsabwicklung_registry()
                                 .unwrap_or(""),
                         ),
                         message_ref: MessageRef::new(msg.message_ref()),
+                        // `BGM` DE 1004 and `DTM+203` — what the 19009/19010
+                        // name in `SG1 RFF+ON` and restate (ORDRSP AHB 1.1b
+                        // Kap. 4.14, S. 57–58). Strom only (`[61]`).
+                        dokumentennummer: o
+                            .bgm()
+                            .and_then(|b| b.document_id.as_deref())
+                            .unwrap_or("")
+                            .to_owned(),
+                        ausfuehrungsdatum: super::prozesstag(
+                            o.dtm().iter().find(|d| d.qualifier == "203"),
+                            mako_fristen::Sparte::Strom,
+                        )?,
                         validation_passed,
                         validation_errors,
                     })

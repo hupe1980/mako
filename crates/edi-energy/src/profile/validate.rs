@@ -19,7 +19,8 @@ use edifact_rs::{Segment, ValidationIssue, ValidationSeverity};
 
 use super::Profile;
 use super::conditions::{
-    ConditionKind, EvalError, Expr, ExprError, Paket, Scope, Status, Truth, Voraussetzung,
+    ConditionKind, EvalError, Expr, ExprError, Paket, Parteirollen, Scope, Status, Truth,
+    Voraussetzung,
 };
 use super::formatbedingung;
 use super::model::{Anwendungsfall, Element, ElementRule, SegmentNode};
@@ -58,11 +59,27 @@ pub const AHB_SKIP_NO_PID: &str = "AHB-SKIP-NO-PID";
 pub const AHB_UNKNOWN_PID: &str = "AHB-UNKNOWN-PID";
 
 /// Run every MIG and AHB check. `segments` is the message from `UNH` to `UNT`.
+///
+/// A Bedingung on the Marktrolle of the sender or receiver stays undecided;
+/// [`validate_with_rollen`] decides it where the caller knows the role.
 #[must_use]
 pub fn validate(
     profile: &Profile,
     segments: &[Segment<'_>],
     pid: Option<u32>,
+) -> Vec<ValidationIssue> {
+    validate_with_rollen(profile, segments, pid, &Parteirollen::unbekannt())
+}
+
+/// [`validate`], with the Marktrollen of sender and receiver as far as the
+/// caller knows them — what a Bedingung like „Wenn MP-ID in SG2 NAD+MS mit
+/// Rolle MSB nicht vorhanden" is decided from.
+#[must_use]
+pub fn validate_with_rollen(
+    profile: &Profile,
+    segments: &[Segment<'_>],
+    pid: Option<u32>,
+    rollen: &Parteirollen,
 ) -> Vec<ValidationIssue> {
     let structure = &profile.structure;
     let res = structure.resolve(segments);
@@ -74,7 +91,7 @@ pub fn validate(
     };
     mig_checks(structure, &res, segments, af, &mut issues);
     match selected {
-        Selected::Some(af) => ahb_checks(profile, af, &res, segments, &mut issues),
+        Selected::Some(af) => ahb_checks(profile, af, &res, segments, rollen, &mut issues),
         Selected::UnknownPid(p) => issues.push(
             ValidationIssue::new(
                 ValidationSeverity::Warning,
@@ -86,8 +103,8 @@ pub fn validate(
             .with_rule_id(AHB_UNKNOWN_PID)
             .with_context_entry("pid", p.to_string()),
         ),
-        Selected::None => match best_fit(profile, &res, segments) {
-            Some(af) => ahb_checks(profile, af, &res, segments, &mut issues),
+        Selected::None => match best_fit(profile, &res, segments, rollen) {
+            Some(af) => ahb_checks(profile, af, &res, segments, rollen, &mut issues),
             None => issues.push(
                 ValidationIssue::new(
                     ValidationSeverity::Warning,
@@ -189,6 +206,7 @@ fn best_fit<'p>(
     profile: &'p Profile,
     res: &Resolution,
     segments: &[Segment<'_>],
+    rollen: &Parteirollen,
 ) -> Option<&'p Anwendungsfall> {
     if !profile.mig.pid_exempt && profile.ahb.anwendungsfaelle.iter().any(|a| a.pid.is_some()) {
         return None;
@@ -199,7 +217,7 @@ fn best_fit<'p>(
         .iter()
         .map(|af| {
             let mut found = Vec::new();
-            ahb_checks(profile, af, res, segments, &mut found);
+            ahb_checks(profile, af, res, segments, rollen, &mut found);
             (
                 found
                     .iter()
@@ -350,6 +368,46 @@ fn mig_checks(
             continue;
         };
         element_checks(layout, seg, i, af, issues);
+    }
+}
+
+/// `v` with every segment pattern it names anchored in `layouts`.
+fn anchored(v: Voraussetzung, layouts: &[super::model::SegmentNode]) -> Voraussetzung {
+    match v {
+        Voraussetzung::Present {
+            scope,
+            patterns,
+            alternatives,
+            negate,
+        } => Voraussetzung::Present {
+            scope,
+            patterns: patterns.iter().map(|p| p.anchored(layouts)).collect(),
+            alternatives,
+            negate,
+        },
+        Voraussetzung::ElementShape {
+            scope,
+            pattern,
+            de,
+            shape,
+            negate,
+        } => Voraussetzung::ElementShape {
+            scope,
+            pattern: pattern.anchored(layouts),
+            de,
+            shape,
+            negate,
+        },
+        Voraussetzung::Count {
+            scope,
+            pattern,
+            more_than,
+        } => Voraussetzung::Count {
+            scope,
+            pattern: pattern.anchored(layouts),
+            more_than,
+        },
+        other => other,
     }
 }
 
@@ -653,6 +711,8 @@ struct Ctx<'a, 'd> {
     /// Paketvoraussetzung that leads back to its own Paket is refused instead
     /// of expanded forever.
     expanding: std::cell::RefCell<Vec<String>>,
+    /// The Marktrollen of sender and receiver, as far as the caller knows.
+    rollen: &'a Parteirollen,
 }
 
 impl<'a, 'd> Ctx<'a, 'd> {
@@ -661,6 +721,7 @@ impl<'a, 'd> Ctx<'a, 'd> {
         res: &'a Resolution,
         segments: &'a [Segment<'d>],
         ahb: &'a super::model::AhbProfile,
+        rollen: &'a Parteirollen,
     ) -> Self {
         // Allgemeine Festlegungen 6.1d Kap. 6.9.1: „Ein Paket ohne
         // Paketvoraussetzung ist immer zu nutzen, soweit das Segment, dem das
@@ -685,6 +746,7 @@ impl<'a, 'd> Ctx<'a, 'd> {
             conditions: &ahb.conditions,
             packages,
             expanding: std::cell::RefCell::new(Vec::new()),
+            rollen,
         }
     }
 
@@ -800,7 +862,34 @@ impl<'a, 'd> Ctx<'a, 'd> {
         })
     }
 
+    /// The value of a „für jede …" Wiederholbarkeit `id` inside `instance`:
+    /// whether the segment it is owed per occurs (its pattern anchored in the
+    /// MIG).
+    fn pro_segment_truth(&self, id: &str, instance: InstanceId) -> Truth {
+        let Some(text) = self.conditions.get(id) else {
+            return Truth::Neutral;
+        };
+        let Some(per) = super::conditions::ProSegment::parse(text) else {
+            return Truth::Neutral;
+        };
+        let range = match self.res.enclosing(self.structure, instance, "SG4") {
+            Some(i) => self.res.instances[i].first..self.res.instances[i].last,
+            None => 0..self.segments.len(),
+        };
+        let pattern = per.pattern.anchored(&self.structure.layouts);
+        let found = self.segments[range].iter().any(|s| pattern.matches(s));
+        // Present → the place is owed and `Muss` binds. Absent →
+        // `Unknown`, which permits without requiring: a
+        // Wiederholbarkeit says *how often*, never *whether it is
+        // allowed*, and the AHB's own 55002 Beispiel carries the
+        // `SEQ+ZF3` block with no `LOC+Z17` above it.
+        if found { Truth::True } else { Truth::Unknown }
+    }
+
     /// The value of Bedingung `id` for a row evaluated inside `instance`.
+    ///
+    /// Every segment pattern of a Voraussetzung is first anchored in the MIG
+    /// ([`super::conditions::SegmentPattern::anchored`]).
     fn truth(&self, id: &str, instance: InstanceId) -> Result<Truth, EvalError> {
         match ConditionKind::of(id) {
             ConditionKind::Voraussetzung => {}
@@ -812,25 +901,7 @@ impl<'a, 'd> Ctx<'a, 'd> {
             // times, so a `Muss [2284]` on a Vorgang with no `LOC+Z17` is
             // satisfied by absence. Treating it as unconditional rejected
             // every GPKE answer mako sends.
-            ConditionKind::Wiederholbarkeit => {
-                let Some(text) = self.conditions.get(id) else {
-                    return Ok(Truth::Neutral);
-                };
-                let Some(per) = super::conditions::ProSegment::parse(text) else {
-                    return Ok(Truth::Neutral);
-                };
-                let range = match self.res.enclosing(self.structure, instance, "SG4") {
-                    Some(i) => self.res.instances[i].first..self.res.instances[i].last,
-                    None => 0..self.segments.len(),
-                };
-                let found = self.segments[range].iter().any(|s| per.pattern.matches(s));
-                // Present → the place is owed and `Muss` binds. Absent →
-                // `Unknown`, which permits without requiring: a
-                // Wiederholbarkeit says *how often*, never *whether it is
-                // allowed*, and the AHB's own 55002 Beispiel carries the
-                // `SEQ+ZF3` block with no `LOC+Z17` above it.
-                return Ok(if found { Truth::True } else { Truth::Unknown });
-            }
+            ConditionKind::Wiederholbarkeit => return Ok(self.pro_segment_truth(id, instance)),
             _ => return Ok(Truth::Neutral),
         }
         let Some(text) = self.conditions.get(id) else {
@@ -842,7 +913,8 @@ impl<'a, 'd> Ctx<'a, 'd> {
         if !super::conditions::is_precondition(text) {
             return Ok(Truth::Neutral);
         }
-        let Some(v) = Voraussetzung::parse(text) else {
+        let Some(v) = Voraussetzung::parse(text).map(|v| anchored(v, &self.structure.layouts))
+        else {
             return Ok(Truth::Unknown);
         };
         let range = |scope: &Scope| -> std::ops::Range<usize> {
@@ -911,6 +983,14 @@ impl<'a, 'd> Ctx<'a, 'd> {
             } => {
                 Truth::from(self.carries_value(range(&scope), &tag, &de, &values, suffix) != negate)
             }
+            Voraussetzung::Rolle {
+                partei,
+                rollen,
+                negate,
+            } => match self.rollen.von(partei) {
+                Some(rolle) => Truth::from(rollen.contains(&rolle) != negate),
+                None => Truth::Unknown,
+            },
         })
     }
 
@@ -963,10 +1043,11 @@ fn ahb_checks(
     af: &Anwendungsfall,
     res: &Resolution,
     segments: &[Segment<'_>],
+    rollen: &Parteirollen,
     issues: &mut Vec<ValidationIssue>,
 ) {
     let structure = &profile.structure;
-    let ctx = Ctx::new(structure, res, segments, &profile.ahb);
+    let ctx = Ctx::new(structure, res, segments, &profile.ahb, rollen);
     let pid = column_key(profile, af);
     let tag_issue = |issue: ValidationIssue| issue.with_context_entry("pid", pid.clone());
 
@@ -1259,7 +1340,7 @@ fn element_rules(
                 .with_context_entry("pid", pid.to_owned())
                 .with_context_entry("nr", nr.to_owned())
                 // The MIG's name for the segment — the obligatory Ortsangabe of
-                // an AHB-Fehler (APERAK AHB 1.1 § 2.1.2.1).
+                // an AHB-Fehler (APERAK AHB 1.1 Kap. 2.1.2.1).
                 .with_context_entry("segment_name", layout.name.clone())
                 .with_context_entry("de", el.id.clone())
                 .with_segment(tag.clone())

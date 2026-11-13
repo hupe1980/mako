@@ -25,6 +25,14 @@ pub fn check(req: &AnlageUpsertRequest) -> Result<(), String> {
     if req.malo_id.trim().is_empty() {
         return Err("malo_id must not be empty".to_owned());
     }
+    if req.kwk_bimschg_genehmigung.is_some() && req.kwk_verbindliche_bestellung.is_some() {
+        return Err(
+            "kwk_bimschg_genehmigung and kwk_verbindliche_bestellung exclude each \
+             other: § 6 Abs. 1 Satz 1 Nr. 1 lit. c bb KWKG applies only where no \
+             BImSchG-Genehmigung is required"
+                .to_owned(),
+        );
+    }
 
     // A capacity of zero or less is not a small plant. It drives the §9 band, the
     // §52 Pflichtzahlung (10 €/kW — negative capacity would *credit* the
@@ -153,10 +161,115 @@ pub fn check(req: &AnlageUpsertRequest) -> Result<(), String> {
     Ok(())
 }
 
+/// What a plant's register row records towards § 6 Abs. 1 Satz 1 Nr. 1 lit. b
+/// and c KWKG.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KwkLitC {
+    /// A KWKAusV-Zuschlag (`ausschreibungs_zuschlag_id`) — lit. b.
+    pub ausschreibungszuschlag: bool,
+    /// lit. c aa — BImSchG-Genehmigung erteilt am.
+    pub bimschg_genehmigung: Option<time::Date>,
+    /// lit. c bb — verbindliche Bestellung am.
+    pub verbindliche_bestellung: Option<time::Date>,
+}
+
+/// Refuse a KWKG Zuschlag the plant has no § 6 Abs. 1 Satz 1 Nr. 1 KWKG claim
+/// to. Dauerbetrieb after 31.12.2026 opens it only through a KWKAusV-Zuschlag
+/// (lit. b) or a BImSchG-Genehmigung or verbindliche Bestellung by that day
+/// with Dauerbetrieb within four years of it (lit. c). Without the
+/// Dauerbetrieb date nothing can be decided, so that is a refusal too.
+///
+/// # Errors
+/// A message naming the plant and the provision.
+pub fn kwkg_anspruch(
+    tr_id: &str,
+    dauerbetrieb: Option<time::Date>,
+    register: KwkLitC,
+) -> Result<(), String> {
+    use eeg_billing::KwkAnspruchsgrundlage as G;
+    let Some(dauerbetrieb) = dauerbetrieb else {
+        return Err(format!(
+            "KWKG plant {tr_id}: no inbetriebnahme — § 6 Abs. 1 Satz 1 Nr. 1 KWKG decides \
+             the claim and § 7 the rate from the Dauerbetrieb date, so neither can be paid \
+             without it"
+        ));
+    };
+    let grundlage = if register.ausschreibungszuschlag {
+        Some(G::Ausschreibungszuschlag)
+    } else {
+        register
+            .bimschg_genehmigung
+            .map(G::BimschgGenehmigung)
+            .or(register
+                .verbindliche_bestellung
+                .map(G::VerbindlicheBestellung))
+    };
+    eeg_billing::zuschlag_anspruch(dauerbetrieb, grundlage)
+        .map_err(|e| format!("KWKG plant {tr_id}: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rust_decimal::dec;
+
+    /// § 6 Abs. 1 Satz 1 Nr. 1 KWKG: Dauerbetrieb after 31.12.2026 without a
+    /// lit. b or c basis is refused, by name, until a Novelle is promulgated;
+    /// a missing Dauerbetrieb date is refused rather than priced.
+    #[test]
+    fn a_kwkg_zuschlag_after_2026_is_refused_without_lit_b_or_c() {
+        use time::macros::date;
+        let keine = KwkLitC::default();
+        assert_eq!(
+            kwkg_anspruch("TR-K", Some(date!(2026 - 12 - 31)), keine),
+            Ok(())
+        );
+        let refused = kwkg_anspruch("TR-K", Some(date!(2027 - 01 - 01)), keine)
+            .expect_err("no § 6 Abs. 1 Satz 1 Nr. 1 claim");
+        assert!(refused.contains("TR-K"), "{refused}");
+        assert!(
+            refused.contains("§ 6 Abs. 1 Satz 1 Nr. 1 KWKG"),
+            "{refused}"
+        );
+        assert!(refused.contains("Novelle"), "{refused}");
+        let award = KwkLitC {
+            ausschreibungszuschlag: true,
+            ..KwkLitC::default()
+        };
+        assert_eq!(
+            kwkg_anspruch("TR-K", Some(date!(2027 - 01 - 01)), award),
+            Ok(())
+        );
+        let genehmigt = KwkLitC {
+            bimschg_genehmigung: Some(date!(2026 - 06 - 15)),
+            ..KwkLitC::default()
+        };
+        assert_eq!(
+            kwkg_anspruch("TR-K", Some(date!(2030 - 06 - 15)), genehmigt),
+            Ok(())
+        );
+        assert!(kwkg_anspruch("TR-K", Some(date!(2030 - 06 - 16)), genehmigt).is_err());
+        let bestellt = KwkLitC {
+            verbindliche_bestellung: Some(date!(2026 - 12 - 31)),
+            ..KwkLitC::default()
+        };
+        assert_eq!(
+            kwkg_anspruch("TR-K", Some(date!(2027 - 03 - 01)), bestellt),
+            Ok(())
+        );
+        let ohne = kwkg_anspruch("TR-K", None, award).expect_err("no Dauerbetrieb date");
+        assert!(ohne.contains("no inbetriebnahme"), "{ohne}");
+    }
+
+    /// lit. c aa and bb exclude each other: bb applies only „sofern nach dem
+    /// Bundes-Immissionsschutzgesetz keine Genehmigung … erforderlich ist".
+    #[test]
+    fn a_kwk_plant_states_one_lit_c_basis() {
+        let mut req = solar();
+        req.kwk_bimschg_genehmigung = Some("2026-06-15".to_owned());
+        req.kwk_verbindliche_bestellung = Some("2026-05-01".to_owned());
+        assert!(check(&req).is_err());
+    }
 
     fn solar() -> AnlageUpsertRequest {
         serde_json::from_value(serde_json::json!({

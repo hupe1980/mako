@@ -84,6 +84,8 @@ dev/.data/
 desk/node_modules/
 desk/dist/
 desk/*.tsbuildinfo
+# A failed screenshot comparison's renderings, for review
+desk/vergleich/abweichung/
 
 # Upstream-crate feedback notes — internal, never published
 /*_FEEDBACK.md

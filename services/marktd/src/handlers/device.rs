@@ -312,9 +312,10 @@ pub struct PutKonfigurationsprodukteRequest {
 ///
 /// Atomically replace the contracted iMS control products
 /// (`Vec<Konfigurationsprodukt>`) for an existing `SteuerbareRessource`
-/// (§14a Modul 3, BK6-24-174 §4.3).
+/// (Codeliste der Konfigurationen 1.4 Kap. 4.1–4.3, ordered under GPKE Teil 3
+/// Kap. 1.3).
 ///
-/// ## Validation (BK6-24-174 §4.3)
+/// ## Validation
 ///
 /// The body is a [`PutKonfigurationsprodukteRequest`]. Every element must:
 /// 1. Cross the BO4E gate as a `Konfigurationsprodukt`, with no key BO4E does
@@ -350,7 +351,8 @@ pub async fn put_konfigurationsprodukte(
         return ApiError::forbidden("access denied").into_response();
     }
 
-    // Business rule (BK6-24-174 §4.3): `produktcode` MUST be non-empty.
+    // `produktcode` MUST be non-empty: the Codeliste der Konfigurationen 1.4
+    // (Kap. 4.1–4.3, S. 17–18) identifies a Konfigurationsprodukt by its code.
     let mut validated: Vec<serde_json::Value> =
         Vec::with_capacity(body.konfigurationsprodukte.len());
     for (i, kp) in body.konfigurationsprodukte.iter().enumerate() {
@@ -363,12 +365,13 @@ pub async fn put_konfigurationsprodukte(
             )
             .into_response();
         }
-        // BK6-24-174 §4.3: produktcode is mandatory — every contracted product
+        // Codeliste der Konfigurationen 1.4 Kap. 4.1–4.3: a Konfigurationsprodukt is
+        // its Konfigurationsprodukt-Code, so every contracted product
         // must be uniquely identifiable by its code.
         match kp.produktcode.as_deref() {
             None | Some("") => {
                 return ApiError::unprocessable(format!(
-                    "element [{}]: 'produktcode' is mandatory per BK6-24-174 §4.3 \
+                    "element [{}]: 'produktcode' is mandatory (Codeliste der Konfigurationen 1.4 Kap. 4.1–4.3) \
                              — every Konfigurationsprodukt must carry a non-empty produktcode",
                     i
                 ))

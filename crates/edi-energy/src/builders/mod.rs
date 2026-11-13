@@ -252,10 +252,19 @@ macro_rules! emit_comp {
     feature = "utilmd",
     feature = "utilts",
 ))]
-pub(crate) fn agency_for(explicit: Option<crate::AgencyCode>, mp_id: &str) -> &'static str {
+pub(crate) fn agency_for(
+    explicit: Option<crate::AgencyCode>,
+    mp_id: &str,
+) -> Result<&'static str, crate::Error> {
     explicit
-        .unwrap_or_else(|| crate::AgencyCode::for_mp_id(mp_id))
-        .as_str()
+        .or_else(|| crate::AgencyCode::for_mp_id(mp_id))
+        .map(crate::AgencyCode::as_str)
+        .ok_or_else(|| {
+            crate::Error::Serialize(format!(
+                "{mp_id:?} is no MP-ID (BDEW-/DVGW-Codenummer or GLN, 13 digits): the NAD \
+                 DE 3055 code list (9, 293, 332) has no agency for it"
+            ))
+        })
 }
 
 // ── Sub-modules ───────────────────────────────────────────────────────────────
@@ -301,7 +310,7 @@ pub use insrpt::InsrptBuilder;
 #[cfg(feature = "orders")]
 mod orders;
 #[cfg(feature = "orders")]
-pub use orders::{OrdersBuilder, OrdersPosition};
+pub use orders::{OrdersBuilder, OrdersParty, OrdersPosition};
 
 #[cfg(feature = "partin")]
 mod partin;

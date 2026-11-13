@@ -79,6 +79,24 @@ describe("the readiness checklist", () => {
     expect(within(identitaeten).getByText(/blockiert:/)).toBeTruthy();
   });
 
+  it("leads from an identity finding to the interview question that fixes it", async () => {
+    makod(LISTE);
+    const gesprungen: string[] = [];
+    const hoeren = (e: Event) => gesprungen.push((e as CustomEvent<string>).detail);
+    window.addEventListener("mako-desk:frage", hoeren);
+    show();
+    const punkte = await screen.findByRole("list", { name: "Punkte" });
+    const identitaeten = within(punkte).getByRole("list", { name: "Befunde zu Identitäten" });
+    fireEvent.click(
+      within(identitaeten).getAllByRole("link", { name: /Im Vorschlag beheben/ })[0] as HTMLElement,
+    );
+    window.removeEventListener("mako-desk:frage", hoeren);
+    expect(gesprungen).toEqual(["rollen"]);
+    // A finding no interview question answers offers no such link.
+    const erreichbarkeit = within(punkte).getByRole("list", { name: "Befunde zu Erreichbarkeit" });
+    expect(within(erreichbarkeit).queryByRole("link", { name: /Im Vorschlag beheben/ })).toBeNull();
+  });
+
   it("shows an unreachable service as unknown, not as failing", async () => {
     makod(LISTE);
     show();

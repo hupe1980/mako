@@ -4073,7 +4073,7 @@ async fn the_annual_statement_follows_the_corrections() {
 
 /// A corrected-away KWKG month has to give the Vollbenutzungsstunden back.
 ///
-/// The cumulative `kwk_strom_kwh_gesamt` is what §8 KWKG 2023 measures the 30 000
+/// The cumulative `kwk_strom_kwh_gesamt` is what §8 KWKG measures the 30 000
 /// Vollbenutzungsstunden against, so kWh a correction removed must leave it again.
 /// The accrual has to be guarded on the *delta*: guarding on the period's new
 /// contribution drops the negative delta of a month corrected to zero, leaving the

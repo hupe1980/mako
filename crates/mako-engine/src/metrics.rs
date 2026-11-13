@@ -211,8 +211,8 @@ pub struct EngineMetrics {
     ///
     /// The outbox worker discharges the window as soon as its message is
     /// delivered, so a window that survives to its due time was never answered.
-    /// A non-zero value is a regulatory violation under APERAK AHB 1.1 §2.4.1
-    /// (Strom) / §2.3.1 (Gas) or CONTRL AHB 1.0 §2.3.1; `label` says which.
+    /// A non-zero value is a regulatory violation under APERAK AHB 1.1 Kap. 2.4.1
+    /// (Strom) / Kap. 2.3.1 (Gas) or CONTRL AHB 1.0 Kap. 2.3.1; `label` says which.
     /// Alert on `makod_delivery_window_missed_total > 0`.
     ///
     /// The discharge is what gives this counter meaning. Firing *after* the due
@@ -500,8 +500,8 @@ impl MetricsSnapshot {
             &mut out,
             "makod_delivery_window_missed_total",
             "APERAK and CONTRL delivery windows that came due undelivered — a regulatory \
-             violation under APERAK AHB 1.1 §2.4.1 (Strom) / §2.3.1 (Gas) or CONTRL AHB 1.0 \
-             §2.3.1. Alert when this counter is non-zero.",
+             violation under APERAK AHB 1.1 Kap. 2.4.1 (Strom) / Kap. 2.3.1 (Gas) or CONTRL AHB 1.0 \
+             Kap. 2.3.1. Alert when this counter is non-zero.",
             &["label"],
             &self.delivery_window_missed,
         );

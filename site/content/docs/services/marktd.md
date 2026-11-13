@@ -903,7 +903,7 @@ at-least-once delivery.
 |---|---|---|---|---|
 | Announce | `process.initiated` | 55001 / 55077 / 44001 | `announce_lf_next` | Adds an `Angekuendigt` assignment (100 % or the Tranche share) with its Zuordnungsbeginn; `lieferstatus` unchanged |
 | Confirm | `process.completed` | 55002 / 55078 / 44002 | `confirm_supply` | Promotes the named supplier to `Aktiv`, displacing only the running assignment on the same Tranche; `Beliefert` |
-| End | `process.completed` | 55005 / 44005 | `end_supply` | Removes the named running assignment (all when none named); `Unbeliefert` only when none is left. An uncovered interval emits `de.markt.versorgung.gap-detected` |
+| End | `process.completed` | 55005 / 44005, 55008, 55007 with `ohne_antwort` | `end_supply` | Removes the named running assignment (all when none named); `Unbeliefert` only when none is left. An uncovered interval emits `de.markt.versorgung.gap-detected` |
 | EoG | `process.completed` | 55013 / 44013 | `begin_eog_supply` | `Ersatzversorgung`/`Grundversorgung` (per `eog_art`), `eog_seit` = Zuordnungsbeginn; Bilanzkreis from the payload, else the NB's `default_bilanzkreis`. Emits `de.markt.versorgung.eog-begonnen` |
 | Clear | `process.completed` | 55003 / 55080 / 44003 | `clear_lf_next` | Drops the refused supplier's announcement; also the write behind 55038 / 44038 |
 | Stammdatenänderung | `process.completed` | GPKE Teil 4 / GeLi Gas | `patch_stammdaten` | See below |
@@ -930,7 +930,7 @@ stateDiagram-v2
     [*] --> Unbeliefert : MaLo registered
     Unbeliefert --> Beliefert   : 55002/55078/44002 confirm_supply
     Beliefert --> Beliefert     : 55005/44005 on one Tranche
-    Beliefert --> Unbeliefert   : 55005/44005, last assignment gone
+    Beliefert --> Unbeliefert   : 55005/44005/55008/55007 ohne Antwort, last assignment gone
     Unbeliefert --> Ersatzversorgung : 55013/44013 (§38 EnWG)
     Unbeliefert --> Grundversorgung  : 55013/44013 (§36 EnWG)
     Ersatzversorgung --> Grundversorgung : 3 Monate, Haushaltskunde (by law)
@@ -962,7 +962,7 @@ shares. A constraint trigger holds the `Aktiv` shares of one MaLo to ≤ 100 % (
 remainder).
 
 `Angekuendigt` rows are unbounded — `E_0622` Prüfschritt 70 rules on competing
-announcements. A Tranche is always > 0 % and < 100 % (GPKE Teil 1 § 3.2.1.5), so
+announcements. A Tranche is always > 0 % and < 100 % (GPKE Teil 1 Kap. 3.2.1.5), so
 a `tranche_id` at 100 % is refused. Each refusal is a `422` mapped from the
 SQLSTATE.
 
@@ -1203,7 +1203,7 @@ payload; an invalid value is `400`.
 
 ### NeLo
 
-A Netzlokation is identified by a 16-character EIC (NAD `ZEW`) or a 13-digit
+A Netzlokation is identified by a 16-character EIC or a 13-digit
 BDEW-Codenummer and owned by an NB. `steuerkanal`, `eigenschaft_msb_lokation`
 and `grundzustaendiger_msb_codenr` are typed columns. Writes need the `NB` role.
 

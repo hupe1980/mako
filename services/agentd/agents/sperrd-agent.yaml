@@ -47,7 +47,7 @@ spec:
       3. `iftsta_outstanding > 0` with `iftsta_stuck = 0` is a dispatch in
          flight — the retry worker is on it. Not a finding on its own.
       4. `frist_ueberschritten > 0` is the **regulatory** miss: those orders are
-         past the 6 Werktage of GPKE Teil 2 § 3.5.1.2 Nr. 1. Classify BREACH, and
+         past the 6 Werktage of GPKE Teil 2 Kap. 3.5.1.2 Nr. 1. Classify BREACH, and
          separately from `overdue_pending`, which is only past the date the
          Lieferant asked for.
       5. `iftsta_ueberfaellig > 0` with `iftsta_stuck = 0` is the 1-Werktag IFTSTA
@@ -75,14 +75,14 @@ spec:
       | Clock | Counter | Source |
       |---|---|---|
       | The Lieferant's own date — DTM+203 Ausführungsdatum, or DTM+469 frühestes Startdatum | `overdue_pending`, and `soll_am` / `ist_fixtermin` on the row | the ORDERS itself |
-      | Execution: **6 Werktage** after the earliest possible Sperrtermin | `frist_ueberschritten` | GPKE Teil 2 § 3.5.1.2 Nr. 1 — the regulatory one |
-      | IFTSTA back to the Lieferant: **1 Werktag** after the order is closed | `iftsta_ueberfaellig` (of the `iftsta_outstanding`) | GPKE Teil 2 § 3.5 |
+      | Execution: **6 Werktage** after the earliest possible Sperrtermin | `frist_ueberschritten` | GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 — the regulatory one |
+      | IFTSTA back to the Lieferant: **1 Werktag** after the order is closed | `iftsta_ueberfaellig` (of the `iftsta_outstanding`) | GPKE Teil 2 Kap. 3.5 |
 
       Two things this list fixes, each of which misclassifies real orders when
       it is got wrong:
 
       - There *is* a regulatory execution window, and it is the 6 Werktage of
-        GPKE Teil 2 § 3.5.1.2 Nr. 1. Reading GPKE as fixing no window leaves
+        GPKE Teil 2 Kap. 3.5.1.2 Nr. 1. Reading GPKE as fixing no window leaves
         `frist_ueberschritten` — the counter processd computes for precisely that
         window — permanently unread, so a breach is never reported.
       - The window is **not** two Werktage from BK6-22-024. That figure appears
@@ -157,7 +157,7 @@ spec:
         audience: [grid-operations]
         priority: urgent
         summary: >-
-          AI-generated. A Sperrauftrag queue is out of compliance on the Netzbetreiber's own obligations — an order past the 6 Werktage of GPKE Teil 2 § 3.5.1.2 Nr. 1, or an IFTSTA 21039 that never reached the Lieferant so their gpke-sperrung-lf process cannot close.
+          AI-generated. A Sperrauftrag queue is out of compliance on the Netzbetreiber's own obligations — an order past the 6 Werktage of GPKE Teil 2 Kap. 3.5.1.2 Nr. 1, or an IFTSTA 21039 that never reached the Lieferant so their gpke-sperrung-lf process cannot close.
         when:
           - path: /sperr_compliance
             equals: "BREACH"
@@ -202,7 +202,7 @@ spec:
         frist_ueberschritten_count:
           type: number
           description: >-
-            Orders past the **6 Werktage** of GPKE Teil 2 § 3.5.1.2 Nr. 1 — the
+            Orders past the **6 Werktage** of GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 — the
             regulatory execution window. Separate from `overdue_count` because
             only this one is a breach of a published rule, and reporting them as
             one number makes a missed Frist indistinguishable from a late job.

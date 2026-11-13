@@ -210,7 +210,7 @@ impl<S, R> ReqoteBuilder<S, R> {
     /// The `+00` zone DE 2379 format `303` requires is appended here, so
     /// callers pass the minute only.
     ///
-    /// **Muss** on the ESA Werteanfrage (REQOTE AHB 1.2 §4.3): `WiM` Teil 2
+    /// **Muss** on the ESA Werteanfrage (REQOTE AHB 1.2 Kap. 4.3): `WiM` Teil 2
     /// UC 4.1.2 Nr. 1 has the ESA state its Wunschtermin for the first
     /// delivery, and this segment is the only place it travels.
     pub fn leistungsbeginn(mut self, ccyymmddhhmm: impl Into<String>) -> Self {
@@ -230,7 +230,7 @@ impl<S, R> ReqoteBuilder<S, R> {
     /// `FTX+Z23+++<subject>` inside the SG27 product group.
     ///
     /// **Muss** whenever a „Werte nach Typ 2 aus SMGW“ product is ordered
-    /// (REQOTE AHB 1.2 §4.3, condition `[512]`); the certificate bodies are
+    /// (REQOTE AHB 1.2 Kap. 4.3, condition `[512]`); the certificate bodies are
     /// X.509 per BSI TR-03109-4.
     pub fn smgw_delivery(
         mut self,
@@ -279,7 +279,7 @@ impl<S, R> ReqoteBuilder<S, R> {
 
     /// Add an `FTX+<qualifier>+++<text>` free-text segment.
     ///
-    /// REQOTE AHB §4.3 uses `FTX+ACB` ("Zusätzliche Informationen") on the ESA
+    /// REQOTE AHB Kap. 4.3 uses `FTX+ACB` ("Zusätzliche Informationen") on the ESA
     /// Werteanfrage.
     pub fn free_text(mut self, qualifier: impl Into<String>, text: impl Into<String>) -> Self {
         self.inner.free_text = Some((qualifier.into(), text.into()));
@@ -289,7 +289,7 @@ impl<S, R> ReqoteBuilder<S, R> {
     /// Add an SG27 product line — `LIN+<n>+<qualifier>` followed by
     /// `PIA+5+<produkt_code>:Z11`.
     ///
-    /// REQOTE AHB §4.3 requires one SG27 per requested Messprodukt on the ESA
+    /// REQOTE AHB Kap. 4.3 requires one SG27 per requested Messprodukt on the ESA
     /// Werteanfrage (PID 35003): `Z67` for "Erforderliches Messprodukt für Werte
     /// nach Typ 2 aus Backend", `Z68` for the SMGW Konfigurationserlaubnis.
     pub fn product(
@@ -317,7 +317,7 @@ impl<S, R> ReqoteBuilder<S, R> {
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         // `DTM+137` is DE 2379 format `303` on every REQOTE Anwendungsfall the
-        // AHB defines (1.1 §4.2 for PID 35002, §4.3 for 35003), with condition
+        // AHB defines (1.1 Kap. 4.2 for PID 35002, Kap. 4.3 for 35003), with condition
         // `[931]` fixing the zone to `+00`.
         let dtm_val = self
             .inner
@@ -381,7 +381,7 @@ impl<S, R> ReqoteBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
         // `SG14 CTA`/`COM` — the Ansprechpartner of the sender, inside the
@@ -395,7 +395,7 @@ impl<S, R> ReqoteBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
         // ── SG11: Liefer-/Bezugsort + Meldepunkt ─────────────────────────────
@@ -417,7 +417,7 @@ impl<S, R> ReqoteBuilder<S, R> {
         }
         // `LIN+<1082 Positionsnummer>+<1229 Handlung, Code>` — the MIG's own
         // examples are `LIN+1+Z64'` / `LIN+1+Z65'`. The qualifier says which kind
-        // of product line follows (REQOTE AHB §4.3: `Z67` "Erforderliches
+        // of product line follows (REQOTE AHB Kap. 4.3: `Z67` "Erforderliches
         // Messprodukt für Werte nach Typ 2 aus Backend", `Z68` the SMGW
         // Konfigurationserlaubnis), and `PIA+5` names the product itself.
         //

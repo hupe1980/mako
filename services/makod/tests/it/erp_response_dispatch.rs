@@ -55,7 +55,10 @@ async fn make_state(marktrollen: &[&str]) -> makod::commands_api::CommandsApiSta
         snapshot_interval: 100,
         cedar,
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+        malo_cache: Arc::new(SlateDbMaloCache::new(
+            store.clone(),
+            TenantId::from_party_id("9900357000004"),
+        )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
         marktd_client: None, // Konfigurationsprodukt guard disabled in unit tests

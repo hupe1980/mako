@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {#- ⚠ Guarded numbers. `services/makod/tests/it/published_counts.rs` reads this file
-    and requires the phrases "494 Prüfidentifikatoren" and "76 workflows" to
+    and requires the phrases "498 Prüfidentifikatoren" and "77 workflows" to
     survive tag-stripping, so a number must stay immediately before its unit with
     only markup between them. `e2e_ahb_rule_coverage_guard.rs` reads the AHB-rule
     count out of the last <strong> element preceding the words it greps for in
@@ -43,16 +43,16 @@
 <section class="stats" aria-label="Scope">
   <div class="stats-inner">
     <div><strong>482 / 482</strong><span>published Prüfidentifikatoren imported</span></div>
-    <div><strong>494</strong><span>Prüfidentifikatoren routed</span></div>
-    <div><strong>76</strong><span>MaKo workflows</span></div>
+    <div><strong>498</strong><span>Prüfidentifikatoren routed</span></div>
+    <div><strong>77</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>14</strong><span>services</span></div>
     <div><strong>4</strong><span>deployable roles</span></div>
   </div>
   <p class="stats-note wrap">Three views of one catalogue. Every one of the 482
-    Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported; 494 are
+    Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported; 498 are
     <em>routed</em> to a workflow — including the DVGW gas codes BDEW does not publish — and
-    <strong>459</strong> additionally carry validated AHB segment rules. The 35 that do not
+    <strong>463</strong> additionally carry validated AHB segment rules. The 35 that do not
     are exactly that DVGW block: ALOCAT, NOMINT/NOMRES and SSQNOT ride <code>dvgw-edi</code>,
     for which no BDEW AHB exists to import rules from. A release that would shrink any of the
     three fails the build.</p>
@@ -256,8 +256,8 @@ graph TB
           portal, and an
           <!-- check-tool-grants pins the two phrases below verbatim; keep each on one
                line, and update the counts only via the guard's own numbers. -->
-          agent plane over the platform's 179 MCP tools.
-          Its 29 declarative specialists are advisory by
+          agent plane over the platform's 181 MCP tools.
+          Its 30 declarative specialists are advisory by
           construction: no active manifest grants a mutating tool, every model and tool call
           is a journaled effect, and a triage worklist carries what a person has to see.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/agentd.md') | safe }}">processd · portald · agentd →</a>

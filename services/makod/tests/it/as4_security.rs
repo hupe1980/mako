@@ -10,7 +10,7 @@
 //! | Test | Contract |
 //! |---|---|
 //! | `slatedb_dedup_conforms` | `SlateDbDedup` is an `asx::DedupStore`: atomic claim, token-fenced settlement |
-//! | `an_outbound_message_is_delivered_with_its_receipt_evidence` | send: Service MP, `{outbox id}@{domain}`, §2.12 file name, receipt evidence kept |
+//! | `an_outbound_message_is_delivered_with_its_receipt_evidence` | send: Service MP, `{outbox id}@{domain}`, Kap. 2.12 file name, receipt evidence kept |
 //! | `a_retry_resends_the_first_attempts_message_id_and_timestamp` | the retry's `eb:MessageId`, `eb:Timestamp` and digests are the first attempt's |
 //! | `a_partner_refusal_is_retried_and_a_receipt_failure_is_not_acknowledged` | delivery errors stay in the outbox |
 //! | `an_interchange_from_a_configured_partner_is_routed` | inbound: verified, dispatched, receipted |
@@ -20,6 +20,11 @@
 //! | `an_unconfigured_sender_is_refused_under_nur_konfigurierte` | `[policy.as4] unbekannte_absender` default |
 //! | `an_unconfigured_sender_is_served_under_bdew_ou_zulassen` | §2.3.2 option |
 //! | `a_tampered_request_is_refused_ebms_0101` | signature integrity |
+//! | `an_interchange_to_another_own_mp_id_passes_the_recipient_guard` | UNB DE0010: every own MP-ID of a combined-role instance |
+//! | `an_unparseable_interchange_is_dead_lettered` | no `UNB`, no guard skipped silently: the file is recorded and refused |
+//! | `an_interchange_under_another_sender_is_refused` | UNB DE0004 is the authenticated `eb:From` |
+//! | `a_named_de0004_ausnahme_admits_the_represented_sender` | `[[as4.partner]] de0004_ausnahme` |
+//! | `a_rotated_identity_serves_without_a_restart` | new key material mid-run; the replaced encryption key still decrypts (AS4 2.6 Kap. 5.3) |
 
 use std::sync::{Arc, Mutex};
 
@@ -37,6 +42,8 @@ use makod::config::UnbekannteAbsender;
 
 /// makod's own MP-ID (NB).
 const OWN: &str = "9900001000001";
+/// makod's second own MP-ID (MSB) — a combined-role instance.
+const OWN_MSB: &str = "9900001000004";
 /// The configured partner (LF).
 const PARTNER: &str = "9900001000002";
 /// A market participant with an SM-PKI certificate and no `[[as4.partner]]`.
@@ -75,6 +82,30 @@ impl Pki {
 
     /// makod's clients, built the way the preflight builds them.
     fn makod(&self, loopback: &Loopback, policy: UnbekannteAbsender) -> As4Clients {
+        self.makod_with(loopback, policy, std::collections::BTreeMap::new())
+    }
+
+    /// makod's clients with `[[as4.partner]] de0004_ausnahme` entries.
+    fn makod_with(
+        &self,
+        loopback: &Loopback,
+        policy: UnbekannteAbsender,
+        de0004_ausnahmen: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    ) -> As4Clients {
+        As4Clients::build_with_http(
+            self.setup(&self.own, policy, de0004_ausnahmen),
+            loopback.clone(),
+        )
+        .expect("makod's clients build")
+    }
+
+    /// makod's AS4 configuration with `own` as its identity.
+    fn setup(
+        &self,
+        own: &TestParty,
+        policy: UnbekannteAbsender,
+        de0004_ausnahmen: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    ) -> As4Setup {
         let mut partners = PartnerDirectory::default();
         partners
             .insert(PartnerEntry {
@@ -86,30 +117,42 @@ impl Pki {
                 quirks: Vec::new(),
             })
             .unwrap();
-        let setup = As4Setup {
+        As4Setup {
             domain: MessageIdDomain::parse("as4.makod.test").unwrap(),
             trust_anchor: self.ca.anchor(),
             crl_signer: self.crl_signer.clone(),
             identities: vec![LocalIdentity {
                 mp_id: OWN.to_owned(),
                 agency: "293".to_owned(),
-                signer: self.own.signing.key_pair(),
-                decrypter: self.own.encryption.key_pair(),
-                tls: self.own.tls.key_pair(),
+                signer: own.signing.key_pair(),
+                decrypter: own.encryption.key_pair(),
+                retired_decrypters: Vec::new(),
+                tls: own.tls.key_pair(),
             }],
             partners,
             unbekannte_absender: policy,
-        };
-        As4Clients::build_with_http(setup, loopback.clone()).expect("makod's clients build")
+            de0004_ausnahmen,
+        }
     }
 
     /// A counterparty's own `asx-rs` client, with makod as its partner.
     fn counterparty(&self, party: &TestParty, loopback: &Loopback) -> asx::as4::As4 {
+        self.counterparty_of(party, &self.own, loopback)
+    }
+
+    /// A counterparty's client that knows makod as `makod` — the certificates
+    /// it encrypts to and pins.
+    fn counterparty_of(
+        &self,
+        party: &TestParty,
+        makod: &TestParty,
+        loopback: &Loopback,
+    ) -> asx::as4::As4 {
         asx::as4::As4::builder(asx::Profile::bdew())
             .local(party.local())
             .trust_anchor(self.ca.anchor())
             .crl_signer(self.crl_signer.clone())
-            .partner(self.own.partner(OWN_URL))
+            .partner(makod.partner(OWN_URL))
             .http_client(loopback.clone())
             .build()
             .expect("the counterparty builds")
@@ -193,13 +236,22 @@ impl DeadLetterSink for RecordingSink {
 fn registry() -> Arc<makod::party_registry::MpIdRegistry> {
     use makod::config::PartyConfig;
     Arc::new(
-        makod::party_registry::MpIdRegistry::from_config(&[PartyConfig {
-            mp_id: OWN.to_owned(),
-            roles: vec!["NB".to_owned()],
-            primary: true,
-            agency: None,
-            as4: None,
-        }])
+        makod::party_registry::MpIdRegistry::from_config(&[
+            PartyConfig {
+                mp_id: OWN.to_owned(),
+                roles: vec!["NB".to_owned()],
+                primary: true,
+                agency: None,
+                as4: None,
+            },
+            PartyConfig {
+                mp_id: OWN_MSB.to_owned(),
+                roles: vec!["MSB".to_owned()],
+                primary: false,
+                agency: None,
+                as4: None,
+            },
+        ])
         .unwrap(),
     )
 }
@@ -219,6 +271,11 @@ async fn mount_inbox(
     policy: UnbekannteAbsender,
     dispatch: bool,
 ) -> Inbox {
+    mount_inbox_with(pki.makod(loopback, policy), loopback, dispatch).await
+}
+
+/// [`mount_inbox`] with makod's clients built by the caller.
+async fn mount_inbox_with(clients: As4Clients, loopback: &Loopback, dispatch: bool) -> Inbox {
     let store = SlateDbStore::open_in_memory().await.unwrap();
     let registry = registry();
     let tenant = mako_engine::ids::TenantId::from_party_id(OWN);
@@ -256,7 +313,6 @@ async fn mount_inbox(
         dispatcher,
         contrl_ack: None,
     });
-    let clients = pki.makod(loopback, policy);
     let handler = Arc::new(
         BdewAs4IngestHandler::new(state, OWN, clients.clone())
             .with_evidence(As4Evidence::new(store.clone())),
@@ -267,7 +323,7 @@ async fn mount_inbox(
     };
     loopback.mount(
         OWN_URL,
-        as4_ingest::inbound(clients.client(OWN).unwrap(), dedup, handler),
+        as4_ingest::inbound(&clients.client(OWN).unwrap(), dedup, handler),
     );
     Inbox {
         log,
@@ -410,7 +466,7 @@ async fn sender(pki: &Pki, loopback: &Loopback) -> (makod::as4_sender::BdewAs4Se
     let store = SlateDbStore::open_in_memory().await.unwrap();
     let evidence = As4Evidence::new(store.clone());
     let malo_sender = makod::malo_ident_sender::MaloIdentSender::new(
-        makod::malo_cache::SlateDbMaloCache::new(store.clone()),
+        makod::malo_cache::SlateDbMaloCache::new(store.clone(), mako_engine::ids::TenantId::new()),
         reqwest::Client::new(),
         std::collections::HashMap::new(),
         None,
@@ -473,7 +529,7 @@ async fn an_outbound_message_is_delivered_with_its_receipt_evidence() {
     let expected = format!("filename=\"APERAK__{OWN}_{PARTNER}_");
     assert!(
         wire.contains(&expected),
-        "Allgemeine Festlegungen V6.1d §2.12 file name on the payload part"
+        "Allgemeine Festlegungen V6.1d Kap. 2.12 file name on the payload part"
     );
 
     let record = evidence
@@ -617,7 +673,7 @@ async fn an_interchange_from_a_configured_partner_is_routed() {
 /// A refused message is durably dead-lettered before its claim is
 /// settled, and the refusal is permanent (`EBMS:0004`) — the sender does not
 /// retransmit a message that is recorded and could never pass. An interchange
-/// addressed to a foreign MP-ID (Allgemeine Festlegungen V6.1d §2.13) is one.
+/// addressed to a foreign MP-ID (Allgemeine Festlegungen V6.1d Kap. 2.13) is one.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refusal_is_dead_lettered_before_the_claim_is_released_for_good() {
     let pki = Pki::new();
@@ -791,7 +847,7 @@ async fn a_tampered_request_is_refused_ebms_0101() {
             contrl_ack: None,
         });
         as4_ingest::inbound(
-            clients.client(OWN).unwrap(),
+            &clients.client(OWN).unwrap(),
             RecordingDedup {
                 inner: SlateDbDedup::new(inbox.store.as_inbox_store()),
                 log: Arc::clone(&inbox.log.0),
@@ -813,5 +869,237 @@ async fn a_tampered_request_is_refused_ebms_0101() {
     assert!(
         inbox.log.take().is_empty(),
         "no claim for an unverified message"
+    );
+}
+
+// ── The interchange envelope ──────────────────────────────────────────────────
+
+/// A combined-role instance holds several MP-IDs, and an interchange addressed
+/// to any of them passes the recipient guard (`UNB` DE0010) on any of its
+/// inboxes — refused only for an MP-ID it does not hold.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_interchange_to_another_own_mp_id_passes_the_recipient_guard() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, false).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
+
+    partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(PARTNER, OWN_MSB),
+            "e1",
+        ))
+        .await
+        .expect("addressed to an own MP-ID: receipted");
+    // Unroutable here (no workflow is registered), so dead-lettered as such —
+    // not as misaddressed.
+    assert_eq!(inbox.log.take(), ["claim", "dead_letter", "accept"]);
+    let reasons = inbox.sink.reasons.lock().unwrap();
+    assert!(
+        reasons.iter().all(|r| !r.contains("foreign MP-ID")),
+        "{reasons:?}"
+    );
+}
+
+/// A payload whose `UNB` does not parse skips every envelope guard — so it
+/// must still end in a dead letter and a permanent refusal, never a receipt
+/// with nothing recorded.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unparseable_interchange_is_dead_lettered() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, false).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
+
+    let err = partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            b"UNA:+.? 'UNB+broken'".to_vec(),
+            "e2",
+        ))
+        .await
+        .expect_err("refused");
+    assert_eq!(err.ebms_code(), Some("EBMS:0004"));
+    assert_eq!(inbox.log.take(), ["claim", "dead_letter", "abandon"]);
+}
+
+/// The authenticated partner presents an interchange whose `UNB` DE0004 names
+/// another market participant: refused and dead-lettered (Allgemeine
+/// Festlegungen 6.1d Kap. 2.13).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_interchange_under_another_sender_is_refused() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, false).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
+
+    let err = partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(STRANGER, OWN),
+            "e3",
+        ))
+        .await
+        .expect_err("refused");
+    assert_eq!(err.ebms_code(), Some("EBMS:0004"));
+    assert!(!err.is_retryable());
+    assert_eq!(inbox.log.take(), ["claim", "dead_letter", "abandon"]);
+    assert!(
+        inbox.sink.reasons.lock().unwrap()[0].contains("UNB DE0004"),
+        "the dead letter names the refusal"
+    );
+}
+
+/// `[[as4.partner]] de0004_ausnahme` naming the represented MP-ID admits the
+/// same interchange — and only for the partner it is configured on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_named_de0004_ausnahme_admits_the_represented_sender() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let clients = pki.makod_with(
+        &loopback,
+        UnbekannteAbsender::NurKonfigurierte,
+        [(PARTNER.to_owned(), [STRANGER.to_owned()].into())].into(),
+    );
+    assert!(clients.binds_interchange_sender(PARTNER, STRANGER));
+    assert!(!clients.binds_interchange_sender(STRANGER, PARTNER));
+    let inbox = mount_inbox_with(clients, &loopback, false).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
+
+    partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(STRANGER, OWN),
+            "e4",
+        ))
+        .await
+        .expect("admitted by the named escape");
+    assert_eq!(inbox.log.take(), ["claim", "dead_letter", "accept"]);
+    let reasons = inbox.sink.reasons.lock().unwrap();
+    assert!(
+        reasons.iter().all(|r| !r.contains("UNB DE0004")),
+        "{reasons:?}"
+    );
+}
+
+// ── Rotation ──────────────────────────────────────────────────────────────────
+
+/// The request a partner sends to `party`'s inbox: captured by mounting an
+/// inbox of `party` alone and sending once.
+async fn captured_request(
+    pki: &Pki,
+    party: &TestParty,
+    id: &str,
+) -> axum::http::Request<http_body_util::Full<axum::body::Bytes>> {
+    let loopback = Loopback::new();
+    let clients = As4Clients::build_with_http(
+        pki.setup(
+            party,
+            UnbekannteAbsender::NurKonfigurierte,
+            Default::default(),
+        ),
+        loopback.clone(),
+    )
+    .unwrap();
+    let _inbox = mount_inbox_with(clients, &loopback, false).await;
+    pki.counterparty_of(&pki.partner, party, &loopback)
+        .send(push(
+            &party.partner(OWN_URL),
+            utilmd_55001(PARTNER, OWN),
+            id,
+        ))
+        .await
+        .expect("the capturing inbox receipts it");
+    let original = loopback.last_request().expect("the request");
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri(OWN_URL)
+        .body(http_body_util::Full::new(axum::body::Bytes::from(
+            original.body().to_vec(),
+        )))
+        .unwrap();
+    *request.headers_mut() = original.headers().clone();
+    request
+}
+
+/// New key material is put into use while makod runs: after
+/// `As4Clients::rotate`, the same inbox serves messages encrypted to the new
+/// certificate, and — inside the overlap of Regelungen zum Übertragungsweg für
+/// AS4 2.6 Kap. 5.3 — still those encrypted to the replaced one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rotated_identity_serves_without_a_restart() {
+    use tower::Service as _;
+    let pki = Pki::new();
+    let neu = pki.ca.bdew_party(OWN);
+    let loopback = Loopback::new();
+    let clients = pki.makod(&loopback, UnbekannteAbsender::NurKonfigurierte);
+    let store = SlateDbStore::open_in_memory().await.unwrap();
+    let state = Arc::new(makod::edifact_api::EdifactApiState {
+        platform: Arc::new(edi_energy::Platform::with_all_profiles()),
+        pid_router: mako_engine::pid_router::PidRouter::new(),
+        mp_id_registry: registry(),
+        cedar: Arc::new(makod::cedar_authz::CedarAuthorizer::unauthenticated().unwrap()),
+        max_body_bytes: 64 << 20,
+        partner_store: None,
+        tenant_id: mako_engine::ids::TenantId::from_party_id(OWN),
+        dl_sink: Arc::new(RecordingSink {
+            log: Log::default(),
+            fail: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            reasons: Mutex::new(Vec::new()),
+        }),
+        dispatcher: None,
+        contrl_ack: None,
+    });
+    let mut inbox = as4_ingest::RotatingInbound::new(
+        clients.clone(),
+        OWN,
+        SlateDbDedup::new(store.as_inbox_store()),
+        Arc::new(BdewAs4IngestHandler::new(state, OWN, clients.clone())),
+    );
+
+    // Before: only the current certificate's messages are readable.
+    let an_neu = captured_request(&pki, &neu, "r1").await;
+    let status = inbox.call(an_neu).await.unwrap().status();
+    assert_ne!(
+        status, 200,
+        "a message for key material not yet in use is refused"
+    );
+    assert_eq!(clients.generation(), 0);
+
+    // The rotation, mid-run.
+    let rotated = clients
+        .rotate(
+            pki.setup(
+                &neu,
+                UnbekannteAbsender::NurKonfigurierte,
+                Default::default(),
+            ),
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect("the new identity builds");
+    assert!(rotated);
+    assert_eq!(clients.generation(), 1);
+    assert!(
+        !clients
+            .rotate(
+                pki.setup(
+                    &neu,
+                    UnbekannteAbsender::NurKonfigurierte,
+                    Default::default()
+                ),
+                time::OffsetDateTime::now_utc(),
+            )
+            .unwrap(),
+        "unchanged key material is no rotation"
+    );
+
+    let an_neu = captured_request(&pki, &neu, "r2").await;
+    assert_eq!(inbox.call(an_neu).await.unwrap().status(), 200);
+    let an_alt = captured_request(&pki, &pki.own, "r3").await;
+    assert_eq!(
+        inbox.call(an_alt).await.unwrap().status(),
+        200,
+        "the replaced encryption key still decrypts inside the overlap"
     );
 }

@@ -15,6 +15,9 @@
 //! make — two daemons acting under different MP-IDs for one Rolle, a daemon
 //! that cannot be reached. makod serves it at
 //! `GET /admin/einrichtung/deployment`, and `just setup` prints it.
+//!
+//! [`vorschlag`] ([`befragung`]) turns the setup interview's answers into a
+//! configuration proposal per daemon, marked against the same reports.
 
 use std::collections::BTreeMap;
 
@@ -22,6 +25,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::befund::{Befund, Bereich, Schwere};
 use crate::policy::PolicyReport;
+
+pub mod befragung;
+
+pub use befragung::{Antworten, Vorschlag, vorschlag};
 
 /// The version every daemon of this workspace is built at.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

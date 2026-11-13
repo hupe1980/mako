@@ -28,7 +28,7 @@
 //!
 //! - **GPKE Teil 4 Kap. 3.2** (BK6-22-024 Anlage 1d) — „Unverzüglich, jedoch
 //!   spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 1"
-//! - APERAK Frist: 45 Minuten für ORDERS (APERAK AHB 1.1 § 2.4.1)
+//! - APERAK Frist: 45 Minuten für ORDERS (APERAK AHB 1.1 Kap. 2.4.1)
 
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
@@ -420,18 +420,17 @@ impl Workflow for GpkeDatenabrufWorkflow {
                 // The ORDERS names its Anfrage by `BGM` DE 1004 — the reference
                 // the MSB's Ablehnung echoes in `SG1 RFF+ON` — and the column's
                 // own fields come in `payload`, merged at the top.
-                let mut body = serde_json::json!({
-                    "pid":         orders_pid.as_u32(),
-                    "location":    malo.as_ref().map(|m| m.as_str()),
-                    "orders_ref":  message_ref.as_str(),
-                    "document_id": message_ref.as_str(),
-                });
-                if let (Some(target), serde_json::Value::Object(extra)) =
-                    (body.as_object_mut(), payload)
-                {
-                    target.extend(extra);
-                }
-                let outbox = vec![PendingOutbox::new("ORDERS", recipient.as_str(), body)];
+                let body = crate::outbound::mit_spalte(
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(orders_pid.as_u32()),
+                        location: malo.as_ref().map(|m| m.as_str().to_owned()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        document_id: Some(message_ref.as_str().to_owned()),
+                        ..Default::default()
+                    },
+                    &payload,
+                )?;
+                let outbox = vec![PendingOutbox::typed(recipient.as_str(), &body)];
                 // The counterparty's Antwortfrist, from the published row for
                 // this ORDERS; a PID no Festlegung quantifies registers nothing.
                 let frist: Vec<PendingDeadline> = antwortfrist(orders_pid.as_u32(), gesendet_am)

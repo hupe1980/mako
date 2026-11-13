@@ -81,7 +81,7 @@ class TestIdentifiers:
     def test_every_generated_mp_id_carries_a_valid_check_digit(
         self, kind, scheme, qualifier
     ):
-        """§2.3 defines two procedures, and an invented ID satisfies neither."""
+        """Kap. 2.3 defines two procedures, and an invented ID satisfies neither."""
 
         @given(mp=marktpartner_ids(kind=kind))
         @_settings

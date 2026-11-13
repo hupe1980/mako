@@ -185,6 +185,10 @@ fn bestellung_emits_orders_17007() {
         ob.payload["pid"].as_u64(),
         Some(u64::from(BESTELLUNG_PID.as_u32()))
     );
+    use mako_engine::payload::OutboundPayload as _;
+    let typed =
+        mako_engine::payload::OrdersPayload::from_payload(&ob.payload).expect("an ORDERS payload");
+    assert!(typed.korrelation_ref.is_some() && typed.ausfuehrungsdatum.is_some());
 }
 
 #[test]
@@ -423,15 +427,17 @@ fn stornierung_references_the_original_bestellung_belegnummer() {
     );
     assert!(
         ob.payload["location"].is_null(),
-        "a conformant ORDCHG carries no LOC (ORDCHG AHB 1.1 §3.2)"
+        "a conformant ORDCHG carries no LOC (ORDCHG AHB 1.1 Kap. 3.2)"
     );
+    use mako_engine::payload::OutboundPayload as _;
+    mako_engine::payload::OrdchgPayload::from_payload(&ob.payload).expect("an ORDCHG payload");
     let _ = STORNIERUNG_PID;
 }
 
 // ── Correlation chain (Anwendungsübersicht der Prüfidentifikatoren 4.0) ───────
 
 /// `ZG-T24`: the ORDERS 17007 echoes the QUOTES Angebot's Belegnummer in
-/// `RFF+AAG`, and carries **no** LOC — ORDERS AHB 1.1b §4.15 lists no
+/// `RFF+AAG`, and carries **no** LOC — ORDERS AHB 1.1b Kap. 4.15 lists no
 /// Meldepunkt segment for the ESA order PIDs.
 #[test]
 fn bestellung_references_the_angebot_and_carries_no_location() {
@@ -491,7 +497,12 @@ fn werteanfrage_carries_the_messprodukt_and_wunschtermin() {
     let ob = out.outbox.first().expect("REQOTE sent");
     assert_eq!(ob.payload["messprodukt"].as_str(), Some("9991000003056"));
     assert_eq!(ob.payload["wunschtermin"].as_str(), Some("2026-03-01"));
-    assert_eq!(ob.payload["abonnement"].as_str(), Some("Z01"));
+    // REQOTE AHB 1.2 Kap. 4.3 (S. 11–15) has no `IMD`: the Abonnement rides the
+    // ORDERS, not the Anfrage. The entry reads back as the REQOTE's payload.
+    use mako_engine::payload::OutboundPayload as _;
+    let typed =
+        mako_engine::payload::ReqotePayload::from_payload(&ob.payload).expect("a REQOTE payload");
+    assert_eq!(typed.pid, Some(35_003));
 }
 
 /// A product outside Codeliste der Konfigurationen Kapitel 4.6 is refused
@@ -617,7 +628,7 @@ fn the_msb_may_end_a_delivery_with_a_stornierung_in_flight() {
 }
 
 /// **The prices tell an Angebot from an Ablehnung — never the Bindungsfrist.**
-/// QUOTES AHB 1.1a §4.3 makes `DTM+273` Muss on the only 15003 use case it
+/// QUOTES AHB 1.1a Kap. 4.3 makes `DTM+273` Muss on the only 15003 use case it
 /// publishes, so a refusal carries one too; what a priced offer has is the
 /// `SG31 PRI` position block and the `PIA+5 …:SRW` OBIS list.
 ///
@@ -916,7 +927,7 @@ fn an_earlier_offered_start_does_not_move_the_wunschtermin() {
     );
 }
 
-/// The `SG2 AJT` is the whole content of a refusal — ORDRSP AHB 1.1b §4.15
+/// The `SG2 AJT` is the whole content of a refusal — ORDRSP AHB 1.1b Kap. 4.15
 /// gives 19011–19014 no free-text segment at all. An ESA that keeps only a
 /// prose `reason` cannot tell `A08` (consent expired — renew and re-order)
 /// from `A10` (Lokationsbündel — split the request) from `A09` (Gerätetechnik

@@ -518,11 +518,20 @@ impl<'p> Seeder<'p> {
     /// One `NAD` party: MP-ID, Firmenname, Anschrift.
     fn partei(
         &mut self,
-        nr: &str,
+        nr: &'static str,
         mp_id: &str,
         gp: Option<&Geschaeftspartner>,
     ) -> Result<(), InvoicAusgangError> {
-        let agency = edi_energy::AgencyCode::for_mp_id(mp_id).as_str().to_owned();
+        let agency = edi_energy::AgencyCode::for_mp_id(mp_id)
+            .ok_or_else(|| InvoicAusgangError::NichtDarstellbar {
+                nr,
+                grund: format!(
+                    "{mp_id:?} is no MP-ID (BDEW-/DVGW-Codenummer or GLN, 13 digits): the NAD \
+                     DE 3055 code list has no agency for it"
+                ),
+            })?
+            .as_str()
+            .to_owned();
         let name = gp
             .and_then(|g| g.organisationsname.clone())
             .unwrap_or_default();

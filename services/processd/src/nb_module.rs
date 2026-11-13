@@ -175,7 +175,7 @@ pub struct AnmeldungPayload {
     /// measures the freed Tranchen against. `None` where the message carried
     /// the Aufteilungsfaktor or the Technische-Ressourcen form instead — those
     /// are not shares, and the arithmetic escalates rather than inventing one —
-    /// or a percentage outside GPKE Teil 1 § 3.2.1.5's „> 0 % und < 100 %".
+    /// or a percentage outside GPKE Teil 1 Kap. 3.2.1.5's „> 0 % und < 100 %".
     pub tranchengroesse_prozent: Option<Decimal>,
     /// Bilanzierungsmethode from UTILMD TM+EM (`SLP` | `RLM` | `IMS`).
     pub bilanzierungsmethode: Option<String>,
@@ -244,7 +244,7 @@ impl AnmeldungPayload {
             .get("veraeusserungsform")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        // GPKE Teil 1 § 3.2.1.5: „Der Prozentsatz einer Tranche ist immer größer
+        // GPKE Teil 1 Kap. 3.2.1.5: „Der Prozentsatz einer Tranche ist immer größer
         // 0% und kleiner als 100%" — both bounds exclusive, because a share of
         // the whole Marktlokation is not a Tranche but Geschäftsvorfall 1.
         // A value outside that is not a Tranchengröße, and settling Prüfschritt
@@ -541,7 +541,7 @@ pub async fn evaluate_and_decide(
         false
     };
 
-    // ── Meldepflichten (GPKE Teil 2 § 2.1.2 Nr. 2 / 10) ───────────────────
+    // ── Meldepflichten (GPKE Teil 2 Kap. 2.1.2 Nr. 2 / 10) ───────────────────
     //
     // Built before `payload` is consumed: the Information über existierende
     // Zuordnung must reference the LFN's own Vorgangsnummer, and the
@@ -784,6 +784,20 @@ pub async fn evaluate_and_decide(
             lfa_mp_ids,
             zuordnungsende,
         } => {
+            // The Anfrage is a Sparte's own message: GeLi Gas 3.0 Kap. 3.2.3
+            // (S. 9) has the GNB send its Abmeldungsanfrage 44010, which no
+            // door sends yet. A Strom 55010 to a Gas LFA would be a wrong
+            // message on the wire, so the Gas case goes to the operator by
+            // name; the Information (44036, Nr. 2) is owed either way.
+            let command = match abmeldeanfrage_command(anfrage.sparte) {
+                Ok(command) => command,
+                Err(grund) => {
+                    warn!(%process_id, pid, %malo_id, %grund, "processd NB: Abmeldungsanfrage escalated");
+                    enqueue_for_operator(queue, config, &payload_meta, grund).await?;
+                    meldung.informieren(makod, &malo_id, process_id).await;
+                    return Ok(true);
+                }
+            };
             let waiting = AbmeldeanfrageRecord {
                 anmeldung_process_id: process_id,
                 malo_id: malo_id.clone(),
@@ -828,12 +842,13 @@ pub async fn evaluate_and_decide(
             for lfa in lfa_mp_ids {
                 dispatch_abmeldeanfrage(
                     makod,
-                    config,
+                    command,
                     &malo_id,
                     process_id,
                     lfa,
                     &lf_mp_id,
                     *zuordnungsende,
+                    received_at,
                     &anfrage,
                     &kunde,
                 )
@@ -877,7 +892,7 @@ pub struct Kunde {
 
 /// The LFA's own answer, as the NB must restate it on its Ablehnung.
 ///
-/// GPKE Teil 2 § 2.1.2 Nr. 6: „Der NB gibt zusätzlich den Grund der Ablehnung des
+/// GPKE Teil 2 Kap. 2.1.2 Nr. 6: „Der NB gibt zusätzlich den Grund der Ablehnung des
 /// LFA an, sofern dieser in Prozessschritt 4 die Anfrage abgelehnt hat." It rides
 /// `SG4 STS+Z35` „Status der Antwort des dritten Marktbeteiligten", which UTILMD
 /// AHB Strom marks **Muss** whenever the NB's own code is `A50` or `A57`.
@@ -911,16 +926,23 @@ pub struct DritterMarktbeteiligter {
 )]
 async fn dispatch_abmeldeanfrage(
     makod: &MakodClient,
-    config: &NbModuleConfig,
+    command: &'static str,
     malo_id: &str,
     process_id: Uuid,
     lfa_mp_id: &str,
     lfn_mp_id: &str,
     zuordnungsende: time::Date,
+    eingang: OffsetDateTime,
     anfrage: &AnmeldungAnfrage,
     kunde: &Kunde,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut payload = serde_json::json!({
+        // The ÜT the LFA's 09:00 window and the Meldepflichten of Nr. 2 / 10
+        // count from (GPKE Teil 2 Kap. 2.1.2, S. 20–23): the Anmeldung's
+        // arrival, which the CloudEvent `time` carries.
+        "anmeldung_eingang":    eingang
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|e| format!("anmeldung_eingang: {e}"))?,
         "malo_id":              malo_id,
         "lfa_mp_id":            lfa_mp_id,
         // „zum Zuordnungsbeginn des LFN" — the date the NB asks the LFA to end
@@ -951,12 +973,11 @@ async fn dispatch_abmeldeanfrage(
 
     let cmd = ForwardCommand {
         marktrolle: Some("NB".to_owned()),
-        command: mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN.to_owned(),
+        command: command.to_owned(),
         malo_id: Some(malo_id.to_owned()),
         melo_id: None,
         payload,
     };
-    let _ = config;
     makod
         .post_command(
             &format!("processd-nb-abmeldeanfrage-{process_id}-{lfa_mp_id}"),
@@ -967,6 +988,24 @@ async fn dispatch_abmeldeanfrage(
             |e| warn!(%e, %process_id, %malo_id, "processd NB: Abmeldeanfrage dispatch failed"),
         )?;
     Ok(())
+}
+
+/// The command that sends the Anfrage zur Beendigung der Zuordnung in `sparte`,
+/// or why none can be sent.
+///
+/// Strom: the 55010 (GPKE Teil 2 Kap. 2.1.2 Nr. 3, S. 20). Gas: the GNB's
+/// Abmeldungsanfrage 44010 (GeLi Gas 3.0 Kap. 3.2.3, S. 9), which no `makod`
+/// door sends — never the Strom message in its place.
+fn abmeldeanfrage_command(sparte: Sparte) -> Result<&'static str, &'static str> {
+    match sparte {
+        Sparte::Gas => Err(
+            "GeLi Gas 3.0 Kap. 3.2.3: the Marktlokation is assigned, so the GNB owes the \
+             Altlieferant an Abmeldungsanfrage (UTILMD 44010) before it may answer. makod \
+             has no door that sends a 44010, and the Strom 55010 is not one — the operator \
+             sends the Abmeldungsanfrage and decides the Anmeldung",
+        ),
+        _ => Ok(mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN),
+    }
 }
 
 // ── Phase two: the LFA answered ──────────────────────────────────────────────
@@ -1180,7 +1219,7 @@ pub async fn resume_after_lfa_antwort(
     // arithmetic over every Tranche's: which shares came free, and whether
     // enough of them did. `waiting.antworten` now holds one entry per LFA that
     // replied; an LFA missing from it answered with silence, which GPKE
-    // Teil 2 § 2.1.2 makes a Zustimmung.
+    // Teil 2 Kap. 2.1.2 makes a Zustimmung.
     let lage = tranchen_lage(&waiting, &anfrage);
     let result = mako_pruefung::evaluate_lieferbeginn(&anfrage, lage.as_ref());
     let pid = waiting.pid as u32;
@@ -1379,7 +1418,7 @@ pub async fn resume_after_lfa_antwort(
 /// answer expected back, so nothing times out when one is missed — it surfaces
 /// later as a supplier holding a stale view of who serves the Marktlokation.
 /// Both are conditional on the same fact, and it is one only `marktd` holds:
-/// GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 routes to
+/// GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 routes to
 /// Prozessschritt 2 „Ist die Marktlokation bzw. Tranche zum Zuordnungsbeginn
 /// einem LF zugeordnet" and straight to Nr. 5 otherwise.
 ///
@@ -1486,7 +1525,7 @@ impl MeldepflichtContext {
     /// Lieferendedatum in der Antwort mit". That date governs when it lies
     /// *before* the Zuordnungsbeginn and „mindestens 1 WT nach dem ÜT der
     /// Anmeldung"; a date failing either test leaves the Zuordnungsbeginn
-    /// standing (GPKE Teil 2 § 2.1.2 Nr. 10).
+    /// standing (GPKE Teil 2 Kap. 2.1.2 Nr. 10).
     ///
     /// `uet` is the Übertragungstag of the Anmeldung — the day the 1-Werktag
     /// floor counts from. Fall b belongs to the verbrauchende branch of
@@ -2129,7 +2168,7 @@ fn classify(
             None,
             Some(format!(
                 "waiting on the Anfrage zur Beendigung der Zuordnung to {lfa_mp_ids:?} \
-                 (GPKE Teil 2 § 2.1.2 Nr. 3); {frist}; silence counts as Zustimmung",
+                 (GPKE Teil 2 Kap. 2.1.2 Nr. 3); {frist}; silence counts as Zustimmung",
                 frist = mako_fristen::antwort::antwort_obligation(55_010).map_or_else(
                     || "no answer Frist is catalogued for 55010".to_owned(),
                     |o| format!("the {} answers {}", o.answered_by, o.frist.beschreibung()),
@@ -2580,6 +2619,19 @@ mod tests {
         assert_eq!(payload.kunde_namensformat.as_deref(), Some("Z01"));
     }
 
+    /// A Gas Anmeldung never produces a 55010: GeLi Gas 3.0 Kap. 3.2.3 (S. 9)
+    /// owes the GNB's Abmeldungsanfrage 44010, and without a door for it the
+    /// case goes to the operator by name.
+    #[test]
+    fn a_gas_anmeldung_never_produces_a_55010() {
+        assert_eq!(
+            super::abmeldeanfrage_command(Sparte::Strom),
+            Ok(mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN)
+        );
+        let grund = super::abmeldeanfrage_command(Sparte::Gas).expect_err("no Gas door");
+        assert!(grund.contains("44010"), "{grund}");
+    }
+
     /// The command the NB sends is registered and permitted to the NB role —
     /// a literal here is how a dead command reaches the dispatcher.
     #[test]
@@ -2636,7 +2688,7 @@ mod tests {
         );
     }
 
-    /// GPKE Teil 2 § 2.1.2 Nr. 1 Prüfschritt 4: an unassigned Marktlokation
+    /// GPKE Teil 2 Kap. 2.1.2 Nr. 1 Prüfschritt 4: an unassigned Marktlokation
     /// goes straight to Prozessschritt 5. Neither Meldung is owed, and sending
     /// one would name an Altlieferant that does not exist.
     #[test]
@@ -3075,7 +3127,7 @@ mod tests {
 
     #[test]
     fn an_affiliated_lieferant_is_named_by_its_own_mp_id_not_the_nb_s() {
-        // Each Marktrolle has its own MP-ID (Identifikatoren AWH V1.2 § 2.1),
+        // Each Marktrolle has its own MP-ID (Identifikatoren AWH V1.2 Kap. 2.1),
         // so the affiliate's MP-ID is never `own_mp_id`: comparing against
         // the NB's own code would never recognise one.
         let cfg = nb_config();
@@ -3232,7 +3284,7 @@ mod tests {
     }
 
     /// The Tranchengröße is `SG8` Produkt-Code `9991000002090`, and GPKE Teil 1
-    /// § 3.2.1.5 fixes its range: „immer größer 0% und kleiner als 100%".
+    /// Kap. 3.2.1.5 fixes its range: „immer größer 0% und kleiner als 100%".
     /// Both bounds are exclusive — 100 % of a Marktlokation is not a Tranche —
     /// so a value outside them escalates rather than being measured against.
     #[test]

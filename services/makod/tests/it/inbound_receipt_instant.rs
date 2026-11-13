@@ -8,8 +8,8 @@
 //! APERAK window all carry the receipt instant, never the dispatch instant.
 //!
 //! The APERAK window follows the message type, the Sparte and the PID (APERAK
-//! AHB 1.1 § 2.4.1 Strom, § 2.3.1 Gas) and is registered on a spawn and on a
-//! resume alike. A Gas APERAK reports a Verarbeitbarkeitsfehler only (§ 2.3), so
+//! AHB 1.1 Kap. 2.4.1 Strom, Kap. 2.3.1 Gas) and is registered on a spawn and on a
+//! resume alike. A Gas APERAK reports a Verarbeitbarkeitsfehler only (Kap. 2.3), so
 //! its window exists only beside an APERAK that was enqueued.
 
 use std::any::Any;
@@ -137,7 +137,7 @@ fn the_adapter_command_carries_the_receipt_instant() {
 }
 
 /// A Strom MSCONS is not a UTILMD or an ORDERS: its APERAK is owed by the next
-/// Werktag 12 Uhr (APERAK AHB 1.1 § 2.4.1, first paragraph).
+/// Werktag 12 Uhr (APERAK AHB 1.1 Kap. 2.4.1, first paragraph).
 #[tokio::test]
 async fn a_strom_mscons_spawn_carries_the_next_werktag_window() {
     let (store, d) = setup().await;
@@ -194,7 +194,7 @@ async fn a_resume_carries_its_aperak_window() {
     assert_eq!(got, want);
 }
 
-/// A processable Gas message is answered by silence (APERAK AHB 1.1 § 2.3), so
+/// A processable Gas message is answered by silence (APERAK AHB 1.1 Kap. 2.3), so
 /// no window watches for an APERAK that is never owed.
 #[tokio::test]
 async fn a_processable_gas_message_carries_no_aperak_window() {
@@ -242,7 +242,7 @@ async fn aperaks(store: &SlateDbStore) -> Vec<(String, mako_engine::payload::Ape
 }
 
 /// A processable Strom message the workflow does not answer with an APERAK
-/// itself gets exactly one Anerkennungsmeldung (APERAK AHB 1.1 § 2.4), naming
+/// itself gets exactly one Anerkennungsmeldung (APERAK AHB 1.1 Kap. 2.4), naming
 /// the message it acknowledges (`SG2 RFF+ACE`, `RFF+AGO`).
 async fn one_anerkennung(msg: edi_energy::AnyMessage, pid: u32, workflow: &str) {
     use edi_energy::EdiEnergyMessage as _;
@@ -319,7 +319,7 @@ async fn a_later_decided_aperak_is_not_preempted() {
     );
 }
 
-/// Gas has no Anerkennungsmeldung (APERAK AHB 1.1 § 2.3).
+/// Gas has no Anerkennungsmeldung (APERAK AHB 1.1 Kap. 2.3).
 #[tokio::test]
 async fn a_gas_message_gets_no_anerkennung() {
     let (store, d) = setup().await;

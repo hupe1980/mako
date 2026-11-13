@@ -15,6 +15,11 @@ makod_api_key  = "dev-makod-key"
 edmd_url       = "http://127.0.0.1:8380"
 edmd_api_key   = "dev-edmd-key"
 
+# The Netzbetreiber's payment term, in Werktage after the Rechnungsdatum, for an
+# invoice whose request states no due_date. No default: at least 10 (GPKE Teil 2
+# Kap. 3.3.2 Nr. 1); a Rückerstattung is capped at 10 after the Rechnungsdatum.
+zahlungsziel_werktage = 14
+
 [http]
 addr = "127.0.0.1:8680"
 

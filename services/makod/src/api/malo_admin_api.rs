@@ -60,7 +60,8 @@ pub struct MaloAdminState {
     /// Cedar-based authorization engine — authenticates callers and evaluates
     /// ABAC policies for each MaLo admin operation.
     pub cedar: Arc<CedarAuthorizer>,
-    /// Operator tenant ID (MP-ID). All cache operations are scoped to this tenant.
+    /// Operator MP-ID: what Cedar authorizes against and what `X-Tenant-Id`
+    /// must name. The cache is scoped by the engine tenant it was built for.
     ///
     /// When a caller provides `X-Tenant-Id`, it must match this value exactly;
     /// mismatches are rejected with `403 Forbidden` to prevent cross-tenant data access.
@@ -185,10 +186,10 @@ pub(crate) async fn handle_get(
     ) {
         return Err(ApiError::Forbidden);
     }
-    let tenant_id = resolve_tenant(&headers, &state.tenant_id)?;
+    resolve_tenant(&headers, &state.tenant_id)?;
     state
         .cache
-        .get(&tenant_id, &malo_id)
+        .get(&malo_id)
         .await
         .map_err(internal_error)?
         .map(Json)
@@ -253,11 +254,7 @@ pub(crate) async fn handle_put(
         "admin malo upsert request",
     );
 
-    state
-        .cache
-        .upsert(&tenant_id, &result)
-        .await
-        .map_err(internal_error)?;
+    state.cache.upsert(&result).await.map_err(internal_error)?;
     Ok(Json(UpsertResponse {
         malo_id,
         updated_at: iso_now(),
@@ -298,12 +295,8 @@ pub(crate) async fn handle_delete(
     ) {
         return Err(ApiError::Forbidden);
     }
-    let tenant_id = resolve_tenant(&headers, &state.tenant_id)?;
-    let deleted = state
-        .cache
-        .remove(&tenant_id, &malo_id)
-        .await
-        .map_err(internal_error)?;
+    resolve_tenant(&headers, &state.tenant_id)?;
+    let deleted = state.cache.remove(&malo_id).await.map_err(internal_error)?;
     Ok(Json(DeleteResponse { malo_id, deleted }))
 }
 
@@ -336,12 +329,9 @@ pub(crate) async fn handle_stats(
     ) {
         return Err(ApiError::Forbidden);
     }
-    let tenant_ids = state.cache.list_tenants().await.map_err(internal_error)?;
-    let mut tenant_stats: Vec<TenantStats> = Vec::new();
-    for tid in tenant_ids {
-        let s = state.cache.stats(&tid).await.map_err(internal_error)?;
-        tenant_stats.push(stats_to_json(s));
-    }
+    let tenant_stats: Vec<TenantStats> = vec![stats_to_json(
+        state.cache.stats().await.map_err(internal_error)?,
+    )];
     Ok(Json(StatsResponse {
         tenants: tenant_stats,
     }))

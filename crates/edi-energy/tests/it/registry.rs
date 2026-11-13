@@ -183,8 +183,8 @@ fn validate_against_explicit_release_overrides_assoc_code() {
 // ── Format-boundary tests ─────────────────────────────────────────────────────
 //
 // EDIFACT changes format at a single Anwendungszeitpunkt (Allgemeine
-// Festlegungen 6.1 §2.5): before it the old format applies, from it the new
-// one. The 15-Werktage Übergangszeitraum in §8.5 is the XML rule and does not
+// Festlegungen 6.1 Kap. 2.5): before it the old format applies, from it the new
+// one. The 15-Werktage Übergangszeitraum in Kap. 8.5 is the XML rule and does not
 // carry over, so the default receive tolerance is zero.
 
 /// A format is not acceptable before its own `valid_from`, ever.
@@ -551,10 +551,10 @@ fn utilmd_gas_g1_1_boundary_selects_correct_profile() {
 
 /// A Formatversion applies six months after it is published.
 ///
-/// Allgemeine Festlegungen 6.1d §2.5.1 („Änderungsmanagement zum 1. Oktober
+/// Allgemeine Festlegungen 6.1d Kap. 2.5.1 („Änderungsmanagement zum 1. Oktober
 /// eines Jahres") puts the *Veröffentlichungszeitpunkt der konsultierten
 /// Dokumente* on 01.04. and their *Anwendungszeitpunkt* on 01.10. of the same
-/// year; §2.5.2 mirrors it for the April changeover. The six months between are
+/// year; Kap. 2.5.2 mirrors it for the April changeover. The six months between are
 /// the Umsetzungsphase, during which the **old** format is still the binding one.
 ///
 /// REQOTE is the sharpest case: AHB 1.1 (published 01.04.2025) and AHB 1.2
@@ -586,7 +586,7 @@ fn reqote_switches_on_the_anwendungszeitpunkt_not_the_publikationsdatum() {
         Some(date!(2025 - 10 - 01)),
         "the last day before the Anwendungszeitpunkt still belongs to AHB 1.1"
     );
-    // The changeover is a single instant with no overlap (§2.5).
+    // The changeover is a single instant with no overlap (Kap. 2.5).
     assert_eq!(
         on(date!(2026 - 10 - 01)),
         Some(date!(2026 - 10 - 01)),
@@ -597,7 +597,7 @@ fn reqote_switches_on_the_anwendungszeitpunkt_not_the_publikationsdatum() {
 /// Every profile takes effect on an Anwendungszeitpunkt BDEW actually publishes
 /// on.
 ///
-/// Allgemeine Festlegungen 6.1d § 2.5 runs two Änderungsmanagement cycles and
+/// Allgemeine Festlegungen 6.1d Kap. 2.5 runs two Änderungsmanagement cycles and
 /// only two, so the regular changeovers are **01.04.** and **01.10.**; mako
 /// additionally carries the ausserordentliche 01.01.2026 and 06.06.2025. A
 /// `valid_from` on any other day is a transcription error, and it selects a
@@ -606,7 +606,7 @@ fn reqote_switches_on_the_anwendungszeitpunkt_not_the_publikationsdatum() {
 /// This is checked against the **compiled registry**, not the JSON: the
 /// generated tables are what the runtime selects on, and `validate-profiles`
 /// already holds the JSON. That guard owns the companion relation — the
-/// `publikationsdatum` § 2.5 entails for each of these dates.
+/// `publikationsdatum` Kap. 2.5 entails for each of these dates.
 #[test]
 fn every_profile_takes_effect_on_a_published_anwendungszeitpunkt() {
     use edi_energy::registry::ReleaseRegistry;
@@ -632,7 +632,7 @@ fn every_profile_takes_effect_on_a_published_anwendungszeitpunkt() {
 /// A sender may only pick a Formatversion whose Anwendungszeitpunkt has passed.
 ///
 /// Profiles are compiled in as soon as BDEW publishes them, six months before
-/// they take effect (Allgemeine Festlegungen 6.1d § 2.5), so the registry's
+/// they take effect (Allgemeine Festlegungen 6.1d Kap. 2.5), so the registry's
 /// newest entry is routinely one release ahead of the one in force. EDIFACT
 /// publishes no Übergangsfrist, so stamping that one is a refusal at the
 /// counterparty rather than a newer dialect it tolerates.

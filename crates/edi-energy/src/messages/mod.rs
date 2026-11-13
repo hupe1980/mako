@@ -66,9 +66,10 @@ macro_rules! impl_edi_energy_message {
             ) -> Result<crate::EdiEnergyReport, crate::Error> {
                 self.core.validate_against_with_semantic(release, None)
             }
-            fn validate_on_date(
+            fn validate_on_date_with_rollen(
                 &self,
                 reference_date: time::Date,
+                rollen: &crate::profile::Parteirollen,
             ) -> Result<crate::EdiEnergyReport, crate::Error> {
                 let release = self.core.detect_release()?;
                 self.core
@@ -77,6 +78,7 @@ macro_rules! impl_edi_energy_message {
                         None,
                         crate::registry::ReleaseRegistry::global(),
                         Some(reference_date),
+                        rollen,
                     )
             }
             fn serialize(&self) -> Result<Vec<u8>, crate::Error> {
@@ -115,9 +117,10 @@ macro_rules! impl_edi_energy_message {
                 self.core
                     .validate_against_with_semantic(release, Some($pack))
             }
-            fn validate_on_date(
+            fn validate_on_date_with_rollen(
                 &self,
                 reference_date: time::Date,
+                rollen: &crate::profile::Parteirollen,
             ) -> Result<crate::EdiEnergyReport, crate::Error> {
                 let release = self.core.detect_release()?;
                 self.core
@@ -126,6 +129,7 @@ macro_rules! impl_edi_energy_message {
                         Some($pack),
                         crate::registry::ReleaseRegistry::global(),
                         Some(reference_date),
+                        rollen,
                     )
             }
             fn serialize(&self) -> Result<Vec<u8>, crate::Error> {

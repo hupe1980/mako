@@ -22,7 +22,7 @@ import { GeparktEntscheiden } from "./Buchungen";
 import { Fragen } from "./Fragen";
 import { Entscheiden } from "./Freigaben";
 import { Lage } from "./Lage";
-import { DisputEntscheiden, PruefpostenEntscheiden } from "./Rechnungen";
+import { DisputEntscheiden, GehaltenEntscheiden, PruefpostenEntscheiden } from "./Rechnungen";
 import { Warum } from "./Warum";
 
 /** What a row's glyph says about where it came from. */
@@ -34,6 +34,7 @@ const GLYPH: Record<QuelleId, IconName> = {
   korrekturbedarf: "bars",
   ableseauftraege: "clock",
   dispute: "doc",
+  gehalten: "doc",
   pruefposten: "doc",
   geparkt: "warn",
   hinweise: "sparkle",
@@ -272,6 +273,7 @@ function Zeile({
           {e.freigabe && <Entscheiden f={e.freigabe} onDone={onEntschieden} sofort={sofort} />}
           {e.disput && <DisputEntscheiden d={e.disput} onDone={onEntschieden} sofort={sofort} />}
           {e.pruefposten && <PruefpostenEntscheiden r={e.pruefposten} onDone={onEntschieden} />}
+          {e.gehalten && <GehaltenEntscheiden g={e.gehalten} onDone={onEntschieden} />}
           {e.geparkt && (
             <GeparktEntscheiden b={e.geparkt} onDone={onEntschieden} vorschlag={vorschlag} />
           )}

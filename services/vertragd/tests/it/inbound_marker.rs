@@ -189,3 +189,52 @@ async fn an_accepted_angebot_that_fails_once_is_contracted_on_redelivery() {
         StatusCode::OK
     );
 }
+
+/// The contract's § 13 BGB Verbraucher status reaches accountingd with its own
+/// command when the NB confirms, as a value or as an explicit `null` — the
+/// contract is its one source, so an unrecorded status clears a stale one
+/// rather than leaving it in place.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_confirmation_sends_the_contracts_verbraucher_status() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let kunde = make_kunde(&pool, TENANT).await;
+    for (n, status) in [Some(false), Some(true), None].into_iter().enumerate() {
+        let mut input = vertrag_input(&format!("C-VB-{n}"));
+        input.verbraucher = status;
+        let created = pg::insert_versorgungsvertrag(&pool, kunde, TENANT, TENANT, &input)
+            .await
+            .expect("create");
+        let process = format!("P-VB-{n}");
+        sqlx::query("UPDATE vertragskomponenten SET mako_process_id = $1 WHERE vertrag_id = $2")
+            .bind(&process)
+            .bind(created.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let ce = serde_json::json!({
+            "specversion": "1.0",
+            "id": format!("ce-vb-{n}"),
+            "source": "/makod/test",
+            "type": mako_events::mako::PROCESS_COMPLETED,
+            "data": { "process_id": process, "accepted": true, "malo_id": "51238696012" },
+        });
+        assert_eq!(post(&pool, "/api/v1/events", &ce).await, StatusCode::OK);
+        let body: serde_json::Value = sqlx::query_scalar(
+            "SELECT envelope->'body' FROM event_outbox
+              WHERE kind = 'command' AND ce_type = 'VERBRAUCHER'
+                AND event_id LIKE '%' || $1",
+        )
+        .bind(created.komponenten[0].id.to_string())
+        .fetch_one(&pool)
+        .await
+        .expect("one Verbraucher command per confirmed component");
+        assert_eq!(
+            body,
+            serde_json::json!({ "verbraucher": status }),
+            "{status:?}"
+        );
+    }
+}

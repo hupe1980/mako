@@ -532,7 +532,7 @@ pub const ANSWER_CONTRACTS: &[(&str, &[Pflichtfeld])] = {
         (c::WIM_STEUERUNGSAUFTRAG_ABLEHNEN, &[TxId]),
         // ESA Wertebestellung (`extract_esa_location`, `esa_antwort_code`).
         // `anbieten` is not here: the Angebot needs `preise` and `obis`
-        // (QUOTES AHB 1.1a §4.3, Muss), which no queue entry holds.
+        // (QUOTES AHB 1.1a Kap. 4.3, Muss), which no queue entry holds.
         (
             c::WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN,
             &[Lokation, Begruendung],
@@ -873,7 +873,7 @@ pub fn decision_body(
 /// ([`mako_pruefung::codes::zustimmung_tree_of`]); an Ablehnung from the
 /// recorded tree itself.
 ///
-/// Each answer is restricted to one cluster — ORDRSP AHB 1.1b §4.15
+/// Each answer is restricted to one cluster — ORDRSP AHB 1.1b Kap. 4.15
 /// conditions \[17\]/\[18\]: the code „muss im EBD dem Cluster Zustimmung /
 /// Ablehnung zugeordnet sein"; the UTILMD side is set out in
 /// [`mako_pruefung::codes`] — and `makod` derives the answer PID from the

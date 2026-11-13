@@ -723,7 +723,7 @@ NAD+MS+{NB_MP}::293'NAD+MR+{MGV_MP}::293'UNT+6+1'UNZ+1+R3'"
 
 /// The report must carry what the CONTRL Empfangsbestätigung needs.
 ///
-/// CONTRL AHB 1.0 §2.3.1 binds the receiver of every inbound *Gas* interchange to
+/// CONTRL AHB 1.0 Kap. 2.3.1 binds the receiver of every inbound *Gas* interchange to
 /// a CONTRL within six wall-clock hours, and a DVGW interchange is Gas by
 /// definition. The AS4 `eb:Receipt` is a protocol acknowledgement and does not
 /// discharge it, so the transport needs the sender, the recipient and the UNB
@@ -903,7 +903,7 @@ UNS+S'UNT+99+1'UNZ+1+IC8'"
 ///
 /// # Why this is a test
 ///
-/// Allgemeine Festlegungen V6.1d §3 forbids processing a test interchange as
+/// Allgemeine Festlegungen V6.1d Kap. 3 forbids processing a test interchange as
 /// production, and both BDEW doors — `POST /edifact` and the AS4 handler —
 /// already refuse one and record a `TestMessage` dead letter. The DVGW door did
 /// not read the field at all, and DVGW rides the same `UNB` envelope: a

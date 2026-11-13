@@ -103,7 +103,7 @@ pub struct NbState {
     pub repo: PgAnmeldungRepository,
     pub queue: PgApprovalQueue,
     /// Anmeldung decisions waiting on an LFA's answer to a 55010 — GPKE Teil 2
-    /// § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 makes the NB's answer
+    /// Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 makes the NB's answer
     /// two-phase whenever the Marktlokation is already assigned.
     pub pending: crate::pg::abmeldeanfrage::PgAbmeldeanfrageRepository,
 }
@@ -184,7 +184,7 @@ pub struct RunConfig {
     pub nb_einsd_api_key: Option<SecretString>,
     pub lf_auto_respond: bool,
     /// This supplier's Bilanzkreise, by Regelzone and regime — a 55607
-    /// Zustimmung must name one (GPKE Teil 2 § 2.4.2.2 Nr. 2).
+    /// Zustimmung must name one (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2).
     pub lf_bilanzkreise: Vec<crate::config::BilanzkreisEintrag>,
     /// See [`crate::config::LfConfig::grundversorgungs_netzgebiete`].
     pub lf_grundversorgungs_netzgebiete: Vec<String>,
@@ -608,7 +608,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
 
     // ── Background: E_0608 Neuanlage Prüflauf (daily) ─────────────────────
     //
-    // A regulatory obligation, not housekeeping: GPKE Teil 2 § 2.2.2 and
+    // A regulatory obligation, not housekeeping: GPKE Teil 2 Kap. 2.2.2 and
     // `E_0608` Prüfschritte 110/590 have the NB re-attempt identification of a
     // newly commissioned Marktlokation **every day** for 60 Werktage before it
     // may answer `A07` / `A16`. A pass that does not run is a Prüfung the NB

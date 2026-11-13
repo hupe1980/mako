@@ -71,7 +71,7 @@ pub enum VorlaufShape {
     TagVorDemLetztenWerktagVor,
     /// „Spätester ÜT liegt `n` Monat(e) vor dem …"
     ///
-    /// A calendar interval, not a Werktag count: GPKE Teil 2 § 2.5.2 Nr. 1
+    /// A calendar interval, not a Werktag count: GPKE Teil 2 Kap. 2.5.2 Nr. 1
     /// uses it for EEG-Marktlokationen and Tranchen of EEG-Marktlokationen.
     /// Clamped to the last day of the month when the anchor day does not exist
     /// there (§ 188 Abs. 3 BGB).
@@ -431,16 +431,40 @@ pub const ANTWORT_ESA_RECHNUNG_WT: u32 = 4;
 /// WiM Strom Teil 2 Kap. 4.5.2 Nr. 3 (`E_0265`).
 pub const MITTEILUNG_ESA_RECHNUNG_KORREKT_WT: u32 = 2;
 
-/// Werktage the Zahlungsziel of a WiM-Rechnung may not fall short of, counted
-/// from the day the invoice is received (WiM Teil 1 Kap. 3.6.3.8.2 / 3.7.2 /
-/// 6.2 Nr. 1, AWH WiM Gas 2.0 Kap. 4.7.2 Nr. 1).
+/// Werktage the Zahlungsziel of an invoice may not fall short of, counted
+/// from the day the invoice is received: „Das Zahlungsziel darf 10 WT nach
+/// Empfang der Rechnung nicht unterschreiten".
+///
+/// | Rechnung | Fundstelle |
+/// |---|---|
+/// | Netznutzung Strom | GPKE Teil 2 Kap. 3.3.2 Nr. 1 (S. 90) |
+/// | Netznutzung Gas | GeLi Gas 3.0 (BK7-24-01-009 Anlage) Kap. 4.5 (S. 14) |
+/// | Messstellenbetrieb | GPKE Teil 3 Kap. 3.5.2 / 3.5.3 Nr. 1; WiM Teil 1 Kap. 3.6.3.8.2 / 6.2 Nr. 1; WiM Teil 2 Kap. 4.5.2 Nr. 1 |
+/// | WiM-Dienstleistung | WiM Teil 1 Kap. 3.7.2 Nr. 1; AWH WiM Gas 2.0 Kap. 4.7.2 Nr. 1 |
+///
+/// The recipient's trees answer it: `E_0406` Prüfschritt 31 `A10`, `E_0264`
+/// Prüfschritt 70 `A07`.
 ///
 /// A floor on the *sender*, not a window on the receiver: it constrains the
 /// date the invoice may carry in `DTM+265`, and the answer window is then
 /// measured against that date.
 pub const ZAHLUNGSZIEL_MINDEST_WT: u32 = 10;
 
-// ── Sperrung / Entsperrung (GPKE Teil 2 § 3.5) ───────────────────────────────
+/// Werktage the Zahlungsziel of a **Rückerstattung** may not exceed, counted
+/// from the Rechnungsdatum — the ceiling opposite [`ZAHLUNGSZIEL_MINDEST_WT`].
+///
+/// | Fundstelle | Wortlaut | Gilt für |
+/// |---|---|---|
+/// | EBD 4.3 Kap. 6.10.1 `E_0406` Prüfschritt 34 (S. 108) | „Ist die Frist der Fälligkeit überschritten?" — Hinweis: „Fälligkeit überschritten bedeutet: Zahlungsziel > 10 WT zum Rechnungsdatum"; `A11` „Das Zahlungsziel ist überschritten." | the tree reaches it from Prüfschritt 28 „Ist der fällige Betrag ≥ Null?" answered no |
+/// | INVOIC AHB 1.0b, `SG8 DTM+265` DE2380, Bedingung `[25]` (S. 16, S. 39) | „Wert darf maximal 10 WT nach Wert aus DTM+137 DE2380 liegen" | 31001–31003 under `[493] ∧ [21]` (Empfänger Gas, fälliger Betrag < 0); 31005 under `[21]`; 31006 and 31008 unconditionally |
+///
+/// Both anchor on the Rechnungsdatum (`DTM+137`), not on the receipt: the
+/// tree adds „Nach NNV/LRV § 8 Abrechnung, Zahlung und Verzug ist bei
+/// Rückerstattungen das Ausstellungsdatum der Rückerstattung entscheidend."
+/// Ten Werktage is admissible; the eleventh is not.
+pub const RUECKERSTATTUNG_ZAHLUNGSZIEL_HOECHST_WT: u32 = 10;
+
+// ── Sperrung / Entsperrung (GPKE Teil 2 Kap. 3.5) ───────────────────────────────
 //
 // Three windows that all count **backwards from the Sperrtermin**, which is why
 // they live here and not in `antwort`: none of them is measured against an
@@ -456,11 +480,11 @@ pub const ZAHLUNGSZIEL_MINDEST_WT: u32 = 10;
 // (3 WT, `antwort`) has to close inside it.
 
 /// Mindestvorlaufzeit of an **untermingebundener** Sperrauftrag, in Werktagen
-/// before the frühestmöglicher Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 1).
+/// before the frühestmöglicher Sperrtermin (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1).
 pub const SPERRAUFTRAG_VORLAUF_WT: u32 = 6;
 
 /// Mindestvorlaufzeit of a **termingebundener** Sperrauftrag, in Werktagen
-/// before the Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 1).
+/// before the Sperrtermin (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1).
 ///
 /// Twice the ordinary lead and then some: a termingebundener Auftrag fixes
 /// date, time and place — the Festlegung's example is a Gerichtsvollzieher — so
@@ -470,7 +494,7 @@ pub const SPERRAUFTRAG_VORLAUF_WT: u32 = 6;
 pub const SPERRAUFTRAG_TERMINGEBUNDEN_VORLAUF_WT: u32 = 12;
 
 /// Latest ÜT of the NB's **Anfrage Sperrung** to the MSB (ORDERS 17116), in
-/// Werktagen before the Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 3).
+/// Werktagen before the Sperrtermin (GPKE Teil 2 Kap. 3.5.1.2 Nr. 3).
 ///
 /// Owed only „sofern keine generelle Zustimmung des MSB zur
 /// Sperrung/Entsperrung durch den NB erteilt wurde". Not to be confused with
@@ -515,7 +539,7 @@ pub const GAS_BEARBEITUNGSFRIST_WT_DEFAULT: u32 = 3;
 /// | LF / MSB | WiM Teil 1 Kap. 3.6.3.8.2, 3.7.2 | **zum** Zahlungsziel |
 ///
 /// The recipient's Marktrolle is what tells them apart (BDEW Allgemeine
-/// Festlegungen §2.13: one MP-ID per Marktrolle). Folding the ESA into the LF
+/// Festlegungen Kap. 2.13: one MP-ID per Marktrolle). Folding the ESA into the LF
 /// arm gave it four Werktage it does not have, and the breach only becomes
 /// visible once the MSB has already stopped waiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -886,7 +910,7 @@ pub const WIM: &[VorlaufObligation] = &[
         name: "Sperrauftrag (nicht termingebunden)",
         anchor: Anchor::Sperrtermin,
         shape: VorlaufShape::LatestWerktageBefore(SPERRAUFTRAG_VORLAUF_WT),
-        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 SD Unterbrechung der Anschlussnutzung \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 SD Unterbrechung der Anschlussnutzung \
                  Nr. 1 — „Auftrag ist nicht termingebunden: Unverzüglich, jedoch spätester \
                  ÜT ist der 6. WT vor dem frühestmöglichen Sperrtermin\"",
     },
@@ -897,7 +921,7 @@ pub const WIM: &[VorlaufObligation] = &[
         name: "Sperrauftrag (termingebunden)",
         anchor: Anchor::Sperrtermin,
         shape: VorlaufShape::LatestWerktageBefore(SPERRAUFTRAG_TERMINGEBUNDEN_VORLAUF_WT),
-        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Nr. 1 — „Auftrag ist termingebunden \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 — „Auftrag ist termingebunden \
                  (z.B. der Gerichtsvollzieher gibt den Sperrtermin (Datum, Uhrzeit, Ort) \
                  vor): … spätester ÜT ist der 12. WT vor dem Sperrtermin\"",
     },
@@ -908,7 +932,7 @@ pub const WIM: &[VorlaufObligation] = &[
         name: "Anfrage Sperrung an den MSB",
         anchor: Anchor::Sperrtermin,
         shape: VorlaufShape::LatestWerktageBefore(SPERRUNG_MSB_ANFRAGE_WT),
-        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Nr. 3 — „Unverzüglich, jedoch spätester \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 Nr. 3 — „Unverzüglich, jedoch spätester \
                  ÜT ist der 3. WT vor dem Sperrtermin\"; owed nur „sofern keine generelle \
                  Zustimmung des MSB … erteilt wurde\". Nr. 2 obliges the NB to set the \
                  Sperrtermin so that this and the MSB\u{2019}s 3-WT answer still fit.",

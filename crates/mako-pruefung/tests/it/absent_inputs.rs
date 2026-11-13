@@ -1192,7 +1192,7 @@ mod rechnung {
         };
         RechnungsFakten {
             einwaende_entkraeftet: Some(true),
-            ustg_konform: Some(true),
+            ustg_maengel: Some(Vec::new()),
             rechnungsdatum: date!(2026 - 04 - 01),
             eingangsdatum: date!(2026 - 04 - 01),
             leistungszeitraum: Some(maerz),
@@ -1267,7 +1267,7 @@ mod rechnung {
             input: StornoFakten {
                 ursprungsrechnung_bekannt: true,
                 rechnungsnummer_bereits_verwendet: false,
-                ustg_konform: Some(true),
+                ustg_maengel: Some(Vec::new()),
                 bereits_storniert: false,
                 rechnungstyp_identisch: true,
                 zeitraum_identisch: true,

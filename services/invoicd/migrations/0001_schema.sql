@@ -54,6 +54,31 @@ CREATE TABLE invoic_receipts (
     -- read under. Server-derived provenance, never a client-supplied value.
     rechnung                JSONB       NOT NULL,
     bo4e_version            TEXT        NOT NULL,
+    -- `SG1 RFF+ACE` and `IMD+7081` — the two INVOIC facts BO4E has no field
+    -- for. The Entscheidungsbaum reads both (the order, the Use-Case), so a
+    -- held invoice walks again from the receipt alone.
+    bestellung_ref          TEXT,
+    rechnungstyp            TEXT,
+    -- The Prüfschritte the walk reached and no record answered, while
+    -- `outcome = 'Offen'`: what a person has to state.
+    offen                   JSONB       NOT NULL DEFAULT '[]',
+    -- What a person stated for this invoice's open Prüfschritte (310, 320,
+    -- 330 per Positionsnummer, 80), with the Begründung — the answers the
+    -- walk reads when it runs again.
+    feststellungen          JSONB       NOT NULL DEFAULT '{}',
+    festgestellt_von        TEXT,
+    festgestellt_am         TIMESTAMPTZ,
+    feststellung_begruendung TEXT,
+    -- The round of the Rechnungsprüfung: 1 `E_0264`/`E_0270`/`E_0273`, 2 the
+    -- second look `E_0266`/`E_0276`/`E_0277` after the MSB answered our
+    -- refusal with a COMDIS 29001 (`comdis_ref`). Opening round 2 keeps round
+    -- 1's answer and its dispatch time in `erste_runde_*`, so both REMADVs
+    -- stay on the § 147 AO record.
+    runde                   SMALLINT    NOT NULL DEFAULT 1 CHECK (runde IN (1, 2)),
+    comdis_ref              TEXT,
+    erste_runde_antwort     JSONB,
+    erste_runde_dispatched_at TIMESTAMPTZ,
+    CONSTRAINT invoic_zweite_runde_hat_comdis CHECK ((runde = 2) = (comdis_ref IS NOT NULL)),
 
     -- Plausibility outcome.
     outcome                 TEXT        NOT NULL CHECK (outcome IN (
@@ -151,6 +176,31 @@ CREATE INDEX invoic_overdue_pending   ON invoic_receipts (tenant, pay_by)
 -- payload with no message reference, a Rechnung makod cannot supply. These are
 -- Buchungsbelege that arrived and were not processed, so they are kept and
 -- alerted on rather than dropped in a log line.
+
+-- ── Leistungsnachweise ────────────────────────────────────────────────────────
+--
+-- `E_0264`/`E_0270`/`E_0273` Prüfschritt 310: „Wurde die abzurechnende
+-- Leistung vom MSB durchgeführt?" (EBD 4.3 S. 628, 657, 667). No INVOIC states
+-- it; the recipient knows it — the values arrived, the technical change was
+-- made. Recorded once per order, Artikel-ID and period, it answers every
+-- position it covers, before or after the invoice arrives.
+CREATE TABLE leistungsnachweise (
+    id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant                  TEXT        NOT NULL,
+    -- The MSB the Leistung was ordered from (NAD+MS of its INVOIC).
+    rechnungssteller_mp_id  TEXT        NOT NULL,
+    -- The order (`SG1 RFF+ACE` of the INVOIC).
+    bestellung_ref          TEXT        NOT NULL,
+    artikel_id              TEXT        NOT NULL,
+    von                     DATE        NOT NULL,
+    bis                     DATE        NOT NULL CHECK (von <= bis),
+    erbracht                BOOLEAN     NOT NULL,
+    -- What the statement rests on — never empty.
+    nachweis                TEXT        NOT NULL CHECK (btrim(nachweis) <> ''),
+    festgestellt_von        TEXT        NOT NULL,
+    festgestellt_am         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant, rechnungssteller_mp_id, bestellung_ref, artikel_id, von, bis)
+);
 
 CREATE TABLE invoic_dlq (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),

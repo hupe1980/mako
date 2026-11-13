@@ -27,7 +27,7 @@
 //! - **PID 55608**: LFN Bestätigung (LFN → NB, outbound)
 //! - **PID 55609**: LFN Ablehnung (LFN → NB, outbound)
 //! - **Deadline**: **15:00 Uhr am ÜT** for the LFN's answer, and silence means
-//!   the NB assigns anyway (BK6-24-174 GPKE Teil 2 § 2.4.2 Nr. 3)
+//!   the NB assigns anyway (BK6-24-174 GPKE Teil 2 Kap. 2.4.2 Nr. 3)
 //! - **Regulatory basis**: UTILMD AHB Strom 2.1/2.2, BK6-24-174, GPKE domain
 //!
 //! AHB validation is bypassed for inbound `ReceiveAnkuendigung` because the
@@ -234,7 +234,7 @@ impl MockLfn {
 /// NB sends UTILMD 55607; LFN receives the announcement, confirms acceptance
 /// (→ 55608 Bestätigung), and acknowledges the assignment as complete.
 ///
-/// Per BK6-24-174 GPKE Teil 2 § 2.4.2, the LFN answers by 15:00 Uhr am ÜT.
+/// Per BK6-24-174 GPKE Teil 2 Kap. 2.4.2, the LFN answers by 15:00 Uhr am ÜT.
 #[tokio::test]
 async fn e2e_ankuendigung_zuordnung_lf_accepted_and_zugeordnet() {
     let lfn = MockLfn::new();

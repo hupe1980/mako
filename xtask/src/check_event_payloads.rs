@@ -96,6 +96,37 @@ const NOT_WORKFLOW_CRATES: &[&str] = &[
 /// `…Event` or `…State` enum of a workflow crate.
 const PAYLOAD_FILES: &[&str] = &["crates/mako-engine/src/payload.rs"];
 
+/// The outbox message types a renderer reads through a typed payload. A
+/// workflow crate enqueues one only through `PendingOutbox::typed`: a
+/// `PendingOutbox::new("<type>", …, json!(…))` spells its keys by hand, and a
+/// key spelt wrong is a segment off the wire that only a debug-build test of
+/// that very path would notice.
+const TYPED_MESSAGE_TYPES: &[&str] = &[
+    "UTILMD", "APERAK", "ORDERS", "ORDRSP", "ORDCHG", "IFTSTA", "QUOTES", "REQOTE", "INSRPT",
+    "MSCONS", "INVOIC", "REMADV",
+];
+
+/// Every `PendingOutbox::new("<typed message type>"` in `body`, as
+/// `(line, message type)`.
+fn untyped_enqueues(body: &str) -> Vec<(usize, &'static str)> {
+    let mut out = Vec::new();
+    let needle = "PendingOutbox::new(";
+    let mut from = 0;
+    while let Some(i) = body[from..].find(needle) {
+        let at = from + i;
+        let rest = body[at + needle.len()..].trim_start();
+        if let Some(lit) = rest.strip_prefix('"')
+            && let Some(ty) = TYPED_MESSAGE_TYPES
+                .iter()
+                .find(|t| lit.starts_with(&format!("{t}\"")))
+        {
+            out.push((body[..at].lines().count().max(1), *ty));
+        }
+        from = at + needle.len();
+    }
+    out
+}
+
 /// Every `Deserialize` type in `src` as `(line, name, strict)`: whether one of
 /// the attributes above its `struct`/`enum` line refuses unknown keys.
 fn payload_types(src: &str) -> Vec<(usize, String, bool)> {
@@ -148,6 +179,30 @@ const REQUEST_BODY_TYPES: &[(&str, &str, &str)] = &[
         "crates/mako-redispatch/src/ausfallarbeit.rs",
         "UeberbauungTr",
         "netzbilanzd Überbauung request input; never recorded as an event",
+    ),
+    (
+        "crates/mako-redispatch/src/bilarem.rs",
+        "Viertelstundenerfassung",
+        "netzbilanzd Ausfallarbeit request input (the TR's Abrechnungsvariante facts); \
+         never recorded as an event",
+    ),
+    (
+        "crates/mako-redispatch/src/bilarem.rs",
+        "TrMerkmale",
+        "the BilAReM Kap. 3.2.1 / 3.3 facts a method decision reads; never recorded as \
+         an event",
+    ),
+    (
+        "crates/mako-redispatch/src/bilarem.rs",
+        "Verfahrensfestlegung",
+        "netzbilanzd Ausfallarbeit request input, internally tagged, so the runtime \
+         unknown-key refusal cannot see into it; never recorded as an event",
+    ),
+    (
+        "crates/mako-redispatch/src/fristen.rs",
+        "Wetterdatenherkunft",
+        "netzbilanzd Ausfallarbeit request input (who supplied the Wetterdaten); never \
+         recorded as an event",
     ),
 ];
 
@@ -353,6 +408,12 @@ pub fn run(workspace_root: &Path) -> bool {
                     .unwrap_or(&p)
                     .display()
                     .to_string();
+                for (n, ty) in untyped_enqueues(&body) {
+                    findings.push(format!(
+                        "{rel}:{n}: a {ty} outbox entry built by hand — construct its typed \
+                         payload and enqueue it with `PendingOutbox::typed`"
+                    ));
+                }
                 let lines: Vec<&str> = body.lines().collect();
                 for (n, line) in lines.iter().enumerate() {
                     if !line.contains(FORBIDDEN) {
@@ -500,6 +561,18 @@ mod tests {
             "pub struct UeberbauungTr {",
         ];
         assert_eq!(attached_type(&lines, 0).as_deref(), Some("UeberbauungTr"));
+    }
+
+    /// A rendered message type enqueued by hand is found, on one line or
+    /// split across two; a notice type and the typed constructor are not.
+    #[test]
+    fn a_hand_built_rendered_entry_is_found() {
+        let src = "let a = PendingOutbox::new(\"ORDRSP\", to, json!({}));\n\
+                   let b = PendingOutbox::new(\n    \"IFTSTA\",\n    to, p);\n\
+                   let c = PendingOutbox::new(\"ProcessCompleted\", \"\", p);\n\
+                   let d = PendingOutbox::typed(to, &payload);\n\
+                   let e = PendingOutbox::new(\"ORDERSX\", to, p);\n";
+        assert_eq!(untyped_enqueues(src), [(1, "ORDRSP"), (2, "IFTSTA")]);
     }
 
     /// The guard finds the attribute it exists to refuse.

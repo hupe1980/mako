@@ -20,7 +20,7 @@
 //!        │
 //!        │  SendAntwort(accepted=true)
 //!        │  → AntwortGesendet state
-//!        │  → WorkflowOutput::outbox: MSCONS 13015 + ORDERS 17134
+//!        │  → WorkflowOutput::outbox: UTILMD 55002 + ProcessCompleted
 //!        │
 //!        │  render UTILMD 55002 → EDIFACT wire bytes  (UtilmdBuilder)
 //!        │  cancel APERAK deadline
@@ -54,7 +54,7 @@ use mako_fristen as fristen;
 use mako_gpke::{
     GPKE_PROCESS_RESPONSE_LABEL, GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow,
     LfAnmeldungCommand, LfAnmeldungState, NB_RESPONSE_WINDOW_LABEL, SupplierChangeCommand,
-    SupplierChangeState, post_acceptance,
+    SupplierChangeState,
 };
 use time::OffsetDateTime;
 
@@ -62,7 +62,6 @@ use time::OffsetDateTime;
 
 const LFN_ID: &str = "4012345000023"; // Lieferant (new supplier)
 const NB_ID: &str = "9900357000004"; // Netzbetreiber
-const MSB_ID: &str = "9900111222333"; // Messstellenbetreiber
 const MALO_ID: &str = "51238696781"; // MaLo identifier
 
 // Format version used throughout this test.
@@ -342,17 +341,9 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
     // ── 5. NB accepts — inspect outbox, then persist ──────────────────────────
 
     let antwort_ref = "MSG-NB-2025-001";
-    let msb = MarktpartnerCode::new(MSB_ID);
-    let malo_for_obligations = MaLo::new(MALO_ID);
-    let new_supplier_for_obligations = MarktpartnerCode::new(LFN_ID);
     let send_antwort = SupplierChangeCommand::SendAntwort {
         antwort: nb_antwort(true, None),
-        obligations: post_acceptance::lieferbeginn_obligations(
-            55001,
-            &malo_for_obligations,
-            &new_supplier_for_obligations,
-            Some(&msb),
-        ),
+        obligations: Vec::new(),
         lfa_lieferende: None,
     };
 
@@ -362,9 +353,8 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
 
     assert_eq!(
         nb_output.outbox.len(),
-        4,
-        "accepted 55001 must produce UTILMD 55002 + ProcessCompleted + MSCONS + ORDERS \
-         outbox entries"
+        2,
+        "accepted 55001 must produce UTILMD 55002 + ProcessCompleted"
     );
     let completed = nb_output
         .outbox
@@ -381,22 +371,6 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         .expect("UTILMD 55002 Bestätigung must be present");
     assert_eq!(utilmd_55002_ob.payload["pid"].as_u64().unwrap(), 55002);
     assert_eq!(utilmd_55002_ob.recipient.as_ref(), LFN_ID);
-
-    let mscons = nb_output
-        .outbox
-        .iter()
-        .find(|e| e.message_type.as_ref() == "MSCONS")
-        .expect("MSCONS 13015 must be present");
-    assert_eq!(mscons.payload["pid"].as_u64().unwrap(), 13015);
-    assert_eq!(mscons.payload["malo"].as_str().unwrap(), MALO_ID);
-
-    let orders = nb_output
-        .outbox
-        .iter()
-        .find(|e| e.message_type.as_ref() == "ORDERS")
-        .expect("ORDERS 17134 must be present");
-    assert_eq!(orders.payload["pid"].as_u64().unwrap(), 17134);
-    assert_eq!(orders.recipient.as_ref(), MSB_ID);
 
     // Persist the state change.
     nb.run(send_antwort, RunOptions::new())

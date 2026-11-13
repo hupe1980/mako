@@ -266,7 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let utilmd_conversation_id = envs[0].conversation_id;
     let utilmd_event_id = envs[0].event_id;
 
-    // ── APERAK sending window (APERAK AHB 1.1 §2.4.1) ────────────────────────
+    // ── APERAK sending window (APERAK AHB 1.1 Kap. 2.4.1) ────────────────────────
     //
     // The technical acknowledgement, on its own clock: **45 minutes** for a
     // Strom UTILMD received on a Werktag, Sonntag 12:00 after a Saturday. It is

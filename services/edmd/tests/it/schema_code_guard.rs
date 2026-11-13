@@ -230,7 +230,7 @@ fn typ2_pid_13027_is_received_and_forked() {
 /// share one row and one going silent is masked by the other still arriving.
 ///
 /// `subscription_ref` is `SG1 RFF+AGI` on the delivering MSCONS 13027 — the
-/// Belegnummer of the ORDERS that ordered the values (MSCONS AHB 3.2 §11.2
+/// Belegnummer of the ORDERS that ordered the values (MSCONS AHB 3.2 Kap. 11.2
 /// hint `[574]`).
 #[test]
 fn typ2_surveillance_is_keyed_per_subscription() {

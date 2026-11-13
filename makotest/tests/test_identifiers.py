@@ -33,7 +33,7 @@ from makotest import (
 
 class TestMarktlokation:
     def test_the_bdew_reference_vector(self):
-        """§8.1 of the BDEW Anwendungshilfe, worked example."""
+        """Kap. 8.1 of the BDEW Anwendungshilfe, worked example."""
         assert malo_from_base("4137355924") == "41373559241"
         assert malo_check_digit("4137355924") == 1
         assert malo_is_valid("41373559241")
@@ -68,7 +68,7 @@ class TestMesslokation:
 
 class TestMarktpartner:
     def test_the_two_check_digit_schemes_are_different_arithmetic(self):
-        """§2.3 defines two procedures, and they disagree on almost every base.
+        """Kap. 2.3 defines two procedures, and they disagree on almost every base.
 
         A fixture that picks 13 digits satisfies neither, and every conformant
         counterparty refuses it — which is why this is a constructor and the

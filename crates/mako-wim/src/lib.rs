@@ -48,7 +48,7 @@
 //!
 //! | Clock | Window | Message |
 //! |---|---|---|
-//! | **APERAK** — processability | 45 min for Strom UTILMD/ORDERS (APERAK AHB 1.1 §2.4.1) | APERAK BGM+312/313 |
+//! | **APERAK** — processability | 45 min for Strom UTILMD/ORDERS (APERAK AHB 1.1 Kap. 2.4.1) | APERAK BGM+312/313 |
 //! | **Antwortfrist** — the business decision | 3 / 5 / 7 / 1 Werktage per process, from `antwort_frist_werktage(pid)` | the Antwort-PID's UTILMD or ORDRSP |
 //! | **Vorlauffrist** — was the requested date admissible? | anchored on the date the message carries, `mako_fristen::vorlauf` | the inbound message itself |
 //!
@@ -380,7 +380,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // 17006 (Beendigung, either direction), plus ORDRSP 19009/19010
         // (Bestätigung/Ablehnung der Beendigung) resuming a Beendigung mako
         // sent. Directions per BDEW PID overview 4.0 / AWH Aktivitätsdiagramme
-        // WiM V1.3 §§2.8–2.11 (EBDs E_0206/E_0209).
+        // WiM V1.3 Kap. 2.8–2.11 (EBDs E_0206/E_0209).
         for &pid in rechnungsabwicklung::RECHNUNGSABWICKLUNG_ORDERS_PIDS
             .iter()
             .chain(rechnungsabwicklung::RECHNUNGSABWICKLUNG_ORDRSP_PIDS)
@@ -414,7 +414,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // echoed in RFF+ON (see the makod ingest dispatcher).
         if roles.contains(mako_engine::marktrolle::Marktrolle::Msb) {
             // REQOTE 35003 opens the handshake. ESA-specific (REQOTE AHB 1.1
-            // §4.3), so it routes straight here — it is not part of the
+            // Kap. 4.3), so it routes straight here — it is not part of the
             // Preisanfrage REQOTE set.
             router.register(
                 wertebestellung::ANFRAGE_PID.as_u32(),
@@ -477,7 +477,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // the makod router disambiguates shared REMADV PIDs by conversation ID
         // (invoice correlation), not by PID alone.
         //
-        // Source: REMADV AHB 1.0a §3, WiM Strom Teil 1 (BK6-24-174).
+        // Source: REMADV AHB 1.0a Kap. 3, WiM Strom Teil 1 (BK6-24-174).
         for &pid in invoic::WIM_REMADV_PIDS {
             router.register(pid, "wim-invoic");
         }

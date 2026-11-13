@@ -469,8 +469,15 @@ fn a_non_advisory_principal_keeps_its_permits() {
         tenant: "9900357000004".to_owned(),
         roles: vec!["NB".to_owned()],
     };
+    let vertragd = mako_service::cedar::CedarPrincipal {
+        sub: "vertragd".to_owned(),
+        tenant: "9900357000004".to_owned(),
+        roles: vec!["LF".to_owned()],
+    };
     for action in actions_used_in_code() {
-        let (who, principal) = if NB_ACTIONS.contains(&action.as_str()) {
+        let (who, principal) = if action == "sync-verbraucher" {
+            ("vertragd", &vertragd)
+        } else if NB_ACTIONS.contains(&action.as_str()) {
             ("NB", &nb)
         } else {
             ("LF", &lf)
@@ -569,4 +576,51 @@ fn an_nb_only_key_reads_the_eeg_payouts_and_an_lf_key_does_not() {
             "{role}"
         );
     }
+}
+
+/// The § 13 BGB status has one writer, vertragd's contract command: an
+/// operator token — whatever market role it carries — cannot set it, neither
+/// through `sync-verbraucher` nor through the master-data PUT, which refuses
+/// the field.
+#[test]
+fn only_vertragd_sets_the_verbraucher_status() {
+    use mako_service::cedar::{CedarEnforcer, CedarPrincipal};
+    let cedar = CedarEnforcer::from_policy_str(POLICY).expect("policy");
+    let tenant = "9900000000003";
+    let principal = |sub: &str| CedarPrincipal {
+        sub: sub.to_owned(),
+        tenant: tenant.to_owned(),
+        roles: ["NB", "LF", "MSB", "ESA", "ADMIN"]
+            .map(str::to_owned)
+            .to_vec(),
+    };
+    assert!(
+        cedar
+            .check(&principal("vertragd"), "sync-verbraucher", tenant)
+            .is_ok()
+    );
+    assert!(
+        cedar
+            .check(&principal("operator-1"), "sync-verbraucher", tenant)
+            .is_err(),
+        "an operator token cannot set the status"
+    );
+    assert!(
+        cedar
+            .check(&principal("vertragd"), "sync-verbraucher", "9900000000010")
+            .is_err(),
+        "nor vertragd across tenants"
+    );
+    assert!(
+        serde_json::from_value::<accountingd::pg::UpdateAccountRequest>(
+            serde_json::json!({ "verbraucher": false })
+        )
+        .is_err(),
+        "the master-data PUT refuses the field"
+    );
+    assert!(
+        serde_json::from_value::<accountingd::pg::SetVerbraucherRequest>(serde_json::json!({}))
+            .is_err(),
+        "an empty body states neither answer"
+    );
 }

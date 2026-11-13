@@ -25,7 +25,7 @@ assert_eq!(action.service(), Service::Marktprozesse);
 let domain = MessageIdDomain::parse("as4.stadtwerke.example").unwrap();
 assert_eq!(domain.message_id("42"), "42@as4.stadtwerke.example");
 
-// The payload part's name (Allgemeine Festlegungen V6.1d §2.12).
+// The payload part's name (Allgemeine Festlegungen V6.1d Kap. 2.12).
 let name = uebertragungsdatei_name(
     "UTILMD", "", "9900000000003", "9900000000010", (2026, 10, 1), "DAR1",
 );
@@ -51,7 +51,7 @@ by public key, which `build()` does not do — and registers the CRL signer.
 | `partner_directory` | `PartnerDirectory` / `PartnerEntry` — one `asx::Partner` per counterparty; `parse_quirk` |
 | `action` | `BdewAction` — the 16 standard EDIFACT message types, `Custom` for any other; `service()` |
 | `service` | `Service` — the five `eb:Service` URIs of §2.3.1.2.1 |
-| `file_name` | `uebertragungsdatei_name` — Allgemeine Festlegungen V6.1d §2.12 |
+| `file_name` | `uebertragungsdatei_name` — Allgemeine Festlegungen V6.1d Kap. 2.12 |
 | `message_id` | `MessageIdDomain` — RFC 2822 `eb:MessageId` values |
 | `keys` | `subject_public_key_info`, `same_public_key` |
 | `constants` | party types per issuing agency (§2.3.1.1), `PAYLOAD_MIME_TYPE`, `MAX_MESSAGE_BYTES`, `MAX_RETRY_DURATION_SECS` (72 h) |

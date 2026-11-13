@@ -17,13 +17,21 @@
 //! message and registers no window.
 //!
 //! The receiving MSB runs [`crate::konfiguration_aenderung`]'s receiving side.
+//!
+//! # Refused until its facts have a source
+//!
+//! The 17134 column makes Muss facts no source of the NB carries — the
+//! Lieferrichtung, the Lieferant and MSB of the Marktlokation, and per Lokation
+//! the erforderlichen Produkte with their Zählzeitdefinition (ORDERS AHB 1.1b
+//! Kap. 4.17.1, S. 101–110). `NbSendsBeauftragung` refuses with
+//! [`MISSING_COLUMN_FACTS`] rather than queue an ORDERS the renderer and the
+//! pre-send gate would refuse.
 
 use std::collections::HashMap;
 
 use mako_engine::{
     envelope::{EventEnvelope, Richtung, Verlauf},
     error::WorkflowError,
-    outbox::PendingOutbox,
     projection::Projection,
     types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
@@ -41,6 +49,16 @@ pub const WORKFLOW_NAME: &str = "gpke-konfiguration";
 /// Kap. 1.3.7.2 Nr. 2, S. 84). The recipient MSB runs
 /// `gpke-konfiguration-aenderung`'s receiving side.
 pub const ORDERS_PIDS: &[u32] = &[17134, 17135];
+
+/// Why no 17134 is queued: ORDERS AHB 1.1b Kap. 4.17.1 (S. 101–110) makes Muss
+/// the Lieferrichtung (`IMD`), the Lieferant and the MSB of the Marktlokation
+/// (`SG2 NAD`), and per Lokation the erforderlichen Produkte (`SG29 LIN`/`PIA`)
+/// with their Zählzeitdefinition (`SG30 CCI`) — facts no source of the NB
+/// carries.
+pub const MISSING_COLUMN_FACTS: &str = "ORDERS 17134 is not sent: its column (ORDERS AHB 1.1b \
+     Kap. 4.17.1, S. 101–110) requires the Lieferrichtung, the Lieferant and the MSB of the \
+     Marktlokation and, per Lokation, the erforderlichen Produkte (SG29 LIN/PIA) with their \
+     Zählzeitdefinition (SG30 CCI), and no source of the NB carries them";
 
 /// The ORDERS the NB sends here: 17134 „NB an MSB".
 pub const NB_ORDERS_PID: u32 = 17_134;
@@ -201,13 +219,7 @@ impl Workflow for GpkeKonfigurationWorkflow {
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
         match command {
-            KonfigurationCommand::NbSendsBeauftragung {
-                orders_pid,
-                msb_mp_id,
-                malo,
-                new_supplier,
-                message_ref,
-            } => {
+            KonfigurationCommand::NbSendsBeauftragung { orders_pid, .. } => {
                 if !matches!(state, KonfigurationState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
@@ -216,25 +228,11 @@ impl Workflow for GpkeKonfigurationWorkflow {
                         "the NB sends ORDERS {NB_ORDERS_PID}; 17135 is the MSB's — got {orders_pid}",
                     )));
                 }
-                let event = KonfigurationEvent::BeauftragungGesendet {
-                    orders_pid,
-                    msb_mp_id: msb_mp_id.clone(),
-                    malo: malo.clone(),
-                    new_supplier: new_supplier.clone(),
-                    message_ref: message_ref.clone(),
-                };
-                let outbox = vec![PendingOutbox::new(
-                    "ORDERS",
-                    msb_mp_id.as_str(),
-                    serde_json::json!({
-                        "type":         "Beauftragung",
-                        "pid":          orders_pid.as_u32(),
-                        "malo":         malo.as_str(),
-                        "new_supplier": new_supplier.as_str(),
-                        "orders_ref":   message_ref.as_str(),
-                    }),
-                )];
-                Ok(WorkflowOutput::with_outbox(vec![event], outbox))
+                // The 17134 column makes Muss what this command does not
+                // carry and the NB holds no source for; an ORDERS without them
+                // is refused by the renderer and the pre-send gate, so none is
+                // queued.
+                Err(WorkflowError::rejected(MISSING_COLUMN_FACTS))
             }
         }
     }
@@ -327,29 +325,14 @@ mod tests {
         }
     }
 
-    /// The 17134 ends the NB's process: no ORDRSP answers it (GPKE Teil 3 Kap.
-    /// 1.3.7.2), so nothing is waited for and no window is registered.
+    /// The 17134 is refused before anything is queued: no window, no event,
+    /// no ORDERS the renderer would refuse.
     #[test]
-    fn the_17134_ends_the_nbs_process_with_no_window() {
+    fn the_17134_is_refused_before_it_is_queued() {
         assert!(GpkeKonfigurationWorkflow::DEADLINE_LABELS.is_empty());
-        let out = GpkeKonfigurationWorkflow::handle(&KonfigurationState::New, beauftragung(17_134))
-            .expect("sent");
-        assert!(out.deadlines.is_empty());
-        assert_eq!(out.outbox.len(), 1);
-        assert_eq!(
-            out.events[0].verlauf(),
-            Some(Verlauf {
-                richtung: Richtung::Ausgang,
-                pid: Some(17_134),
-                message_ref: Some("ORD-1".to_owned()),
-            })
-        );
-        let state = out
-            .events
-            .iter()
-            .fold(KonfigurationState::New, GpkeKonfigurationWorkflow::apply);
-        assert!(state.is_terminal());
-        assert!(!mako_engine::workflow::OccupiesBusinessKey::occupies_business_key(&state));
+        let err = GpkeKonfigurationWorkflow::handle(&KonfigurationState::New, beauftragung(17_134))
+            .expect_err("refused");
+        assert!(err.to_string().contains("Zählzeitdefinition"), "{err}");
     }
 
     /// 17135 is the MSB's forward to the weiterer MSB, not the NB's.

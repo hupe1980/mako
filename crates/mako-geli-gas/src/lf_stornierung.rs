@@ -48,7 +48,7 @@
 //!   So the boundary is the *original* message's Antwortfrist — for a 44001
 //!   Anmeldung, the GNB's 4 Werktage — not a window of the Stornierung's own,
 //!   and certainly not the LFN's 10-Werktage Vorlauffrist.
-//! - **APERAK AHB 1.1 § 2.3.1** — Gas: nächster Werktag 12:00 (Folgeprozess),
+//! - **APERAK AHB 1.1 Kap. 2.3.1** — Gas: nächster Werktag 12:00 (Folgeprozess),
 //!   3 Werktage (Initialprozess). A separate clock.
 
 use mako_engine::envelope::{Richtung, Verlauf};
@@ -457,16 +457,16 @@ impl Workflow for GeliGasLfStornierungWorkflow {
                 // Rücktritt, `E35` Sperrung — UTILMD AHB Gas, GeLi Gas 3.0).
                 // The Gas track puts every Lokation in `SG5 LOC+172`, which the
                 // renderer derives from the release track.
-                let outbox = PendingOutbox::new(
-                    "UTILMD",
+                let outbox = PendingOutbox::typed(
                     receiver.as_str(),
-                    serde_json::json!({
-                        "pid":           pid.as_u32(),
-                        "sender":        sender.as_str(),
-                        "receiver":      receiver.as_str(),
-                        "malo":          malo.as_str(),
-                        "document_code": bgm_qualifier,
-                    }),
+                    &mako_engine::payload::UtilmdPayload {
+                        pid: pid.as_u32(),
+                        sender: sender.as_str().to_owned(),
+                        receiver: Some(receiver.as_str().to_owned()),
+                        malo: Some(malo.as_str().to_owned()),
+                        document_code: Some(bgm_qualifier),
+                        ..Default::default()
+                    },
                 );
 
                 Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))

@@ -91,6 +91,10 @@ pub struct LfVorgangsdaten {
     /// switch completes; it is what reconciles an Anfrage against a Kündigung
     /// the LFA already answered.
     pub lfn_mp_id: Option<String>,
+    /// `SG4 DTM+206` — the Geräteausbauzeitpunkt of a 55007 under `Z33`
+    /// (Bedingung `[79]`), `YYYYMMDD`. The LF's 55008 restates it: the same
+    /// Bedingung makes it Muss there.
+    pub geraeteausbaudatum: Option<String>,
 }
 
 impl LfVorgangsdaten {
@@ -150,6 +154,7 @@ impl LfVorgangsdaten {
         set("kunde_name", &self.kunde_name);
         set("kunde_namensformat", &self.kunde_namensformat);
         set("lfn_mp_id", &self.lfn_mp_id);
+        set("geraeteausbaudatum", &self.geraeteausbaudatum);
 
         if let Some(extra) = extra.as_object() {
             for (k, v) in extra {
@@ -215,9 +220,11 @@ mod tests {
                 kunde_name: Some("Mustermann Erika".into()),
                 kunde_namensformat: Some("Z01".into()),
                 lfn_mp_id: Some("9900357000004".into()),
+                geraeteausbaudatum: Some("20261130".into()),
             },
             &serde_json::Value::Null,
         );
+        assert_eq!(p["geraeteausbaudatum"], "20261130");
         assert_eq!(p["transaktionsgrund"], "E03");
         assert_eq!(p["transaktionsgrund_ergaenzung"], "ZW4");
         assert_eq!(p["vorgangsnummer"], "NNV1234");

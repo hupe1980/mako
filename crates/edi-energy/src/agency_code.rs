@@ -1,8 +1,16 @@
 /// EDIFACT DE 3055 — code list responsible agency for market participant identification.
 ///
-/// Used in NAD segments (C082 component 2) and IDE segments to indicate which body
-/// issued the party identifier code. Choosing the wrong agency code produces
+/// Used in NAD segments (C082 component 2) to indicate which body issued the
+/// party identifier code. Choosing the wrong agency code produces
 /// non-conformant EDIFACT that receiving parties may reject.
+///
+/// The variants are exactly the NAD DE 3055 code list of the MIGs: `9` GS1,
+/// `293` BDEW, `332` DVGW (UTILMD MIG Strom S2.2 S. 32–33, UTILMD MIG Gas G1.2
+/// S. 17–18, APERAK MIG 2.2 S. 12–13, MSCONS MIG 2.5 S. 15–16). No MIG lists a
+/// code for an EIC on a NAD: DE 3039 there is the MP-ID, and an EIC travels in
+/// `CCI` DE 7037 or `LOC` DE 3225, which carry no DE 3055. The integration test
+/// `party_agency_code` reads the imported MIG profiles and holds this enum to
+/// their list.
 ///
 /// In the **German energy market (BDEW `MaKo` / EDI@Energy)** the dominant code is
 /// [`AgencyCode::Bdew`] (`"293"`). Nearly all supplier, DSO, and MSB codes carry
@@ -26,7 +34,7 @@
 ///
 /// assert_eq!(AgencyCode::Bdew.as_str(), "293");
 /// assert_eq!(AgencyCode::Gs1.as_str(),  "9");
-/// assert_eq!(AgencyCode::Etso.as_str(), "305");
+/// assert_eq!(AgencyCode::Dvgw.as_str(), "332");
 ///
 /// // Parse from a raw NAD segment agency string.
 /// assert_eq!(AgencyCode::parse("293"), Some(AgencyCode::Bdew));
@@ -61,20 +69,6 @@ pub enum AgencyCode {
     /// operators use [`AgencyCode::Bdew`] even for GS1-compatible numbers.
     Gs1,
 
-    /// `"305"` — ETSO, registered in DE 3055 as the European transmission
-    /// system operators' association.
-    ///
-    /// The body became ENTSO-E, which now runs the EIC coding scheme, so this is
-    /// the agency for 16-character EIC codes: transmission operators (ÜNB/TSO),
-    /// Regelzonen, Bilanzkreise and cross-border participants.
-    ///
-    /// # NAD wire form
-    ///
-    /// ```text
-    /// NAD+MS+10XDE-EON-NETZ-C::305'
-    /// ```
-    Etso,
-
     /// `"332"` — the DVGW gas code list.
     ///
     /// Not legacy: it is the agency on **every** coded value in the DVGW gas
@@ -99,7 +93,6 @@ impl AgencyCode {
         match self {
             Self::Bdew => "293",
             Self::Gs1 => "9",
-            Self::Etso => "305",
             Self::Dvgw => "332",
         }
     }
@@ -121,24 +114,32 @@ impl AgencyCode {
     /// be a Strom party; that is a wider set, so deriving from the MP-ID stays
     /// inside it.)
     ///
-    /// A 16-character EIC resolves to [`AgencyCode::Bdew`], matching
-    /// `unb_qualifier`'s `500`: BDEW is the German EIC issuing office.
+    /// Any other identifier — a 16-character EIC among them — has no agency:
+    /// `None`. An MP-ID is a BDEW-Codenummer, a DVGW-Codenummer or a GLN
+    /// (BDEW-AWH Identifikatoren V1.2 Kap. 2.1, S. 4), all 13 digits, and an
+    /// EIC is none of them (Kap. 1, S. 4); no MIG admits one on a NAD. A caller
+    /// refuses the party by name rather than borrowing a code.
     ///
     /// ```rust
     /// use edi_energy::AgencyCode;
     ///
-    /// assert_eq!(AgencyCode::for_mp_id("9900123456789"), AgencyCode::Bdew); // BDEW Strom
-    /// assert_eq!(AgencyCode::for_mp_id("9870123456789"), AgencyCode::Dvgw); // DVGW Gas
-    /// assert_eq!(AgencyCode::for_mp_id("4012345000023"), AgencyCode::Gs1);  // GS1 GLN
+    /// assert_eq!(AgencyCode::for_mp_id("9900123456789"), Some(AgencyCode::Bdew)); // BDEW Strom
+    /// assert_eq!(AgencyCode::for_mp_id("9870123456789"), Some(AgencyCode::Dvgw)); // DVGW Gas
+    /// assert_eq!(AgencyCode::for_mp_id("4012345000023"), Some(AgencyCode::Gs1));  // GS1 GLN
+    /// assert_eq!(AgencyCode::for_mp_id("10XDE-EON-NETZ-C"), None);              // EIC
     /// ```
     #[must_use]
-    pub fn for_mp_id(mp_id: &str) -> Self {
-        match mp_id.len() {
-            13 if mp_id.starts_with("99") => Self::Bdew,
-            13 if mp_id.starts_with("98") => Self::Dvgw,
-            13 => Self::Gs1,
-            _ => Self::Bdew,
+    pub fn for_mp_id(mp_id: &str) -> Option<Self> {
+        if mp_id.len() != 13 || !mp_id.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
         }
+        Some(if mp_id.starts_with("99") {
+            Self::Bdew
+        } else if mp_id.starts_with("98") {
+            Self::Dvgw
+        } else {
+            Self::Gs1
+        })
     }
 
     /// Parse a DE 3055 agency code string.
@@ -150,7 +151,6 @@ impl AgencyCode {
         match s {
             "293" => Some(Self::Bdew),
             "9" => Some(Self::Gs1),
-            "305" => Some(Self::Etso),
             "332" => Some(Self::Dvgw),
             _ => None,
         }
@@ -189,11 +189,16 @@ mod tests {
             ("9900123456789", "293", "500"),
             ("9870123456789", "332", "502"),
             ("4012345000023", "9", "14"),
-            ("10XDE-EON-NETZ-C", "293", "500"),
         ] {
-            assert_eq!(AgencyCode::for_mp_id(mp_id).as_str(), agency, "{mp_id}");
-            assert_eq!(crate::builders::unb_qualifier(mp_id), unb, "{mp_id}");
+            assert_eq!(
+                AgencyCode::for_mp_id(mp_id).map(AgencyCode::as_str),
+                Some(agency),
+                "{mp_id}"
+            );
+            assert_eq!(crate::builders::unb_qualifier(mp_id), Some(unb), "{mp_id}");
         }
+        assert_eq!(AgencyCode::for_mp_id("10XDE-EON-NETZ-C"), None);
+        assert_eq!(crate::builders::unb_qualifier("10XDE-EON-NETZ-C"), None);
     }
 
     #[test]
@@ -201,7 +206,6 @@ mod tests {
         for (code, variant) in [
             ("293", AgencyCode::Bdew),
             ("9", AgencyCode::Gs1),
-            ("305", AgencyCode::Etso),
             ("332", AgencyCode::Dvgw),
         ] {
             assert_eq!(AgencyCode::parse(code), Some(variant));

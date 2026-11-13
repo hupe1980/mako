@@ -73,7 +73,7 @@ pub const WORKFLOW_NAME: &str = "wim-preisanfrage";
 /// | 35004 | Anfrage einer Konfiguration                  | 1.2 ✅      |
 /// | 35005 | Anfrage Angebot Änderung Technik             | 1.2 ✅      |
 ///
-/// 35003 is deliberately absent: REQOTE AHB 1.1 §4.3 assigns it to the ESA
+/// 35003 is deliberately absent: REQOTE AHB 1.1 Kap. 4.3 assigns it to the ESA
 /// "Anfrage von Werten" (WiM Teil 2), which `wertebestellung` owns.
 pub const REQOTE_PIDS: &[u32] = &[35001, 35002, 35004, 35005];
 
@@ -580,13 +580,14 @@ impl Workflow for WimPreisanfrageWorkflow {
                         "expected REQOTE PID (35001/35002/35004/35005), got {pid}",
                     )));
                 }
-                let payload = serde_json::json!({
-                    "pid":         pid.as_u32(),
-                    "sender":      sender.as_str(),
-                    "receiver":    receiver.as_str(),
-                    "location":    location,
-                    "message_ref": message_ref.as_str(),
-                });
+                let payload = mako_engine::payload::ReqotePayload {
+                    pid: Some(pid.as_u32()),
+                    sender: Some(sender.as_str().to_owned()),
+                    receiver: Some(receiver.as_str().to_owned()),
+                    location: Some(location.clone()),
+                    message_ref: Some(message_ref.as_str().to_owned()),
+                    ..Default::default()
+                };
                 Ok(WorkflowOutput::with_outbox(
                     vec![PreisanfrageEvent::AnfrageGesendet {
                         sender,
@@ -594,7 +595,7 @@ impl Workflow for WimPreisanfrageWorkflow {
                         message_ref,
                         pruefidentifikator: pid,
                     }],
-                    vec![PendingOutbox::new("REQOTE", receiver.as_str(), payload).caused_by(0)],
+                    vec![PendingOutbox::typed(receiver.as_str(), &payload).caused_by(0)],
                 ))
             }
 
@@ -655,19 +656,20 @@ impl Workflow for WimPreisanfrageWorkflow {
                     })?;
                 // The QUOTES goes back the way the REQOTE came: this party —
                 // the REQOTE's receiver — to its sender.
-                let payload = serde_json::json!({
-                    "pid":         response_pid.as_u32(),
-                    "sender":      data.receiver.as_str(),
-                    "receiver":    data.sender.as_str(),
-                    "location":    location,
-                    "message_ref": message_ref.as_str(),
-                });
+                let payload = mako_engine::payload::QuotesPayload {
+                    pid: Some(response_pid.as_u32()),
+                    sender: Some(data.receiver.as_str().to_owned()),
+                    receiver: Some(data.sender.as_str().to_owned()),
+                    location: Some(location.clone()),
+                    message_ref: Some(message_ref.as_str().to_owned()),
+                    ..Default::default()
+                };
                 Ok(WorkflowOutput::with_outbox(
                     vec![PreisanfrageEvent::AngebotGesendet {
                         response_pid: Some(response_pid),
                         message_ref,
                     }],
-                    vec![PendingOutbox::new("QUOTES", data.sender.as_str(), payload).caused_by(0)],
+                    vec![PendingOutbox::typed(data.sender.as_str(), &payload).caused_by(0)],
                 ))
             }
 
@@ -804,6 +806,10 @@ mod tests {
         assert_eq!(q.payload["sender"], "9900357000004");
         assert_eq!(q.payload["receiver"], "9900000000002");
         assert_eq!(q.payload["location"], "51238696012");
+        use mako_engine::payload::OutboundPayload as _;
+        let typed = mako_engine::payload::QuotesPayload::from_payload(&q.payload)
+            .expect("a QUOTES payload");
+        assert_eq!(typed.pid, Some(15001));
     }
 
     #[test]
@@ -848,6 +854,10 @@ mod tests {
         assert_eq!(&*out.outbox[0].message_type, "REQOTE");
         assert_eq!(&*out.outbox[0].recipient, "9900000000002");
         assert_eq!(out.outbox[0].payload["pid"], 35001);
+        use mako_engine::payload::OutboundPayload as _;
+        let typed = mako_engine::payload::ReqotePayload::from_payload(&out.outbox[0].payload)
+            .expect("a REQOTE payload");
+        assert_eq!(typed.receiver.as_deref(), Some("9900000000002"));
         assert!(matches!(
             out.events[0],
             PreisanfrageEvent::AnfrageGesendet { .. }

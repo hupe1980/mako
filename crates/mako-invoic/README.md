@@ -73,7 +73,7 @@ Deadlines are never cancelled, so a window that fires after the answer is
 absorbed; one that fires on an unanswered invoice records `FristAbgelaufen` and
 the invoice still accepts its REMADV. A dispute carries a `RemadvAntwort`
 (`SG7 AJT`: code + Entscheidungsbaum), and its shape picks 33002, 33003 or 33004
-(REMADV AHB 1.0a § 3). `InvoicData` keeps `bestellung_ref` (`SG1 RFF+ACE`) and
+(REMADV AHB 1.0a Kap. 3). `InvoicData` keeps `bestellung_ref` (`SG1 RFF+ACE`) and
 `rechnungstyp` (`IMD+7081`) beside the BO4E `Rechnung`.
 
 `SendInvoic` carries `nachricht`, the INVOIC (`UNH` … `UNT`) the transport

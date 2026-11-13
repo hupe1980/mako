@@ -60,7 +60,9 @@ pub struct MmmAutoRunRequest {
     /// Invoice issue date. Defaults to today.
     #[serde(default)]
     pub invoice_date: Option<time::Date>,
-    /// Payment due date. Defaults to 30 days after the issue date.
+    /// Payment due date. Absent, `zahlungsziel_werktage` Werktage after the
+    /// issue date, held to the published floor and ceiling
+    /// ([`crate::zahlungsziel`]).
     #[serde(default)]
     pub due_date: Option<time::Date>,
     /// Rechnungskreis for the generated invoice number.
@@ -123,9 +125,6 @@ pub async fn post_mmm_run(
     }
 
     let invoice_date = req.invoice_date.unwrap_or_else(mako_fristen::heute);
-    let due_date = req
-        .due_date
-        .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));
 
     let mut position = BillingPositionRequest {
         malo_id: malo_id.clone(),
@@ -152,7 +151,7 @@ pub async fn post_mmm_run(
         &cfg,
         std::slice::from_mut(&mut position),
         invoice_date,
-        due_date,
+        req.due_date,
         req.rechnungskreis.as_deref(),
     )
     .await?;
@@ -230,7 +229,9 @@ pub struct GgvNneRequest {
     /// Invoice issue date. Defaults to today.
     #[serde(default)]
     pub invoice_date: Option<time::Date>,
-    /// Payment due date. Defaults to 30 days after the issue date.
+    /// Payment due date. Absent, `zahlungsziel_werktage` Werktage after the
+    /// issue date, held to the published floor and ceiling
+    /// ([`crate::zahlungsziel`]).
     #[serde(default)]
     pub due_date: Option<time::Date>,
     /// Rechnungskreis for the generated invoice numbers.
@@ -287,9 +288,6 @@ pub async fn post_ggv_nne(
     }
 
     let invoice_date = req.invoice_date.unwrap_or_else(mako_fristen::heute);
-    let due_date = req
-        .due_date
-        .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));
 
     let total_kwh: Decimal = req.tenant_consumption.values().copied().sum();
     for (tenant_malo, kwh) in &req.tenant_consumption {
@@ -365,7 +363,7 @@ pub async fn post_ggv_nne(
         &cfg,
         &mut positions,
         invoice_date,
-        due_date,
+        req.due_date,
         req.rechnungskreis.as_deref(),
     )
     .await?;

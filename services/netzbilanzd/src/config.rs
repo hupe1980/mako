@@ -70,6 +70,23 @@ pub struct NetzbilanzConfig {
     /// Bilanzkreis INVOIC paid/disputed.
     #[serde(default)]
     pub inbound_secret: Option<String>,
+    /// The Netzbetreiber's Zahlungsziel: how many Werktage after the
+    /// Rechnungsdatum an invoice it issues falls due, when the request states
+    /// no `due_date` of its own.
+    ///
+    /// The term is the Netzbetreiber's business fact, so there is no default:
+    /// absent, [`Self::zahlungsziel_befunde`] refuses the boot. It may not be
+    /// shorter than the published floor — „Das Zahlungsziel darf 10 WT nach
+    /// Empfang der Rechnung nicht unterschreiten" (GPKE Teil 2 Kap. 3.3.2
+    /// Nr. 1, S. 90; [`mako_fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT`]).
+    ///
+    /// A Rückerstattung is held to the opposite bound — at most
+    /// [`mako_fristen::vorlauf::RUECKERSTATTUNG_ZAHLUNGSZIEL_HOECHST_WT`]
+    /// Werktage after the Rechnungsdatum where INVOIC AHB 1.0b `[25]` or
+    /// `E_0406` Prüfschritt 34 applies — so such an invoice falls due at
+    /// whichever of the two comes first.
+    #[serde(default)]
+    pub zahlungsziel_werktage: Option<u32>,
     /// How often (seconds) to look for drafts stuck undispatched.
     /// Default: 3600 (1 hour). Set to 0 to disable the worker.
     pub dispatch_alert_interval_secs: Option<u64>,
@@ -184,6 +201,39 @@ impl NetzbilanzConfig {
             );
         }
         out
+    }
+
+    /// Every finding about [`Self::zahlungsziel_werktage`]: unset, or shorter
+    /// than the published floor.
+    #[must_use]
+    pub fn zahlungsziel_befunde(&self) -> Vec<mako_service::Befund> {
+        use mako_fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT;
+        let quelle = "GPKE Teil 2 Kap. 3.3.2 Nr. 1 (S. 90)";
+        let befund = match self.zahlungsziel_werktage {
+            None => mako_service::Befund::blockiert(
+                "zahlungsziel_werktage",
+                format!(
+                    "zahlungsziel_werktage is not set: it is the Netzbetreiber's own payment \
+                     term, in Werktage after the Rechnungsdatum, and an invoice whose request \
+                     states no due_date would otherwise fall due on a date nobody chose. Set \
+                     it to at least {ZAHLUNGSZIEL_MINDEST_WT}."
+                ),
+            ),
+            Some(n) if n < ZAHLUNGSZIEL_MINDEST_WT => mako_service::Befund::blockiert(
+                "zahlungsziel_werktage",
+                format!(
+                    "zahlungsziel_werktage = {n} falls short of the published floor: „Das \
+                     Zahlungsziel darf 10 WT nach Empfang der Rechnung nicht unterschreiten\" — \
+                     set it to at least {ZAHLUNGSZIEL_MINDEST_WT}"
+                ),
+            ),
+            Some(_) => return Vec::new(),
+        };
+        vec![
+            befund
+                .quelle(quelle)
+                .bereich(mako_service::befund::Bereich::Konfiguration),
+        ]
     }
 
     /// [`Self::mabis_befunde`] as the boot refusal states them.

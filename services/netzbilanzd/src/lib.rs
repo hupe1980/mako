@@ -20,6 +20,7 @@
 //! |---|---|
 //! | [`request`] | the billing request model — one variant per settlement kind |
 //! | [`billing`] | the seam between a request and the pure `grid-billing` engine |
+//! | [`zahlungsziel`] | the due date an invoice is issued with, and its published bounds |
 //! | [`pg`] | tenant-scoped persistence, invoice numbering, lifecycle transitions |
 //! | [`handlers`] | the billing REST surface |
 //! | [`autorun`] | convenience endpoints that source their inputs from `edmd` / `marktd` |
@@ -41,5 +42,6 @@ pub mod mabis;
 pub mod mcp_server;
 pub mod pg;
 pub mod request;
+pub mod zahlungsziel;
 
 pub use daemon::Netzbilanzd;

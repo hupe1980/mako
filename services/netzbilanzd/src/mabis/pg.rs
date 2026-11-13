@@ -45,7 +45,7 @@ pub struct InsertRunParams<'a> {
     pub bilanzierungsgebiet_id: &'a str,
     pub period_from: Date,
     pub period_to: Date,
-    /// Ascending version (§3.8.2), truncated to whole seconds by the caller so
+    /// Ascending version (Kap. 3.8.2), truncated to whole seconds by the caller so
     /// that it survives the second-precision wire format unchanged.
     pub version: OffsetDateTime,
     /// Which settlement run the submission belongs to.
@@ -61,7 +61,7 @@ pub struct InsertRunParams<'a> {
     pub tenant: &'a str,
 }
 
-/// Settlement run a submission belongs to (BK6-24-174 Anlage 3 §3.10).
+/// Settlement run a submission belongs to (BK6-24-174 Anlage 3 Kap. 3.10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Abrechnungslauf {
     /// Ordinary Bilanzkreisabrechnung.
@@ -81,7 +81,7 @@ impl Abrechnungslauf {
     }
 }
 
-/// Phase of the settlement calendar a submission falls in (§3.10, Tabelle 2).
+/// Phase of the settlement calendar a submission falls in (Kap. 3.10, Tabelle 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmissionPhase {
     /// Erstaufschlag — a new version is assigned `Abrechnungsdaten` directly.
@@ -304,7 +304,7 @@ pub async fn get_run(
 
 // ── Inbound BIKO responses ────────────────────────────────────────────────────
 
-/// Datenstatus values the BIKO may assign (BK6-24-174 Anlage 3 §3.8.3).
+/// Datenstatus values the BIKO may assign (BK6-24-174 Anlage 3 Kap. 3.8.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Datenstatus {
     /// Received but not yet accepted for settlement.
@@ -347,7 +347,7 @@ impl Datenstatus {
 
     /// `true` when a version carrying this status is used for settlement.
     ///
-    /// §3.8.3: settlement takes the highest version with `Abrechnungsdaten` or
+    /// Kap. 3.8.3: settlement takes the highest version with `Abrechnungsdaten` or
     /// `Abrechnungsdaten KBKA`.
     #[must_use]
     pub fn settles(self) -> bool {
@@ -440,7 +440,7 @@ pub async fn record_pruefmitteilung(
 
 /// Negative Prüfmitteilungen with no correcting submission yet.
 ///
-/// §9.8.1: a negative Prüfmitteilung signals Korrekturbedarf, and the ÜNB
+/// Kap. 9.8.1: a negative Prüfmitteilung signals Korrekturbedarf, and the ÜNB
 /// answers it with a corrected BG-SZR under a higher version. An entry here is
 /// an unmet obligation, not a historical record.
 ///
@@ -464,7 +464,7 @@ pub async fn open_korrekturbedarf(
 
 /// Close the Korrekturbedarf raised against `corrected_run_id`.
 ///
-/// §9.8.1: the corrected BG-SZR *is* the answer to the negative Prüfmitteilung.
+/// Kap. 9.8.1: the corrected BG-SZR *is* the answer to the negative Prüfmitteilung.
 /// Without this the obligation stays open on `/korrekturbedarf` even after the
 /// correction has been filed and acked.
 ///
@@ -651,7 +651,7 @@ pub async fn list_series(pool: &PgPool, run_id: Uuid) -> Result<Vec<SeriesRow>, 
 /// # Why `corrects_run_id` is part of the key
 ///
 /// Re-filing an acked territory under a new version is exactly what a
-/// correction is (§9.8.1), so a correction must *not* skip it. The lineage is
+/// correction is (Kap. 9.8.1), so a correction must *not* skip it. The lineage is
 /// what tells the two apart: every run answering the same negative
 /// Prüfmitteilung — the first correction and any retry of it — carries the same
 /// `corrects_run_id`, and a first filing and its retries carry `NULL`. Matching

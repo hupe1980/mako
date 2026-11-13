@@ -65,7 +65,7 @@ through PyO3 — never reimplemented in Python:
 | Concern | Home |
 |---|---|
 | EDIFACT build + MIG/AHB/semantic validation, release per format version | Rust — `edi-energy` |
-| Identifier check digits (MaLo, MP-ID, EIC, §8.2 resources) | Rust — `rubo4e` |
+| Identifier check digits (MaLo, MP-ID, EIC, Kap. 8.2 resources) | Rust — `rubo4e` |
 | Werktag calendar, acknowledgement clocks, answer Fristen | Rust — `mako-fristen` |
 | Antwortcodes per Entscheidungsbaum | Rust — `mako-pruefung` |
 | CloudEvents type catalog and subscription matcher | Rust — `mako-events` |

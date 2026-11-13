@@ -13,7 +13,7 @@
 //!
 //! - **GeLi Gas Lieferbeginn (44001).** The GNB answers inside its 4-Werktage
 //!   window (GeLi Gas 3.0 Kap. 3.2.3). In Gas an APERAK is a
-//!   Verarbeitbarkeitsfehlermeldung only (APERAK AHB 1.1 §2.3), so a
+//!   Verarbeitbarkeitsfehlermeldung only (APERAK AHB 1.1 Kap. 2.3), so a
 //!   processable Anmeldung sends none, and no APERAK window may be left to
 //!   fire on it.
 //! - **WiM Beginn Messstellenbetrieb (55042 Strom, 44042 Gas).** The NB
@@ -27,7 +27,6 @@ use std::sync::Arc;
 use mako_engine::{
     deadline::DeadlineStore as _,
     ids::TenantId,
-    lf_vorgang::LfVorgangsdaten,
     process::Process,
     store_slatedb::SlateDbStore,
     types::{DeviceId, MaLo, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator},
@@ -116,7 +115,7 @@ fn gas_anmeldung() -> GasSupplierChangeCommand {
         validation_errors: vec![],
         received_at: RECEIVED_AT,
         bilanzierungsmethode: None,
-        vorgang: LfVorgangsdaten::default(),
+        vorgang: Box::default(),
         fallgruppe: None,
         gasqualitaet: None,
     }
@@ -219,7 +218,7 @@ async fn a_processable_gas_anmeldung_registers_no_aperak_window() {
         !labels
             .iter()
             .any(|l| l.starts_with(mako_fristen::APERAK_WINDOW_LABEL_PREFIX)),
-        "no APERAK goes out for a processable Gas Anmeldung (APERAK AHB 1.1 §2.3), \
+        "no APERAK goes out for a processable Gas Anmeldung (APERAK AHB 1.1 Kap. 2.3), \
          so no APERAK delivery window may be armed; got {labels:?}"
     );
 }

@@ -204,6 +204,17 @@ pub struct ZugeordneterMsb {
 }
 
 impl ZugeordneterMsb {
+    /// The outbound payload form — `SG10 CCI+++ZB3` with its `CAV`s.
+    #[must_use]
+    pub fn to_payload(&self) -> mako_engine::payload::ZugeordneterMsb {
+        mako_engine::payload::ZugeordneterMsb {
+            mp_id: self.mp_id.clone(),
+            rolle: Some(self.rolle.clone()),
+            grundlage: Some(self.grundlage.clone()),
+            gmsb_mp_id: Some(self.gmsb_mp_id.clone()),
+        }
+    }
+
     /// The grundzuständige Messstellenbetreiber of a Lokation, acting on a
     /// contract with the Anschlussnutzer — `Z39` + `Z19`, the ordinary case.
     #[must_use]
@@ -242,6 +253,17 @@ pub struct AntwortMesslokation {
     pub melo_id: String,
     /// The Messstellenbetreiber of *this* Messlokation.
     pub msb: ZugeordneterMsb,
+}
+
+impl AntwortMesslokation {
+    /// The outbound payload form — `SG5 LOC+Z17` with its `SG8 SEQ+ZF3`.
+    #[must_use]
+    pub fn to_payload(&self) -> mako_engine::payload::UtilmdMesslokation {
+        mako_engine::payload::UtilmdMesslokation {
+            melo_id: self.melo_id.clone(),
+            msb: Some(self.msb.to_payload()),
+        }
+    }
 }
 
 impl LfAntwort {
@@ -363,29 +385,22 @@ pub fn antwort_outbox(
     process_date: &str,
     referenz_vorgangsnummer: Option<&str>,
 ) -> PendingOutbox {
-    let mut payload = serde_json::json!({
-        "pid":          response_pid,
+    let payload = mako_engine::payload::UtilmdPayload {
+        pid: response_pid,
         // The answer travels back the way the request came: our own MP-ID as
         // sender, the requester as receiver.
-        "sender":       receiver.as_str(),
-        "receiver":     sender.as_str(),
-        "malo":         location_id.as_str(),
-        "process_date": antwort.termin.as_deref().unwrap_or(process_date),
-        "antwort_code": antwort.antwort_code,
-    });
-    if let Some(ebd) = &antwort.ebd {
-        payload["antwort_codeliste"] = serde_json::Value::String(ebd.clone());
-    }
-    if let Some(bemerkung) = &antwort.bemerkung {
-        payload["bemerkung"] = serde_json::Value::String(bemerkung.clone());
-    }
-    if let Some(bilanzkreis) = &antwort.bilanzkreis {
-        payload["bilanzkreis"] = serde_json::Value::String(bilanzkreis.clone());
-    }
-    if let Some(referenz) = referenz_vorgangsnummer {
-        payload["referenz_vorgangsnummer"] = serde_json::Value::String(referenz.to_owned());
-    }
-    PendingOutbox::new("UTILMD", sender.as_str(), payload)
+        sender: receiver.as_str().to_owned(),
+        receiver: Some(sender.as_str().to_owned()),
+        malo: Some(location_id.as_str().to_owned()),
+        process_date: Some(antwort.termin.as_deref().unwrap_or(process_date).to_owned()),
+        antwort_code: Some(antwort.antwort_code.clone()),
+        antwort_codeliste: antwort.ebd.clone(),
+        bemerkung: antwort.bemerkung.clone(),
+        bilanzkreis: antwort.bilanzkreis.clone(),
+        referenz_vorgangsnummer: referenz_vorgangsnummer.map(str::to_owned),
+        ..Default::default()
+    };
+    PendingOutbox::typed(sender.as_str(), &payload)
 }
 
 #[cfg(test)]

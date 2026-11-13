@@ -72,6 +72,7 @@ static BUILTIN_AGENTS: &[Specialist] = &[
     MAKO_AGENT,
     DEADLINE_ALERT_AGENT,
     DESK_ASSISTANT,
+    EINRICHTUNG_ASSISTENT,
     #[cfg(any(
         not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
         feature = "role-lf",
@@ -269,6 +270,13 @@ const BILLING_REGULATORY_GUARD_AGENT: Specialist = Specialist {
 /// The Desk's colleague: started by a person's question, never by an event.
 const DESK_ASSISTANT: Specialist = Specialist {
     name: "desk-assistant",
+    trigger_patterns: &[],
+};
+
+/// The Einrichtung's pre-fill: started by a person's sentence, never by an
+/// event.
+const EINRICHTUNG_ASSISTENT: Specialist = Specialist {
+    name: "einrichtung-assistent",
     trigger_patterns: &[],
 };
 
@@ -640,7 +648,7 @@ mod trigger_contract_tests {
         #[cfg(not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")))]
         assert_eq!(
             names.len(),
-            29,
+            30,
             "the default build carries every specialist; update this count \
              deliberately when one is added or removed"
         );
@@ -657,6 +665,10 @@ mod trigger_contract_tests {
         (
             "desk-assistant",
             "answers a person's question asked in the Desk; an event has no question",
+        ),
+        (
+            "einrichtung-assistent",
+            "reads a sentence a person types into the Einrichtung; an event has no sentence",
         ),
         (
             "jahresabrechnung-agent",

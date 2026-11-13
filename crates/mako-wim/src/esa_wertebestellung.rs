@@ -654,14 +654,14 @@ fn window_open(label: &str, state: &EsaWertebestellungState) -> bool {
 /// Render an inbound `SG2 AJT` as the Begründung an operator reads.
 ///
 /// The ORDRSP ESA answers publish **no free-text segment** (ORDRSP AHB 1.1b
-/// §4.15), so the Antwortcode and its EBD are the whole content of a refusal.
+/// Kap. 4.15), so the Antwortcode and its EBD are the whole content of a refusal.
 /// An answer that names no tree stays unresolved rather than being given a
 /// meaning it does not have — `A01` is a different sentence in each of the
 /// three trees.
 fn antwort_reason(antwort: Option<&Antwort>) -> String {
     antwort.map_or_else(
         || {
-            "ORDRSP ohne SG2 AJT — der Antwortcode ist Muss (ORDRSP AHB 1.1b §4.15), \
+            "ORDRSP ohne SG2 AJT — der Antwortcode ist Muss (ORDRSP AHB 1.1b Kap. 4.15), \
              die Ablehnung nennt damit keinen Grund"
                 .to_owned()
         },
@@ -939,7 +939,7 @@ impl Workflow for EsaWertebestellungWorkflow {
         //
         // Only the REQOTE carries a `LOC` — `ZO-T17` is the *only* location
         // key in the process, and a conformant ORDERS/ORDCHG of Kapitel 4 has
-        // no `LOC` segment at all (ORDERS AHB 1.1b §4.15, ORDCHG AHB 1.1 §3.2).
+        // no `LOC` segment at all (ORDERS AHB 1.1b Kap. 4.15, ORDCHG AHB 1.1 Kap. 3.2).
         fn esa_send(
             message_type: &'static str,
             pid: Pruefidentifikator,
@@ -949,26 +949,63 @@ impl Workflow for EsaWertebestellungWorkflow {
             ausfuehrungsdatum: Option<OffsetDateTime>,
             abonnement: Abonnement,
         ) -> PendingOutbox {
-            let traegt_location = pid == ANFRAGE_PID;
-            PendingOutbox::new(
-                message_type,
-                data.msb.as_str(),
-                serde_json::json!({
-                    "pid": pid,
-                    "sender": data.esa.as_str(),
-                    "receiver": data.msb.as_str(),
-                    "message_ref": message_ref.as_str(),
-                    "location": traegt_location.then(|| data.lokations_id.clone()),
-                    "ebene": data.ebene,
-                    "korrelation_ref": korrelation_ref,
-                    "messprodukt": data.gegenstand.messprodukt,
-                    "wunschtermin": data.gegenstand.wunschtermin.to_string(),
-                    "zeitraum_bis": data.gegenstand.zeitraum_bis.map(|d| d.to_string()),
-                    "abonnement": abonnement.imd_code(),
-                    "ausfuehrungsdatum": ausfuehrungsdatum.map(|d| d.date().to_string()),
-                    "smgw": data.gegenstand.smgw,
-                }),
-            )
+            let sender = Some(data.esa.as_str().to_owned());
+            let message_ref = Some(message_ref.as_str().to_owned());
+            let korrelation_ref = korrelation_ref.map(str::to_owned);
+            match message_type {
+                "REQOTE" => PendingOutbox::typed(
+                    data.msb.as_str(),
+                    &mako_engine::payload::ReqotePayload {
+                        pid: Some(pid.as_u32()),
+                        sender,
+                        receiver: Some(data.msb.as_str().to_owned()),
+                        message_ref,
+                        location: Some(data.lokations_id.clone()),
+                        wunschtermin: Some(data.gegenstand.wunschtermin.to_string()),
+                        messprodukt: Some(data.gegenstand.messprodukt.clone()),
+                        smgw: data.gegenstand.smgw.as_ref().map(|z| {
+                            mako_engine::payload::SmgwZiel {
+                                uri_ipv4: z.uri_ipv4.clone(),
+                                uri_ipv6: z.uri_ipv6.clone(),
+                                zertifikat_aussteller: z.zertifikat_aussteller.clone(),
+                                zertifikat_nutzer: z.zertifikat_nutzer.clone(),
+                                schwellwerte: z
+                                    .schwellwerte
+                                    .iter()
+                                    .map(|sw| mako_engine::payload::Schwellwert {
+                                        position_code: sw.position_code.clone(),
+                                        oberer: sw.oberer.clone(),
+                                        unterer: sw.unterer.clone(),
+                                    })
+                                    .collect(),
+                            }
+                        }),
+                        ..Default::default()
+                    },
+                ),
+                "ORDCHG" => PendingOutbox::typed(
+                    data.msb.as_str(),
+                    &mako_engine::payload::OrdchgPayload {
+                        pid: Some(pid.as_u32()),
+                        sender,
+                        message_ref,
+                        korrelation_ref,
+                        order_reference: None,
+                    },
+                ),
+                _ => PendingOutbox::typed(
+                    data.msb.as_str(),
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(pid.as_u32()),
+                        sender,
+                        message_ref,
+                        korrelation_ref,
+                        ausfuehrungsdatum: ausfuehrungsdatum.map(|d| d.date().to_string()),
+                        abonnement: Some(abonnement.imd_code().to_owned()),
+                        ..Default::default()
+                    },
+                ),
+            }
         }
 
         use EsaWertebestellungCommand as C;
@@ -1083,7 +1120,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                     return Err(WorkflowError::rejected(
                         "QUOTES 15003 ohne bepreiste Position ist kein Angebot, sondern die \
                          Ablehnung der Anfrage (SG31 PRI und die PIA+5 …:SRW OBIS-Kennzahlen \
-                         sind Muss, QUOTES AHB 1.1a §4.3) — nutze ReceiveAnfrageAblehnung",
+                         sind Muss, QUOTES AHB 1.1a Kap. 4.3) — nutze ReceiveAnfrageAblehnung",
                     ));
                 }
                 Ok(WorkflowOutput {
@@ -1139,17 +1176,17 @@ impl Workflow for EsaWertebestellungWorkflow {
                         "Bindungsfrist des Angebots endete am {bindungsfrist}"
                     )));
                 }
-                // ORDERS AHB 1.1b §4.15: `SG1 RFF+AAG` is Muss on 17007 and
+                // ORDERS AHB 1.1b Kap. 4.15: `SG1 RFF+AAG` is Muss on 17007 and
                 // carries the QUOTES Angebot's Dokumentennummer — it is the
                 // order's published Zuordnungsschlüssel (`ZG-T24`), so an
                 // order without it cannot be matched to the offer it accepts.
                 let angebot_ref = data.angebot_ref.as_deref().ok_or_else(|| {
                     WorkflowError::rejected(
-                        "Bestellung ohne Angebotsnummer — RFF+AAG ist Muss (ORDERS AHB 1.1b §4.15)",
+                        "Bestellung ohne Angebotsnummer — RFF+AAG ist Muss (ORDERS AHB 1.1b Kap. 4.15)",
                     )
                 })?;
                 // `DTM+203` Ausführungsdatum is **Muss** on the 17007
-                // (ORDERS AHB 1.1b §4.15) and states when delivery is to
+                // (ORDERS AHB 1.1b Kap. 4.15) and states when delivery is to
                 // begin. The MSB has already answered that question with
                 // `DTM+469` „Startdatum, frühestes/r" — Muss on its Angebot —
                 // so ordering the original Wunschtermin when the offer named a
@@ -1223,7 +1260,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                 antwort,
             } => {
                 let mut events = konflikt_event(ABLEHNUNG_PID, antwort.as_ref(), false);
-                // The `AJT` **is** the reason — ORDRSP AHB 1.1b §4.15 gives
+                // The `AJT` **is** the reason — ORDRSP AHB 1.1b Kap. 4.15 gives
                 // 19011–19014 no free-text segment at all, and the only `FTX`
                 // a conformant 19011 may carry is `SG27 FTX+Z27`, the MSB's IP
                 // address.
@@ -1268,11 +1305,11 @@ impl Workflow for EsaWertebestellungWorkflow {
                          (UC 4.3 Vorbedingung) — nutze die Abbestellung (17008)",
                     ));
                 }
-                // ORDCHG AHB 1.1 §3.2: `SG1 RFF+ON` is Muss and carries the
+                // ORDCHG AHB 1.1 Kap. 3.2: `SG1 RFF+ON` is Muss and carries the
                 // ORDERS' Dokumentennummer (`ZG-T51`).
                 let bestellung_ref = data.bestellung_ref.as_deref().ok_or_else(|| {
                     WorkflowError::rejected(
-                        "Stornierung ohne Auftragsnummer — RFF+ON ist Muss (ORDCHG AHB 1.1 §3.2)",
+                        "Stornierung ohne Auftragsnummer — RFF+ON ist Muss (ORDCHG AHB 1.1 Kap. 3.2)",
                     )
                 })?;
                 let outbox = esa_send(
@@ -1356,13 +1393,13 @@ impl Workflow for EsaWertebestellungWorkflow {
                          Abbestellung mit A01 ab",
                     ));
                 }
-                // ORDERS AHB 1.1b §4.15 makes `SG1 RFF+ACW` Muss —
+                // ORDERS AHB 1.1b Kap. 4.15 makes `SG1 RFF+ACW` Muss —
                 // it carries the 17007's Dokumentennummer (`ZG-T41`) and is
                 // the only way the MSB can tell which order is being ended.
                 let bestellung_ref = data.bestellung_ref.as_deref().ok_or_else(|| {
                     WorkflowError::rejected(
                         "Abbestellung ohne Referenz auf die Bestellung — RFF+ACW ist Muss \
-                         (ORDERS AHB 1.1b §4.15)",
+                         (ORDERS AHB 1.1b Kap. 4.15)",
                     )
                 })?;
                 let outbox = esa_send(

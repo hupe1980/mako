@@ -76,11 +76,13 @@
 //! The Lieferant sends them from [`GpkeLfAnmeldungWorkflow`], and the NB's
 //! answers 55602–55605 route back there (`NEUANLAGE_ANTWORT_PIDS_LF`).
 //!
-//! ### NB-initiated Lieferende — routed to `gpke-lf-abmeldung`
+//! ### Lieferende von NB an LF — `gpke-lf-abmeldung` and `gpke-nb-lieferende`
 //!
-//! | PID   | Process name (AHB)                                   |
-//! |-------|------------------------------------------------------|
-//! | 55007 | Ankündigung NB-seitiges Lieferende (NB → LFN)        |
+//! | PID   | Process name (AHB)                                   | Routed to |
+//! |-------|------------------------------------------------------|-----------|
+//! | 55007 | Ankündigung NB-seitiges Lieferende (NB → LFN)        | `gpke-lf-abmeldung` (LF) |
+//! | 55008 | Bestätigung (LF → NB)                                | `gpke-nb-lieferende` (NB) |
+//! | 55009 | Ablehnung (LF → NB)                                  | `gpke-nb-lieferende` (NB) |
 //!
 //! ### Ankündigung Zuordnung LF — routed to `gpke-ankuendigung-zuordnung-lf`
 //!
@@ -91,8 +93,8 @@
 //! PIDs 55608 (Bestätigung) and 55609 (Ablehnung) are outbound responses derived
 //! by `GpkeAnkuendigungZuordnungLfWorkflow` and never routed as inbound.
 //!
-//! PIDs 55008 (Bestätigung) and 55009 (Ablehnung) are outbound responses derived
-//! by `GpkeLfAbmeldungWorkflow` and never routed as inbound.
+//! The LF answers 55008 / 55009 from `GpkeLfAbmeldungWorkflow`; the NB sends the
+//! 55007 from `GpkeNbLieferendeWorkflow`, which those answers resume.
 //!
 //! ### Ersatz-/Grundversorgung — routed to `gpke-eog`
 //!
@@ -141,7 +143,7 @@
 //! `pruefidentifikator` stored in `mako_invoic::InvoicData` lets read-models
 //! distinguish variants.
 //! PID 31003 (WiM-Rechnung) belongs to `mako-wim`. PID 31004 (Stornorechnung)
-//! is the Sparte-neutral universal Storno (INVOIC AHB §3.1.2) — checked
+//! is the Sparte-neutral universal Storno (INVOIC AHB Kap. 3.1.2) — checked
 //! generically by `invoicd`, not registered as a GPKE billing PID here.
 //! PIDs 31007/31008 (Aggreg. MMM-Rechnung NB → MGV, Gas-only) belong to
 //! `mako-gabi-gas` `gabi-gas-invoic` — MGV is a Gas-only market role.
@@ -209,10 +211,6 @@
     clippy::manual_let_else,
     reason = "existing code style; rewrite in follow-up"
 )]
-#![expect(
-    clippy::redundant_closure_for_method_calls,
-    reason = "a pedantic style lint this crate does not adopt"
-)]
 
 pub mod abrechnung;
 pub mod abrechnungsdaten;
@@ -232,9 +230,10 @@ pub mod lf_abmeldung;
 pub mod lf_anmeldung;
 pub mod lf_antwort;
 pub mod messwerte;
+pub mod nb_lieferende;
 pub mod neuanlage;
+mod outbound;
 pub mod partin;
-pub mod post_acceptance;
 pub mod sperrung;
 pub mod sperrung_lf;
 pub mod sperrung_msb;
@@ -335,6 +334,11 @@ pub use messwerte::{
     GpkeMesswerteLieferungWorkflow, MSCONS_PIDS, MesswerteLieferungCommand, MesswerteLieferungData,
     MesswerteLieferungEvent, MesswerteLieferungState, WORKFLOW_NAME as MESSWERTE_WORKFLOW_NAME,
 };
+pub use nb_lieferende::{
+    Ankuendigung as NbLieferendeAnkuendigung, GpkeNbLieferendeWorkflow, NbLieferendeCommand,
+    NbLieferendeData, NbLieferendeEvent, NbLieferendeState,
+    WORKFLOW_NAME as NB_LIEFERENDE_WORKFLOW_NAME,
+};
 pub use neuanlage::{
     GpkeNeuanlageWorkflow, NEUANLAGE_ANTWORT_WINDOW_LABEL, NEUANLAGE_PIDS, NeuanlageCommand,
     NeuanlageData, NeuanlageEvent, NeuanlageState, NeuanlageTranche,
@@ -398,7 +402,8 @@ pub use zuordnungsmeldung::{
 /// - PIDs 55001–55002, 55016 (inbound ANFRAGE, UTILMD) → `"gpke-supplier-change"`
 /// - PIDs 55022, 55023, 55024 (Stornierung Anfrage + Antwort, UTILMD) → `"gpke-stornierung"`
 /// - PIDs 55600, 55601 (Neuanlage ANFRAGE, UTILMD) → `"gpke-neuanlage"`
-/// - PID 55007 (NB-seitiges Lieferende, UTILMD) → `"gpke-lf-abmeldung"`
+/// - PID 55007 (NB-seitiges Lieferende, UTILMD) → `"gpke-lf-abmeldung"`; its
+///   answers 55008/55009 (NB role) → `"gpke-nb-lieferende"`
 /// - PID 55607 (Ankündigung Zuordnung LF, UTILMD) → `"gpke-ankuendigung-zuordnung-lf"`
 /// - PIDs 17115/17117 (Sperrauftrag/Entsperrauftrag, ORDERS) → `"gpke-sperrung"`;
 ///   the Anfrage Sperrung 17116 (MSB role) → `"gpke-sperrung-msb"`
@@ -420,7 +425,8 @@ pub use zuordnungsmeldung::{
 /// - PIDs 55002/55003, 55005/55006, 55017, 55018 are outbound ANTWORT messages derived by
 ///   `GpkeSupplierChangeWorkflow::handle`. They are never routed as inbound.
 ///
-/// PIDs 55007–55009 (NB-seitiges Lieferende) are handled by `GpkeLfAbmeldungWorkflow`.
+/// PID 55007 (NB-seitiges Lieferende) is answered by `GpkeLfAbmeldungWorkflow`;
+/// the answers 55008/55009 resume `GpkeNbLieferendeWorkflow`.
 /// PIDs 55013–55015 (Ersatz-/Grundversorgung) are handled by `GpkeEogWorkflow`.
 /// PIDs 55010–55012 (Anfrage zur Beendigung der Zuordnung — NB Abmeldeanfrage an
 /// den LFA) are handled by `GpkeBeendigungZuordnungWorkflow`.
@@ -478,6 +484,9 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             WorkflowDriver::of::<neuanlage::GpkeNeuanlageWorkflow>(neuanlage::WORKFLOW_NAME),
             WorkflowDriver::of::<lf_abmeldung::GpkeLfAbmeldungWorkflow>(
                 lf_abmeldung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<nb_lieferende::GpkeNbLieferendeWorkflow>(
+                nb_lieferende::WORKFLOW_NAME,
             ),
             WorkflowDriver::of::<ankuendigung_zuordnung_lf::GpkeAnkuendigungZuordnungLfWorkflow>(
                 ankuendigung_zuordnung_lf::WORKFLOW_NAME,
@@ -587,6 +596,14 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         for &pid in LF_ABMELDUNG_PIDS {
             router.register(pid, "gpke-lf-abmeldung");
         }
+        // PIDs 55008/55009 — the LF's answer to the NB's own 55007 (GPKE Teil 2
+        // Kap. 2.5.2.2 Nr. 2). Only the NB sends a 55007, so only the NB takes
+        // the answer back.
+        if roles.contains(Marktrolle::Nb) {
+            for &pid in nb_lieferende::ANTWORT_PIDS {
+                router.register(pid, nb_lieferende::WORKFLOW_NAME);
+            }
+        }
 
         // PIDs 55036/55037/55038 (Zuordnungs-Meldungen, NB→LFN/LFA/LFZ) — GPKE
         // Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13. One-way: the NB sends
@@ -654,7 +671,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // carries the same ORDERS/ORDRSP/ORDCHG PIDs, and the Sparte-agnostic
         // table is last-wins, so a Strom+Gas deployment would hand every
         // Sperrung of both Sparten to whichever module registered second. The
-        // recipient MP-ID (UNB DE 0010) names the Sparte (BDEW §2.13).
+        // recipient MP-ID (UNB DE 0010) names the Sparte (Allgemeine Festlegungen Kap. 2.13).
         let sperrung_pid = |router: &mut mako_engine::pid_router::PidRouter, pid, wf: &str| {
             router.register(pid, wf);
             router.register_with_sparte(pid, mako_engine::types::Sparte::Strom, wf.to_owned());
@@ -723,7 +740,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // Gas „Ablehnung REMADV", and the Sparte-agnostic table is last-wins, so
         // a dual-fuel deployment would otherwise route a Strom COMDIS to the Gas
         // workflow. The recipient MP-ID (UNB DE 0010) decides — every `[[party]]`
-        // covers exactly one Sparte (BDEW §2.13).
+        // covers exactly one Sparte (Allgemeine Festlegungen Kap. 2.13).
         router.register(GPKE_COMDIS_ABLEHNUNG_PID.as_u32(), "gpke-abrechnung");
         router.register_with_sparte(
             GPKE_COMDIS_ABLEHNUNG_PID.as_u32(),
@@ -841,8 +858,13 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // Positive response comes via MSCONS (13013/13014) — MMM Strom/Gas PIDs,
         // NOT GeLi Gas. Routed here per the BDEW/VKU/bne/GEODE AWH „Prozesse
         // Mehr-/Mindermengen Strom Gas" V2.1 (18.03.2025); the MMM processes
-        // sit in an Anwendungshilfe, not in a BNetzA Festlegung.
-        for &pid in allokationsliste::ORDERS_ANFRAGE_PIDS {
+        // sit in an Anwendungshilfe, not in a BNetzA Festlegung. An inbound
+        // 17110 reaches the GNB, whose receiver is `mako-gabi-gas`
+        // `gabi-gas-mmma`; it is not registered here.
+        for &pid in allokationsliste::ORDERS_ANFRAGE_PIDS
+            .iter()
+            .filter(|&&p| p != allokationsliste::ORDERS_ANFRAGE_GAS_PID)
+        {
             router.register(pid, allokationsliste::WORKFLOW_NAME);
         }
         for &pid in allokationsliste::ORDRSP_ABLEHNUNG_PIDS {

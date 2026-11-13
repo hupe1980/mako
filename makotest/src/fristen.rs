@@ -181,13 +181,13 @@ pub fn add_hours(received: &str, hours: u32) -> PyResult<String> {
 ///
 /// | `anlass` | Window | Fundstelle |
 /// |---|---|---|
-/// | `"regelfall"` (default) | 6 hours | §2.3.1, §2.4.1 |
-/// | `"strom_utilmd_orders"` | 15 minutes, 6 hours on a Saturday | §2.4.1 |
-/// | `"gas_alocat"` | 45 minutes | §2.3.1 |
+/// | `"regelfall"` (default) | 6 hours | Kap. 2.3.1, Kap. 2.4.1 |
+/// | `"strom_utilmd_orders"` | 15 minutes, 6 hours on a Saturday | Kap. 2.4.1 |
+/// | `"gas_alocat"` | 45 minutes | Kap. 2.3.1 |
 ///
 /// A deadline falling inside a Formatumstellung window (31.3. 18:00 – 2.4. 00:00
 /// and 30.9. 18:00 – 2.10. 00:00, gesetzliche deutsche Zeit) moves to the end of
-/// that window: §2.3.1 and §2.4.1 make a deviation inside it one the market
+/// that window: Kap. 2.3.1 and Kap. 2.4.1 make a deviation inside it one the market
 /// partners must accept.
 #[pyfunction]
 #[pyo3(signature = (received, anlass = "regelfall"))]

@@ -23,7 +23,7 @@
 //!   operand cites has an evaluator in `edi_energy::profile::formatbedingung`,
 //!   bar the [`UNEVALUATED_FORMATBEDINGUNGEN`] ratchet;
 //! - every profile on a regular Anwendungszeitpunkt states the
-//!   `publikationsdatum` Allgemeine Festlegungen 6.1d § 2.5 expects for it; a
+//!   `publikationsdatum` Allgemeine Festlegungen 6.1d Kap. 2.5 expects for it; a
 //!   date off that timetable is admitted only with a `publikation_quelle` that
 //!   names the BNetzA Mitteilung, and no publication falls on or after its
 //!   `valid_from`;
@@ -136,7 +136,7 @@ struct Source {
     #[serde(default)]
     publikationsdatum: Option<String>,
     /// The BNetzA Mitteilung that published these documents, when the
-    /// publication does not fall on the § 2.5 timetable.
+    /// publication does not fall on the Kap. 2.5 timetable.
     ///
     /// Required exactly then: a date that matches the entailment needs no
     /// source because the Festlegung *is* the source, and a date that does not
@@ -425,6 +425,88 @@ fn codes_cited_by_conditions_exist(dir: &str, ahb: &serde_json::Value, mig: &Mig
     out
 }
 
+/// Every element rule names a data element its segment's MIG layout has, at
+/// that occurrence.
+///
+/// The AHB parser reads a row as a data-element row by its shape — three
+/// capitals and four digits. A description that wraps onto a line opening the
+/// same way (`EEG 2014 §38`, the text of `ZG6`) once opened a phantom DE
+/// `2014` in UTILMD Strom `SG4 STS+7`, and every code row after it — `ZG9`,
+/// `ZH0`, `ZH1` on 55038 and 55611 — landed there without a code. Such a rule
+/// is unrepresentable in the message, so the profile refuses what the AHB
+/// admits.
+fn elements_sit_in_their_segment<'a>(
+    dir: &str,
+    ahb: &serde_json::Value,
+    mig: impl Iterator<Item = &'a serde_json::Value>,
+) -> Vec<String> {
+    fn layouts(node: &serde_json::Value, out: &mut BTreeMap<String, Vec<String>>) {
+        if let (Some(nr), Some(elements)) = (
+            node.get("nr").and_then(|v| v.as_str()),
+            node.get("elements").and_then(|v| v.as_array()),
+        ) {
+            let mut ids = Vec::new();
+            for el in elements {
+                match el.get("components").and_then(|v| v.as_array()) {
+                    Some(c) if !c.is_empty() => ids.extend(
+                        c.iter()
+                            .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+                            .map(ToOwned::to_owned),
+                    ),
+                    _ => ids.extend(el.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)),
+                }
+            }
+            out.insert(nr.to_owned(), ids);
+        }
+        for key in ["children", "segments"] {
+            for child in node
+                .get(key)
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                layouts(child, out);
+            }
+        }
+    }
+    let mut by_nr = BTreeMap::new();
+    for node in mig {
+        layouts(node, &mut by_nr);
+    }
+    let mut out = BTreeSet::new();
+    for af in ahb
+        .get("anwendungsfaelle")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        for el in af
+            .get("elements")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let (Some(nr), Some(de)) = (
+                el.get("nr").and_then(|v| v.as_str()),
+                el.get("de").and_then(|v| v.as_str()),
+            ) else {
+                continue;
+            };
+            let Some(layout) = by_nr.get(nr) else {
+                continue;
+            };
+            let occ = el.get("occurrence").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            if layout.iter().filter(|id| *id == de).count() <= occ {
+                out.insert(format!(
+                    "{dir}: segment {nr} has no DE {de} (occurrence {occ}) in its MIG layout, \
+                     yet an AHB element rule sits under it — a misread row"
+                ));
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// Walk the MIG structure, recording each segment node's `nr` → `tag`.
 fn collect_tags(nodes: &[serde_json::Value], out: &mut BTreeMap<String, String>) {
     for n in nodes {
@@ -500,10 +582,10 @@ fn nrs(nodes: &[serde_json::Value], out: &mut BTreeSet<String>) {
 /// One profile's window and Prüfidentifikatoren: (dir, valid_from, valid_until, pids).
 type Span = (String, time::Date, Option<time::Date>, BTreeSet<u32>);
 
-/// The `publikationsdatum` Allgemeine Festlegungen 6.1d § 2.5 *expects* for a
+/// The `publikationsdatum` Allgemeine Festlegungen 6.1d Kap. 2.5 *expects* for a
 /// profile applying on `valid_from`, or `None` where neither timetable covers it.
 ///
-/// § 2.5.1 and § 2.5.2 set one timetable each and there are only two: a release
+/// Kap. 2.5.1 and Kap. 2.5.2 set one timetable each and there are only two: a release
 /// applying **01.10.** has its consulted documents published **01.04.**, and one
 /// applying **01.04.** publishes **01.10.** Six months is the Festlegung's own
 /// schedule, so for a regular Anwendungszeitpunkt the date is not observed — it
@@ -552,7 +634,7 @@ fn names_a_mitteilung(quelle: &str) -> bool {
     })
 }
 
-/// The publication-date rule of Allgemeine Festlegungen 6.1d § 2.5 for one
+/// The publication-date rule of Allgemeine Festlegungen 6.1d Kap. 2.5 for one
 /// `sources.json` entry — see [`entailed_publikationsdatum`].
 fn publication_errors(
     dir: &str,
@@ -581,7 +663,7 @@ fn publication_errors(
         publikationsdatum,
         quelle,
     ) {
-        // On the § 2.5 timetable: the Festlegung is the source.
+        // On the Kap. 2.5 timetable: the Festlegung is the source.
         (Some(entailed), Some(stated), _) if stated == entailed => {}
         // Off it, and sourced: a deviation somebody can point at. Whether the
         // source names a Mitteilung is checked above.
@@ -589,13 +671,13 @@ fn publication_errors(
         // Off it, unsourced: indistinguishable from a typo, so refused.
         (Some(entailed), Some(stated), None) => errors.push(format!(
             "{dir}: publikationsdatum {stated} is not the {entailed} that Allgemeine \
-             Festlegungen 6.1d § 2.5 expects for a release applying {}. If the release \
+             Festlegungen 6.1d Kap. 2.5 expects for a release applying {}. If the release \
              was given a different Umsetzungszeitraum, name the BNetzA Mitteilung that \
              published it in `publikation_quelle`; otherwise one of the two dates is a typo",
             valid_from,
         )),
         (None, Some(stated), None) => errors.push(format!(
-            "{dir}: valid_from {} falls on neither § 2.5 timetable, so publikationsdatum \
+            "{dir}: valid_from {} falls on neither Kap. 2.5 timetable, so publikationsdatum \
              {stated} is not entailed by anything. State the Mitteilung that published it \
              in `publikation_quelle`, or remove the date",
             valid_from,
@@ -603,7 +685,7 @@ fn publication_errors(
         // Expected by the timetable and simply missing.
         (Some(entailed), None, _) => errors.push(format!(
             "{dir}: valid_from {} is a regular Anwendungszeitpunkt, so Allgemeine \
-             Festlegungen 6.1d § 2.5 expects its publikationsdatum on {entailed} — state it",
+             Festlegungen 6.1d Kap. 2.5 expects its publikationsdatum on {entailed} — state it",
             valid_from,
         )),
         (None, None, _) => {}
@@ -733,6 +815,11 @@ pub fn run(workspace_root: &str) -> bool {
                     ));
                 }
                 errors.extend(codes_cited_by_conditions_exist(dir, &raw, &mig));
+                errors.extend(elements_sit_in_their_segment(
+                    dir,
+                    &raw,
+                    mig.structure.iter().chain(&mig.envelope),
+                ));
                 errors.extend(unregistered_formatbedingungen(dir, &raw));
             }
             Err(e) => errors.push(format!("{dir}: {e}")),
@@ -917,9 +1004,34 @@ pub fn run(workspace_root: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        RETIRED_PIDS, UNEVALUATED_FORMATBEDINGUNGEN, entailed_publikationsdatum, format_ids,
-        publication_errors, vanished_pid_errors,
+        RETIRED_PIDS, UNEVALUATED_FORMATBEDINGUNGEN, elements_sit_in_their_segment,
+        entailed_publikationsdatum, format_ids, publication_errors, vanished_pid_errors,
     };
+
+    /// An element rule under a data element its segment does not have is a
+    /// misread AHB row (UTILMD Strom `SG4 STS+7`: a phantom DE `2014` holding
+    /// `ZG9`/`ZH0`/`ZH1`), and is refused; the layout's own DE passes.
+    #[test]
+    fn an_element_rule_outside_its_segment_layout_is_refused() {
+        let mig = serde_json::json!({
+            "nr": "00033", "tag": "STS",
+            "elements": [
+                { "id": "C601", "components": [{ "id": "9015" }] },
+                { "id": "C556", "components": [{ "id": "9013" }] },
+            ],
+        });
+        let ahb = |de: &str| {
+            serde_json::json!({ "anwendungsfaelle": [{ "elements": [
+                { "nr": "00033", "de": de, "operands": [{ "operand": "X" }] },
+            ]}]})
+        };
+        let errors = elements_sit_in_their_segment("utilmd/x", &ahb("2014"), [&mig].into_iter());
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("no DE 2014"));
+        assert!(
+            elements_sit_in_their_segment("utilmd/x", &ahb("9013"), [&mig].into_iter()).is_empty()
+        );
+    }
 
     /// A retired PID must name the release that drops it. ORDERS 17114 is
     /// published by AHB 1.1a (fv20260401, Kap. 4.2.2) and gone from AHB 1.1b
@@ -1029,7 +1141,7 @@ mod tests {
         );
     }
 
-    /// Allgemeine Festlegungen 6.1d § 2.5.1 — a release applying **01.10.** has
+    /// Allgemeine Festlegungen 6.1d Kap. 2.5.1 — a release applying **01.10.** has
     /// its consulted documents published **01.04.** of the same year.
     #[test]
     fn an_october_release_publishes_in_april_of_the_same_year() {
@@ -1039,7 +1151,7 @@ mod tests {
         );
     }
 
-    /// § 2.5.2 — a release applying **01.04.** publishes **01.10.** of the year
+    /// Kap. 2.5.2 — a release applying **01.04.** publishes **01.10.** of the year
     /// before. The year decrement is the half a six-month subtraction written by
     /// hand gets wrong.
     #[test]

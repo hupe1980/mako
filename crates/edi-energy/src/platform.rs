@@ -92,7 +92,7 @@ impl Platform {
     /// Accept a superseded format for `days` past its `valid_until`.
     ///
     /// The BDEW default is **zero** — EDIFACT changes at a single
-    /// Anwendungszeitpunkt (Allgemeine Festlegungen 6.1 §2.5) with no window
+    /// Anwendungszeitpunkt (Allgemeine Festlegungen 6.1 Kap. 2.5) with no window
     /// around it. Raise this only for a tenant whose contract tolerates
     /// late-arriving messages in the old format; see
     /// [`DEFAULT_RECEIVE_TOLERANCE_DAYS`](crate::DEFAULT_RECEIVE_TOLERANCE_DAYS).
@@ -222,7 +222,7 @@ impl Platform {
     /// Read only the interchange header — the `UNB` envelope.
     ///
     /// Independent of whether the messages parse, so an envelope-level decision
-    /// — the Allgemeine Festlegungen § 3 test indicator above all — is not made
+    /// — the Allgemeine Festlegungen Kap. 3 test indicator above all — is not made
     /// conditional on every message inside being well formed.
     ///
     /// # Errors

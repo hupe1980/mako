@@ -28,7 +28,7 @@ __all__ = ["MABIS_SUMMENZEITREIHE_PIDS", "BikoSim", "Klaerfall", "Submission"]
 #: The MSCONS Prüfidentifikatoren a Bilanzkoordinator receives under MaBiS.
 #:
 #: 13003 is the Summenzeitreihe („Summenzeitreihen und Ausfallarbeitssummen",
-#: MSCONS AHB §5); 13010–13012 are the normiertes Profil, the Profilschar and
+#: MSCONS AHB Kap. 5); 13010–13012 are the normiertes Profil, the Profilschar and
 #: the TEP, which are BK-Treue/MaBiS settlement profile data. The rest of the
 #: 13xxx band is **Messwesen** — 13002 is a Gas Zählerstand and 13008 a Gas
 #: Lastgang, both addressed to a Netzbetreiber. A BIKO that accepted any MSCONS

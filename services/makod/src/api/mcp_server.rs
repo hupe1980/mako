@@ -177,6 +177,15 @@ pub struct SubmitCommandParams {
     pub idempotency_key: Option<String>,
 }
 
+/// Parameters for `einrichtung_vorschlag`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EinrichtungVorschlagParams {
+    /// The setup interview's answers; every question is optional and an
+    /// unanswered one is a gap in the proposal.
+    pub antworten: mako_service::einrichtung::Antworten,
+}
+
 /// Parameters for `rehearse_command`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RehearseCommandParams {
@@ -870,12 +879,7 @@ impl MakodMcpHandler {
         >,
     ) -> Result<CallToolResult, McpError> {
         self.require_malo_read(&parts)?;
-        match self
-            .state
-            .malo_cache
-            .get(&self.state.tenant, &p.malo_id)
-            .await
-        {
+        match self.state.malo_cache.get(&p.malo_id).await {
             Ok(Some(record)) => ContentBlock::json(&record)
                 .map(|block| CallToolResult::success(vec![block]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
@@ -1002,7 +1006,7 @@ impl MakodMcpHandler {
     )]
     #[instrument(skip(self))]
     async fn get_health(&self) -> Result<CallToolResult, McpError> {
-        let cache_stats = self.state.malo_cache.stats(&self.state.tenant).await.ok();
+        let cache_stats = self.state.malo_cache.stats().await.ok();
 
         ContentBlock::json(serde_json::json!({
             "status": "ok",
@@ -1054,8 +1058,35 @@ impl MakodMcpHandler {
         let e = &self.state.einrichtung;
         let andere = mako_service::einrichtung::abfragen(&e.http, &e.dienste).await;
         serde_json::to_value(crate::api::einrichtung_api::deployment(
-            &e.einrichtung,
+            &e.aktuell(),
             andere,
+        ))
+        .map(CallToolResult::structured)
+        .map_err(|err| McpError::internal_error(err.to_string(), None))
+    }
+
+    /// The configuration the setup interview's answers propose — the value
+    /// `POST /admin/einrichtung/vorschlag` serves, from the same function.
+    #[tool(
+        description = "Propose the configuration a deployment's setup answers describe: one file per daemon (makod.toml, processd.toml), each line marked against what the daemons report as loaded (gleich, neu, weg) and naming the rule or document it satisfies, every unanswered fact a `# FEHLT:` gap, every refused answer (a Gas Rolle under a 99… BDEW-Codenummer, key material instead of a path) in `abgelehnt` with its rule, and `vorbelegt` — the answers the loaded configuration already gives. Holds no secret: certificates and keys are named by path. Read-only; nothing is written to any server.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::einrichtung::Vorschlag>()
+    )]
+    #[instrument(skip(self, p, parts))]
+    async fn einrichtung_vorschlag(
+        &self,
+        Parameters(p): Parameters<EinrichtungVorschlagParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_einrichtung(&parts)?;
+        let e = &self.state.einrichtung;
+        let andere = mako_service::einrichtung::abfragen(&e.http, &e.dienste).await;
+        let berichte = crate::api::einrichtung_api::berichte(&e.aktuell(), andere);
+        serde_json::to_value(mako_service::einrichtung::vorschlag(
+            &p.antworten,
+            &berichte,
         ))
         .map(CallToolResult::structured)
         .map_err(|err| McpError::internal_error(err.to_string(), None))
@@ -1873,7 +1904,7 @@ impl MakodMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**GPKE Sperrung — Ausführungsmeldung (GPKE Teil 2 § 3.5)**\n\n\
+                "**GPKE Sperrung — Ausführungsmeldung (GPKE Teil 2 Kap. 3.5)**\n\n\
                  This is the **NB side**. After the field team has (or has not) carried out the\n\
                  disconnection, the NB reports the outcome and `makod` dispatches IFTSTA 21039\n\
                  to the Lieferant.\n\n\
@@ -1895,7 +1926,7 @@ impl MakodMcpHandler {
                  The **LF side** is a different command set: `gpke.sperrung.beauftragen`\n\
                  (17115), `gpke.entsperrung.beauftragen` (17117), `gpke.sperrung.stornieren`\n\
                  (ORDCHG 39000).\n\n\
-                 **Source:** GPKE Teil 2 § 3.5 (BK6-24-174 Anlage 1b); ORDERS PIDs 17115/17117, IFTSTA 21039.",
+                 **Source:** GPKE Teil 2 Kap. 3.5 (BK6-24-174 Anlage 1b); ORDERS PIDs 17115/17117, IFTSTA 21039.",
             ),
         ]
     }
@@ -2050,7 +2081,7 @@ impl ServerHandler for MakodMcpHandler {
         let uri = request.uri.as_str();
 
         if let Some(malo_id) = uri.strip_prefix("malo://") {
-            return match self.state.malo_cache.get(&self.state.tenant, malo_id).await {
+            return match self.state.malo_cache.get(malo_id).await {
                 Ok(Some(record)) => {
                     let json =
                         serde_json::to_string_pretty(&record).unwrap_or_else(|_| "{}".to_owned());
@@ -2274,7 +2305,7 @@ fn next_steps_hint(command: &str) -> String {
         }
         "geli.gas.sperrung.bestaetigen" | "gpke.sperrung.bestaetigen" => {
             return "Execution reported. IFTSTA 21039 is queued to the Lieferant \
-                    (GPKE Teil 2 § 3.5)."
+                    (GPKE Teil 2 Kap. 3.5)."
                 .to_owned();
         }
         "gpke.sperrung.fehlgeschlagen" => {
@@ -2284,7 +2315,7 @@ fn next_steps_hint(command: &str) -> String {
         }
         "gpke.sperrung.beauftragen" => (
             "Sperrauftrag sent to the NB. After its answer the NB executes within the \
-             window GPKE Teil 2 § 3.5.1.2 Nr. 1 sets after the frühestmöglichen \
+             window GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 sets after the frühestmöglichen \
              Sperrtermin and reports via IFTSTA 21039.",
             &[17_115],
         ),
@@ -2499,6 +2530,7 @@ mod tool_inventory_tests {
 
         let mut expected = vec![
             "einrichtung_checkliste",
+            "einrichtung_vorschlag",
             "get_format_version_coverage",
             "get_health",
             "get_malo",

@@ -125,7 +125,7 @@ pub enum ErpEventType {
     /// The counterparty sent an APERAK rejecting our UTILMD.
     ///
     /// `erc_code` is `Some` when the APERAK carried a structured ERC segment
-    /// (BDEW APERAK AHB 1.1 §2.2), and `None` when the counterparty sent none.
+    /// (BDEW APERAK AHB 1.1 Kap. 2.2), and `None` when the counterparty sent none.
     AperakRejected {
         /// Structured BDEW ERC error code from the APERAK ERC segment.
         ///

@@ -106,7 +106,7 @@ pub(super) fn cmd_wim_wertebestellung_abbestellung_beantworten<'a>(
 
 /// The Lokationsebene a Werteanfrage addresses.
 ///
-/// **The Messprodukt decides it.** REQOTE AHB 1.2 §4.3 gives `LOC+172` DE 3225
+/// **The Messprodukt decides it.** REQOTE AHB 1.2 Kap. 4.3 gives `LOC+172` DE 3225
 /// four permitted shapes and lets the Marktlokations-ID format (`[950]`) serve
 /// *both* the Marktlokation (hint `[502]`) and the Tranche (hint `[504]`) — so
 /// an 11-digit identifier is provably ambiguous and no inspection of it can
@@ -159,7 +159,7 @@ pub(super) async fn esa_outbound_consent_gate(
 
 /// Length of a Zählpunktbezeichnung. The one location identifier whose shape
 /// is unambiguous — MaLo-, NeLo- and Tranchen-IDs all share the `[950]`/`[960]`
-/// numeric formats (REQOTE AHB 1.2 §4.3, `LOC+172` DE 3225).
+/// numeric formats (REQOTE AHB 1.2 Kap. 4.3, `LOC+172` DE 3225).
 const ZPB_LEN: usize = 33;
 
 /// The first of `keys` the payload carries, as a date.
@@ -186,7 +186,7 @@ fn date_field(
 /// `esa.werteanfrage.stellen` payload.
 ///
 /// These are the substance of the request, not decoration: the Messprodukt is
-/// `SG27 PIA+5` (restricted by REQOTE AHB 1.2 §4.3 condition `[41]` to Codeliste
+/// `SG27 PIA+5` (restricted by REQOTE AHB 1.2 Kap. 4.3 condition `[41]` to Codeliste
 /// der Konfigurationen Kapitel 4.6), the Wunschtermin is the `DTM+76` **Muss**,
 /// and the Abo mode is the `IMD+7081` **Muss** on the ORDERS that follows.
 ///
@@ -552,7 +552,7 @@ pub(super) fn esa_answer_reason(payload: &serde_json::Value) -> Option<String> {
 /// Nr. 2).
 ///
 /// UC 4.1.1: the ESA asks for „die Übermittlung von Werten **und die damit
-/// verbundenen Kosten**", and QUOTES AHB 1.1a §4.3 makes `SG4 CUX`, the
+/// verbundenen Kosten**", and QUOTES AHB 1.1a Kap. 4.3 makes `SG4 CUX`, the
 /// `SG27 PIA+Z02` Artikel-IDs, the `SG31 PRI+CAL` prices and one to 23
 /// `PIA+5 …:SRW` OBIS-Kennzahlen **Muss**. So `preise` and `obis` are required
 /// here — an offer that prices nothing is not an offer, and there is no other
@@ -641,7 +641,7 @@ fn parse_angebot(
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 DispatchError::InvalidPayload(
-                    "preise[].artikel_id is required — SG27 PIA+Z02 is Muss inside the                      Positionsblock (QUOTES AHB 1.1a §4.3 condition [2042])"
+                    "preise[].artikel_id is required — SG27 PIA+Z02 is Muss inside the                      Positionsblock (QUOTES AHB 1.1a Kap. 4.3 condition [2042])"
                         .to_owned(),
                 )
             })?
@@ -693,7 +693,7 @@ fn parse_angebot(
 
     if preise.is_empty() || obis_kennzahlen.is_empty() {
         return Err(DispatchError::InvalidPayload(
-            "preise und obis sind Pflicht auf einem Angebot — SG31 PRI und die              PIA+5 …:SRW OBIS-Kennzahlen sind Muss auf der QUOTES 15003              (QUOTES AHB 1.1a §4.3). Ohne Angebot: wim.wertebestellung.anfrage-ablehnen"
+            "preise und obis sind Pflicht auf einem Angebot — SG31 PRI und die              PIA+5 …:SRW OBIS-Kennzahlen sind Muss auf der QUOTES 15003              (QUOTES AHB 1.1a Kap. 4.3). Ohne Angebot: wim.wertebestellung.anfrage-ablehnen"
                 .to_owned(),
         ));
     }
@@ -737,7 +737,7 @@ pub(super) async fn dispatch_wim_wertebestellung_anfrage_ablehnen(
 ///
 /// The ESA answers are ORDRSP, where `SG2 AJT` is **Muss** and its code must
 /// sit in the named EBD's Zustimmungs- or Ablehnungs-Cluster (ORDRSP AHB 1.1b
-/// §4.15, conditions `[17]`/`[18]`). The **cluster picks the answer PID**, so there is
+/// Kap. 4.15, conditions `[17]`/`[18]`). The **cluster picks the answer PID**, so there is
 /// no separate `accept: bool` beside it — the two could disagree, and an answer
 /// to the market is a binding statement.
 ///

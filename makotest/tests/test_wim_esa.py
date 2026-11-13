@@ -34,7 +34,7 @@ def wrap(message: bytes, *, dar: str = "W1", sender: str = NB_ID) -> bytes:
     """Envelope one message.
 
     `sender` must match the message's own `NAD+MS`: BDEW Allgemeine Festlegungen
-    §2.13 requires UNB DE0004 and the NAD to be identical, and the parser
+    Kap. 2.13 requires UNB DE0004 and the NAD to be identical, and the parser
     refuses the interchange outright when they differ.
     """
     receiver = LF_ID if sender == NB_ID else NB_ID

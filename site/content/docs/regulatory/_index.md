@@ -96,7 +96,7 @@ graph LR
 
 > **Format version coexistence.** Profiles are per message and fv-dated —
 > `fv20260401` binds from 01.04.2026, `fv20261001` from 01.10.2026. The
-> directory names the **Anwendungszeitpunkt**; Allgemeine Festlegungen 6.1d §2.5
+> directory names the **Anwendungszeitpunkt**; Allgemeine Festlegungen 6.1d Kap. 2.5
 > schedules publication six months earlier, and a deviating date must name the
 > Mitteilung that published it. Several format versions run in one instance,
 > and a process finishes under the version it started with.

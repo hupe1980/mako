@@ -76,6 +76,7 @@ pub(crate) fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
     pg::CreateVersorgungsvertragInput {
         rahmenvertrag_id: None,
         kundentyp: "B2C".to_owned(),
+        verbraucher: None,
         vertragsart: None,
         bundle_code: None,
         vertragsbeginn: d,

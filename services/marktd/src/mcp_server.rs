@@ -1032,7 +1032,7 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
     }
 
     #[tool(
-        description = "Get a SteuerbareRessource (controllable load, §14a EnWG) by SR-ID, including all Konfigurationsprodukte (BK6-24-174 §4.3 produktcode).",
+        description = "Get a SteuerbareRessource (controllable load, §14a EnWG) by SR-ID, including all Konfigurationsprodukte (produktcode per Codeliste der Konfigurationen 1.4 Kap. 4.1–4.3).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_steuerbare_ressource(

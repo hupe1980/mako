@@ -339,7 +339,7 @@ async fn anmeldung_decisions_insert_and_list() {
 
 // ── Neuanlage — the E_0608 60-Werktage Prüflauf ──────────────────────────────
 
-/// GPKE Teil 2 § 2.2.2 and `E_0608` Prüfschritte 110 / 590: an Anmeldung whose
+/// GPKE Teil 2 Kap. 2.2.2 and `E_0608` Prüfschritte 110 / 590: an Anmeldung whose
 /// Marktlokation cannot be identified is re-checked daily and only refused once
 /// the 60-Werktage window has run out.
 ///
@@ -559,7 +559,7 @@ async fn a_tranchierte_anmeldung_waits_for_every_lfa() {
 }
 
 /// A lapsed 09:00 Frist resolves the row whatever is still outstanding: the LFA
-/// that did not answer answered with silence, which GPKE Teil 2 § 2.1.2 makes a
+/// that did not answer answered with silence, which GPKE Teil 2 Kap. 2.1.2 makes a
 /// Zustimmung — „Verstreicht die Frist, ohne dass eine Antwort beim NB eingeht,
 /// gilt dies als Bestätigung nach Fall a)".
 #[tokio::test]

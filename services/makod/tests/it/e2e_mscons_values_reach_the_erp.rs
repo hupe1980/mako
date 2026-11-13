@@ -77,7 +77,7 @@ fn rendered_13027() -> String {
 
 /// The message `makod` itself emits satisfies the AHB rules for 13027.
 ///
-/// MSCONS AHB 3.1g §11.2 makes `SG9 LIN`, `SG9 PIA` and both `SG1 RFF` groups
+/// MSCONS AHB 3.1g Kap. 11.2 makes `SG9 LIN`, `SG9 PIA` and both `SG1 RFF` groups
 /// *Muss*, so the profile carries them as such. Calling them optional would let
 /// a 13027 with no `PIA` — hence no OBIS code — validate clean, and the reading
 /// would have nothing to say which register it belongs to.
@@ -221,7 +221,7 @@ fn a_reading_without_an_offset_is_skipped_rather_than_guessed() {
 
 /// A conformant third-party 13027 carries the MaLo in `SG6 LOC+172` only.
 ///
-/// MSCONS AHB 3.1g §11.2 gives `SG5 NAD` just DE 3035 = `DP`; the identifier is
+/// MSCONS AHB 3.1g Kap. 11.2 gives `SG5 NAD` just DE 3035 = `DP`; the identifier is
 /// `LOC` DE 3225. Reading `NAD` works against mako's own renderer, which happens
 /// to fill both, and yields an empty location for a message from anyone else —
 /// which is the field `edmd` refuses the whole event on.

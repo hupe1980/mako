@@ -10,6 +10,7 @@ tools — the surface agents are granted — and writes through their REST route
 just desk          # makod on its dev config + the Desk with hot reload, browser on :5173
 just desk-gen      # refresh services/*/mcp.snapshot.json and regenerate src/data/gen
 just desk-check    # generated types current, tsc, biome, vitest — part of `just ci`
+just desk-vergleich  # Einrichtung screenshots against desk/vergleich/; --bless after a deliberate change
 ```
 
 Node comes from `.node-version`; npm ships with it. `npm ci` runs no install

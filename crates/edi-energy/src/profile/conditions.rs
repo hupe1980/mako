@@ -695,6 +695,119 @@ impl SegmentPattern {
     }
 }
 
+impl SegmentPattern {
+    /// This pattern with each code placed in the data element the MIG lists it
+    /// under, among the `layouts` of its tag.
+    ///
+    /// A Bedingung writes the codes of a segment positionally, and the AHBs
+    /// drop an element they leave empty: ORDERS AHB 1.1b writes „Wenn IMD+Z01
+    /// vorhanden" for the Abonnement the MIG 1.4c (S. 20) puts in DE 7081 —
+    /// `IMD++Z01`, the second element, with DE 7077 „Nicht benutzt". Read by
+    /// position, the pattern asks DE 7077 for a code it never carries, and the
+    /// place the Bedingung gates is never owed.
+    ///
+    /// A code stays where it is written when some layout of the tag admits it
+    /// there, or leaves that place a free value. It moves only when the
+    /// layouts admit every alternative at exactly one other place the pattern
+    /// leaves open — so no reading the MIG supports is changed, and an
+    /// ambiguous one is left as written.
+    #[must_use]
+    pub fn anchored(&self, layouts: &[super::model::SegmentNode]) -> Self {
+        let tagged: Vec<&super::model::SegmentNode> =
+            layouts.iter().filter(|l| l.tag == self.tag).collect();
+        if tagged.is_empty() {
+            return self.clone();
+        }
+        let leaf = |l: &super::model::SegmentNode, ei: usize, ci: usize| {
+            l.leaves()
+                .find(|&(e, c, _)| e == ei && c == ci)
+                .map(|(_, _, el)| el.clone())
+        };
+        let fits = |p: &SegmentPattern| {
+            p.elements.iter().enumerate().all(|(ei, comps)| {
+                comps.iter().enumerate().all(|(ci, alternatives)| {
+                    let Some(alts) = alternatives else {
+                        return true;
+                    };
+                    tagged.iter().any(|l| match leaf(l, ei, ci) {
+                        Some(el) => {
+                            el.status != "N"
+                                && (el.codes.is_empty()
+                                    || alts
+                                        .iter()
+                                        .all(|a| el.codes.iter().any(|c| code_matches(a, &c.code))))
+                        }
+                        None => false,
+                    })
+                })
+            })
+        };
+        if fits(self) {
+            return self.clone();
+        }
+        // The AHB drops an element it leaves empty: „STS+E01+ZG2" is the
+        // `STS+E01++ZG2` the MIG lays out, „IMD+Z36+Z13" the `IMD++Z36+Z13`.
+        // The first single gap that seats every code where the MIG admits it
+        // is the reading.
+        for k in 0..=self.elements.len() {
+            let mut gapped = self.clone();
+            gapped.elements.insert(k, Vec::new());
+            if fits(&gapped) {
+                return gapped;
+            }
+        }
+        let mut out = self.clone();
+        for (ei, comps) in self.elements.iter().enumerate() {
+            for (ci, alternatives) in comps.iter().enumerate() {
+                let Some(alts) = alternatives else { continue };
+                let fits_here = tagged.iter().any(|l| match leaf(l, ei, ci) {
+                    Some(el) => {
+                        (el.codes.is_empty() && el.status != "N")
+                            || alts
+                                .iter()
+                                .all(|a| el.codes.iter().any(|c| code_matches(a, &c.code)))
+                    }
+                    None => false,
+                });
+                if fits_here {
+                    continue;
+                }
+                let mut places: Vec<(usize, usize)> = tagged
+                    .iter()
+                    .flat_map(|l| l.leaves())
+                    .filter(|(_, _, el)| {
+                        el.status != "N"
+                            && alts
+                                .iter()
+                                .all(|a| el.codes.iter().any(|c| code_matches(a, &c.code)))
+                    })
+                    .map(|(e, c, _)| (e, c))
+                    .collect();
+                places.sort_unstable();
+                places.dedup();
+                let [(te, tc)] = places[..] else { continue };
+                let open = out
+                    .elements
+                    .get(te)
+                    .and_then(|cs| cs.get(tc))
+                    .is_none_or(Option::is_none);
+                if !open {
+                    continue;
+                }
+                out.elements[ei][ci] = None;
+                if out.elements.len() <= te {
+                    out.elements.resize(te + 1, Vec::new());
+                }
+                if out.elements[te].len() <= tc {
+                    out.elements[te].resize(tc + 1, None);
+                }
+                out.elements[te][tc] = Some(alts.clone());
+            }
+        }
+        out
+    }
+}
+
 /// A pattern value against a wire value: a lowercase letter in the pattern
 /// stands for any one character (`1-b:1.9.e` names a family of OBIS-Kennzahlen).
 fn code_matches(pattern: &str, value: &str) -> bool {
@@ -919,6 +1032,114 @@ pub enum Voraussetzung {
         /// The count must exceed this.
         more_than: usize,
     },
+    /// „Wenn MP-ID in SG2 NAD+MS mit Rolle MSB nicht vorhanden", „Wenn MP-ID in
+    /// SG2 NAD+MR (Nachrichtenempfänger) in der Rolle LF/MSB" — the Marktrolle
+    /// the sender's or receiver's MP-ID holds. The message does not carry it, so
+    /// it is decided from the caller's [`Parteirollen`] and stays unknown where
+    /// the caller does not know the role.
+    Rolle {
+        /// Whose MP-ID: `NAD+MS` or `NAD+MR`.
+        partei: Partei,
+        /// The roles named, any of which satisfies the Bedingung.
+        rollen: Vec<String>,
+        /// „nicht vorhanden" / „nicht in der Rolle".
+        negate: bool,
+    },
+}
+
+/// The party a role Bedingung speaks of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Partei {
+    /// `NAD+MS` — the Nachrichtenabsender.
+    Absender,
+    /// `NAD+MR` — the Nachrichtenempfänger.
+    Empfaenger,
+}
+
+/// The Marktrollen of a message's sender and receiver, as far as the caller
+/// knows them — the context a role Bedingung is decided from.
+///
+/// A role is the BDEW abbreviation an AHB prints (`LF`, `NB`, `MSB`, `ÜNB`,
+/// `ESA`, `BKV`, `BIKO`, `MGV`, `KN`); `None` leaves every Bedingung on that
+/// party undecided. Each MP-ID identifies one Marktrolle („Für jede Sparte …
+/// und jede Rolle hat ein Marktteilnehmer genau eine MP-ID", Identifikatoren
+/// AWH V1.2 Kap. 2.1), so one role per party is the whole fact.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Parteirollen {
+    /// The Nachrichtenabsender's role.
+    pub absender: Option<String>,
+    /// The Nachrichtenempfänger's role.
+    pub empfaenger: Option<String>,
+}
+
+impl Parteirollen {
+    /// Neither role known.
+    #[must_use]
+    pub fn unbekannt() -> Self {
+        Self::default()
+    }
+
+    /// The role of `partei`, normalised to the AHB's spelling.
+    #[must_use]
+    pub fn von(&self, partei: Partei) -> Option<String> {
+        match partei {
+            Partei::Absender => self.absender.as_deref(),
+            Partei::Empfaenger => self.empfaenger.as_deref(),
+        }
+        .map(normalise_rolle)
+    }
+}
+
+/// `UENB`/`UNB` → `ÜNB`, everything else upper-cased.
+fn normalise_rolle(r: &str) -> String {
+    match r.trim().to_uppercase().as_str() {
+        "UENB" | "UNB" => "ÜNB".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+/// Read a role Bedingung. `None` for one that qualifies the role further („…
+/// mit Rolle MSB in der Sparte Gas …") or names a party other than `NAD+MS` /
+/// `NAD+MR` — those stay unread.
+fn parse_rolle(t: &str) -> Option<Voraussetzung> {
+    let lower = t.to_lowercase();
+    if lower.contains("sparte") {
+        return None;
+    }
+    let partei = if t.contains("NAD+MS") {
+        Partei::Absender
+    } else if t.contains("NAD+MR") {
+        Partei::Empfaenger
+    } else {
+        return None;
+    };
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let at = words.iter().position(|w| w.eq_ignore_ascii_case("rolle"))?;
+    let mut rollen = Vec::new();
+    for w in &words[at + 1..] {
+        let w = w.trim_end_matches(['.', ',', ';', ')']);
+        if matches!(w, "vorhanden" | "nicht") {
+            break;
+        }
+        if w == "oder" {
+            continue;
+        }
+        for r in w.split('/') {
+            if r.is_empty() || !r.chars().all(char::is_alphabetic) {
+                return None;
+            }
+            rollen.push(normalise_rolle(r));
+        }
+    }
+    if rollen.is_empty() {
+        return None;
+    }
+    let negate = lower.contains(" nicht vorhanden") || lower.contains(" nicht in der rolle ");
+    Some(Voraussetzung::Rolle {
+        partei,
+        rollen,
+        negate,
+    })
 }
 
 /// Re-join an EDIFACT pattern the AHB printed across a line break: a space
@@ -946,6 +1167,34 @@ fn join_wrapped_pattern(text: &str) -> String {
             {
                 i += 1;
                 continue;
+            }
+            // „A14 /A15": the column wrapped before an alternative's slash.
+            if prev.is_some_and(|p| p.is_ascii_alphanumeric()) && next == Some('/') {
+                i += 1;
+                continue;
+            }
+            // „E_05 48": an EBD number the column broke inside its four
+            // digits — rejoined only when the halves make exactly four.
+            let token: String = out
+                .chars()
+                .rev()
+                .take_while(|c| !matches!(c, '+' | ':' | '/' | ' '))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            if let Some(head) = token.strip_prefix("E_")
+                && !head.is_empty()
+                && head.chars().all(|c| c.is_ascii_digit())
+            {
+                let tail = chars[i + 1..]
+                    .iter()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count();
+                if tail > 0 && head.len() + tail == 4 {
+                    i += 1;
+                    continue;
+                }
             }
             in_pattern = false;
         }
@@ -1409,6 +1658,16 @@ fn parse_value_shape(words: &[&str]) -> Option<Voraussetzung> {
     })
 }
 
+/// Whether a Bedingung predicates the Marktrolle of an MP-ID („… mit Rolle
+/// MSB …", „… in der Rolle LF"). The role an MP-ID holds is not in the
+/// message, so such a Bedingung is read as [`Voraussetzung::Rolle`] and
+/// decided only from the caller's [`Parteirollen`].
+#[must_use]
+pub fn predicates_a_role(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("mp-id") && (lower.contains(" mit rolle ") || lower.contains(" in der rolle "))
+}
+
 impl Voraussetzung {
     /// Read the Voraussetzung shapes the AHBs use. `None` for anything else.
     #[must_use]
@@ -1420,6 +1679,14 @@ impl Voraussetzung {
         let lower = t.to_lowercase();
         if !lower.starts_with("wenn ") {
             return None;
+        }
+        // „Wenn MP-ID in SG2 NAD+MS mit Rolle MSB nicht vorhanden" names the
+        // Marktrolle the sender's MP-ID holds, not whether `NAD+MS` is there:
+        // the segment is in every message, and the role is not on the wire.
+        // Read as a presence test it decides the Bedingung the same way for
+        // every sender — ORDERS 17004 then refuses a LF's `IMD++Z46`.
+        if predicates_a_role(t) {
+            return parse_rolle(t);
         }
         let words: Vec<&str> = t.split_whitespace().collect();
         // A comparison states its Voraussetzung without the word „vorhanden",
@@ -1783,6 +2050,65 @@ mod tests {
             .unwrap()
             .unwrap()
             .into_owned()
+    }
+
+    /// „Wenn IMD+Z01 vorhanden" names the Abonnement the ORDERS MIG 1.4c
+    /// (S. 20) puts in DE 7081 with DE 7077 unused: anchored in that layout,
+    /// the pattern matches `IMD++Z01` and not `IMD+Z01`. A code the layout
+    /// admits where it is written stays there.
+    #[test]
+    fn a_code_is_read_in_the_element_the_mig_lists_it_under() {
+        let layout: super::super::model::SegmentNode = serde_json::from_value(serde_json::json!({
+            "nr": "00009", "tag": "IMD", "status": "D", "max": 1,
+            "elements": [
+                {"id": "7077", "status": "N"},
+                {"id": "C272", "status": "R", "components": [
+                    {"id": "7081", "status": "R",
+                     "codes": [{"code": "Z01"}, {"code": "Z02"}, {"code": "Z03"}]}
+                ]}
+            ]
+        }))
+        .expect("layout");
+        let written = SegmentPattern::parse("IMD+Z01").expect("pattern");
+        assert!(written.matches(&seg("IMD+Z01'")));
+        assert!(!written.matches(&seg("IMD++Z01'")));
+        let anchored = written.anchored(std::slice::from_ref(&layout));
+        assert!(anchored.matches(&seg("IMD++Z01'")));
+        assert!(!anchored.matches(&seg("IMD++Z02'")));
+        let already = SegmentPattern::parse("IMD++Z02/Z03").expect("pattern");
+        assert_eq!(already.anchored(std::slice::from_ref(&layout)), already);
+        let other_tag = SegmentPattern::parse("STS+Z01").expect("pattern");
+        assert_eq!(other_tag.anchored(std::slice::from_ref(&layout)), other_tag);
+    }
+
+    /// The AHB drops an empty element: „STS+E01+ZG2" is `STS+E01++ZG2` where
+    /// `C555` is „Nicht benutzt"; and a column that broke an EBD number or an
+    /// alternative's slash is read whole.
+    #[test]
+    fn a_dropped_element_and_a_wrapped_code_are_read_as_the_mig_lays_them_out() {
+        let sts: super::super::model::SegmentNode = serde_json::from_value(serde_json::json!({
+            "nr": "00034", "tag": "STS", "status": "M", "max": 1,
+            "elements": [
+                {"id": "C601", "status": "R", "components": [
+                    {"id": "9015", "status": "M", "codes": [{"code": "E01"}]}]},
+                {"id": "C555", "status": "N", "components": [{"id": "4405", "status": "N"}]},
+                {"id": "C556", "status": "R", "components": [{"id": "9013", "status": "M"}]}
+            ]
+        }))
+        .expect("layout");
+        let p = SegmentPattern::parse("STS+E01+ZG2")
+            .expect("pattern")
+            .anchored(std::slice::from_ref(&sts));
+        assert!(p.matches(&seg("STS+E01++ZG2'")));
+        assert!(!p.matches(&seg("STS+E01++ZG3'")));
+        assert_eq!(
+            join_wrapped_pattern("wenn SG2 AJT+A02/A03+E_05 48 vorhanden"),
+            "wenn SG2 AJT+A02/A03+E_0548 vorhanden"
+        );
+        assert_eq!(
+            join_wrapped_pattern("Wenn SG4 STS++A05/ A06/ A14 /A15 (Status) vorhanden"),
+            "Wenn SG4 STS++A05/A06/A14/A15 (Status) vorhanden"
+        );
     }
 
     #[test]

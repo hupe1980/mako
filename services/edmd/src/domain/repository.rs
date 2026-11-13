@@ -207,7 +207,7 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
 ///
 /// A deliberately separate trait and table (`esa_typ2_reads`) from
 /// [`TimeSeriesRepository`]. Typ-2 data is non-authoritative (Codeliste 1.4
-/// Kap. 4.6; WiM Strom Teil 2 §4) and must never reach a billing path — so it
+/// Kap. 4.6; WiM Strom Teil 2 Kap. 4) and must never reach a billing path — so it
 /// shares *no* read method with the billing store. There is no `imbalance`,
 /// `billing_period`, `latest_read`, `store_corrections` or substitute-value
 /// method here **by design**: a Typ-2 value can only be stored and read back

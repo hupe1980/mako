@@ -220,7 +220,7 @@ fn the_supplier_change_workflow_enqueues_a_renderable_aperak() {
         .outbox
         .iter()
         .find(|p| p.message_type.as_ref() == "APERAK")
-        .expect("a clean Strom UTILMD is always acknowledged (APERAK AHB 1.1 §2.4)");
+        .expect("a clean Strom UTILMD is always acknowledged (APERAK AHB 1.1 Kap. 2.4)");
 
     // It answers the message it received, and it is the Anerkennungsmeldung.
     assert_eq!(aperak.payload["orig_message_ref"], "MSG-001");
@@ -256,7 +256,7 @@ fn an_anerkennung_references_the_acknowledged_document() {
 }
 
 /// The door's two Verarbeitbarkeitsfehlermeldungen pass the APERAK AHB:
-/// `Z31` (no Ortsangabe) and `Z29` with its obligatory `FTX+Z02` (§ 2.1.2.2).
+/// `Z31` (no Ortsangabe) and `Z29` with its obligatory `FTX+Z02` (Kap. 2.1.2.2).
 #[test]
 fn the_doors_fehlermeldungen_pass_the_ahb() {
     let z31 =

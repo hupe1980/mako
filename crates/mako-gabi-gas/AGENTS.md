@@ -7,17 +7,19 @@
 - Scope: `GaBiGasModule` registers five workflows — `gabi-gas-invoic`
   (INVOIC **31010** Kapazitätsrechnung NB → KN — INVOIC AHB 1.0b Kap. 3.1.4, **31007**/**31008**
   aggregierte MMM-Rechnung Gas NB → MGV, REMADV **33001** Zahlungsavis and
-  COMDIS **29001** Ablehnung REMADV), `gabi-gas-mmma` (MSCONS **13013**,
-  marktlokationsscharfe Allokationsliste Gas NB → LF), and the three DVGW
+  COMDIS **29001** Ablehnung REMADV), `gabi-gas-mmma` (the GNB's ORDERS
+  **17110** and the MSCONS **13013** marktlokationsscharfe Allokationsliste Gas
+  NB → LF), and the three DVGW
   carriers `gabi-gas-allocation` (ALOCAT, PIDs 70001–70023),
   `gabi-gas-nomination` (NOMINT/NOMRES, 70030–70039) and
   `gabi-gas-mehr-mindermengen` (SSQNOT, 70095–70096). `drivers()` in
-  `src/lib.rs` is the list (`gabi-gas-mmma` as a routing-only driver: its MSCONS
-  resumes the `gpke-allokationsliste` process); the module docs carry the per-PID routing.
-- ORDERS **17110** / ORDRSP **19110** (Anfrage und Ablehnung der Allokationsliste
-  Gas) open the exchange MSCONS 13013 answers, but are **routed by `mako-gpke`**
-  under `gpke-allokationsliste`, which carries the Strom pair beside them. Named
-  here, registered there — one PID, one crate.
+  `src/lib.rs` is the list (an inbound 13013 resumes the LF's
+  `gpke-allokationsliste` process); the module docs carry the per-PID routing.
+- ORDERS **17110** (Anforderung der Allokationsliste Gas) is the GNB's: it routes
+  to `gabi-gas-mmma` for a NB role, and the GNB refuses a Start Abo on ORDRSP
+  **19110** out of `E_0803` / `G_0001`. The LF's side — sending 17110, receiving
+  19110 and 13013 — is `mako-gpke` `gpke-allokationsliste`, which registers
+  19110 and not 17110. One PID, one crate.
 - The DVGW formats `dvgw-edi` cannot parse — SCHEDL, IMBNOT, TRANOT,
   DELORD/DELRES, CHACAP, NUEVOR, SLPASP, TSIMSG — have no workflow and no PID
   here: registering one would overstate what the router handles.

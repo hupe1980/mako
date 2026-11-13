@@ -30,7 +30,10 @@ async fn lf_state() -> CommandsApiState {
         snapshot_interval: 100,
         cedar: Arc::new(CedarAuthorizer::unauthenticated().expect("infallible")),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+        malo_cache: Arc::new(SlateDbMaloCache::new(
+            store.clone(),
+            TenantId::from_party_id(LF_MP_ID),
+        )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
         marktd_client: None,
@@ -52,7 +55,7 @@ async fn lf_state() -> CommandsApiState {
         .expect("MaLo fixture matches the energy-api schema");
     state
         .malo_cache
-        .upsert(&state.tenant_id.to_string(), &record)
+        .upsert(&record)
         .await
         .expect("seed MaLo cache");
     state

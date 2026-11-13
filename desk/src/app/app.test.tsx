@@ -1268,6 +1268,8 @@ describe("the Desk", () => {
     antwort?: (url: string) => Response | undefined;
     /** The parked bookings accountingd lists. */
     geparkt?: Record<string, unknown>[];
+    /** The receipts invoicd holds Offen. */
+    gehalten?: Record<string, unknown>[];
     /** agentd's `/vorschlaege` answer, when it is not the dispute's proposal. */
     vorschlaege?: Record<string, unknown>;
     /** The skills agentd's catalog lists. */
@@ -1361,34 +1363,42 @@ describe("the Desk", () => {
                     saturated: false,
                   },
                 }
-              : name === "list_parked_bookings"
+              : name === "list_held_receipts"
                 ? {
                     structuredContent: {
-                      buchungen: opts.geparkt ?? [],
-                      count: opts.geparkt?.length ?? 0,
+                      gehalten: opts.gehalten ?? [],
+                      count: opts.gehalten?.length ?? 0,
                       saturated: false,
                     },
                   }
-                : name === "list_pending_approvals"
-                  ? { structuredContent: { freigaben: [], count: 0, saturated: false } }
-                  : name === "list_open_processes"
-                    ? { structuredContent: { prozesse: [], weiter: null } }
-                    : name === "list_overdue_processes"
-                      ? {
-                          structuredContent: {
-                            overdue: [],
-                            count: 0,
-                            saturated: false,
-                            limit: 500,
-                          },
-                        }
-                      : name === "list_anmeldungen"
-                        ? { structuredContent: { anmeldungen: [], gesamt: 0 } }
-                        : name === "kunden_zu_malos"
-                          ? { structuredContent: { kunden: [] } }
-                          : name
-                            ? { structuredContent: {} }
-                            : {};
+                : name === "list_parked_bookings"
+                  ? {
+                      structuredContent: {
+                        buchungen: opts.geparkt ?? [],
+                        count: opts.geparkt?.length ?? 0,
+                        saturated: false,
+                      },
+                    }
+                  : name === "list_pending_approvals"
+                    ? { structuredContent: { freigaben: [], count: 0, saturated: false } }
+                    : name === "list_open_processes"
+                      ? { structuredContent: { prozesse: [], weiter: null } }
+                      : name === "list_overdue_processes"
+                        ? {
+                            structuredContent: {
+                              overdue: [],
+                              count: 0,
+                              saturated: false,
+                              limit: 500,
+                            },
+                          }
+                        : name === "list_anmeldungen"
+                          ? { structuredContent: { anmeldungen: [], gesamt: 0 } }
+                          : name === "kunden_zu_malos"
+                            ? { structuredContent: { kunden: [] } }
+                            : name
+                              ? { structuredContent: {} }
+                              : {};
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
         headers: { "content-type": "application/json", "mcp-session-id": "s" },
       });
@@ -1543,6 +1553,169 @@ describe("the Desk", () => {
       url: "/svc/billingd/api/v1/billing/b-rev/reviewed",
       body: null,
     });
+    localStorage.removeItem("mako-desk.rolle");
+  });
+
+  it("decides a held invoice in place: a statement per open Prüfschritt, or the order's Leistungsnachweis, each held and never confirmed", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    const posts: { url: string; body: unknown }[] = [];
+    const gehalten = {
+      id: "rc-h",
+      process_id: "p-held",
+      pid: 31009,
+      sender_mp_id: "9900357000004",
+      rechnungsnummer: "MSB-2031-0001",
+      bestellung_ref: "B-77",
+      frist: "2031-01-25T23:00:00Z",
+      offen: [
+        {
+          ebene: { ebene: "position", position: 2 },
+          pruefschritt: 310,
+          detail: "kein Leistungsnachweis zur Bestellung",
+        },
+        { ebene: { ebene: "kopf" }, pruefschritt: 80, detail: "Preisblatt-Version unbekannt" },
+        { ebene: { ebene: "kopf" }, pruefschritt: 20, detail: "Rechnungssteller unbekannt" },
+      ],
+    };
+    const fetch = rechnungFetch({ posts, gehalten: [gehalten] });
+    vi.stubGlobal("fetch", fetch);
+    await open("/heute");
+    // Titled by who sent it, its open steps the reason, due by the Zahlungsziel.
+    const zeile = await screen.findByRole("button", {
+      name: /3 Prüfschritte offen, zuerst: kein Leistungsnachweis zur Bestellung/,
+    });
+    await waitFor(() => expect(zeile.textContent).toContain("Stadtwerke Musterstadt Netz"));
+    expect(zeile.textContent).toContain("Bestellung B-77");
+    fireEvent.click(zeile);
+    const schritte = screen.getByRole("list", { name: "Offene Prüfschritte" });
+    expect(within(schritte).getAllByRole("listitem")).toHaveLength(3);
+    // Prüfschritt 20 wants a record, not a statement: it is said, never asked.
+    expect(within(schritte).getByText(/es fehlt ein Datensatz/)).toBeTruthy();
+    expect(screen.queryByRole("radiogroup", { name: /Prüfschritt 20/ })).toBeNull();
+
+    const senden = screen.getByRole("button", { name: "Feststellen" });
+    expect(senden.hasAttribute("disabled") || senden.getAttribute("data-disabled") !== null).toBe(
+      true,
+    );
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: /Prüfschritt 310 · Position 2/ })).getByRole(
+        "radio",
+        { name: /^\+\s*erbracht$/ },
+      ),
+    );
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: /Prüfschritt 80/ })).getByRole("radio", {
+        name: /Version ungültig/,
+      }),
+    );
+    fireEvent.change(screen.getByLabelText(/Worauf stützt sich die Feststellung/), {
+      target: { value: "Zählerwechsel am 12.01. im WFM belegt" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Feststellen" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getAllByText(/Feststellung erfasst/).length).toBeGreaterThan(0);
+    expect(posts).toEqual([]);
+    flush();
+    await waitFor(() =>
+      expect(posts).toEqual([
+        {
+          url: "/svc/invoicd/api/v1/receipts/rc-h/feststellungen",
+          body: {
+            feststellungen: {
+              leistung_erbracht: { "2": true },
+              preisblatt_version_gueltig: false,
+            },
+            begruendung: "Zählerwechsel am 12.01. im WFM belegt",
+          },
+        },
+      ]),
+    );
+    cleanup();
+
+    // The same invoice answered through its order: R chooses the Leistungsnachweis.
+    posts.length = 0;
+    await open("/heute");
+    fireEvent.click(await screen.findByRole("button", { name: /3 Prüfschritte offen/ }));
+    fireEvent.keyDown(window, { key: "r" });
+    fireEvent.change(screen.getByLabelText(/Artikel-ID/), { target: { value: "9990001000798" } });
+    fireEvent.change(screen.getByLabelText(/^Von/), { target: { value: "2031-01-01" } });
+    fireEvent.change(screen.getByLabelText(/^Bis/), { target: { value: "2031-01-31" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^\+\s*erbracht$/ }));
+    fireEvent.change(screen.getByLabelText(/Worauf stützt sich der Nachweis/), {
+      target: { value: "Ablesewerte vom MSB empfangen" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Leistungsnachweis" }));
+    flush();
+    await waitFor(() =>
+      expect(posts).toEqual([
+        {
+          url: "/svc/invoicd/api/v1/leistungsnachweise",
+          body: {
+            rechnungssteller_mp_id: "9900357000004",
+            bestellung_ref: "B-77",
+            artikel_id: "9990001000798",
+            von: "2031-01-01",
+            bis: "2031-01-31",
+            erbracht: true,
+            nachweis: "Ablesewerte vom MSB empfangen",
+          },
+        },
+      ]),
+    );
+    localStorage.removeItem("mako-desk.rolle");
+  });
+
+  it("holds a received invoice for Netz and Energieservice too, decided the same way in place", async () => {
+    for (const rolle of ["netz", "energieservice"]) {
+      localStorage.setItem("mako-desk.rolle", rolle);
+      const posts: { url: string; body: unknown }[] = [];
+      vi.stubGlobal(
+        "fetch",
+        rechnungFetch({
+          posts,
+          gehalten: [
+            {
+              id: "rc-n",
+              process_id: "p-n",
+              pid: 31009,
+              sender_mp_id: "9900357000004",
+              rechnungsnummer: "MSB-2031-0002",
+              bestellung_ref: null,
+              frist: null,
+              offen: [
+                {
+                  ebene: { ebene: "kopf" },
+                  pruefschritt: 80,
+                  detail: "Preisblatt-Version unbekannt",
+                },
+              ],
+            },
+          ],
+        }),
+      );
+      await open("/heute");
+      fireEvent.click(await screen.findByRole("button", { name: /1 Prüfschritt offen/ }));
+      // No order on the invoice: the Leistungsnachweis is not offered.
+      expect(screen.queryByRole("radio", { name: "Leistungsnachweis" })).toBeNull();
+      fireEvent.click(screen.getByRole("radio", { name: /Version gültig/ }));
+      fireEvent.change(screen.getByLabelText(/Worauf stützt sich die Feststellung/), {
+        target: { value: "Preisblatt 2031 liegt vor" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Feststellen" }));
+      flush();
+      await waitFor(() =>
+        expect(posts).toEqual([
+          {
+            url: "/svc/invoicd/api/v1/receipts/rc-n/feststellungen",
+            body: {
+              feststellungen: { preisblatt_version_gueltig: true },
+              begruendung: "Preisblatt 2031 liegt vor",
+            },
+          },
+        ]),
+      );
+      cleanup();
+    }
     localStorage.removeItem("mako-desk.rolle");
   });
 
@@ -2000,6 +2173,28 @@ describe("the Desk", () => {
             frist: "2031-01-20T23:00:00Z",
             abgesendet: false,
             befunde: [],
+          },
+        ],
+        count: 1,
+        saturated: false,
+      },
+      list_held_receipts: {
+        gehalten: [
+          {
+            id: "rc-h",
+            process_id: "p-held",
+            pid: 31009,
+            sender_mp_id: "9900357000004",
+            rechnungsnummer: "MSB-2031-0001",
+            bestellung_ref: "B-1",
+            frist: "2031-01-25T23:00:00Z",
+            offen: [
+              {
+                ebene: { ebene: "position", position: 1 },
+                pruefschritt: 310,
+                detail: "kein Leistungsnachweis zur Bestellung",
+              },
+            ],
           },
         ],
         count: 1,

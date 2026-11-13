@@ -516,7 +516,6 @@ Also sets the SEPA billing_day (day of month for direct debit).",
                 abschlag_ct: Some(p.abschlag_ct),
                 billing_day: p.billing_day,
                 address: Default::default(),
-                verbraucher: None,
             },
         )
         .await

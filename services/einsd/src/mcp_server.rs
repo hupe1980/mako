@@ -1425,6 +1425,9 @@ impl EinsdMcpHandler {
                    plus kwk_verwendung, and kwk_kostenanteil for a modernisierte or\n\
                    nachgerüstete Anlage — §8 Abs. 1–3 derives the Vollbenutzungsstunden\n\
                    from those; kwk_foerderdauer_h overrides them\n\
+                   A plant in Dauerbetrieb after 31.12.2026 is settled only with\n\
+                   ausschreibungs_zuschlag_id (§6 Abs. 1 Satz 1 Nr. 1 lit. b KWKG) or\n\
+                   kwk_bimschg_genehmigung / kwk_verbindliche_bestellung dated by then (lit. c)\n\
                  - FLEXIBILITAET: flex_leistung_kw + flex_praemie_ct_kwh (§50b)\n\n\
                  ### Derived for you\n\
                  - foerderendedatum: §25 Abs. 1 — 20 years extended to 31 December of the\n\
@@ -1678,7 +1681,7 @@ impl ServerHandler for EinsdMcpHandler {
              VERGUETUNG (§21 Abs. 1) | AUSFALLVERGUETUNG (§21 Abs. 1 Satz 1 Nr. 3, AW −20 %) |\n\
              MIETERSTROM (§21 Abs. 3) | GGV (§42b EnWG) | DIREKTVERMARKTUNG (§20 gleitende\n\
              Marktprämie) | AUSSCHREIBUNG (§22) | SONSTIGE_DIREKTVERMARKTUNG (§21a) |\n\
-             POST_EEG_SPOT | EIGENVERBRAUCH | KWKG_ZUSCHLAG (§7 KWKG 2023) |\n\
+             POST_EEG_SPOT | EIGENVERBRAUCH | KWKG_ZUSCHLAG (§7 KWKG) |\n\
              FLEXIBILITAET (§50b) | FLEXIBILITAET_ZUSCHLAG (§50a, capacity-based)\n\n\
              ## Tools (19)\n\
              Registry: list_plants, get_plant, list_expiring, list_settlements, list_unsettled_plants\n\

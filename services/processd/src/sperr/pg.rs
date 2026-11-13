@@ -24,21 +24,21 @@ use uuid::Uuid;
 use crate::config::MsbVorlaufLesart;
 use crate::sperr::model::{Arbeitszeit, OrderStatus, OrderType};
 
-/// The window GPKE Teil 2 § 3.5.1.2 Nr. 1 gives the NB for the physical act:
+/// The window GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 gives the NB for the physical act:
 /// „Die Sperrung der Marktlokation ist durch den NB spätestens innerhalb von
 /// **6 WT** nach dem frühestmöglichen Sperrtermin durchzuführen."
 pub const AUSFUEHRUNG_WERKTAGE: u32 = 6;
 
 /// „Unverzüglich, jedoch spätester ÜT ist der **1. WT** nach dem Abschluss des
-/// Sperrauftrags" — the IFTSTA 21039 window (GPKE Teil 2 § 3.5.1.2 Nr. 5,
-/// § 3.5.2.2 Nr. 4).
+/// Sperrauftrags" — the IFTSTA 21039 window (GPKE Teil 2 Kap. 3.5.1.2 Nr. 5,
+/// Kap. 3.5.2.2 Nr. 4).
 pub const IFTSTA_WERKTAGE: u32 = 1;
 
 /// „Der NB führt bis zu **zwei** Sperrversuche innerhalb eines Sperrauftrags
-/// durch" (GPKE Teil 2 § 3.5.1.2 Nr. 5).
+/// durch" (GPKE Teil 2 Kap. 3.5.1.2 Nr. 5).
 pub const MAX_SPERRVERSUCHE: i32 = 2;
 
-/// Whether the Lieferant gave the NB the lead time GPKE Teil 2 § 3.5.1.2 Nr. 1
+/// Whether the Lieferant gave the NB the lead time GPKE Teil 2 Kap. 3.5.1.2 Nr. 1
 /// requires, and which of the two windows applied.
 ///
 /// The Festlegung states **two**, and the wire tells them apart on its own:
@@ -169,7 +169,7 @@ pub fn msb_fenster(
 }
 
 /// „Unverzüglich, jedoch spätester ÜT ist der **3. WT** nach dem ÜT von Nr. 3" —
-/// the MSB's window to answer the Anfrage Sperrung (GPKE Teil 2 § 3.5.1.2 Nr. 4).
+/// the MSB's window to answer the Anfrage Sperrung (GPKE Teil 2 Kap. 3.5.1.2 Nr. 4).
 ///
 /// Its absence is consent: „Verstreicht die Frist, ohne dass die Antwort auf die
 /// Anfrage beim NB eingeht, gilt dies als Zustimmung."
@@ -307,7 +307,7 @@ pub struct SperrOrderRow {
     pub treffpunkt_ort: Option<String>,
     pub treffpunkt_land: Option<String>,
     pub hinweis: Option<String>,
-    /// The § 3.5.1.2 Nr. 1 deadline for the physical act.
+    /// The Kap. 3.5.1.2 Nr. 1 deadline for the physical act.
     pub ausfuehrung_faellig_am: Option<Date>,
     pub status: OrderStatus,
     /// How many Sperrversuche have been made — the Festlegung allows two.
@@ -320,7 +320,7 @@ pub struct SperrOrderRow {
     pub execution_note: Option<String>,
     pub fail_reason: Option<String>,
     pub pruefschritt_code: Option<String>,
-    /// The § 3.5.1.2 Nr. 5 deadline for the IFTSTA 21039.
+    /// The Kap. 3.5.1.2 Nr. 5 deadline for the IFTSTA 21039.
     pub iftsta_faellig_am: Option<Date>,
     pub iftsta_ref: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -392,11 +392,11 @@ pub struct SperrStats {
     /// the work done, not when the Festlegung requires it.
     pub overdue_pending: i64,
     /// Pending orders past the **regulatory** execution window: 6 Werktage after
-    /// the frühestmöglicher Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 1). This is
+    /// the frühestmöglicher Sperrtermin (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1). This is
     /// the number a BNetzA audit asks about.
     pub frist_ueberschritten: i64,
     /// Terminal orders whose IFTSTA 21039 is past its own Frist — 1 Werktag
-    /// after completion (§ 3.5.1.2 Nr. 5).
+    /// after completion (Kap. 3.5.1.2 Nr. 5).
     pub iftsta_ueberfaellig: i64,
     /// Terminal orders whose IFTSTA 21039 has not been dispatched. The LF has
     /// not learned the outcome and their process cannot close.
@@ -405,7 +405,7 @@ pub struct SperrStats {
     pub iftsta_stuck: i64,
     /// Orders the **Lieferant** sent later than its own Vorlauffrist allowed —
     /// 6 Werktage before the frühestmöglicher Sperrtermin, or 12 before a
-    /// termingebundener one (GPKE Teil 2 § 3.5.1.2 Nr. 1).
+    /// termingebundener one (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1).
     ///
     /// A different question from every other figure here: the others count the
     /// NB's own windows, this one counts the counterparty's. The NB executes
@@ -443,7 +443,7 @@ pub async fn create_order_pg(
             spaetester_ut = %b.spaetester_ut,
             frist = b.obligation.name,
             "processd sperr: Sperrauftrag arrived after its Vorlauffrist — recorded, not refused \
-             (GPKE Teil 2 § 3.5.1.2 Nr. 2 does not publish it as a ground)",
+             (GPKE Teil 2 Kap. 3.5.1.2 Nr. 2 does not publish it as a ground)",
         );
     }
     let mut tx = pool.begin().await?;
@@ -571,7 +571,7 @@ pub enum Outcome<'a> {
         /// Sperrversuche the Festlegung allows.
         ///
         /// `false` records the attempt and leaves the order `pending`: GPKE
-        /// Teil 2 § 3.5.1.2 Nr. 5 gives the NB **two** Sperrversuche within one
+        /// Teil 2 Kap. 3.5.1.2 Nr. 5 gives the NB **two** Sperrversuche within one
         /// Sperrauftrag, and reporting `Z13 gescheitert` after the first ends a
         /// process that still owes a second visit.
         endgueltig: bool,
@@ -641,7 +641,7 @@ pub async fn report_outcome(
     };
 
     // A non-final Sperrversuch is recorded and the order stays `pending`: GPKE
-    // Teil 2 § 3.5.1.2 Nr. 5 allows two attempts inside one Sperrauftrag, and
+    // Teil 2 Kap. 3.5.1.2 Nr. 5 allows two attempts inside one Sperrauftrag, and
     // the guard is on the *stored* count so two concurrent field reports cannot
     // both read "one attempt left".
     if let Outcome::Failed {
@@ -894,7 +894,7 @@ pub async fn record_iftsta_delivered(
 /// * the order's outbox command was dead-lettered — its retry budget is spent,
 ///   or makod refused it outright, and
 /// * the order is past `iftsta_faellig_am` — the 1. Werktag nach Abschluss the
-///   Lieferant is entitled to the Auftragsstatus by (GPKE Teil 2 § 3.5.1.2
+///   Lieferant is entitled to the Auftragsstatus by (GPKE Teil 2 Kap. 3.5.1.2
 ///   Nr. 5).
 ///
 /// The deadline arm is not redundant: a command still retrying is not
@@ -1072,7 +1072,7 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
     })
 }
 
-// ── Execution-window sweep (GPKE Teil 2 § 3.5.1.2 Nr. 1) ─────────────────────
+// ── Execution-window sweep (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1) ─────────────────────
 
 /// Pending orders past their 6-Werktage execution window that have not been
 /// announced yet.

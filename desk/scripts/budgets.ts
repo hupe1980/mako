@@ -17,6 +17,9 @@
 //   screen: ≤ 100 ms.
 // - **Erste Befunde der Einrichtung** — from the navigation to /einrichtung
 //   to the checklist's items on screen: ≤ 1000 ms.
+// - **Erster Vorschlag** — from the navigation to /einrichtung to the first
+//   proposed file's lines on screen, the interview pre-filled from what is
+//   loaded: ≤ 1000 ms.
 // - **Urteil des Probelaufs** — from the press on „Probelauf starten" to
 //   makod's verdict on screen: ≤ 3000 ms.
 // - **Entscheidung per Tastatur** — the Interaction to Next Paint of a
@@ -216,6 +219,16 @@ const ersteBefunde: Budget = {
   },
 };
 
+const ersterVorschlag: Budget = {
+  name: "Erster Vorschlag der Einrichtung sichtbar",
+  grenzeMs: 1000,
+  async messen(page, base) {
+    await abNavigation(page, '[aria-label="Zeilen von makod.toml"] li');
+    await page.goto(`${base}einrichtung`);
+    return gemessen(page);
+  },
+};
+
 const probeUrteil: Budget = {
   name: "Urteil des Probelaufs sichtbar",
   grenzeMs: 3000,
@@ -316,6 +329,7 @@ try {
     ersterSchritt,
     aktionenSichtbar,
     ersteBefunde,
+    ersterVorschlag,
     probeUrteil,
     entscheidungAnsicht,
     entscheidungPalette,

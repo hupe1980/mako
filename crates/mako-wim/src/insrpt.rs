@@ -554,18 +554,18 @@ impl WimInsrptWorkflow {
         message_ref: &MessageRef,
         status_code: Option<&str>,
     ) -> PendingOutbox {
-        let mut payload = serde_json::json!({
-            "type":          "Stoerungsmeldung",
-            "pid":           pid,
-            "melo":          data.melo_id.as_str(),
-            "receiver":      receiver.as_str(),
-            "document_date": data.document_date,
-            "message_ref":   message_ref.as_str(),
-        });
-        if let Some(code) = status_code {
-            payload["status_code"] = serde_json::Value::String(code.to_owned());
-        }
-        PendingOutbox::new("INSRPT", receiver.as_str(), payload)
+        PendingOutbox::typed(
+            receiver.as_str(),
+            &mako_engine::payload::InsrptPayload {
+                pid,
+                melo: data.melo_id.as_str().to_owned(),
+                receiver: Some(receiver.as_str().to_owned()),
+                document_date: Some(data.document_date.clone()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+                status_code: status_code.map(str::to_owned),
+                ..Default::default()
+            },
+        )
     }
 }
 
@@ -1020,6 +1020,12 @@ mod tests {
 
         let (bestaetigt, out) = run(empfangen.clone(), antwort(23_004));
         assert_eq!(bestaetigt.label(), "Bestaetigt");
+        // The INSRPT reads back as its typed payload.
+        use mako_engine::payload::OutboundPayload as _;
+        let typed = mako_engine::payload::InsrptPayload::from_payload(&out.outbox[0].payload)
+            .expect("an INSRPT payload");
+        assert_eq!(typed.pid, 23_004);
+        assert!(!typed.melo.is_empty());
         assert!(
             !bestaetigt.is_terminal(),
             "the Ergebnisbericht still follows"

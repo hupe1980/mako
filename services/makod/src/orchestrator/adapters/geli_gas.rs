@@ -13,7 +13,7 @@ use super::*;
 /// **Message format**: ORDERS (AWH Sperrprozesse Gas; GeLi Gas 3.0
 /// BK7-24-01-009 holds no Sperrprozess). The GNB's answer window is the
 /// 17115 / 17117 row of `mako_fristen::antwort`; the APERAK is the Gas
-/// Verarbeitbarkeitsfehlermeldung of APERAK AHB 1.1 § 2.3.1.
+/// Verarbeitbarkeitsfehlermeldung of APERAK AHB 1.1 Kap. 2.3.1.
 #[must_use]
 pub fn geli_gas_sperrung_nb_registry() -> AdapterRegistry<GeliGasSperrungNbWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -200,6 +200,18 @@ pub fn geli_gas_registry(
                     ))
                 })
                 .and_then(convert_pid)?;
+            // 44021 answers the LF's Änderungsmeldung zur Bestandsliste 44020
+            // (UTILMD AHB Gas 1.2 Kap. 5.1, S. 15, NB an LF). mako sends no 44020, so
+            // no LF-side process waits for it; refuse it by name rather than
+            // open it as an Anfrage.
+            if pid.as_u32() == 44_021 {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas adapter: PID 44021 answers an Änderungsmeldung zur \
+                     Bestandsliste 44020; mako implements no LF-side Änderungsmeldung, so \
+                     there is no open 44020 for it to answer"
+                        .into(),
+                ));
+            }
             let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             Ok(GasSupplierChangeCommand::ReceiveUtilmd {
@@ -254,7 +266,7 @@ pub fn geli_gas_registry(
                 // Transaktionsgrund *and* its Ergänzung, the Vorgangsnummer,
                 // `DTM+154` and `DTM+471`. Reading the Grund alone escalated
                 // every Gas answer at Prüfschritt 10.
-                vorgang: super::lf_vorgangsdaten(u)?,
+                vorgang: Box::new(super::lf_vorgangsdaten(u)?),
                 // No gas-quality characteristic exists in UTILMD G; see
                 // `extract_gasqualitaet`. Always `None` until an AHB defines one.
                 gasqualitaet: extract_gasqualitaet(u.segments()).map(str::to_owned),
@@ -683,7 +695,7 @@ pub fn geli_gas_stornierung_lf_registry() -> AdapterRegistry<GeliGasLfStornierun
 /// (Bedingung `[500]`: the category of the cancelled message).
 ///
 /// **APERAK:** only a Verarbeitbarkeitsfehlermeldung, nächster Werktag 12 Uhr
-/// for a Folgeprozess (APERAK AHB 1.1 § 2.3 / § 2.3.1).
+/// for a Folgeprozess (APERAK AHB 1.1 Kap. 2.3 / Kap. 2.3.1).
 #[must_use]
 pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWorkflow> {
     let mut registry = AdapterRegistry::new();

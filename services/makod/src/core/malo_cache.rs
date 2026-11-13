@@ -21,6 +21,11 @@
 //! mc_txres/{tenant_id}/{tx_id}                     →  JSON(MaloIdentResolved)
 //! ```
 //!
+//! `{tenant_id}` is the engine tenant ([`TenantId`]) — the data-isolation key
+//! the command doors, the MaLo-ID answer and every writer share. It is fixed
+//! when the cache is built ([`SlateDbMaloCache::new`]), so no writer can file a
+//! record under a key the doors do not read.
+//!
 //! The `mc_addr/` secondary index enables address-based lookups when the
 //! Lieferant does not supply a MaLo-ID.
 //!
@@ -33,6 +38,7 @@
 
 use energy_api::models::electricity::{IdentificationParameter, MaloIdentResultPositive};
 use energy_api::server::malo_ident::MaloRegistry;
+use mako_engine::ids::TenantId;
 use mako_engine::store_slatedb::{KvNamespace, SlateDbStore};
 use time::OffsetDateTime;
 
@@ -58,13 +64,18 @@ const MC_TXRES: KvNamespace = KvNamespace::new("mc_txres/");
 #[derive(Clone)]
 pub struct SlateDbMaloCache {
     store: SlateDbStore,
+    /// The engine tenant every record is filed and read under.
+    tenant: String,
 }
 
 impl SlateDbMaloCache {
-    /// Create a new cache using an existing shared store.
+    /// The cache of `tenant` over an existing shared store.
     #[must_use]
-    pub fn new(store: SlateDbStore) -> Self {
-        Self { store }
+    pub fn new(store: SlateDbStore, tenant: TenantId) -> Self {
+        Self {
+            store,
+            tenant: tenant.to_string(),
+        }
     }
 
     // ── Write path (admin API) ────────────────────────────────────────────────
@@ -77,11 +88,8 @@ impl SlateDbMaloCache {
     /// # Errors
     ///
     /// Returns an error on storage failure.
-    pub async fn upsert(
-        &self,
-        tenant_id: &str,
-        result: &MaloIdentResultPositive,
-    ) -> Result<(), anyhow::Error> {
+    pub async fn upsert(&self, result: &MaloIdentResultPositive) -> Result<(), anyhow::Error> {
+        let tenant_id = self.tenant.as_str();
         let malo_id = result.data_market_location.malo_id.as_ref();
         let suffix = malo_suffix(tenant_id, malo_id);
         let value = serde_json::to_vec(result)?;
@@ -124,7 +132,8 @@ impl SlateDbMaloCache {
     /// # Errors
     ///
     /// Returns an error on storage failure.
-    pub async fn remove(&self, tenant_id: &str, malo_id: &str) -> Result<bool, anyhow::Error> {
+    pub async fn remove(&self, malo_id: &str) -> Result<bool, anyhow::Error> {
+        let tenant_id = self.tenant.as_str();
         let suffix = malo_suffix(tenant_id, malo_id);
         let existed = self.store.kv_get(MC, &suffix).await?.is_some();
         if existed {
@@ -141,10 +150,9 @@ impl SlateDbMaloCache {
     /// Returns an error on storage failure or JSON deserialization failure.
     pub async fn get(
         &self,
-        tenant_id: &str,
         malo_id: &str,
     ) -> Result<Option<MaloIdentResultPositive>, anyhow::Error> {
-        let suffix = malo_suffix(tenant_id, malo_id);
+        let suffix = malo_suffix(&self.tenant, malo_id);
         match self.store.kv_get(MC, &suffix).await? {
             Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
             None => Ok(None),
@@ -156,7 +164,8 @@ impl SlateDbMaloCache {
     /// # Errors
     ///
     /// Returns an error on storage failure.
-    pub async fn stats(&self, tenant_id: &str) -> Result<MaloCacheStats, anyhow::Error> {
+    pub async fn stats(&self) -> Result<MaloCacheStats, anyhow::Error> {
+        let tenant_id = self.tenant.as_str();
         let count = self.read_count(tenant_id).await?;
         let last_upsert = self.read_last_upsert(tenant_id).await?;
         Ok(MaloCacheStats {
@@ -164,27 +173,6 @@ impl SlateDbMaloCache {
             count,
             last_upsert,
         })
-    }
-
-    /// List all tenants that have at least one MaLo record in the cache.
-    ///
-    /// Scans the `mc_stat/` prefix. Returns an empty vec when the cache is
-    /// completely empty.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error on storage failure.
-    pub async fn list_tenants(&self) -> Result<Vec<String>, anyhow::Error> {
-        // kv_scan_prefix returns suffix-only keys (namespace prefix stripped).
-        // Suffix shape: `{tenant_id}/{field}`
-        let pairs = self.store.kv_scan_prefix(MC_STAT).await?;
-        let mut tenants: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for (suffix, _) in pairs {
-            if let Some(tenant) = suffix.split('/').next() {
-                tenants.insert(tenant.to_owned());
-            }
-        }
-        Ok(tenants.into_iter().collect())
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -255,6 +243,11 @@ impl MaloRegistry for SlateDbMaloCache {
         tenant_id: &str,
         params: &IdentificationParameter,
     ) -> Result<Option<MaloIdentResultPositive>, energy_api::Error> {
+        // The cache answers for its own tenant only; another tenant's question
+        // finds nothing rather than this tenant's records.
+        if tenant_id != self.tenant {
+            return Ok(None);
+        }
         // 1. Try direct lookup by MaLo-ID (most common path).
         if let Some(id_params) = &params.identification_parameter_id
             && let Some(malo_id) = &id_params.malo_id

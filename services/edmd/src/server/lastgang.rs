@@ -754,7 +754,7 @@ pub(crate) async fn post_esa_typ2(
 /// `GET /api/v1/esa/typ2/{malo_id}` — read ESA "Werte nach Typ 2" for a MaLo.
 ///
 /// Reads the separate `esa_typ2_reads` store exclusively. These values are
-/// non-authoritative (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 §4) and have no
+/// non-authoritative (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 Kap. 4) and have no
 /// bearing on billing — this endpoint exists so the ESA can retrieve what it was
 /// delivered, kept structurally apart from every billing/aggregation endpoint.
 pub(crate) async fn get_esa_typ2(

@@ -32,7 +32,7 @@
 //!
 //! - **PID 55042**: Anmeldung Messstellenbetrieb (nMSB → NB, WiM AHB S2.1)
 //! - **Two clocks.** The **APERAK** acknowledgement is 45 minutes for Strom
-//!   UTILMD (APERAK AHB §2.4.1). The **business answer** is per PID —
+//!   UTILMD (APERAK AHB Kap. 2.4.1). The **business answer** is per PID —
 //!   55039 3 WT · 55042 5 WT · 55051 7 WT · 55168 1 WT (BK6-24-174 Teil 1
 //!   Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2), via `antwort_frist_werktage`.
 //! - **Saturdays, Sundays and federal public holidays are not Werktage**

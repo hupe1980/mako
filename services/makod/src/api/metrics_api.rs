@@ -15,6 +15,7 @@
 //! | `makod_registry_total` | gauge | Process instances in the registry (live routing entries) |
 //! | `makod_dead_letter_recent_total` | gauge | Dead-letter records in the durable DLQ (last 1000) |
 //! | `makod_build_info` | gauge (1) | Build metadata (version) |
+//! | `makod_certificate_expiry_days` | gauge, `pfad` | Whole days until each configured AS4 certificate expires (negative once expired); re-read on every scrape |
 //!
 //! ### Counters (from [`EngineMetrics::global()`], reset on restart)
 //!
@@ -83,6 +84,9 @@ pub struct MetricsState {
     /// operators can alert when a production instance accidentally runs without
     /// a persistent `--data-dir`.
     pub volatile_mode: bool,
+    /// The AS4 certificates' expiry, exported as
+    /// `makod_certificate_expiry_days`; `None` without AS4.
+    pub zertifikate: Option<Arc<crate::zertifikat_monitor::ZertifikatMonitor>>,
 }
 
 impl MetricsState {
@@ -97,7 +101,18 @@ impl MetricsState {
             cedar,
             tenant_id: tenant_id.into(),
             volatile_mode: false,
+            zertifikate: None,
         }
+    }
+
+    /// Export the expiry of the AS4 certificates `monitor` reads.
+    #[must_use]
+    pub fn with_zertifikate(
+        mut self,
+        monitor: Option<Arc<crate::zertifikat_monitor::ZertifikatMonitor>>,
+    ) -> Self {
+        self.zertifikate = monitor;
+        self
     }
 
     /// Set to `true` when the daemon started with in-memory (volatile) storage.
@@ -164,6 +179,14 @@ async fn handler(
     // Snapshot the per-family / per-outcome event counters from the global
     // EngineMetrics instance (AtomicU64 reads, no I/O).
     let event_counters = EngineMetrics::global().snapshot().render_prometheus();
+    let zertifikate = state
+        .zertifikate
+        .as_ref()
+        .map(|m| {
+            m.lies();
+            m.prometheus(time::OffsetDateTime::now_utc())
+        })
+        .unwrap_or_default();
 
     // Build Prometheus text exposition format (v0.0.4).
     let body = format!(
@@ -188,7 +211,7 @@ async fn handler(
          # HELP makod_build_info A metric with a constant value 1 labelled with version information.\n\
          # TYPE makod_build_info gauge\n\
          makod_build_info{{version=\"{version}\"}} 1\n\
-         {event_counters}",
+         {event_counters}{zertifikate}",
     );
 
     Ok((

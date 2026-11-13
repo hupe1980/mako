@@ -123,7 +123,7 @@ async fn state_for(
         snapshot_interval: 100,
         cedar,
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone(), tenant_id)),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
         marktd_client: None,
@@ -192,18 +192,21 @@ async fn an_lf_szr_reaches_the_lf_and_is_answered_from_e_0007() {
     let router = router_for(&[Rolle::LfStrom], &DeploymentRoles::lf());
     const ZP: &str = "DE00056266802AO6G56M11SN51G21M24S";
 
-    // The skeleton carries no `SG10 CCI+++ZB4`; the LF-SZR Kategorie A is
-    // `CAV+ZA1` (UTILMD AHB Strom 2.2 Kap. 13.1). The version is the
-    // 17-character Erstellungszeitpunkt `CCYYMMDDHHMMSSZZZ` (`DTM+293`).
-    let wire = set_element(
-        &skeleton(13_003, NB_MP, LF_MP),
-        "DTM+293:",
-        "20260930220000?",
+    // The 13003 column carries no `CCI` (MSCONS AHB 3.2 Kap. 8.3.3): the
+    // series is the one the NB activated the MaBiS-ZP for, the LF-SZR
+    // (Kategorie A).
+    aktiviere(
+        &state,
+        ZP,
+        mako_mabis::ZpSerie::LieferantensummenzeitreiheNb,
+        NB_MP,
+        LF_MP,
     )
-    .replacen(
-        &format!("LOC+172+{ZP}'"),
-        &format!("LOC+172+{ZP}'CCI+++ZB4'CAV+ZA1'"),
-        1,
+    .await;
+    let wire = skeleton(13_003, NB_MP, LF_MP);
+    assert!(
+        !wire.contains("CCI+"),
+        "the 13003 column has no CCI: {wire}"
     );
     let workflow = router.route(13_003).expect("routed on the LF deployment");
     let outcome = dispatcher
@@ -254,6 +257,66 @@ async fn an_lf_szr_reaches_the_lf_and_is_answered_from_e_0007() {
         matches!(outcome, Ok(IngestOutcome::Spawned { .. })),
         "13010: {outcome:?}"
     );
+}
+
+/// A valid LF-AASZR reaches the LF's settlement and is answered from `E_0093`
+/// (EBD 4.3, „LF-AASZR prüfen") on 21000 (Anwendungsübersicht 4.0 lfd. Nr.
+/// 9590). The 13023 column carries no `CCI` (MSCONS AHB 3.2 Kap. 8.3.3, S.
+/// 94–97): its PID alone names the series — one row, NB an LF, LF-AASZR (Kap.
+/// 8.3.2, S. 93), so the skeleton goes in unchanged.
+#[tokio::test]
+async fn an_lf_aaszr_reaches_the_lf_and_is_answered_from_e_0093() {
+    use mako_mabis::{BillingCommand, BillingState, MabisBillingWorkflow};
+    let (state, dispatcher) = state_for(LF_MP, "LF").await;
+    let router = router_for(&[Rolle::LfStrom], &DeploymentRoles::lf());
+    const ZP: &str = "DE00056266802AO6G56M11SN51G21M24S";
+
+    let wire = skeleton(13_023, NB_MP, LF_MP);
+    assert!(wire.contains(&format!("LOC+172+{ZP}'")), "{wire}");
+    assert!(
+        !wire.contains("CCI+"),
+        "the 13023 column has no CCI: {wire}"
+    );
+    let workflow = router.route(13_023).expect("routed on the LF deployment");
+    let outcome = dispatcher
+        .dispatch(
+            &parse(&wire),
+            workflow,
+            13_023,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await;
+    assert!(
+        matches!(outcome, Ok(IngestOutcome::Spawned { .. })),
+        "13023: {outcome:?}"
+    );
+
+    let ids = processes_on(&state, ZP, "mabis-billing").await;
+    assert_eq!(ids.len(), 1, "one settlement on the MaBiS-Zählpunkt");
+    let process =
+        Process::<MabisBillingWorkflow, _>::from_identity(state.store.clone(), ids[0].clone());
+    let BillingState::Offen(data) = process.state().await.expect("state") else {
+        panic!("the LF-AASZR opened its settlement");
+    };
+    assert_eq!(
+        data.zeitreihe.familie(),
+        mako_mabis::Familie::LfAaszr,
+        "13023 is the LF-AASZR"
+    );
+    let version = data.hoechste_version().expect("a version").clone();
+    process
+        .run(
+            BillingCommand::SendPruefmitteilung {
+                version,
+                pid: mako_engine::types::Pruefidentifikator::const_new(21_000),
+                antwortcode: "A06".to_owned(),
+                grund: None,
+                message_ref: mako_engine::types::MessageRef::new("PM-AASZR"),
+            },
+            mako_engine::process::RunOptions::new(),
+        )
+        .await
+        .expect("A06 is E_0093's Zustimmung");
 }
 
 /// A Lieferantenclearingliste reaches the LF's `mabis-listenabgleich` and is
@@ -384,7 +447,7 @@ fn korrekturliste_der_lf(listennummer: &str, grund: Option<&str>) -> edi_energy:
             pid: mako_engine::types::Pruefidentifikator::const_new(55_065),
             sender: mako_engine::types::MarktpartnerCode::new(NB_MP),
             receiver: mako_engine::types::MarktpartnerCode::new(LF_MP),
-            billing_period: mako_engine::types::BillingPeriod::new("202609"),
+            billing_period: mako_engine::types::BillingPeriod::new("2026-09"),
             message_ref: mako_engine::types::MessageRef::new("LIST-1"),
             mabis_zaehlpunkt: MABIS_ZP.to_owned(),
             zeitreihen_version: "20261005090000+00".to_owned(),
@@ -531,5 +594,177 @@ async fn a_code_outside_e_0047_is_refused() {
     assert_eq!(
         process.state().await.expect("state").label(),
         "ListeGesendet"
+    );
+}
+
+/// Record the activation of `zp` for `serie` as this deployment received it —
+/// the 55062 a receiver of a Summenzeitreihe holds before any version arrives
+/// (BK6-24-174 Anlage 3 Kap. 7.4.1, S. 83).
+async fn aktiviere(
+    state: &makod::commands_api::CommandsApiState,
+    zp: &str,
+    serie: mako_mabis::ZpSerie,
+    sender: &str,
+    receiver: &str,
+) {
+    use mako_engine::event_store::CorrelationEntry;
+    use mako_engine::process::RunOptions;
+    use mako_engine::types::{BillingPeriod, MarktpartnerCode, MessageRef, Pruefidentifikator};
+    let process = Process::<mako_mabis::MabisZpLifecycleWorkflow, _>::new(
+        state.store.clone(),
+        state.tenant_id,
+        mako_engine::version::WorkflowId::new("mabis-zp-lifecycle", "FV2026-10-01"),
+    );
+    let korrelation = CorrelationEntry {
+        tenant_id: state.tenant_id,
+        tag: zp.to_owned(),
+        process_id: process.process_id(),
+        identity: process.identity(),
+    };
+    process
+        .run(
+            mako_mabis::ZpLifecycleCommand::ReceiveAnfrage {
+                pid: Pruefidentifikator::const_new(55_062),
+                serie,
+                vorgang: mako_mabis::ZpVorgang::Aktivierung,
+                mabis_zp_id: zp.to_owned(),
+                sender: MarktpartnerCode::new(sender),
+                receiver: MarktpartnerCode::new(receiver),
+                billing_period: BillingPeriod::new("2026-09"),
+                document_date: "20260801".to_owned(),
+                message_ref: MessageRef::new("AKT-1"),
+                validation_passed: true,
+                validation_errors: vec![],
+            },
+            RunOptions::new().correlations(&[korrelation]),
+        )
+        .await
+        .expect("the activation is recorded");
+}
+
+/// An unmodified 13003 skeleton is accepted on every deployment the PID table
+/// names as a receiver (NB → LF, BIKO → NB, BIKO → BKV, BIKO → ÜNB, NB → BIKO),
+/// its series read off the MaBiS-ZP's activation; without one it is refused
+/// by name, never guessed.
+#[tokio::test]
+async fn a_conformant_13003_is_accepted_by_every_receiver() {
+    use mako_engine::builder::EngineModule as _;
+    use mako_engine::marktrolle::Marktrolle;
+    use mako_mabis::{BillingState, MabisBillingWorkflow, ZpSerie};
+    const BIKO_MP: &str = "9900000000027";
+    for (empfaenger, rolle, serie, sender) in [
+        (
+            Marktrolle::Lf,
+            "LF",
+            ZpSerie::LieferantensummenzeitreiheNb,
+            NB_MP,
+        ),
+        (
+            Marktrolle::Nb,
+            "NB",
+            ZpSerie::Abrechnungssummenzeitreihe,
+            BIKO_MP,
+        ),
+        (
+            Marktrolle::Bkv,
+            "BKV",
+            ZpSerie::BilanzkreissummenzeitreiheNb,
+            BIKO_MP,
+        ),
+        (
+            Marktrolle::Uenb,
+            "ÜNB",
+            ZpSerie::Abrechnungssummenzeitreihe,
+            BIKO_MP,
+        ),
+        (
+            Marktrolle::Biko,
+            "BIKO",
+            ZpSerie::BilanzkreissummenzeitreiheNb,
+            NB_MP,
+        ),
+    ] {
+        let mut router = PidRouter::new();
+        mako_mabis::MabisModule
+            .register_pids_with_roles(&mut router, &DeploymentRoles::from_roles([empfaenger]));
+        let workflow = router
+            .route(13_003)
+            .unwrap_or_else(|| panic!("{rolle} receives 13003"));
+        let (state, dispatcher) = state_for(LF_MP, rolle).await;
+        let wire = skeleton(13_003, sender, LF_MP);
+        let zp = makod::ingest_dispatcher::extract_malo_from_msg(&parse(&wire));
+
+        let ohne = dispatcher
+            .dispatch(
+                &parse(&wire),
+                workflow,
+                13_003,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await;
+        assert!(
+            ohne.as_ref()
+                .is_err_and(|e| e.to_string().contains("Aktivierung")),
+            "{rolle}: without an activation the series is unknown: {ohne:?}"
+        );
+
+        aktiviere(&state, zp.as_str(), serie, sender, LF_MP).await;
+        let outcome = dispatcher
+            .dispatch(
+                &parse(&wire),
+                workflow,
+                13_003,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await;
+        assert!(
+            matches!(outcome, Ok(IngestOutcome::Spawned { .. })),
+            "{rolle}: {outcome:?}"
+        );
+        let ids = processes_on(&state, zp.as_str(), "mabis-billing").await;
+        let process =
+            Process::<MabisBillingWorkflow, _>::from_identity(state.store.clone(), ids[0].clone());
+        let BillingState::Offen(data) = process.state().await.expect("state") else {
+            panic!("{rolle}: the version opened its settlement");
+        };
+        assert_eq!(Some(data.zeitreihe), serie.zeitreihe(), "{rolle}");
+    }
+}
+
+/// The NB receives the LF's Profil-Reklamation (ORDERS 17211, ORDERS AHB 1.1b
+/// Kap. 5.5, S. 126–127) on `mabis-profile`, keyed on its sender and `BGM`
+/// DE 1004 — the ORDERS names no Lokation — and holds its `E_0100` code. No
+/// answer goes out: the NB corrects by a new version (BK6-24-174 Anlage 3
+/// Kap. 6.5.2 Nr. 2, S. 69).
+#[tokio::test]
+async fn the_nb_receives_a_profil_reklamation() {
+    use mako_mabis::{MabisProfilWorkflow, ProfilState};
+    let (state, dispatcher) = state_for(NB_MP, "NB").await;
+    let router = router_for(&[Rolle::NbStrom], &DeploymentRoles::nb());
+    let wire = skeleton(17_211, LF_MP, NB_MP);
+    let msg = parse(&wire);
+    let workflow = router.route(17_211).expect("the NB receives 17211");
+    let outcome = dispatcher
+        .dispatch(&msg, workflow, 17_211, time::OffsetDateTime::now_utc())
+        .await;
+    assert!(
+        matches!(outcome, Ok(IngestOutcome::Spawned { .. })),
+        "17211: {outcome:?}"
+    );
+    let key = mako_mabis::reklamation_key(LF_MP, "DOK17211");
+    let ids = processes_on(&state, &key, "mabis-profile").await;
+    assert_eq!(ids.len(), 1, "one record per Reklamation");
+    let process =
+        Process::<MabisProfilWorkflow, _>::from_identity(state.store.clone(), ids[0].clone());
+    let ProfilState::ReklamationErhalten(r) = process.state().await.expect("state") else {
+        panic!("the NB holds the Reklamation");
+    };
+    assert!(!r.antwortcode.is_empty(), "FTX+AFH carries the E_0100 code");
+    let pending = state.store.pending_now(10).await.expect("outbox");
+    assert!(
+        pending
+            .iter()
+            .all(|p| matches!(&*p.message_type, "APERAK" | "CONTRL")),
+        "nothing but the technical acknowledgement answers a Reklamation"
     );
 }

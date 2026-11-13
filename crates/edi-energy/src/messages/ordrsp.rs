@@ -143,7 +143,7 @@ impl OrdrespMessage {
     ///
     /// This, not [`ftx`](Self::ftx), is what an ORDRSP answer *means*. It is
     /// **Muss** on the ESA order answers (PIDs 19011–19014, ORDRSP AHB 1.1b
-    /// §4.15) and on the Sperr-/Entsperr and Stammdaten answers, and those use
+    /// Kap. 4.15) and on the Sperr-/Entsperr and Stammdaten answers, and those use
     /// cases publish no free-text segment at all — the only `FTX` on a
     /// conformant ESA 19011 is `SG27 FTX+Z27`, which carries the MSB's IP
     /// address rather than a reason.

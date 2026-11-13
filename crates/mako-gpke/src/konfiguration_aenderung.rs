@@ -26,12 +26,12 @@
 //!
 //! [`KonfigurationAenderungCommand::SendAntwort`] answers a received ORDERS on
 //! the ORDRSP the AHB pairs with it, out of a tree its column names
-//! ([`antwort_auf`]; ORDRSP AHB 1.1b Kap. 4.4.2, 4.4.4, 4.4.5, 4.6): `SG1
+//! ([`antwort_auf`]; ORDRSP AHB 1.1b Kap. 4.4–4.7): `SG1
 //! RFF+ON` the ORDERS' `BGM` DE 1004, `SG2 AJT` the code with „EBD Nr.", and
-//! `SG2 FTX+AAP` beside `A99` (`[28]`). Only the trees `mako_pruefung::codes`
-//! carries are offered — `E_0526`, `E_0527`, `E_0539`; an answer whose column
-//! names another (`E_0523`, `E_0533`, `E_0538`, `E_0540`, `E_0544`–`E_0552`)
-//! is refused by name.
+//! `SG2 FTX+AAP` where the code needs the problem named (`[28]`, `[72]`–`[74]`).
+//! The Ablehnung der Reklamation einer Definition 19123 is refused by name:
+//! its column names the UTILTS that carried the Definition, which a received
+//! 17122 does not give this process.
 //!
 //! # Process families
 //!
@@ -150,12 +150,29 @@ pub fn ist_auftrag(pid: u32) -> bool {
     ORDERS_ANFRAGE_PIDS.contains(&pid) || ORDERS_EINRICHTUNG_PIDS.contains(&pid)
 }
 
-/// The ORDRSP that answers a received ORDERS, its `BGM` DE 1001 and the
-/// catalogued trees its `SG2 AJT` may name (ORDRSP AHB 1.1b Kap. 4.4.2 S. 23–24,
-/// 4.4.4 S. 27–28, 4.4.5 S. 29–30, 4.6 S. 35–36).
+/// The ORDRSP that answers a received ORDERS, its `BGM` DE 1001 and the trees
+/// its `SG2 AJT` may name (ORDRSP AHB 1.1b Kap. 4.4.2 S. 23–24, 4.4.3 S. 25–26,
+/// 4.4.4 S. 27–28, 4.4.5 S. 29–30, 4.4.6 S. 31–32, 4.6 S. 36–37, 4.7 S. 38–39).
 ///
-/// 19132 echoes the Bestellung's own `BGM` (`Z73` Bestellung einer
-/// Konfiguration, `Z74` Bestellung eines Angebots).
+/// The column picks the tree by the role of the party answered (`SG3 NAD+MR`)
+/// or of the answering one (`NAD+MS`); the caller names it, and only the
+/// column's trees are admitted. 19132 echoes the Bestellung's own `BGM` (`Z73`
+/// Bestellung einer Konfiguration, `Z74` Bestellung eines Angebots).
+///
+/// | ORDERS | ORDRSP | `BGM` | Trees |
+/// |---|---|---|---|
+/// | 17130 | 19132 | `Z73` / `Z74` | `E_0526` to a NB, `E_0527` to a MSB, `E_0533` to a LF |
+/// | 17123 | 19124 | `Z56` | `E_0523` from a NB, `E_0533` from a MSB |
+/// | 17120 | 19121 | `Z30` | `E_0523` |
+/// | 17121 | 19120 | `Z68` | `E_0526` |
+/// | 17118 | 19127 | `Z31` | `E_0527`, `E_0539` |
+/// | 17129 | 19131 | `Z72` | `E_0538` to a NB, `E_0539` to a MSB, `E_0540` to a LF |
+/// | 17128 | 19130 | `Z76` | `E_0552` to a NB, `E_0553` to a LF, `E_0554` to a MSB |
+///
+/// The Ablehnung der Reklamation einer Definition 19123 (17122, `E_0544`–
+/// `E_0551`) is not answered here: its column requires `SG1 RFF+ACW` / `RFF+TN`
+/// naming the UTILTS that carried the Definition (Kap. 4.5, S. 33–35,
+/// `[56]`–`[69]`), which this process does not hold.
 #[must_use]
 pub fn antwort_auf(
     orders_pid: u32,
@@ -174,9 +191,19 @@ pub fn antwort_auf(
                 &[
                     c::EBD_KONFIGURATION_BESTELLUNG,
                     c::EBD_KONFIGURATION_BESTELLUNG_WEITERER_MSB,
+                    c::EBD_KONFIGURATION_BESTELLUNG_LF_MSB,
                 ],
             ))
         }
+        17_123 => Some((
+            19_124,
+            "Z56",
+            &[
+                c::EBD_KONFIGURATION_BESTELLUNG_NB,
+                c::EBD_KONFIGURATION_BESTELLUNG_LF_MSB,
+            ],
+        )),
+        17_120 => Some((19_121, "Z30", &[c::EBD_KONFIGURATION_BESTELLUNG_NB])),
         17_121 => Some((19_120, "Z68", &[c::EBD_KONFIGURATION_BESTELLUNG])),
         17_118 => Some((
             19_127,
@@ -189,7 +216,20 @@ pub fn antwort_auf(
         17_129 => Some((
             19_131,
             "Z72",
-            &[c::EBD_KONFIGURATION_BEENDIGUNG_WEITERER_MSB],
+            &[
+                c::EBD_KONFIGURATION_BEENDIGUNG_NB,
+                c::EBD_KONFIGURATION_BEENDIGUNG_WEITERER_MSB,
+                c::EBD_KONFIGURATION_BEENDIGUNG_LF,
+            ],
+        )),
+        17_128 => Some((
+            19_130,
+            "Z76",
+            &[
+                c::EBD_KONFIGURATION_REKLAMATION_NB,
+                c::EBD_KONFIGURATION_REKLAMATION_LF,
+                c::EBD_KONFIGURATION_REKLAMATION_MSB,
+            ],
         )),
         _ => None,
     }
@@ -809,16 +849,18 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                     malo: malo.clone(),
                     message_ref: message_ref.clone(),
                 };
-                let outbox = vec![PendingOutbox::new(
-                    "ORDERS",
-                    recipient.as_str(),
-                    serde_json::json!({
-                        "pid":        orders_pid.as_u32(),
-                        "malo":       malo.as_str(),
-                        "orders_ref": message_ref.as_str(),
-                        "payload":    payload,
-                    }),
-                )];
+                // The column's own fields come in `payload`, laid over the
+                // head at the top, where the renderer reads them.
+                let body = crate::outbound::mit_spalte(
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(orders_pid.as_u32()),
+                        location: Some(malo.as_str().to_owned()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        ..Default::default()
+                    },
+                    &payload,
+                )?;
+                let outbox = vec![PendingOutbox::typed(recipient.as_str(), &body)];
                 // The counterparty's Antwortfrist, from the published row for
                 // this ORDERS; a PID no Festlegung quantifies registers nothing.
                 let frist: Vec<PendingDeadline> = antwortfrist(orders_pid.as_u32(), gesendet_am)
@@ -868,11 +910,17 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                         state.label(),
                     ));
                 };
+                if pid.as_u32() == 17_122 {
+                    return Err(WorkflowError::validation(
+                        "the Ablehnung der Reklamation einer Definition 19123 names the UTILTS \
+                         that carried the Definition in SG1 RFF+ACW / RFF+TN (ORDRSP AHB 1.1b \
+                         Kap. 4.5, [56]–[69]); this process does not hold it",
+                    ));
+                }
                 let (ordrsp, bgm, baeume) =
                     antwort_auf(pid.as_u32(), &auftrag.bgm).ok_or_else(|| {
                         WorkflowError::validation(format!(
-                            "no catalogued tree answers ORDERS {pid}: its ORDRSP column names a \
-                             tree mako_pruefung::codes does not carry"
+                            "ORDERS {pid} is not answered by an ORDRSP of this process"
                         ))
                     })?;
                 if !baeume.contains(&codeliste.as_str()) {
@@ -886,6 +934,15 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                             "{antwortcode:?} is not published in {codeliste}"
                         ))
                     })?;
+                // `A06` „konnte nicht sofort korrigiert werden" carries the
+                // geplanter Behebungszeitpunkt `DTM+292` (ORDRSP AHB 1.1b Kap.
+                // 4.7, S. 38, `[46]`–`[48]`), which the answer does not carry.
+                if ordrsp == 19_130 && antwortcode == "A06" {
+                    return Err(WorkflowError::validation(
+                        "A06 on 19130 requires the geplanter Behebungszeitpunkt DTM+292 \
+                         (ORDRSP AHB 1.1b Kap. 4.7, [46]–[48]), which this answer does not carry",
+                    ));
+                }
                 if code.braucht_bemerkung && freitext.as_deref().is_none_or(|t| t.trim().is_empty())
                 {
                     return Err(WorkflowError::validation(format!(
@@ -896,21 +953,21 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                 let ordrsp_pid = Pruefidentifikator::new(ordrsp)
                     .map_err(|e| WorkflowError::validation(format!("answer PID {ordrsp}: {e}")))?;
                 let outbox = vec![
-                    PendingOutbox::new(
-                        "ORDRSP",
+                    PendingOutbox::typed(
                         auftrag.absender.as_str(),
-                        serde_json::json!({
-                            "pid": ordrsp,
-                            "sender": auftrag.empfaenger.as_str(),
-                            "receiver": auftrag.absender.as_str(),
-                            "message_ref": message_ref.as_str(),
-                            "document_code": bgm,
-                            "document_id": message_ref.as_str(),
-                            "order_reference": auftrag.dokumentennummer,
-                            "antwort_code": antwortcode,
-                            "antwort_codeliste": codeliste,
-                            "antwort_freitext": freitext,
-                        }),
+                        &mako_engine::payload::OrdrspPayload {
+                            pid: Some(ordrsp),
+                            sender: Some(auftrag.empfaenger.as_str().to_owned()),
+                            receiver: Some(auftrag.absender.as_str().to_owned()),
+                            message_ref: Some(message_ref.as_str().to_owned()),
+                            document_code: Some(bgm.to_string()),
+                            document_id: Some(message_ref.as_str().to_owned()),
+                            order_reference: Some(auftrag.dokumentennummer.clone()),
+                            antwort_code: Some(antwortcode.clone()),
+                            antwort_codeliste: Some(codeliste.clone()),
+                            antwort_freitext: freitext,
+                            ..Default::default()
+                        },
                     )
                     .caused_by(0),
                 ];
@@ -1273,7 +1330,92 @@ mod tests {
         assert!(
             GpkeKonfigurationAenderungWorkflow::handle(&offen(17_120), antwort("E_0526", "A07"))
                 .is_err(),
-            "19121's E_0523 is not catalogued"
+            "19121's column names E_0523 alone"
         );
+    }
+
+    /// Each column the AHB pairs with a received ORDERS answers out of the
+    /// trees it names (ORDRSP AHB 1.1b Kap. 4.4.3, 4.4.6, 4.6, 4.7).
+    #[test]
+    fn every_column_answers_out_of_its_own_trees() {
+        use super::EingangAuftrag;
+        let offen = |pid: u32| KonfigurationAenderungState::AuftragEingegangen {
+            pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            auftrag: EingangAuftrag {
+                absender: MarktpartnerCode::new("9900000000003"),
+                empfaenger: MarktpartnerCode::new("9900555000005"),
+                lokation: None,
+                dokumentennummer: "KONF-2".to_owned(),
+                bgm: "Z73".to_owned(),
+                message_ref: MessageRef::new("UNH-2"),
+            },
+        };
+        let antwort = |tree: &str, code: &str, freitext: Option<&str>| {
+            KonfigurationAenderungCommand::SendAntwort {
+                codeliste: tree.to_owned(),
+                antwortcode: code.to_owned(),
+                freitext: freitext.map(str::to_owned),
+                message_ref: MessageRef::new("ORDRSP-2"),
+            }
+        };
+        for (orders, tree, code, ordrsp, bgm) in [
+            (17_120, "E_0523", "A17", 19_121, "Z30"),
+            (17_123, "E_0523", "A12", 19_124, "Z56"),
+            (17_123, "E_0533", "A07", 19_124, "Z56"),
+            (17_130, "E_0533", "A07", 19_132, "Z73"),
+            (17_129, "E_0538", "A03", 19_131, "Z72"),
+            (17_129, "E_0540", "A04", 19_131, "Z72"),
+            (17_128, "E_0552", "A05", 19_130, "Z76"),
+            (17_128, "E_0553", "A02", 19_130, "Z76"),
+            (17_128, "E_0554", "A03", 19_130, "Z76"),
+        ] {
+            let out = GpkeKonfigurationAenderungWorkflow::handle(
+                &offen(orders),
+                antwort(tree, code, None),
+            )
+            .unwrap_or_else(|e| panic!("{orders} {tree} {code}: {e}"));
+            let p = &out.outbox[0].payload;
+            assert_eq!(p["pid"], ordrsp, "{orders}");
+            assert_eq!(p["document_code"], bgm, "{orders}");
+            assert_eq!(p["antwort_codeliste"], tree, "{orders}");
+            assert_eq!(p["order_reference"], "KONF-2", "{orders}");
+        }
+        assert!(
+            GpkeKonfigurationAenderungWorkflow::handle(
+                &offen(17_123),
+                antwort("E_0526", "A07", None)
+            )
+            .is_err(),
+            "19124 names E_0523 / E_0533 only"
+        );
+        assert!(
+            GpkeKonfigurationAenderungWorkflow::handle(
+                &offen(17_128),
+                antwort("E_0552", "A04", None)
+            )
+            .is_err(),
+            "A04 names the problem in FTX+AAP"
+        );
+        assert!(
+            GpkeKonfigurationAenderungWorkflow::handle(
+                &offen(17_128),
+                antwort("E_0552", "A04", Some("Zähler defekt"))
+            )
+            .is_ok()
+        );
+        assert!(
+            GpkeKonfigurationAenderungWorkflow::handle(
+                &offen(17_128),
+                antwort("E_0552", "A06", None)
+            )
+            .is_err(),
+            "A06 needs DTM+292"
+        );
+        let refused = GpkeKonfigurationAenderungWorkflow::handle(
+            &offen(17_122),
+            antwort("E_0544", "A01", None),
+        )
+        .expect_err("19123 is refused by name");
+        assert!(refused.to_string().contains("RFF+ACW"), "{refused}");
     }
 }

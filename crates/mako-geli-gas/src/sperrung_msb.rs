@@ -314,21 +314,21 @@ impl Workflow for GeliGasSperrungMsbWorkflow {
                     message_ref,
                 };
                 let outbox = vec![
-                    PendingOutbox::new(
-                        "ORDRSP",
+                    PendingOutbox::typed(
                         anfrage.netzbetreiber.as_str(),
-                        serde_json::json!({
-                            "pid": pid,
-                            "sender": anfrage.msb.as_str(),
-                            "receiver": anfrage.netzbetreiber.as_str(),
-                            "message_ref": antwort.message_ref.as_str(),
-                            "document_code": BGM_SPERRUNG,
-                            "document_id": antwort.message_ref.as_str(),
-                            "order_reference": anfrage.dokumentennummer,
-                            "antwort_code": antwort.antwortcode,
-                            "antwort_codeliste": codeliste,
-                            "antwort_freitext": freitext,
-                        }),
+                        &mako_engine::payload::OrdrspPayload {
+                            pid: Some(pid),
+                            sender: Some(anfrage.msb.as_str().to_owned()),
+                            receiver: Some(anfrage.netzbetreiber.as_str().to_owned()),
+                            message_ref: Some(antwort.message_ref.as_str().to_owned()),
+                            document_code: Some(BGM_SPERRUNG.to_owned()),
+                            document_id: Some(antwort.message_ref.as_str().to_owned()),
+                            order_reference: Some(anfrage.dokumentennummer.clone()),
+                            antwort_code: Some(antwort.antwortcode.clone()),
+                            antwort_codeliste: Some(codeliste.to_owned()),
+                            antwort_freitext: freitext,
+                            ..Default::default()
+                        },
                     )
                     .caused_by(0),
                 ];
@@ -387,6 +387,9 @@ mod tests {
         assert_eq!(out.outbox[0].payload["pid"], BESTAETIGUNG_PID);
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_1001");
         assert_eq!(out.outbox[0].payload["order_reference"], "SPERR-GAS-1");
+        let typed = <mako_engine::payload::OrdrspPayload as mako_engine::payload::OutboundPayload>::from_payload(&out.outbox[0].payload)
+            .expect("the ORDRSP reads back as its typed payload");
+        assert_eq!(typed.antwort_code.as_deref(), Some("A01"));
         let ende = out
             .events
             .iter()

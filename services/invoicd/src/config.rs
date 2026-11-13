@@ -139,6 +139,8 @@ impl Config {
             tariff_tolerance_ppm: (self.check.tariff_tolerance * 1_000_000.0).round() as u32,
             require_tariff: self.check.require_tariff,
             max_zahlungsziel_days: self.check.max_zahlungsziel_days,
+            // A fact of each invoice, set per check (`handler::check_config_for`).
+            empfaenger_sparte: None,
         }
     }
 }
@@ -184,7 +186,7 @@ pub struct IdentityConfig {
     /// The Marktrolle this deployment **receives** invoices in.
     ///
     /// PID 31009 carries five Use-Cases and the message body names none of
-    /// them: BDEW Allgemeine Festlegungen §2.13 gives every Marktrolle its own
+    /// them: BDEW Allgemeine Festlegungen Kap. 2.13 gives every Marktrolle its own
     /// MP-ID, so the recipient's role is half of the answer (`IMD+7081` is the
     /// other half). Without it a Preisblatt-B invoice from an MSB cannot be
     /// told from an NB's — `E_0270` and `E_0273` publish the same codes under
@@ -302,11 +304,14 @@ pub struct CheckSectionConfig {
     /// auto-approved.
     #[serde(default)]
     pub auto_dispute_threshold_eur: rust_decimal::Decimal,
-    /// Maximum Zahlungsziel (payment term) in days from `rechnungsdatum` to
-    /// `faelligkeitsdatum` (`SG8 DTM+265`). Set to `0` to disable this check.
-    /// Default: `30` days per §7 Allgemeine Festlegungen V6.1d.
-    #[serde(default = "default_max_zahlungsziel_days")]
-    pub max_zahlungsziel_days: u16,
+    /// The longest Zahlungsziel (payment term) this operator accepts, in
+    /// calendar days from `rechnungsdatum` to `faelligkeitsdatum`
+    /// (`SG8 DTM+265`); a longer one is a `Warn`. Unset (the default) checks
+    /// no ceiling: no Festlegung publishes one for an invoice the recipient
+    /// pays. The published **floor** — 10 Werktage after receipt — is checked
+    /// regardless.
+    #[serde(default)]
+    pub max_zahlungsziel_days: Option<u16>,
 }
 
 fn default_arithmetic_tolerance() -> f64 {
@@ -317,9 +322,6 @@ fn default_total_tolerance() -> f64 {
 }
 fn default_tariff_tolerance() -> f64 {
     0.03
-}
-fn default_max_zahlungsziel_days() -> u16 {
-    30
 }
 
 impl CheckSectionConfig {
@@ -356,7 +358,7 @@ impl Default for CheckSectionConfig {
             tariff_tolerance: default_tariff_tolerance(),
             require_tariff: false,
             auto_dispute_threshold_eur: rust_decimal::Decimal::ZERO,
-            max_zahlungsziel_days: default_max_zahlungsziel_days(),
+            max_zahlungsziel_days: None,
         }
     }
 }

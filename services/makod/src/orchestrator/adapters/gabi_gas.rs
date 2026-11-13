@@ -443,3 +443,51 @@ fn nomination_positions(msg: &DvgwMessage) -> Vec<mako_gabi_gas::NominationPosit
     }
     out
 }
+
+// ── GaBi Gas MMMA — the GNB's Abonnement (ORDERS 17110) ──────────────────────
+
+/// Build an [`AdapterRegistry`] for [`mako_gabi_gas::GaBiGasMmmaWorkflow`]:
+/// the LF's Anforderung Allokationsliste (ORDERS 17110, ORDERS AHB 1.1b Kap.
+/// 4.2, S. 23–24) becomes `ReceiveAnforderung` — `IMD` DE 7081 `Z01` / `Z02`
+/// and the `DTM+273` Betrachtungszeitintervall in `610` `CCYYMM`.
+#[must_use]
+pub fn gabi_gas_mmma_registry() -> AdapterRegistry<mako_gabi_gas::GaBiGasMmmaWorkflow> {
+    use mako_gabi_gas::mmma::{Anforderung, MmmaCommand};
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization("expected AnyMessage for GaBi Gas MMMA adapter".into())
+            })?;
+            let AnyMessage::Orders(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GaBi Gas MMMA adapter: expected ORDERS 17110".into(),
+                ));
+            };
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+            let kopf = super::msb_eingang::orders_kopf(o);
+            let monat = o
+                .segments()
+                .iter()
+                .filter(|s| s.tag == "DTM")
+                .find(|s| s.component_str(0, 0) == Some("273"))
+                .and_then(|s| s.component_str(0, 1))
+                .unwrap_or("")
+                .to_owned();
+            Ok(MmmaCommand::ReceiveAnforderung {
+                anforderung: Anforderung {
+                    lf: mako_engine::types::MarktpartnerCode::new(kopf.sender),
+                    nb: mako_engine::types::MarktpartnerCode::new(kopf.empfaenger),
+                    dokumentennummer: kopf.dokumentennummer,
+                    abo: kopf.leistung.unwrap_or_default(),
+                    monat,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                },
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}

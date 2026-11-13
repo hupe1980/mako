@@ -35,6 +35,7 @@ struct IftstaBuilderInner {
     referenz_nachricht: Option<String>,
     referenz_vorgang: Option<String>,
     fertigstellung: Option<String>,
+    freitext: Option<String>,
 }
 
 /// Fluent builder for `IFTSTA` (International Multimodal Status Report) messages.
@@ -96,6 +97,7 @@ impl IftstaBuilder<Unset, Unset> {
                 referenz_nachricht: None,
                 referenz_vorgang: None,
                 fertigstellung: None,
+                freitext: None,
             },
         }
     }
@@ -281,6 +283,14 @@ impl<S, R> IftstaBuilder<S, R> {
         self
     }
 
+    /// Set the `SG25` Sendungsposition with its `FTX+ACB` free text — `GID+1`
+    /// and the text, which 21047 requires beside `A99` (IFTSTA AHB 2.1 Kap.
+    /// 7.7, `[148]`; IFTSTA MIG 2.1 Nr 00131/00132).
+    pub fn freitext(mut self, text: impl Into<String>) -> Self {
+        self.inner.freitext = Some(text.into());
+        self
+    }
+
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = self
             .inner
@@ -323,7 +333,7 @@ impl<S, R> IftstaBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
         if let Some(id) = &self.inner.sender_id {
@@ -331,7 +341,7 @@ impl<S, R> IftstaBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
 
@@ -404,6 +414,12 @@ impl<S, R> IftstaBuilder<S, R> {
                 "DTM",
                 ["93", &super::ccyymmddhhmm_utc("93", ende)?, "303"]
             );
+        }
+
+        // ── SG25 GID+1 / FTX+ACB — the Sendungsposition's free text ─────────
+        if let Some(text) = &self.inner.freitext {
+            emit_seg!(w, "GID", "1");
+            emit_comp!(w, "FTX", ["ACB"], [""], [""], [text]);
         }
 
         w.finish_unt(&self.inner.message_ref)

@@ -177,7 +177,7 @@ pub const MSCONS_PIDS: &[u32] = &[
 /// MSCONS PIDs carrying **"Werte nach Typ 2"** (MSB → NB / LF / ESA).
 ///
 /// These values are **non-authoritative** (Codeliste der Konfigurationen 1.4,
-/// Kap. 4.6; WiM Strom Teil 2 §4): they have *no bearing* on Netznutzungs-,
+/// Kap. 4.6; WiM Strom Teil 2 Kap. 4): they have *no bearing* on Netznutzungs-,
 /// Bilanzkreis- or Mehr-/Mindermengenabrechnung, and only Kapitel-2 (Typ-1)
 /// values are relevant on divergence. `edmd` receives them (a Messwesen
 /// Anwendungsfall it owns, so they are in [`MSCONS_PIDS`]) but the ingest handler
@@ -222,7 +222,7 @@ pub const STORNO_PIDS: &[u32] = &[13006];
 /// can only check the half that is local — that this set ⊆ `ALL_MSCONS_PIDS`.
 ///
 /// Source: BDEW *Anwendungsübersicht Prüfidentifikatoren 4.0* (01.04.2026);
-/// MSCONS AHB 3.1g §5.
+/// MSCONS AHB 3.1g Kap. 5.
 pub const REDISPATCH_MSCONS_PIDS: &[u32] = &[13_020, 13_021, 13_022, 13_023, 13_026];
 
 /// All MSCONS PIDs that `edmd` accepts (Messwesen + Redispatch 2.0).
@@ -275,7 +275,7 @@ pub const fn mscons_pid_description(pid: u32) -> &'static str {
 /// PID 13007 = Gasbeschaffenheitsdaten (NB → LF): contains Abrechnungsbrennwert
 /// (`QTY+Z08`, kWh/m³) and Zustandszahl (`QTY+Z10`, dimensionless).
 ///
-/// Source: MSCONS AHB Gas 1.x; Allgemeine Festlegungen V6.1d §6.
+/// Source: MSCONS AHB Gas 1.x; Allgemeine Festlegungen V6.1d Kap. 6.
 pub const GAS_QUALITY_PIDS: &[u32] = &[13007];
 
 /// Metering / balancing classification of a Marktlokation.
@@ -560,7 +560,7 @@ impl Typ2DeliveryPath {
 ///
 /// Deliberately *not* a [`MeterRead`], and stored in a *separate* table
 /// (`esa_typ2_reads`), because Typ-2 data is non-authoritative: Codeliste 1.4
-/// Kap. 4.6 and WiM Strom Teil 2 §4 give it **no bearing** on Netznutzungs-,
+/// Kap. 4.6 and WiM Strom Teil 2 Kap. 4 give it **no bearing** on Netznutzungs-,
 /// Bilanzkreis- or Mehr-/Mindermengenabrechnung. The separation is structural —
 /// there is no `source`/`pid` discriminator on the billing store that could
 /// leak by omission, and this type carries **none** of `MeterRead`'s billing
@@ -600,7 +600,7 @@ pub struct Typ2Read {
     /// `SG1 RFF+AGI` on the delivering MSCONS 13027 — the Belegnummer of the
     /// ORDERS 17007 that ordered these values.
     ///
-    /// MSCONS AHB 3.2 §11.2 hint `[574]`: „Wert aus BGM DE1004 der ORDERS mit
+    /// MSCONS AHB 3.2 Kap. 11.2 hint `[574]`: „Wert aus BGM DE1004 der ORDERS mit
     /// der die Bestellung der Werte nach Typ 2 erfolgt ist", and the first hop
     /// of the PID overview's `EZ-03` routing. It is the **only** thing on a
     /// value delivery that names the subscription it belongs to — a Meldepunkt
@@ -1120,7 +1120,7 @@ pub struct BillingPeriodQuery {
 /// `meter_billing_periods` alone — leaves no record of *which* month's value was
 /// applied.
 ///
-/// Source: MSCONS AHB Gas; Allgemeine Festlegungen §6; § 25 Nr. 4 MessEV /
+/// Source: MSCONS AHB Gas; Allgemeine Festlegungen Kap. 6; § 25 Nr. 4 MessEV /
 /// DVGW G 685.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasQualityRecord {

@@ -12,5 +12,7 @@ pub mod as4_sender;
 pub mod contrl_ack;
 pub mod malo_ident_sender;
 pub mod redispatch_xml_ingest;
+pub mod sendepruefung;
+pub mod sm_pki;
 pub mod verzeichnisdienst_worker;
 pub mod webdienste;

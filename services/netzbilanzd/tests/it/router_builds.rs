@@ -27,6 +27,7 @@ async fn the_router_builds_as_the_runner_mounts_it() {
         "makod_url": peer, "makod_api_key": "test",
         "inbound_secret": "s3cret",
         "allow_insecure_no_auth": true,
+        "zahlungsziel_werktage": 10,
     }))
     .expect("the configuration parses");
     let _app = mako_service::build_for_test::<netzbilanzd::Netzbilanzd>(cfg)
@@ -43,6 +44,7 @@ pub(crate) fn mabis_config(peer: &str, target: &str) -> netzbilanzd::config::Net
         "edmd_url": peer, "edmd_api_key": "test",
         "inbound_secret": "s3cret",
         "allow_insecure_no_auth": true,
+        "zahlungsziel_werktage": 10,
         "mabis": {
             "sender_mp_id": "9900357000004",
             "receiver_mp_id": "9900077000006",

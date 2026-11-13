@@ -21,6 +21,13 @@ pub struct LocalIdentity {
     pub signer: asx::KeyPair,
     /// Decrypts inbound messages.
     pub decrypter: asx::KeyPair,
+    /// Encryption key pairs replaced by `decrypter` that still decrypt: a
+    /// partner may encrypt to the previous certificate until the overlap of
+    /// Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.3 (S. 6) ends („Im
+    /// Überlappungszeitraum müssen alle Marktpartner in der Lage sein, sowohl
+    /// mit den bisher genutzten als auch mit den neuen Zertifikaten signierte
+    /// und verschlüsselte AS4-Nachrichten zu verarbeiten.").
+    pub retired_decrypters: Vec<asx::KeyPair>,
     /// Opens the mutual-TLS connection to a partner MSH.
     pub tls: asx::KeyPair,
 }
@@ -84,11 +91,14 @@ pub fn client_builder(
             }
         }
     }
-    let local = asx::LocalParty::new(&identity.mp_id)
+    let mut local = asx::LocalParty::new(&identity.mp_id)
         .party_type(crate::constants::party_id_type_for_agency(&identity.agency))
         .signer(identity.signer.clone())
         .decrypter(identity.decrypter.clone())
         .tls_identity(identity.tls.clone());
+    for retired in &identity.retired_decrypters {
+        local = local.decrypter(retired.clone());
+    }
     let mut builder = asx::as4::As4::builder(
         asx::Profile::bdew().max_message_bytes(crate::constants::MAX_MESSAGE_BYTES),
     )
@@ -112,6 +122,7 @@ mod tests {
             agency: "293".to_owned(),
             signer: party.signing.key_pair(),
             decrypter: party.encryption.key_pair(),
+            retired_decrypters: Vec::new(),
             tls: party.tls.key_pair(),
         }
     }

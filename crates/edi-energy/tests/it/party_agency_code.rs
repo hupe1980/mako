@@ -89,10 +89,10 @@ fn the_envelope_and_the_nad_agree_on_the_issuing_office() {
         (GNB_GAS, "502", "332"),
         ("4012345000023", "14", "9"),
     ] {
-        assert_eq!(unb_qualifier(mp_id), unb, "UNB DE 0007 for {mp_id}");
+        assert_eq!(unb_qualifier(mp_id), Some(unb), "UNB DE 0007 for {mp_id}");
         assert_eq!(
-            AgencyCode::for_mp_id(mp_id).as_str(),
-            nad,
+            AgencyCode::for_mp_id(mp_id).map(AgencyCode::as_str),
+            Some(nad),
             "NAD DE 3055 for {mp_id}"
         );
     }
@@ -154,7 +154,7 @@ fn every_checked_in_fixture_stamps_the_agency_its_mp_id_implies() {
                     continue;
                 };
                 checked += 1;
-                let expected = AgencyCode::for_mp_id(mp_id).as_str();
+                let expected = AgencyCode::for_mp_id(mp_id).map_or("none", AgencyCode::as_str);
                 if agency != expected {
                     wrong.push(format!(
                         "{}: NAD {mp_id} stamped {agency}, but for_mp_id says {expected}",
@@ -240,7 +240,7 @@ fn every_checked_in_fixture_stamps_the_unb_qualifier_its_mp_id_implies() {
                     continue;
                 };
                 checked += 1;
-                let expected = unb_qualifier(mp_id);
+                let expected = unb_qualifier(mp_id).unwrap_or("none");
                 if qualifier != expected {
                     wrong.push(format!(
                         "{}: UNB {role} {mp_id} stamped {qualifier}, but unb_qualifier says \
@@ -268,4 +268,127 @@ fn every_checked_in_fixture_stamps_the_unb_qualifier_its_mp_id_implies() {
             .collect::<Vec<_>>()
             .join("\n  ")
     );
+}
+
+/// Every DE 3055 code a NAD segment admits, read from the imported MIG
+/// profiles (`profiles/*/*/mig.json`).
+///
+/// The MIGs list the codes per NAD: UTILMD MIG Strom S2.2 S. 32–33 `9`, `293`,
+/// `332`; UTILMD MIG Gas G1.2 S. 17–18 `9`, `332`, `293`; APERAK MIG 2.2
+/// S. 12–13, MSCONS MIG 2.5 S. 15–16 and INVOIC MIG 2.8e S. 29 `9`, `293`,
+/// `332`. No MIG lists any other code on a NAD.
+fn nad_agency_codes_the_migs_admit() -> std::collections::BTreeSet<String> {
+    fn walk(
+        node: &serde_json::Value,
+        tag: Option<&str>,
+        out: &mut std::collections::BTreeSet<String>,
+    ) {
+        match node {
+            serde_json::Value::Object(map) => {
+                let tag = map.get("tag").and_then(|t| t.as_str()).or(tag);
+                if tag == Some("NAD") && map.get("id").and_then(|i| i.as_str()) == Some("3055") {
+                    for code in map
+                        .get("codes")
+                        .and_then(|c| c.as_array())
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(code) = code.get("code").and_then(|c| c.as_str()) {
+                            out.insert(code.to_owned());
+                        }
+                    }
+                }
+                for value in map.values() {
+                    walk(value, tag, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    walk(item, tag, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("profiles");
+    let mut codes = std::collections::BTreeSet::new();
+    let mut migs = 0usize;
+    for message in std::fs::read_dir(&root)
+        .expect("profiles/ is readable")
+        .flatten()
+    {
+        let Ok(releases) = std::fs::read_dir(message.path()) else {
+            continue;
+        };
+        for release in releases.flatten() {
+            let mig = release.path().join("mig.json");
+            let Ok(raw) = std::fs::read_to_string(&mig) else {
+                continue;
+            };
+            let json: serde_json::Value = serde_json::from_str(&raw).expect("mig.json parses");
+            walk(&json, None, &mut codes);
+            migs += 1;
+        }
+    }
+    assert!(migs > 20, "expected every imported MIG, read {migs}");
+    codes
+}
+
+/// `AgencyCode` is exactly the NAD DE 3055 code list of the MIGs.
+///
+/// A variant outside it renders a NAD no Anwendungsfall defines, and a MIG code
+/// `parse` refuses is an inbound NAD read as unknown. The candidates beyond the
+/// MIG set are the codes this crate or `makod` has carried for a 16-character
+/// party, which no MIG lists.
+#[test]
+fn agency_code_is_the_nad_code_list_of_the_migs() {
+    let admitted = nad_agency_codes_the_migs_admit();
+    assert_eq!(
+        admitted.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["293", "332", "9"],
+        "the MIGs' NAD DE 3055 code list changed — re-read the MIGs and update AgencyCode"
+    );
+    for code in &admitted {
+        let parsed = AgencyCode::parse(code).unwrap_or_else(|| panic!("{code} is a MIG code"));
+        assert_eq!(parsed.as_str(), code);
+    }
+    for unlisted in ["305", "14", "500", "502", "89"] {
+        assert_eq!(
+            AgencyCode::parse(unlisted),
+            None,
+            "{unlisted} is on no NAD code list of any MIG"
+        );
+    }
+}
+
+/// An identifier that is no MP-ID has no agency, and a message naming it as
+/// a party is refused by name rather than rendered under a borrowed code.
+///
+/// An MP-ID is a BDEW-Codenummer, a DVGW-Codenummer or a GLN (BDEW-AWH
+/// Identifikatoren V1.2 Kap. 2.1, S. 4), all 13 digits; an EIC is not one
+/// (Kap. 1, S. 4). No MIG carries an EIC on a NAD — the MIGs put it in `CCI`
+/// DE 7037 (UTILMD MIG Strom S2.2 S. 41, Gas G1.2 S. 69) or `LOC` DE 3225
+/// (ORDERS MIG 1.4c S. 89, PRICAT MIG 2.1 S. 15), neither with a DE 3055.
+#[test]
+fn a_party_that_is_no_mp_id_is_refused_by_name() {
+    const EIC: &str = "10XDE-EON-NETZ-C";
+    assert_eq!(AgencyCode::for_mp_id(EIC), None);
+    assert_eq!(unb_qualifier(EIC), None);
+    for not_an_mp_id in ["990012345678", "99001234567890", "99001234567AB"] {
+        assert_eq!(AgencyCode::for_mp_id(not_an_mp_id), None, "{not_an_mp_id}");
+        assert_eq!(unb_qualifier(not_an_mp_id), None, "{not_an_mp_id}");
+    }
+    let err = UtilmdBuilder::new(Release::new("S2.1"))
+        .pruefidentifikator(Pruefidentifikator::new(55_002).expect("valid PID"))
+        .sender(EIC)
+        .receiver(LF_STROM)
+        .message_ref("MSG1")
+        .document_date("202608040900")
+        .transaction("VG1")
+        .marktlokation("51238696781")
+        .done()
+        .serialize()
+        .expect_err("an EIC is no NAD party");
+    assert!(err.to_string().contains(EIC), "{err}");
 }

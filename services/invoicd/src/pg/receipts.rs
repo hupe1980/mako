@@ -65,6 +65,12 @@ pub struct ReceiptRow {
     /// Set once the answer command has been accepted by `makod`.
     pub dispatched_at: Option<OffsetDateTime>,
     pub tenant: String,
+    /// `SG1 RFF+ACE` — the order the invoice answers.
+    pub bestellung_ref: Option<String>,
+    /// `IMD+7081` — the Use-Case of a shared PID.
+    pub rechnungstyp: Option<String>,
+    /// The Prüfschritte left open, when the walk ended open.
+    pub offen: serde_json::Value,
 }
 
 /// The receipt upsert, named so the conflict key is assertable without a
@@ -72,10 +78,14 @@ pub struct ReceiptRow {
 const UPSERT_SQL: &str = r"INSERT INTO invoic_receipts
             (process_id, invoice_ref, rechnungsnummer, pid, sender_mp_id,
              receiver_gln, malo_id, rechnung, bo4e_version, outcome, findings,
-             pay_by, received_at, checked_at, dispatched_at, tenant)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+             pay_by, received_at, checked_at, dispatched_at, tenant,
+             bestellung_ref, rechnungstyp, offen)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
           ON CONFLICT (tenant, process_id) DO UPDATE SET
             outcome         = EXCLUDED.outcome,
+            offen           = EXCLUDED.offen,
+            bestellung_ref  = COALESCE(EXCLUDED.bestellung_ref, invoic_receipts.bestellung_ref),
+            rechnungstyp    = COALESCE(EXCLUDED.rechnungstyp, invoic_receipts.rechnungstyp),
             findings        = EXCLUDED.findings,
             pay_by          = EXCLUDED.pay_by,
             checked_at      = EXCLUDED.checked_at,
@@ -110,6 +120,9 @@ pub async fn upsert_receipt(pool: &PgPool, row: &ReceiptRow) -> Result<(), sqlx:
         .bind(row.checked_at)
         .bind(row.dispatched_at)
         .bind(&row.tenant)
+        .bind(row.bestellung_ref.as_deref())
+        .bind(row.rechnungstyp.as_deref())
+        .bind(&row.offen)
         .execute(pool)
         .await?;
     Ok(())

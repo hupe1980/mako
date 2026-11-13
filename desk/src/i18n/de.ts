@@ -237,6 +237,124 @@ export const de = {
       leer: "Noch kein Probelauf.",
       leerText: "Nachricht wählen, Angaben prüfen, Probelauf starten.",
     },
+    befragung: {
+      titel: "Vorschlag",
+      text: "Ein paar Fragen zur Bereitstellung — daraus schlägt die Marktkommunikation je Dienst die Konfiguration vor, jede Zeile mit ihrer Quelle. Was offen bleibt, steht als Lücke darin. Angewendet wird nichts: Sie kopieren oder laden die Datei und setzen sie selbst ein.",
+      satz: {
+        titel: "Aus einem Satz",
+        feld: "Die Bereitstellung in einem Satz",
+        platzhalter:
+          "Wir sind Lieferant Strom und Gas, Strom unter 9900357000004, Gas unter 9800357000005.",
+        vorbelegen: "Vorbelegen",
+        liest: "liest …",
+        hinweis:
+          "Der Assistent schlägt Antworten vor, jede übernehmen Sie selbst. Ohne ihn funktioniert die Befragung genauso.",
+        nichtErreichbar: "Der Assistent ist nicht erreichbar",
+        nichtErreichbarText:
+          "Die Befragung funktioniert ohne ihn — beantworten Sie die Fragen direkt.",
+        abgelehnt: "Der Assistent hat den Satz nicht gelesen",
+        keine: "Der Satz enthielt keine Antwort, die sich übernehmen ließe.",
+        vorgeschlagen: "Vorgeschlagene Antworten",
+        uebernehmen: "Übernehmen",
+        uebernommen: "übernommen",
+        verwerfen: "Verwerfen",
+        alleUebernehmen: "Alle übernehmen",
+        rolle: (rolle: string, mpId: string | null) =>
+          mpId ? `${rolle} unter ${mpId}` : `${rolle} — MP-ID offen`,
+        primaer: (mpId: string) => `Primäre MP-ID ${mpId}`,
+        bilanzkreis: (sparte: string, bk: string) => `Bilanzkreis ${sparte}: ${bk}`,
+        verbunden: (liste: string) =>
+          liste ? `Verbundene Lieferanten: ${liste}` : "Keine verbundenen Lieferanten",
+      },
+      rollen: {
+        titel: "Rollen und MP-IDs",
+        text: "Welche Rollen spielt die Bereitstellung, und unter welcher MP-ID? Strom braucht eine BDEW-Codenummer (99…), Gas eine DVGW-Codenummer (98…).",
+        mpId: (rolle: string) => `MP-ID ${rolle}`,
+        namen: {
+          "lf-strom": "Lieferant Strom",
+          "lf-gas": "Lieferant Gas",
+          "nb-strom": "Netzbetreiber Strom",
+          "nb-gas": "Netzbetreiber Gas",
+          "msb-strom": "Messstellenbetreiber Strom",
+          "msb-gas": "Messstellenbetreiber Gas",
+          "esa-strom": "Energieserviceanbieter",
+        } as Record<string, string>,
+      },
+      primaer: {
+        titel: "Primäre MP-ID",
+        text: "Der Speicherschlüssel aller Ereignisströme — einmal gewählt, bleibt er.",
+      },
+      bilanzkreise: {
+        titel: "Bilanzkreise",
+        text: "Denen der Lieferant zuordnet, durch Komma getrennt.",
+        feld: (sparte: string) => `Bilanzkreise ${sparte}`,
+        sparten: { strom: "Strom", gas: "Gas" } as Record<string, string>,
+        keinLieferant: "Erst mit einer Lieferantenrolle gefragt.",
+      },
+      verbunden: {
+        titel: "Verbundene Lieferanten",
+        text: "Die MP-IDs der Lieferanten desselben Unternehmens, durch Komma getrennt.",
+        feld: "MP-IDs verbundener Lieferanten",
+        keine: "Es gibt keine",
+      },
+      as4: {
+        titel: "AS4-Schlüsselmaterial",
+        text: "Nur die Pfade, unter denen die Dateien liegen — nie ihr Inhalt.",
+        angeben: "Pfade angeben",
+        domain: "Domain der Nachrichten-IDs",
+        anker: "SM-PKI-Wurzel (Pfad)",
+        sperrliste: "Aussteller der Sperrliste (Pfad)",
+        schluessel: (mpId: string) => `Schlüsselpaare von ${mpId}`,
+        keineMpId: "Erst mit einer MP-ID gefragt.",
+        felder: {
+          signing_cert_pem_file: "Signaturzertifikat",
+          signing_key_pem_file: "Signaturschlüssel",
+          encryption_cert_pem_file: "Verschlüsselungszertifikat",
+          encryption_key_pem_file: "Verschlüsselungsschlüssel",
+          tls_cert_pem_file: "TLS-Zertifikat",
+          tls_key_pem_file: "TLS-Schlüssel",
+        } as Record<string, string>,
+      },
+      dienste: {
+        titel: "Weitere Dienste",
+        text: "Wo die übrigen Dienste laufen; die Checkliste fragt jeden davon.",
+        name: "Dienst",
+        url: "Adresse",
+        schluessel: "Schlüsseldatei (Pfad, optional)",
+        hinzufuegen: "Dienst hinzufügen",
+        entfernen: (n: string) => `${n || "Dienst"} entfernen`,
+      },
+      ergebnis: {
+        titel: "Vorgeschlagene Konfiguration",
+        rechnet: "aktualisiert …",
+        leer: "Noch keine Antwort.",
+        leerText: "Wählen Sie eine Rolle — der Vorschlag erscheint hier.",
+        vollstaendig: "Vollständig",
+        vollstaendigText: "Keine Lücke und keine abgelehnte Antwort.",
+        unvollstaendig: "Noch nicht vollständig",
+        summe: (aenderungen: number, luecken: number, a: string, l: string) =>
+          `${aenderungen === 1 ? "1 Änderung" : `${a} Änderungen`} · ${luecken === 1 ? "1 Lücke" : `${l} Lücken`}`,
+        abgelehnt: "Abgelehnte Antworten",
+        nichtAbgeglichen: (dienst: string) =>
+          `${dienst} meldet diese Einstellungen nicht — jede Zeile ist als neu gezeigt.`,
+        dateien: "Dateien",
+        kopieren: (datei: string) => `${datei} kopieren`,
+        kopiert: "Kopiert",
+        herunterladen: (datei: string) => `${datei} herunterladen`,
+        zeilen: (datei: string) => `Zeilen von ${datei}`,
+        art: {
+          gleich: "unverändert",
+          neu: "neu",
+          weg: "entfällt",
+          fehlt: "Lücke",
+          abschnitt: "Abschnitt",
+        } as Record<string, string>,
+        zurFrage: "Zur Frage",
+        nichtsAngewendet: "Nichts wird auf einen Server geschrieben.",
+        fehler: "Der Vorschlag ließ sich nicht berechnen",
+        imVorschlag: "Im Vorschlag beheben",
+      },
+    },
   },
   quickLook: {
     titel: (typ: string, pid: string) => `${typ} ${pid}`,
@@ -476,6 +594,11 @@ export const de = {
     ausgestellt: "Ausgestellt und zur Prüfung vorgelegt; eine Korrektur geht als Stornorechnung.",
     freigeben: "Freigeben",
     geprueft: "Geprüft",
+    gehaltenVerweigert: "Der Rechnungseingang lässt Sie hier nichts feststellen",
+    offeneSchritte: "Offene Prüfschritte",
+    nichtFeststellbar: "Hier nicht festzustellen — es fehlt ein Datensatz, kein Urteil",
+    gehaltenText:
+      "Gehalten: der Entscheidungsbaum erreichte Prüfschritte, die kein Datensatz beantwortet; eine Antwort ging noch nicht hinaus.",
   },
   tasten: {
     gruppe: { ueberall: "Überall", listen: "Listen", entscheiden: "Entscheiden" },
@@ -485,9 +608,9 @@ export const de = {
     naechste: "Nächster Eintrag",
     vorige: "Voriger Eintrag",
     freigeben:
-      "Freigeben wählen — beim Disput Beilegen, beim Prüfposten Geprüft, bei einer geparkten Buchung Neu buchen",
+      "Freigeben wählen — beim Disput Beilegen, beim Prüfposten Geprüft, bei einer geparkten Buchung Neu buchen, bei einer gehaltenen Rechnung Feststellen",
     ablehnen:
-      "Ablehnen wählen — beim Disput Ablehnung senden, bei einer geparkten Buchung Verwerfen",
+      "Ablehnen wählen — beim Disput Ablehnung senden, bei einer geparkten Buchung Verwerfen, bei einer gehaltenen Rechnung Leistungsnachweis",
     uebernehmen: "Vorschlag des Assistenten übernehmen",
     warum: "Warum steht der Eintrag hier? Den Assistenten fragen",
     undo: "Letzte Entscheidung zurücknehmen",
@@ -682,6 +805,7 @@ export const de = {
       disput: "Rechnungsdisput",
       pruefposten: "Rechnungsprüfung",
       buchung: "Geparkte Buchung",
+      gehalten: "Gehaltene Rechnung",
     },
     bemerkung: "Bemerkung (optional)",
     freigabe: {
@@ -721,6 +845,38 @@ export const de = {
       verwerfenWas:
         "Verwirft sie endgültig, sobald das Halten endet; der Grund bleibt mit ihr im Prüfpfad.",
       verworfen: "Buchung verworfen",
+    },
+    gehalten: {
+      feststellen: "Feststellen",
+      begruendung: "Worauf stützt sich die Feststellung? (Begründung, Pflicht)",
+      feststellenWas:
+        "Hält die Antworten mit Ihrer Begründung fest und prüft die Rechnung sofort neu — erreicht der Entscheidungsbaum ein Ergebnis, geht die Antwort wie automatisch hinaus.",
+      festgestellt: "Feststellung erfasst",
+      nachweis: "Leistungsnachweis",
+      nachweisText: "Worauf stützt sich der Nachweis? (Pflicht)",
+      nachweisWas: (bestellung: string) =>
+        `Erfasst den Leistungsnachweis zur Bestellung ${bestellung}; jede auf sie gehaltene Rechnung dieses Messstellenbetreibers wird sofort neu geprüft.`,
+      nachgewiesen: "Leistungsnachweis erfasst",
+      schritt: (pruefschritt: string, position: string | null, detail: string) =>
+        `Prüfschritt ${pruefschritt}${position ? ` · Position ${position}` : ""} — ${detail}`,
+      ja: {
+        "310": "erbracht",
+        "320": "wie Angebot",
+        "330": "Steuersatz richtig",
+        "80": "Version gültig",
+      } as Record<string, string>,
+      nein: {
+        "310": "nicht erbracht",
+        "320": "weicht ab",
+        "330": "Steuersatz falsch",
+        "80": "Version ungültig",
+      } as Record<string, string>,
+      artikel: "Artikel-ID",
+      von: "Von (JJJJ-MM-TT)",
+      bis: "Bis einschließlich (JJJJ-MM-TT)",
+      erbracht: "Leistung im ganzen Zeitraum",
+      erbrachtJa: "erbracht",
+      erbrachtNein: "nicht erbracht",
     },
   },
   rollenNamen: {
@@ -814,6 +970,11 @@ export const de = {
     buchungsdatum: (d: string) => `Buchungsdatum ${d}`,
     geparktSeit: (s: string) => `geparkt seit ${s}`,
     hinweis: "Hinweis des Assistenten",
+    gehalten: "Gehaltene Rechnungen",
+    gehaltenGrund: (n: number, text: string, erster: string) =>
+      n === 1 ? `1 Prüfschritt offen: ${erster}` : `${text} Prüfschritte offen, zuerst: ${erster}`,
+    gehaltenOhneSchritt: "Gehalten — offene Prüfschritte",
+    bestellung: (ref: string) => `Bestellung ${ref}`,
   },
   buchungsarten: {
     /** Each Buchungsart accountingd books, as the Lieferant reads it. */

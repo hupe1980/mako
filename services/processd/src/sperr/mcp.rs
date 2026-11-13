@@ -24,7 +24,7 @@
 //!
 //! ## Deadlines
 //!
-//! Three clocks, from BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2:
+//! Three clocks, from BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 / 3.5.2.2:
 //!
 //! | Clock | Frist | Owner |
 //! |---|---|---|
@@ -138,7 +138,7 @@ impl ProcessdMcpHandler {
     }
 
     #[tool(
-        description = "Aggregate counters: pending/executed/failed/cancelled; overdue_pending (past the date the Lieferant asked for) and frist_ueberschritten (past the 6-Werktage window of GPKE Teil 2 § 3.5.1.2 Nr. 1 — the regulatory one); iftsta_outstanding (terminal orders whose IFTSTA 21039 has not reached the Lieferant, so their gpke-sperrung-lf process cannot close), iftsta_ueberfaellig (of those, past the 1-Werktag window after completion) and iftsta_stuck (its outbox command was dead-lettered, needs a human).",
+        description = "Aggregate counters: pending/executed/failed/cancelled; overdue_pending (past the date the Lieferant asked for) and frist_ueberschritten (past the 6-Werktage window of GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 — the regulatory one); iftsta_outstanding (terminal orders whose IFTSTA 21039 has not reached the Lieferant, so their gpke-sperrung-lf process cannot close), iftsta_ueberfaellig (of those, past the 1-Werktag window after completion) and iftsta_stuck (its outbox command was dead-lettered, needs a human).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_sperr_stats(&self) -> Result<CallToolResult, McpError> {
@@ -342,7 +342,7 @@ pub(crate) fn instructions() -> &'static str {
              - `execute-sperrung` — confirming an execution and its IFTSTA\n\
              - `iftsta-sweep` — finding and clearing unreported outcomes\n\n\
              ## Timing\n\
-             GPKE Teil 2 § 3.5: the NB answers with an **ORDRSP am 1. Werktag nach \
+             GPKE Teil 2 Kap. 3.5: the NB answers with an **ORDRSP am 1. Werktag nach \
              dem Übertragungstag** (makod tracks that one) and executes within \
              **6 Werktagen nach dem frühestmöglichen Sperrtermin**, then reports \
              via IFTSTA **am 1. Werktag nach Abschluss**. The Sperrtermin itself \

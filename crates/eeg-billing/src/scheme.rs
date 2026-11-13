@@ -476,9 +476,6 @@ pub enum Paragraph100Rule {
     /// are permanently exempt from §51 Negativpreisregel.
     Pre2016Bestandsschutz,
 
-    /// §100 KWKG: KWKG plants use the transitional rule from KWKG 2017 → 2023.
-    KwkgTransition,
-
     /// §100 Abs. 6 EEG 2023: biomass plants that received their EEG support under
     /// old §42–§44 rules continue at their original rates and with original fuel-class
     /// restrictions for the remainder of their Förderdauer.

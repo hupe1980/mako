@@ -231,8 +231,11 @@ impl<S, R> ContrlBuilder<S, R> {
                 w,
                 "UCI",
                 [&self.inner.interchange_ref],
-                [sender, super::interchange::unb_qualifier(sender)],
-                [receiver, super::interchange::unb_qualifier(receiver)],
+                [sender, super::interchange::unb_qualifier_or_refuse(sender)?],
+                [
+                    receiver,
+                    super::interchange::unb_qualifier_or_refuse(receiver)?
+                ],
                 [&self.inner.action_code],
                 [code]
             );
@@ -241,8 +244,11 @@ impl<S, R> ContrlBuilder<S, R> {
                 w,
                 "UCI",
                 [&self.inner.interchange_ref],
-                [sender, super::interchange::unb_qualifier(sender)],
-                [receiver, super::interchange::unb_qualifier(receiver)],
+                [sender, super::interchange::unb_qualifier_or_refuse(sender)?],
+                [
+                    receiver,
+                    super::interchange::unb_qualifier_or_refuse(receiver)?
+                ],
                 [&self.inner.action_code]
             );
         }

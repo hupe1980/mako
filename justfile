@@ -174,9 +174,11 @@ test-marktd-db:
         write_and_event_commit_together::
 
 # invoicd's receipt store — the § 147 AO / GoBD audit trail, its per-tenant
-# uniqueness and the outbox delivery of the receipt event.
+# uniqueness and the outbox delivery of the receipt event — and the ESA's
+# second round (`E_0266`) through the webhook.
 test-invoicd-db:
     {{ just_executable() }} suite invoicd receipts_pg --include-ignored --test-threads=1
+    {{ just_executable() }} suite invoicd zweite_runde --include-ignored --test-threads=1
 
 # netzbilanzd's invoice-draft store — numbering series, Abschlag deduction,
 # the Storno chain and the tenant scoping of every read and transition — and
@@ -769,6 +771,28 @@ desk-budgets:
 desk-axe:
     cd desk && npm run zugang
 
+# The Einrichtung view in light, dark and at a phone's width, held to its
+# baselines in desk/vergleich/ with a pixel tolerance; a change fails until it
+# is blessed (`just desk-vergleich --bless`). The baselines are Linux
+# renderings: on Linux (CI) it runs directly, elsewhere in Playwright's Linux
+# image (Docker), which writes back the baselines or the renderings that differ.
+#
+# The Einrichtung view's screenshots compared with their baselines
+desk-vergleich *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(uname -s)" = "Linux" ]; then
+        cd desk && exec npm run vergleich -- {{ args }}
+    fi
+    version="$(node -p 'require("./desk/package.json").devDependencies.playwright')"
+    docker run --rm -v "$PWD/desk:/repo/desk" -w /work "mcr.microsoft.com/playwright:v${version}-noble" bash -c '
+        set -euo pipefail
+        tar -C /repo --exclude=desk/node_modules --exclude=desk/dist -cf - desk | tar -xf -
+        cd desk && npm ci --no-audit --no-fund >/dev/null
+        status=0; node scripts/vergleich.ts {{ args }} || status=$?
+        cp -r vergleich/. /repo/desk/vergleich/
+        exit $status'
+
 # Needs Node (desk/.node-version) and no browser or Docker.
 #
 # The Desk's own gate: generated types current, typecheck, lint, unit tests
@@ -1048,13 +1072,17 @@ check-config-findings:
 # folded across daemons — identities, certificates, Bilanzkreise, access,
 # reachability, format coverage. Exits non-zero while anything is red.
 # `just setup --url http://makod:8080 --token-env MAKOD_TOKEN` asks a running
-# makod's /admin/einrichtung/deployment instead.
+# makod's /admin/einrichtung/deployment instead; `--tabelle` prints one line per
+# daemon; `--vorschlag antworten.toml [--schreiben dir]` prints the
+# configuration the setup interview's answers propose, as the Desk shows it.
+#
+# The deployment checklist in the terminal
 setup *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -n "{{ args }}" ]; then
-        exec cargo xtask setup {{ args }}
-    fi
+    case " {{ args }} " in
+        *" --url "*) exec cargo xtask setup {{ args }} ;;
+    esac
     services=$(ls dev/config | sed 's/\.toml$//')
     cargo build --quiet $(for s in $services; do printf -- '-p %s ' "$s"; done)
     out="$(mktemp -d)"
@@ -1063,7 +1091,23 @@ setup *args:
     for s in $services; do
         ( . dev/env.sh "$s"; "$target/debug/$s" --check-config --json >"$out/$s.json" 2>"$out/$s.err" ) || true
     done
-    cargo xtask setup --berichte "$out"
+    cargo xtask setup --berichte "$out" {{ args }}
+
+# One line per dev/config daemon: ready or blocked, and how many findings
+# block or warn. Exits non-zero while anything is red.
+#
+# Every daemon's configuration state at a glance
+doctor:
+    {{ just_executable() }} setup --tabelle
+
+# From an empty makod to a green check and a passing Probelauf for the
+# fixture interview „Lieferant Strom und Gas“, each step timed; fails over 30
+# minutes. No Docker, no database.
+#
+# The first run, scripted and timed
+erstlauf:
+    cargo build --quiet -p makod
+    cargo xtask erstlauf
 
 # An adapter reads a UTILMD STS code from C556 DE 9013 — `transaktionsgrund()`,
 # `antwort()` — never from DE 4405, which a conformant message leaves empty.

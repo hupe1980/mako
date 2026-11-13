@@ -403,6 +403,12 @@ pub struct Answer {
     /// A decision the assistant proposes for a held Freigabe — prefilled in
     /// the Desk's form, never sent by agentd or by the Desk on its own.
     pub vorschlag: Option<Vorschlag>,
+    /// The setup interview's answers a sentence was read into, each
+    /// identifier kept only where the sentence contains it
+    /// ([`super::einrichtung::belegte_angaben`]) — for the person to confirm,
+    /// never used unconfirmed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub angaben: Option<Value>,
     /// Every service read the run made, in the order it made them — so a
     /// reader watching a running answer sees what is being read, and a
     /// finished one shows what was.
@@ -454,6 +460,7 @@ impl Answer {
             disclosure: super::MACHINE_GENERATED.trim_end(),
             saetze,
             vorschlag: None,
+            angaben: None,
             schritte: Vec::new(),
             hilfreich: None,
         }
@@ -1265,6 +1272,21 @@ impl Plane {
                 .collect();
             let mut done = Answer::new(run, "succeeded", saetze);
             done.vorschlag = vorschlag(&output["vorschlag"], &outputs);
+            if output["angaben"].is_object() {
+                let satz = records
+                    .iter()
+                    .find_map(|r| match r.kind() {
+                        RecordKind::RunAdmitted { input, .. } => {
+                            input[super::einrichtung::SATZ].as_str().map(str::to_owned)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                done.angaben = Some(super::einrichtung::belegte_angaben(
+                    &output["angaben"],
+                    &satz,
+                ));
+            }
             done
         } else {
             Answer::new(run, &outcome, Vec::new())

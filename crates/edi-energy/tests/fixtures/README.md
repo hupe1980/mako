@@ -58,7 +58,7 @@ cargo run -p edi-energy --all-features --example 07_resolve -- tests/fixtures/ut
 
 The second command shows where every segment landed and every finding. The
 `UNB` parties must be the message's `NAD+MS`/`NAD+MR` (Allgemeine Festlegungen
-§ 2.13); the Prüfidentifikator travels where the AHB puts it (`SG6 RFF+Z13` in
+Kap. 2.13); the Prüfidentifikator travels where the AHB puts it (`SG6 RFF+Z13` in
 UTILMD, `SG1 RFF+Z13` in most other types), and `BGM` DE 1004 is the
 Dokumentennummer.
 

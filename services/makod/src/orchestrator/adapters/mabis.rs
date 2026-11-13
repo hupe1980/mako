@@ -153,11 +153,13 @@ pub fn mabis_clearingliste_registry() -> AdapterRegistry<MabisClearinglisteWorkf
 /// anything — the workflow records it as received and the empty value surfaces
 /// in the read model rather than being silently substituted.
 #[must_use]
-pub fn mabis_zp_lifecycle_registry() -> AdapterRegistry<MabisZpLifecycleWorkflow> {
+pub fn mabis_zp_lifecycle_registry(
+    aktiviert: Option<ZpSerie>,
+) -> AdapterRegistry<MabisZpLifecycleWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
                     "expected AnyMessage for MaBiS-ZP lifecycle adapter".into(),
@@ -192,17 +194,19 @@ pub fn mabis_zp_lifecycle_registry() -> AdapterRegistry<MabisZpLifecycleWorkflow
             let billing_period = billing_period_head(&document_date);
 
             // 55062/55063 are shared by eleven Summenzeitreihen, so the PID
-            // alone does not say what was activated. The UTILMD carries the
-            // discriminator: `SG10 CCI+++ZB4 / CAV` DE 7111 names the
-            // Summenzeitreihe and `SG10 CCI+6` DE 7037 the responsible role
-            // (UTILMD AHB Strom 2.2 Kap. 13.1). Both are read here rather than
-            // guessed, because there are eleven wrong answers.
+            // alone does not say what was activated. The Aktivierung 55062
+            // carries the discriminator: `SG10 CCI+++ZB4 / CAV` DE 7111 names
+            // the Summenzeitreihe and `SG10 CCI+6` DE 7037 the responsible role
+            // (UTILMD AHB Strom 2.2 Kap. 13.1, S. 1100). The Deaktivierung 55063
+            // carries neither, so it takes the series the caller read off the
+            // MaBiS-ZP's activation (`aktiviert`). Nothing is guessed: there are
+            // eleven wrong answers.
             let vorgang = zp_vorgang_for_pid(pid.as_u32()).ok_or_else(|| {
                 EngineError::Deserialization(format!(
                     "MaBiS-ZP lifecycle adapter: PID {pid} is not a lifecycle Anfrage"
                 ))
             })?;
-            let serie = zp_serie_from_utilmd(msg, pid.as_u32())?;
+            let serie = zp_serie_from_utilmd(msg, pid.as_u32(), aktiviert)?;
 
             Ok(ZpLifecycleCommand::ReceiveAnfrage {
                 pid,
@@ -615,9 +619,13 @@ pub fn mabis_listenabgleich_korrektur_registry() -> AdapterRegistry<MabisListena
 ///
 /// Three fields cannot come from the message alone and are resolved here:
 ///
-/// - **Which Summenzeitreihe** — `SG10 CCI+++ZB4` / `CAV` DE 7111, the same
-///   codelist the ZP-lifecycle adapter reads. Without it 13003 is ambiguous
-///   across every row of Tabelle 1.
+/// - **Which Summenzeitreihe** — the 13003 / 13020 / 13023 columns carry no
+///   `CCI` (MSCONS AHB 3.2 Kap. 8.3.3, S. 94–97). 13023 names the LF-AASZR by
+///   its PID ([`mako_mabis::zeitreihe_aus_pid`]); every other version names its
+///   series through the MaBiS-ZP in `SG6 LOC+172`, which was activated before
+///   any version is sent (BK6-24-174 Anlage 3 Kap. 7.4.1, S. 83). The caller
+///   reads that activation and passes it as `aktiviert`; without one the
+///   version is refused by name rather than guessed across Tabelle 1.
 /// - **The version** — the Erstellungszeitpunkt in `SG6 DTM+293`, which the
 ///   BIKO echoes back in IFTSTA `RFF+AUU`. It is the key both ends match on.
 /// - **Whether the arrival is inside the Erstaufschlag window** — a calendar
@@ -631,6 +639,7 @@ pub fn mabis_listenabgleich_korrektur_registry() -> AdapterRegistry<MabisListena
 #[must_use]
 pub fn mabis_summenzeitreihe_registry(
     received_at: time::OffsetDateTime,
+    aktiviert: Option<mako_mabis::Zeitreihe>,
 ) -> AdapterRegistry<MabisBillingWorkflow> {
     let eingang = mako_fristen::berlin_date(received_at);
     let mut registry = AdapterRegistry::new();
@@ -656,24 +665,21 @@ pub fn mabis_summenzeitreihe_registry(
                 })
                 .and_then(convert_pid)?;
 
-            let cav =
-                mscons_cav(m, mako_mabis::CCI_BEZEICHNUNG_SUMMENZEITREIHE).ok_or_else(|| {
-                    EngineError::Deserialization(
-                        "MaBiS Summenzeitreihe adapter: SG10 CCI+++ZB4 (Bezeichnung der \
-                         Summenzeitreihe) carries no CAV code, so the Summenzeitreihe is \
-                         ambiguous"
-                            .into(),
-                    )
+            let mabis_zp_raw = extract_malo_from_msg(msg);
+            let zeitreihe = mako_mabis::zeitreihe_aus_pid(pid.as_u32())
+                .or(aktiviert)
+                .ok_or_else(|| {
+                    EngineError::Deserialization(format!(
+                        "MaBiS Summenzeitreihe adapter: MaBiS-ZP '{}' has no recorded \
+                         Aktivierung (55062) naming its Summenzeitreihe, and MSCONS {pid} \
+                         does not name one — a version is sent only for an activated \
+                         MaBiS-ZP (BK6-24-174 Anlage 3 Kap. 7.4.1)",
+                        mabis_zp_raw.as_str()
+                    ))
                 })?;
-            let (zeitreihe, _ebene) = mako_mabis::zeitreihe_aus_cav(&cav).ok_or_else(|| {
-                EngineError::Deserialization(format!(
-                    "MaBiS Summenzeitreihe adapter: CAV '{cav}' names no MaBiS \
-                         Summenzeitreihe"
-                ))
-            })?;
 
-            let mabis_zp = mako_mabis::MabisZaehlpunktId::new(extract_malo_from_msg(msg).as_str())
-                .map_err(|e| {
+            let mabis_zp =
+                mako_mabis::MabisZaehlpunktId::new(mabis_zp_raw.as_str()).map_err(|e| {
                     EngineError::Deserialization(format!(
                         "MaBiS Summenzeitreihe adapter: SG6 LOC+172 Meldepunkt: {e}"
                     ))
@@ -776,14 +782,6 @@ fn bilanzierungsmonat_aus(document_date: &str) -> Option<mako_mabis::Bilanzierun
         .map(mako_mabis::Bilanzierungsmonat::new)
 }
 
-/// The `CAV` DE 7111 code under the MSCONS `SG10` characteristic whose DE 7037
-/// Merkmal is `merkmal`.
-fn mscons_cav(m: &edi_energy::messages::mscons::MsconsMessage, merkmal: &str) -> Option<String> {
-    super::cav_codes_under_merkmal(m.segments(), merkmal)
-        .next()
-        .map(str::to_owned)
-}
-
 // ── MaBiS Anforderung Ablehnung (ORDRSP 19204) ───────────────────────────────
 
 /// Build an [`AdapterRegistry`] for the one Ablehnung a MaBiS Anforderung has.
@@ -847,8 +845,62 @@ pub fn mabis_anforderung_ablehnung_registry() -> AdapterRegistry<MabisAnforderun
 /// Build an [`AdapterRegistry`] for [`MabisProfilWorkflow`].
 ///
 /// Converts an inbound MSCONS profile delivery into
-/// [`ProfilCommand::ReceiveProfile`]. The Reklamation (ORDERS 17211) is
-/// **outbound** — this participant sends it — so no inbound arm exists for it.
+/// [`ProfilCommand::ReceiveProfile`]. The NB's copy of a Reklamation (ORDERS
+/// 17211) goes through [`mabis_profil_reklamation_registry`].
+/// Build an [`AdapterRegistry`] for the NB's side of the Profil-Reklamation:
+/// the LF's ORDERS 17211 (ORDERS AHB 1.1b Kap. 5.5, S. 126–127) becomes
+/// `ReceiveReklamation` — `FTX+AFH` DE 4441 the `E_0100` code and `SG1
+/// RFF+ACW` the reclaimed MSCONS' `BGM` DE 1004.
+#[must_use]
+pub fn mabis_profil_reklamation_registry() -> AdapterRegistry<MabisProfilWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for MaBiS Profil-Reklamation adapter".into(),
+                )
+            })?;
+            let AnyMessage::Orders(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "MaBiS Profil-Reklamation adapter: expected ORDERS 17211".into(),
+                ));
+            };
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+            let kopf = super::msb_eingang::orders_kopf(o);
+            let segs = o.segments();
+            let antwortcode = segs
+                .iter()
+                .filter(|s| s.tag == "FTX")
+                .find(|s| s.component_str(0, 0) == Some("AFH"))
+                .and_then(|s| s.component_str(2, 0))
+                .unwrap_or("")
+                .to_owned();
+            let reklamierte_nachricht = segs
+                .iter()
+                .filter(|s| s.tag == "RFF")
+                .find(|s| s.component_str(0, 0) == Some("ACW"))
+                .and_then(|s| s.component_str(0, 1))
+                .unwrap_or("")
+                .to_owned();
+            Ok(ProfilCommand::ReceiveReklamation {
+                reklamation: mako_mabis::ReklamationEingang {
+                    lf: MarktpartnerCode::new(kopf.sender),
+                    nb: MarktpartnerCode::new(kopf.empfaenger),
+                    dokumentennummer: kopf.dokumentennummer,
+                    reklamierte_nachricht,
+                    antwortcode,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                },
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
 #[must_use]
 pub fn mabis_profil_registry() -> AdapterRegistry<MabisProfilWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -899,6 +951,12 @@ pub fn mabis_profil_registry() -> AdapterRegistry<MabisProfilWorkflow> {
                 bilanzierungsmonat,
                 version: 0,
                 message_ref: MessageRef::new(msg.message_ref()),
+                // `BGM` DE 1004 — what a Reklamation 17211 names in `SG1
+                // RFF+ACW` (ORDERS AHB 1.1b Kap. 5.5, `[525]`).
+                dokumentennummer: m
+                    .bgm()
+                    .and_then(|b| b.document_id.clone())
+                    .unwrap_or_default(),
                 validation_passed,
                 validation_errors,
             })
@@ -928,7 +986,11 @@ fn zp_vorgang_for_pid(pid: u32) -> Option<ZpVorgang> {
 /// is, and a missing or unknown one is refused rather than defaulted: eleven
 /// series share the code and five of them owe no answer, so a wrong guess either
 /// invents an obligation or drops one.
-fn zp_serie_from_utilmd(msg: &AnyMessage, pid: u32) -> Result<ZpSerie, EngineError> {
+fn zp_serie_from_utilmd(
+    msg: &AnyMessage,
+    pid: u32,
+    aktiviert: Option<ZpSerie>,
+) -> Result<ZpSerie, EngineError> {
     // A PID used by exactly one series needs no lookup.
     let kandidaten: Vec<ZpSerie> = ZP_FAMILIEN
         .iter()
@@ -945,14 +1007,19 @@ fn zp_serie_from_utilmd(msg: &AnyMessage, pid: u32) -> Result<ZpSerie, EngineErr
         ));
     };
 
-    let cav = utilmd_cav(u, CCI_BEZEICHNUNG_SUMMENZEITREIHE).ok_or_else(|| {
-        EngineError::Deserialization(format!(
-            "MaBiS-ZP lifecycle adapter: PID {pid} is shared by {} Summenzeitreihen, but \
-             SG10 CCI+++{CCI_BEZEICHNUNG_SUMMENZEITREIHE} (Bezeichnung der Summenzeitreihe) \
-             carries no CAV code",
-            kandidaten.len()
-        ))
-    })?;
+    let Some(cav) = utilmd_cav(u, CCI_BEZEICHNUNG_SUMMENZEITREIHE) else {
+        // The Deaktivierung names no series; its activation does.
+        return aktiviert
+            .filter(|serie| kandidaten.contains(serie))
+            .ok_or_else(|| {
+                EngineError::Deserialization(format!(
+                    "MaBiS-ZP lifecycle adapter: PID {pid} is shared by {} Summenzeitreihen; \
+                     it carries no SG10 CCI+++{CCI_BEZEICHNUNG_SUMMENZEITREIHE} and the \
+                     MaBiS-ZP has no recorded Aktivierung naming its series",
+                    kandidaten.len()
+                ))
+            });
+    };
     let verantwortlicher =
         utilmd_merkmal_of_class(u, CCI_KLASSENTYP_VERANTWORTLICHER).ok_or_else(|| {
             EngineError::Deserialization(
@@ -1003,10 +1070,17 @@ mod tests {
              DTM+137:{nachrichtendatum}1200?+00:303'RFF+Z13:13003'\
              NAD+MS+9900357000004::293'NAD+MR+9900357000011::293'UNS+D'NAD+DP'\
              LOC+172+DE0004030099000000000000000012345'{monat}\
-             DTM+293:20261016213000?+00:304'CCI+++ZB4'CAV+Z97'\
+             DTM+293:20261016213000?+00:304'\
              LIN+1'QTY+220:100'UNT+17+1'UNZ+1+1'"
         );
         edi_energy::parse(raw.as_bytes()).expect("the Summenzeitreihe parses")
+    }
+
+    /// The series the MaBiS-ZP was activated for — the BK-SZR (Kategorie A).
+    fn bk_szr_a() -> mako_mabis::Zeitreihe {
+        mako_mabis::ZpSerie::BilanzkreissummenzeitreiheNb
+            .zeitreihe()
+            .expect("a Tabelle-1 row")
     }
 
     fn summenzeitreihe() -> AnyMessage {
@@ -1016,7 +1090,7 @@ mod tests {
     fn dispatch(msg: &AnyMessage, received_at: time::OffsetDateTime) -> BillingCommand {
         let fv = FormatVersion::parse("FV2026-04-01").expect("known");
         let raw: &dyn Any = msg;
-        mabis_summenzeitreihe_registry(received_at)
+        mabis_summenzeitreihe_registry(received_at, Some(bk_szr_a()))
             .dispatch(raw, &fv)
             .expect("dispatched")
     }
@@ -1071,7 +1145,8 @@ mod tests {
         let msg = summenzeitreihe_vom("20261002", None);
         let raw: &dyn Any = &msg;
         let Err(refused) =
-            mabis_summenzeitreihe_registry(time::OffsetDateTime::UNIX_EPOCH).dispatch(raw, &fv)
+            mabis_summenzeitreihe_registry(time::OffsetDateTime::UNIX_EPOCH, Some(bk_szr_a()))
+                .dispatch(raw, &fv)
         else {
             panic!("a version without DTM+492 is refused");
         };

@@ -20,11 +20,11 @@ pub(super) fn render_aperak(
 ) -> Result<RenderedInterchange, RenderError> {
     let payload: AperakPayload = typed_payload(p)?;
 
-    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.1 §2.3. The
+    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.1 Kap. 2.3. The
     // entry still reaches the ERP webhook as domain JSON; nothing goes on the wire.
     if payload.suppress_wire {
         return Err(RenderError::Suppressed {
-            reason: "Gas positive APERAK: suppress_wire=true (silence = acceptance, APERAK AHB 1.1 §2.3)"
+            reason: "Gas positive APERAK: suppress_wire=true (silence = acceptance, APERAK AHB 1.1 Kap. 2.3)"
                 .into(),
         });
     }

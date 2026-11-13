@@ -239,7 +239,7 @@ fn angebot_registers_the_bindungsfrist_as_the_ordering_deadline() {
     assert_eq!(dl.due_at, datetime!(2026-03-16 17:00 UTC));
 }
 
-/// `DTM+273` is a **duration** (QUOTES AHB 1.1a §4.3), so the day count on the
+/// `DTM+273` is a **duration** (QUOTES AHB 1.1a Kap. 4.3), so the day count on the
 /// wire is a function of the Bindungsfrist *and* the Übertragungszeitpunkt.
 ///
 /// Both are command inputs. Were the ÜT read from the clock inside `handle`, a
@@ -588,6 +588,12 @@ fn msb_can_terminate_a_running_delivery() {
         ))
     );
     assert_eq!(ob.payload["sts_code"].as_str(), Some("105"));
+    // `DTM+93` is the German day delivery stops, which the renderer turns
+    // into the instant it begins.
+    use mako_engine::payload::OutboundPayload as _;
+    let typed =
+        mako_engine::payload::IftstaPayload::from_payload(&ob.payload).expect("an IFTSTA payload");
+    assert_eq!(typed.beendigung_zum.as_deref(), Some("2026-05-01"));
     let mut state = state;
     for ev in &out.events {
         state = W::apply(state.clone(), ev);
@@ -669,11 +675,11 @@ fn a_lapsed_bindungsfrist_is_not_a_fristversaeumnis() {
 
 /// The ESA Werteanfrage is REQOTE **35003**, not 35002.
 ///
-/// REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and labels the
+/// REQOTE AHB 1.1 Kap. 4.3 gives the Kommunikation as *ESA an MSB* and labels the
 /// `SG1 RFF+Z13` text "35003 Anfrage von Werten für ESA"; the PID overview 4.0
 /// lists 35003 under WiM Strom Teil 2 and nowhere else.
 ///
-/// 35002 is §4.2 "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über
+/// 35002 is Kap. 4.2 "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über
 /// den LF" (LF → MSB, WiM Teil 1) — a different process with a different sender
 /// role. Sending it here would also collide with the Preisanfrage stream, which
 /// only a sender-role classifier could then resolve; with 35003 there is nothing
@@ -774,7 +780,7 @@ fn answer_bestellung_enqueues_ordrsp_confirm_or_reject() {
         "ORDRSP must echo the answered Bestellung Belegnummer"
     );
     // `IMD+7081` and the EBD the Prüfschritt code belongs to are Muss on every
-    // ESA answer (ORDRSP AHB 1.1b §4.15, conditions [17]/[21]-[23]).
+    // ESA answer (ORDRSP AHB 1.1b Kap. 4.15, conditions [17]/[21]-[23]).
     assert_eq!(confirm.payload["abonnement"].as_str(), Some("Z01"));
     assert_eq!(
         confirm.payload["antwort_codeliste"].as_str(),
@@ -913,6 +919,10 @@ fn liefere_werte_emits_mscons_13027_addressed_to_the_esa() {
     assert_eq!(ob.payload["receiver_mp_id"].as_str(), Some("9900555000005"));
     assert_eq!(ob.recipient.as_ref(), "9900555000005");
     assert_eq!(ob.payload["reads"].as_array().map(Vec::len), Some(2));
+    use mako_engine::payload::OutboundPayload as _;
+    let typed =
+        mako_engine::payload::MsconsPayload::from_payload(&ob.payload).expect("an MSCONS payload");
+    assert_eq!(typed.reads.len(), 2);
     // An auditable transmission event is recorded, and delivery has begun.
     assert!(matches!(
         out.events.as_slice(),
@@ -952,6 +962,24 @@ fn delivery_without_a_confirmed_bestellung_is_refused() {
         err.to_string().contains("BestellungBestaetigt"),
         "delivery must gate on a confirmed Bestellung, got: {err}"
     );
+}
+
+/// An interval value carrying a key the MSCONS does not declare is refused at
+/// the command, not dropped at render.
+#[test]
+fn a_delivery_with_an_undeclared_interval_key_is_refused() {
+    let err = W::handle(
+        &authorised(),
+        C::LiefereWerte {
+            message_ref: mref("WERTE-K"),
+            reads: serde_json::json!([{
+                "dtm_from": "2026-03-10T00:00:00Z", "dtm_to": "2026-03-10T00:15:00Z",
+                "quantity_kwh": "0.250", "herkunft": "x",
+            }]),
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("herkunft"), "got: {err}");
 }
 
 /// A delivery with no interval values is rejected.

@@ -155,7 +155,7 @@ fn an_esa_may_file_typ2_values_from_its_smgw_gateway() {
 
 /// …and the separation runs the other way too. A Typ-2 value is
 /// non-authoritative by regulation (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2
-/// §4) and may never reach `meter_reads`, so the gateway that files one must
+/// Kap. 4) and may never reach `meter_reads`, so the gateway that files one must
 /// not be able to write the authoritative store — nor correct it, nor erase.
 #[test]
 fn the_typ2_gateway_cannot_reach_the_authoritative_store() {

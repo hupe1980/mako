@@ -1,7 +1,7 @@
 //! NB **Neuanlage** decisions and the `E_0608` 60-Werktage Prüflauf.
 //!
 //! A Lieferant registers a Marktlokation being commissioned for the first time
-//! (UTILMD **55600** verbrauchend / **55601** erzeugend, GPKE Teil 2 § 2.2).
+//! (UTILMD **55600** verbrauchend / **55601** erzeugend, GPKE Teil 2 Kap. 2.2).
 //! The NB answers 55602/55604 or 55603/55605 — but not necessarily today.
 //!
 //! # Why this is a case log and not a handler

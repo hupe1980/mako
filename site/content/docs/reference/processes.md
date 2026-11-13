@@ -31,7 +31,7 @@ instance — see [Release Lifecycle](@/docs/compliance/release-lifecycle.md).
 | Domain | APERAK Frist |
 |---|---|
 | GPKE | per Prüfidentifikator, als Uhrzeit auf einem Werktag (`mako_fristen::antwort`) |
-| WiM Strom | 45 Minuten (UTILMD Strom; APERAK AHB §2.4.1) |
+| WiM Strom | 45 Minuten (UTILMD Strom; APERAK AHB Kap. 2.4.1) |
 | GeLi Gas | negative APERAK only: nächster Werktag 12:00 (Folgeprozess) / 3 Werktage (Initialprozess) |
 | WiM Gas | negative APERAK only: nächster Werktag 12:00 (Folgeprozess) / 3 Werktage (Initialprozess: 44039, 44042) |
 
@@ -52,17 +52,18 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 
 | Domain | Sparte | Crate | Key PIDs | Antwortfrist des Geschäftsprozesses | Basis |
 |---|:---:|---|---|---|---|
-| **GPKE Lieferantenwechsel (NB-Sicht)** | ⚡ | `mako-gpke` `gpke-supplier-change` | UTILMD 55001–55018, 55022–55024 | 11:00 / 06:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2 § 2.1.2 / § 2.5.1.2 |
+| **GPKE Lieferantenwechsel (NB-Sicht)** | ⚡ | `mako-gpke` `gpke-supplier-change` | UTILMD 55001–55018, 55022–55024 | 11:00 / 06:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2 Kap. 2.1.2 / Kap. 2.5.1.2 |
 | **GPKE Lieferantenwechsel (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-lf-anmeldung` | UTILMD 55001/55002/55016/55077 (out) · 55003–55006 (in) | — (the NB answers) | BK6-24-174 Teil 2 |
-| **GPKE Neuanlage MaLo** | ⚡ | `mako-gpke` `gpke-neuanlage` | UTILMD 55600/55601 → 55602–55605 | **00:00 Uhr des 61. WT nach dem ÜT** (60 WT täglicher Prüflauf, `E_0608`) | BK6-24-174 Teil 2 § 2.2.2 |
-| **GPKE Abmeldung LF** | ⚡ | `mako-gpke` `gpke-lf-abmeldung` | UTILMD 55007 → 55008/55009 | 05:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2 § 2.5.2.2 |
-| **GPKE Ankündigung Zuordnung LF** | ⚡ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` | UTILMD 55607 → 55608/55609 | **15:00 Uhr am ÜT** (Zuordnungsbeginn in der Zukunft), sonst 15:00 Uhr des 1. WT | BK6-24-174 Teil 2 § 2.4.2 |
-| **GPKE Sperrung/Entsperrung (NB)** | ⚡ | `mako-gpke` `gpke-sperrung` | ORDERS 17115/17117 → ORDRSP 19116/19117 | ORDRSP 1. WT nach dem ÜT · Ausführung 6 WT · IFTSTA 1 WT nach Abschluss | BK6-24-174 Teil 2 § 3.5 |
-| **GPKE Sperrung/Entsperrung (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDERS 17115/17117 (out) · ORDCHG 39000 (out) · ORDRSP 19116/19117 · 19128/19129 · IFTSTA 21039 | Vorlauf 6 WT (nicht termingebunden) / 12 WT (termingebunden) | BK6-24-174 Teil 2 § 3.5 |
-| **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | zum Zahlungsziel (`SG8 DTM+265`) | BK6-24-174 Teil 2 § 3.3 |
-| **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` (`gpke.datenabruf.anfordern` sends 17004) · `gpke-datenabruf-msb` (MSB side, `gpke.datenabruf.ablehnen` out of `E_0442` / `E_0219`–`E_0225` / `E_0226`–`E_0230`) | ORDERS 17004/17102/17113 → ORDRSP rejection 19007/19102/19114 | **1 WT** on 17102 (GPKE Teil 4 Kap. 3.2 Nr. 4) · Ablehnung **2 WT** on 17004, **3 WT** on 17113 (WiM Teil 2 Kap. 2.6.3/2.7.3 Nr. 2) — the values themselves follow „Darstellung der zu übermittelnden Werte" | GPKE Teil 4 · WiM Teil 2 Kap. 2.6/2.7 |
+| **GPKE Neuanlage MaLo** | ⚡ | `mako-gpke` `gpke-neuanlage` | UTILMD 55600/55601 → 55602–55605 | **00:00 Uhr des 61. WT nach dem ÜT** (60 WT täglicher Prüflauf, `E_0608`) | BK6-24-174 Teil 2 Kap. 2.2.2 |
+| **GPKE Abmeldung LF** | ⚡ | `mako-gpke` `gpke-lf-abmeldung` | UTILMD 55007 → 55008/55009; the NB's 55007 `BGM+Z90` (Nr. 3) resumes it by `RFF+TN` and ends it | 05:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2 Kap. 2.5.2.2 |
+| **GPKE Lieferende von NB an LF** (NB side) | ⚡ | `mako-gpke` `gpke-nb-lieferende` | UTILMD 55007 → 55008/55009; on silence 55007 `BGM+Z90`; on a Stilllegung 55611 to MSB/MSBZ and 55038 to the LFZ with the ending, 07:00 Uhr des 1. WT | LF's answer 05:00, Beendigung 05:00–06:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 GPKE Teil 2 Kap. 2.5.2.2 Nr. 1–3, S. 60–62 |
+| **GPKE Ankündigung Zuordnung LF** | ⚡ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` | UTILMD 55607 → 55608/55609 | **15:00 Uhr am ÜT** (Zuordnungsbeginn in der Zukunft), sonst 15:00 Uhr des 1. WT | BK6-24-174 Teil 2 Kap. 2.4.2 |
+| **GPKE Sperrung/Entsperrung (NB)** | ⚡ | `mako-gpke` `gpke-sperrung` | ORDERS 17115/17117 → ORDRSP 19116/19117 | ORDRSP 1. WT nach dem ÜT · Ausführung 6 WT · IFTSTA 1 WT nach Abschluss | BK6-24-174 Teil 2 Kap. 3.5 |
+| **GPKE Sperrung/Entsperrung (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDERS 17115/17117 (out) · ORDCHG 39000 (out) · ORDRSP 19116/19117 · 19128/19129 · IFTSTA 21039 | Vorlauf 6 WT (nicht termingebunden) / 12 WT (termingebunden) | BK6-24-174 Teil 2 Kap. 3.5 |
+| **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | zum Zahlungsziel (`SG8 DTM+265`) | BK6-24-174 Teil 2 Kap. 3.3 |
+| **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` (`gpke.datenabruf.anfordern` sends 17004) · `gpke-datenabruf-msb` (MSB side, `gpke.datenabruf.ablehnen` out of `E_0442` / `E_0219`–`E_0225` / `E_0226`–`E_0230`; `gpke.datenabruf.werte-senden` answers a 17102 for Lastgangdaten or Zählerstände) | ORDERS 17004/17102/17113 → ORDRSP rejection 19007/19102/19114 · MSCONS 13017/13018/13025 on a 17102 | **1 WT** on 17102 (GPKE Teil 4 Kap. 3.2 Nr. 4) · Ablehnung **2 WT** on 17004, **3 WT** on 17113 (WiM Teil 2 Kap. 2.6.3/2.7.3 Nr. 2) — the values themselves follow „Darstellung der zu übermittelnden Werte" | GPKE Teil 4 · WiM Teil 2 Kap. 2.6/2.7 |
 | **GPKE Geschäftsdatenanfrage** | ⚡ | `mako-gpke` `gpke-geschaeftsdatenanfrage` | ORDERS 17132 → UTILMD 55035/55095/55060 · ORDRSP 19101 | **1 WT** (NB antwortet) | BK6-22-024 Anlage 1d Teil 4 Kap. 3.2 |
-| **GPKE Anfrage Bestellung (55555)** | ⚡ | `mako-gpke` `gpke-anfrage-bestellung` | UTILMD 55555 | nicht quantifiziert | BK6-24-174 Teil 4 |
+| **GPKE Anfrage Bestellung (55555)** | ⚡ | `mako-gpke` `gpke-anfrage-bestellung` | UTILMD 55555 | nicht quantifiziert | BK6-22-024 Anlage 1d (GPKE Teil 4) |
 | **GPKE Allokationsliste Strom** | ⚡ | `mako-gpke` `gpke-allokationsliste` | ORDERS 17110/17114 · ORDRSP 19110/19115 · MSCONS 13014 | nicht quantifiziert | BK6-24-174 |
 | **GPKE Messwerte (MSCONS)** | ⚡ | `mako-gpke` `gpke-messwerte` | MSCONS 13005/13006/13015–13019/13025/13027 | nicht quantifiziert | BK6-24-174 |
 | **GPKE UTILTS** | ⚡ | `mako-gpke` `gpke-utilts` | UTILTS 25001/25004–25010 | nicht quantifiziert | BK6-24-174 |
@@ -71,8 +72,8 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GPKE Beendigung der Zuordnung** | ⚡ | `mako-gpke` `gpke-beendigung-zuordnung` | UTILMD 55010 → 55011/55012 | **09:00 Uhr des 1. WT** nach dem ÜT (`E_0624`) | BK6-24-174 Teil 2 |
 | **GPKE Kündigung** | ⚡ | `mako-gpke` `gpke-kuendigung` | UTILMD 55016 → 55017/55018 | Ablauf des **1. WT** nach dem ÜT | BK6-24-174 Teil 2 |
 | **GPKE Stornierung** | ⚡ | `mako-gpke` `gpke-stornierung` | UTILMD 55022 → 55023/55024 | — **keine Festlegung nennt ein Antwortfenster** | GPKE Teil 4 Kap. 5 |
-| **GPKE Stammdatenänderung** | ⚡ | `mako-gpke` `gpke-stammdatenaenderung` | UTILMD 55615–55694, 55109/55110 → 55137 | **2 WT** Rückmeldung · **10 WT** Bestellung | BK6-24-174 Teil 4 |
-| **GPKE Abrechnungsdaten** | ⚡ | `mako-gpke` `gpke-abrechnungsdaten` | UTILMD 55156/55220/55673 → IFTSTA 21047 | **2 WT** | BK6-24-174 Teil 2 § 3.1 |
+| **GPKE Stammdatenänderung** | ⚡ | `mako-gpke` `gpke-stammdatenaenderung` | UTILMD 55615–55694, 55109/55110 → 55137 | **2 WT** Rückmeldung · **10 WT** Bestellung | BK6-22-024 Anlage 1d (GPKE Teil 4) |
+| **GPKE Abrechnungsdaten** | ⚡ | `mako-gpke` `gpke-abrechnungsdaten` | UTILMD 55156/55220/55673 (LF, `E_0595`) · 55614/55675 (ÜNB, `E_0618` / `E_0613`) → IFTSTA 21047 | **2 WT** | BK6-24-174 Teil 2 Kap. 3.1 |
 | **GPKE Zuordnungs-Meldungen** | ⚡ | `mako-gpke` `gpke-zuordnungsmeldung` | UTILMD 55036/55037/55038 | — Meldepflicht, **keine Antwortnachricht** (Sendefrist in `mako_fristen::meldung`) | BK6-24-174 Teil 2 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
 | **WiM MSB-Wechsel** | ⚡ 🔥 | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 resp. 44039/44042/44051/44168 (out+in) und ihre Antworten | 3/5/7/1 WT — see below | BK6-24-174 · AWH WiM Gas 2.0 |
@@ -91,8 +92,8 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GeLi Gas Lieferbeginn (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-lf-anmeldung` | UTILMD G 44001 (out) · 44002/44003 (in) | Ablauf des **4. WT** (der GNB antwortet) | BK7-24-01-009 Kap. 3.2.3 |
 | **GeLi Gas Stornierung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung` | UTILMD G 44022 (Nb-only inbound) | — **keine Festlegung quantifiziert sie**; Betreiberkonvention | GeLi Gas 2.0 Kap. 1.8 |
 | **GeLi Gas Stornierung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung-lf` | UTILMD G 44023/44024 (Lf-only inbound) | — (der GNB antwortet) | GeLi Gas 2.0 Kap. 1.8 |
-| **GeLi Gas Sperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` | ORDERS 17115/17117 · ORDCHG 39000 | **1 WT** (Sparte-neutrale 17115/17117-Zeile) | BK6-24-174 GPKE Teil 2 § 3.5 |
-| **GeLi Gas Sperrung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-nb` | ORDERS 17115–17117 · ORDCHG 39000/39001 · ORDRSP 19118/19119 | **1 WT** (17115/17117/39000) · **3 WT** (17116) | BK6-24-174 GPKE Teil 2 § 3.5 |
+| **GeLi Gas Sperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` | ORDERS 17115/17117 · ORDCHG 39000 | **1 WT** (Sparte-neutrale 17115/17117-Zeile) | BK6-24-174 GPKE Teil 2 Kap. 3.5 |
+| **GeLi Gas Sperrung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-nb` | ORDERS 17115–17117 · ORDCHG 39000/39001 · ORDRSP 19118/19119 | **1 WT** (17115/17117/39000) · **3 WT** (17116) | BK6-24-174 GPKE Teil 2 Kap. 3.5 |
 | **GeLi Gas AWH-Abrechnung** | 🔥 | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` | INVOIC 31011 | das Zahlungsziel der Rechnung (`SG8 DTM+265`, Muss); ohne es wird die Rechnung abgewiesen | AWH Sperrprozesse Gas · INVOIC AHB 1.0b Kap. 3.1.5 |
 | **GeLi Gas Messdaten (MSCONS)** | 🔥 | `mako-geli-gas` `geli-gas-mscons` | MSCONS 13002/13007/13008/13009 | — | BK7-24-01-009 |
 | **GeLi Gas Datenabruf** | 🔥 | `mako-geli-gas` `geli-gas-datenabruf` | ORDERS 17103/17104 → ORDRSP 19103/19104 | 17103: Ablauf des **10. WT** nach Eingang, aber **nicht vor dem 10. WT des Folgemonats** des Zeitspannen-Endes (`SG29 DTM+164`) — beide Seiten registrieren den späteren Termin · 17104: **1 WT** (Geschäftsdatenanfrage) | BK7-24-01-009 GeLi Gas 3.0 Kap. 4.2 · GPKE Teil 4 Kap. 3.2 Nr. 2 |
@@ -103,7 +104,7 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **WiM INSRPT** | 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23001–23009 (23005/23009 beide Sparten; Gas an den NB) | 3 WT Antwort · 7 WT Ergebnis | AWH WiM Gas 2.0 Kap. 4.3 |
 | **WiM Gas Abrechnung** | 🔥 | `mako-wim` `wim-invoic` | INVOIC 31003/31004 | Zahlungsziel (DTM+265) | AWH WiM Gas 2.0 Kap. 4.7 |
 | **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | das Zahlungsziel der Rechnung (`SG8 DTM+265`, Muss); ohne es wird die Rechnung abgewiesen | BK7-24-01-008 · INVOIC AHB 1.0b Kap. 3.1.3/3.1.4 |
-| **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | MSCONS 13013 (ORDERS 17110 / ORDRSP 19110 routed via `mako-gpke` `gpke-allokationsliste`) | — | BK7-24-01-008 |
+| **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | ORDERS 17110 received by the GNB, refused on ORDRSP 19110 (`E_0803` / `G_0001`); MSCONS 13013 and the 19110 reach the LF's `gpke-allokationsliste` | — (Antwort unverzüglich, nur bei Ablehnung) | MMM AWH V2.1 Kap. 6.2–6.4 |
 | **GaBi Gas ALOCAT** | 🔥 | `mako-gabi-gas` `gabi-gas-allocation` | PIDs 70001–70023 | — | DVGW ALOCAT 5.11a |
 | **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | PIDs 70030–70039 | — | DVGW NOMINT 4.6 / NOMRES 4.7 |
 | **GaBi Gas SSQNOT** | 🔥 | `mako-gabi-gas` `gabi-gas-mehr-mindermengen` | PIDs 70095–70096 | — | DVGW SSQNOT 5.7 |
@@ -113,8 +114,8 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 > **Zehn Werktage ist bei GeLi Gas meist die Vorlauffrist des Lieferanten**
 > („Mindestens 10 Werktage vor Aufnahme der Belieferung", GeLi Gas 3.0 Kap.
 > 3.2.3), nicht das Antwortfenster des Netzbetreibers (4 / 3 / 2 WT). Echte
-> Zehn-WT-Antwortfenster sind der Datenabruf (AWH § 5.12) und die
-> Stammdatenänderung Gas (AWH § 4.3.2).
+> Zehn-WT-Antwortfenster sind der Datenabruf (AWH Kap. 5.12) und die
+> Stammdatenänderung Gas (AWH Kap. 4.3.2).
 
 ---
 
@@ -165,7 +166,7 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 21.03.2024) — LFW24 (§ 20a EnWG) and GPKE Teil 4 = Anlage 1d.
 
 **APERAK Frist:** **45 Minuten** für UTILMD und ORDERS; Samstagseingang bis
-Sonntag 12:00; sonst nächster Werktag 12:00 (APERAK AHB 1.1 § 2.4.1).
+Sonntag 12:00; sonst nächster Werktag 12:00 (APERAK AHB 1.1 Kap. 2.4.1).
 
 ---
 
@@ -178,7 +179,7 @@ the outgoing supplier's (LFA) contract (GPKE Teil 2).
 a duration. The 24 hours of § 20a EnWG bind the switch as a whole; GPKE Teil 1
 Kap. 7 („Fristenberechnung") defines no 24-hour message Frist.
 
-**Der Sequenzablauf des Lieferbeginn (GPKE Teil 2 § 2.1.2):**
+**Der Sequenzablauf des Lieferbeginn (GPKE Teil 2 Kap. 2.1.2):**
 
 | Nr. | Aktion | PID | Richtung | Spätester ÜZ |
 |---|---|---|---|---|
@@ -218,11 +219,11 @@ des LFA an", on the wire.
 | Scenario | Mindestvorlauffrist | Notes |
 |---|---|---|
 | Lieferbeginn (LFW24) | spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn | Day-granular, kein Uhrzeit-Cutoff. Es gibt keine separate „Standardwechsel"-Frist; frühere Anmeldung ist zulässig („unverzüglich nach Vorliegen des Anmeldegrundes") |
-| EEG-Marktlokationen und Tranchen | sechs published Fristen, keyed on Geschäftsvorfall und Veräußerungsform | GPKE Teil 2 § 2.1.1, Tabelle „Fristen für die Anmeldung (Prozessschritt 1)" |
+| EEG-Marktlokationen und Tranchen | sechs published Fristen, keyed on Geschäftsvorfall und Veräußerungsform | GPKE Teil 2 Kap. 2.1.1, Tabelle „Fristen für die Anmeldung (Prozessschritt 1)" |
 | Neuanlage MaLo | keine Mindestfrist | Antwortfrist dafür 00:00 Uhr des **61. WT** — `E_0608` macht die Identifikation einer neu in Betrieb genommenen MaLo zu einer *täglichen* Wiederholprüfung über 60 WT |
 | Stornierung einer Zuordnung | solange die auslösende Meldung **noch nicht beantwortet** ist | GPKE Teil 4 Kap. 5. Danach nur noch Rückabwicklung — ein manueller Prozess, der das Einverständnis aller Beteiligten erfordert. Es gibt **keine** „24 h vor Lieferbeginn"-Frist |
 
-> **Kündigung und Anmeldung sind nicht taggleich gekoppelt.** GPKE Teil 2 § 1.2.1
+> **Kündigung und Anmeldung sind nicht taggleich gekoppelt.** GPKE Teil 2 Kap. 1.2.1
 > stellt für den Use-Case „Kündigung" keine Bedingung auf, dass 55016 (LFN → LFA)
 > am selben Kalendertag wie 55001 (LFN → NB) zu senden wäre. Was die Festlegung
 > verlangt, ist die **Nachbedingung im Erfolgsfall**: „Der LFA ist verpflichtet,
@@ -350,7 +351,7 @@ sequenceDiagram
 ### INVOIC Strom Abrechnung
 
 Network billing from the NB to the LF. The APERAK is due by the next Werktag
-12:00 (APERAK AHB 1.1 § 2.4.1 — the 45 minutes are UTILMD/ORDERS only); the
+12:00 (APERAK AHB 1.1 Kap. 2.4.1 — the 45 minutes are UTILMD/ORDERS only); the
 business answer is the REMADV, due zum Zahlungsziel (`SG8 DTM+265`).
 
 #### INVOIC — Netznutzungs- und Mehr-/Mindermengenabrechnung
@@ -362,7 +363,7 @@ business answer is the REMADV, due zum Zahlungsziel (`SG8 DTM+265`).
 | MMM-Rechnung | NB → LF | INVOIC **31005** | Mehr-/Mindermengensaldo Strom + Gas | ⚡ | `mako-gpke` `gpke-abrechnung` ✅ (issued by `netzbilanzd`) |
 | MMM Mehrmenge selbst ausgestellt | NB+LF same entity | INVOIC **31006** | Mehr-/Mindermenge als Lieferung, selbst ausgestellt | ⚡ | `mako-gpke` `gpke-abrechnung` ✅ (issued by `netzbilanzd`) |
 | WiM-Rechnung | MSBA → NB · MSBA → MSBN | INVOIC **31003** | Fortführung Messstellenbetrieb, Geräteübernahme, Zwischen-/Kontrollablesung | ⚡🔥 | `mako-wim` `wim-invoic` |
-| Stornorechnung (universal) | Rechnungssteller → Rechnungsempfänger | INVOIC **31004** | Sparte-neutral Storno of any INVOIC (INVOIC AHB §3.1.2); deadline = Zahlungsziel of the referenced invoice (DTM+265) | ⚡🔥 | `mako-wim` `wim-invoic` (checked by `invoic-checker` `check_storno`) |
+| Stornorechnung (universal) | Rechnungssteller → Rechnungsempfänger | INVOIC **31004** | Sparte-neutral Storno of any INVOIC (INVOIC AHB Kap. 3.1.2); deadline = Zahlungsziel of the referenced invoice (DTM+265) | ⚡🔥 | `mako-wim` `wim-invoic` (checked by `invoic-checker` `check_storno`) |
 | MSB-Rechnung Strom | MSB → NB / LF / ESA | INVOIC **31009** | WiM Messstellenbetriebsabrechnung, routed to `mako-wim` `wim-invoic` | ⚡ | `mako-wim` ✅ |
 | MMM Gas aggregiert | NB → MGV | INVOIC **31007** | Aggreg. MMM-Rechnung Gas | 🔥 | `mako-gabi-gas` ✅ |
 | MMM Gas selbstausgestellt | MGV | INVOIC **31008** | Selbst ausgest. MMM-Rechnung Gas | 🔥 | `mako-gabi-gas` ✅ |
@@ -398,7 +399,7 @@ Data requests and configuration processes under GPKE Teil 4 (BK6-22-024).
 | Anfrage von Werten | LF → MSB/NB | ORDERS **17102** | ORDRSP 19102 | `mako-gpke` ✅ |
 | Reklamation von Werten | LF/NB/MSB/ÜNB → NB/MSB | ORDERS **17113** | ORDRSP 19114 | `mako-gpke` ✅ |
 | Anfrage Stammdaten (Strom) | LF/MSB → NB | ORDERS **17132** | UTILMD 55035/55095 (LF) · 55060 (MSB) · ORDRSP 19101 | `mako-gpke` ✅ |
-| Anforderung Allokationsliste | LF → NB | ORDERS **17110** | ORDRSP 19110 | `mako-gpke` ✅ |
+| Anforderung Allokationsliste | LF → NB | ORDERS **17110** | ORDRSP 19110 | `mako-gpke` (LF) · `mako-gabi-gas` (GNB) ✅ |
 | Anforderung bilanzierte Menge | NB/LF → ÜNB | ORDERS **17114** | ORDRSP 19115 | `mako-gpke` ✅ |
 
 #### Einrichtung der Konfigurationen aufgrund einer Zuordnung eines LF
@@ -476,7 +477,7 @@ on the computation and the §42b Abs. 5 `Pos()` cap.
 MSCONS messages carry meter readings, load profiles, and interval metered values.
 The NB sends MSCONS to the LF at defined reporting intervals and at Lieferbeginn/
 Lieferende. The LF acknowledges with an APERAK by the next Werktag 12:00 (APERAK
-AHB 1.1 § 2.4.1); the 45-minute window is UTILMD/ORDERS only.
+AHB 1.1 Kap. 2.4.1); the 45-minute window is UTILMD/ORDERS only.
 
 | Context | Sender → Empfänger | Trigger |
 |---|---|---|
@@ -524,7 +525,7 @@ für Strom; **AWH WiM Gas 2.0** (gültig ab 01.10.2026) für Gas. Beide Sparten
 laufen in `mako-wim` durch dieselben Workflows.
 
 **APERAK:** Strom antwortet positiv *und* negativ innerhalb **45 Minuten**
-(APERAK AHB §2.4.1); Gas kennt nur die negative APERAK, fällig am nächsten
+(APERAK AHB Kap. 2.4.1); Gas kennt nur die negative APERAK, fällig am nächsten
 Werktag 12:00 (Folgeprozess) bzw. nach 3 WT (Initialprozess).
 
 **Antwortfrist (business answer):** **3 / 5 / 7 / 1 Werktage per PID** for the
@@ -620,7 +621,7 @@ Preisanfrage/Angebot pair and is ordered — and later ended — via ORDERS:
 | Anfrage Rechnungsabwicklung | REQOTE **35002** | LF → MSB | QUOTES 15002 |
 | Angebot Rechnungsabwicklung | QUOTES **15002** | MSB → LF | — |
 | Bestellung | ORDERS **17005** | LF → MSB | — (answers the Angebot; **no ORDRSP** exists for 17005) |
-| Beendigung | ORDERS **17006** | **both directions** — MSB → LF (AD §2.9, EBD E_0206) · LF → MSB (AD §2.11, EBD E_0209) | ORDRSP 19009 (Bestätigung) / 19010 (Ablehnung) |
+| Beendigung | ORDERS **17006** | **both directions** — MSB → LF (AD Kap. 2.9, EBD E_0206) · LF → MSB (AD Kap. 2.11, EBD E_0209) | ORDRSP 19009 (Bestätigung) / 19010 (Ablehnung) |
 
 ORDRSP 19009/19010 answer **only the Beendigung** (17006), never the
 Bestellung — the 17005 Bestellung itself is the answer to the QUOTES 15002
@@ -734,12 +735,12 @@ than the request addresses is refused before it reaches the wire.
 
 **The product decides the Lokationsebene.** `LOC+172` DE 3225 has four permitted
 shapes and the Marktlokations-ID format (`[950]`) serves both the Marktlokation
-and the **Tranche** (REQOTE AHB 1.2 §4.3, hints `[502]`/`[504]`), so the
+and the **Tranche** (REQOTE AHB 1.2 Kap. 4.3, hints `[502]`/`[504]`), so the
 identifier cannot resolve it — and the Tranche carries a Pflichtprodukt.
 
 **The Angebot is a priced offer.** UC 4.1.1 has the ESA asking for „die
 Übermittlung von Werten **und die damit verbundenen Kosten**"; QUOTES AHB 1.1a
-§4.3 makes `SG4 CUX`, the `PIA+Z02` Artikel-IDs, one `SG31 PRI+CAL` each and one
+Kap. 4.3 makes `SG4 CUX`, the `PIA+Z02` Artikel-IDs, one `SG31 PRI+CAL` each and one
 to 23 `PIA+5 … :SRW` OBIS-Kennzahlen Muss, alongside `DTM+469` and `DTM+273`. The
 **prices**, not the Bindungsfrist, tell an Angebot from an Ablehnung: `DTM+273` is
 Muss on the only published 15003 use case, so a refusal carries one too.
@@ -955,7 +956,7 @@ Gas **AWH GeLi Gas V1.2** (26.03.2026, gültig ab 01.04.2026).
 
 **APERAK Frist:** Gas knows only the **Verarbeitbarkeitsfehlermeldung** —
 nächster Werktag 12:00 Uhr for a Folgeprozess, **3 Werktage** for an
-Initialprozess (APERAK AHB 1.1 § 2.3.1). Every APERAK is answered with a CONTRL.
+Initialprozess (APERAK AHB 1.1 Kap. 2.3.1). Every APERAK is answered with a CONTRL.
 This is the *technical* clock; the business Antwortfristen are 4 / 3 / 2 Werktage
 per Prüfidentifikator.
 
@@ -1182,7 +1183,7 @@ sequenceDiagram
 | **31005** | Mehr-/Mindermengensaldo Gas (MMM) | NB → LF | `mako-gpke` `gpke-abrechnung` ✅ (issued by `netzbilanzd`) |
 | **31011** | AWH Sperrprozesse Gas | GNB/VNB → LF | `mako-geli-gas` ✅ |
 | **31003** | WiM-Rechnung (Abrechnung von Dienstleistungen im Messwesen — Strom *und* Gas) | MSBA → NB · MSBA → MSBN | `mako-wim` `wim-invoic` |
-| **31004** | Stornorechnung — Sparte-neutral universal Storno of any INVOIC (INVOIC AHB §3.1.2) | Rechnungssteller → Rechnungsempfänger | `mako-wim` `wim-invoic` |
+| **31004** | Stornorechnung — Sparte-neutral universal Storno of any INVOIC (INVOIC AHB Kap. 3.1.2) | Rechnungssteller → Rechnungsempfänger | `mako-wim` `wim-invoic` |
 | **31007/31008** | Aggreg. MMM-Rechnung Gas | NB → MGV | `mako-gabi-gas` ✅ |
 | **31010** | Kapazitätsabrechnung Gas | GNB → KN | `mako-gabi-gas` ✅ |
 
@@ -1213,7 +1214,7 @@ actual data (MSCONS or similar); ORDRSP is sent only for rejections.
 Gas meter readings, load profiles, energy quantities, and gas quality values
 delivered via MSCONS by the GNB or MSB to the LF. The LF acknowledges with an
 APERAK on the Gas APERAK clock — **nächster Werktag 12:00 Uhr** for a
-Folgeprozess, 3 Werktage for an Initialprozess (APERAK AHB 1.1 § 2.3.1).
+Folgeprozess, 3 Werktage for an Initialprozess (APERAK AHB 1.1 Kap. 2.3.1).
 
 13013 (Allokationsliste Gas, MMMA) belongs to `mako-gabi-gas` `gabi-gas-mmma`
 and 13014 (bilanzierte Menge) to `mako-gpke` `gpke-allokationsliste`; a
@@ -1245,7 +1246,7 @@ not every process has a twin.
 | INVOIC NNE Strom — 31002 | **INVOIC 31002** — NNE Gas (NB → LF, GasNEV §15) | ✅ Same NN-Rechnung PID for both Sparten; `netzbilanzd` takes `billing_type: "nne"` and a required `sparte`, which selects GasNEV §15 |
 | INVOIC MMM Strom — 31005 (NB → LF) | **INVOIC 31005** — MMM Gas (NB → LF); aggregierte Gas MMM (NB → MGV) uses **31007/31008** (`mako-gabi-gas`) | ⚠️ NB → LF Gas MMM shares 31005 with Strom; the aggregierte MMM-Rechnung goes **NB → MGV** as 31007/31008 |
 | **Neuanlage MaLo** — UTILMD 55600–55605 | Embedded in UTILMD G 44001 (Lieferbeginn) | ⚠️ Gas has no separate "Neuanlage" PID set; new connections use the same 44001 PID as supplier changes |
-| **Ankündigung Zuordnung LF** — UTILMD 55607–55609 | ❌ No equivalent | The NB restores the 100 % LF-Zuordnung of an **erzeugende** Marktlokation or Tranche (GPKE Teil 2 § 2.4). Gas has no Veräußerungsform/Direktvermarktung split, so no counterpart |
+| **Ankündigung Zuordnung LF** — UTILMD 55607–55609 | ❌ No equivalent | The NB restores the 100 % LF-Zuordnung of an **erzeugende** Marktlokation or Tranche (GPKE Teil 2 Kap. 2.4). Gas has no Veräußerungsform/Direktvermarktung split, so no counterpart |
 | **UTILTS** — 25001/25004–25010 | ❌ No equivalent | UTILTS carries Zählzeitdefinitionen (HT/NT tariff clocks) and Berechnungsformeln — concepts that don't exist in Gas regulation |
 | **Allokationsliste Strom** — ORDERS 17110 · MSCONS 13014 | **GaBi Gas** Allokationsliste — MSCONS 13013 (`mako-gabi-gas`) | Different crate/domain: Gas allocation belongs to GaBi Gas (BK7-24-01-008), not GeLi Gas |
 | **Konfiguration / iMSys** — ORDERS 17134/17135 | **WiM Gas** — UTILMD G 44039–44044 / 44051–44053 / 44168/44169/44183 | Handled by `mako-wim`; MSB gateway configuration is a WiM concern in both Sparten |
@@ -1319,7 +1320,7 @@ Sparte-neutral AHBs carrying both, and the Sparte comes from the recipient MP-ID
 | Message | Sender → Empfänger | PID | Content | Frist | Crate |
 |---|---|---|---|---|---|
 | WiM Gas Rechnung | MSBA → NB · MSBA → MSBN | INVOIC **31003** | Fortführung Messstellenbetrieb, Geräteübernahme, Zwischen-/Kontrollablesung | 20 WT nach Durchführung; Zahlungsziel ≥ 10 WT | `mako-wim` `wim-invoic` |
-| Stornorechnung (universal) | Rechnungssteller → Rechnungsempfänger | INVOIC **31004** | Sparte-neutral Storno of any INVOIC (INVOIC AHB §3.1.2); checked by `invoic-checker` `check_storno` | Zahlungsziel (DTM+265) | `mako-wim` `wim-invoic` |
+| Stornorechnung (universal) | Rechnungssteller → Rechnungsempfänger | INVOIC **31004** | Sparte-neutral Storno of any INVOIC (INVOIC AHB Kap. 3.1.2); checked by `invoic-checker` `check_storno` | Zahlungsziel (DTM+265) | `mako-wim` `wim-invoic` |
 | Zahlungsavis | NB → MSBA · MSBN → MSBA | REMADV **33001/33002** | Payment confirmation/rejection | zum Zahlungsziel | `mako-wim` `wim-invoic` |
 | Ablehnung Zahlungsavis | MSBA → NB | COMDIS **29001** | Invoicer disputes the REMADV | — | `mako-wim` `wim-invoic` |
 
@@ -1590,7 +1591,7 @@ The APERAK states whether a message could be processed — not whether the
 process is accepted, which is the substantive answer's job (e.g. UTILMD
 55002/55003). Two Anwendungsfälle exist: **29002 Anerkennungsmeldung**
 (`BGM+312`, Strom only) and **29001 Fehlermeldung** (`BGM+313`, with an `ERC`
-error code); Gas sends only the Fehlermeldung (APERAK AHB 1.1 §2.3).
+error code); Gas sends only the Fehlermeldung (APERAK AHB 1.1 Kap. 2.3).
 
 ### CONTRL — Syntaxprüfung und Empfangsbestätigung
 
@@ -1612,7 +1613,7 @@ message could be *processed*. Three different statements on three clocks.
 | Empfangsbestätigung | `7` | Gas only — „In der Sparte Strom wird die CONTRL **ausschließlich** als Syntaxfehlermeldung eingesetzt" (§2.4) |
 | Syntaxfehlermeldung | `4` + a DE 0085 code | Both Sparten, when the Übertragungsdatei does not parse and „wird nicht weiterbearbeitet" |
 
-**The window is not one number** (§2.3.1, §2.4.1):
+**The window is not one number** (Kap. 2.3.1, Kap. 2.4.1):
 
 | What arrived | Window |
 |---|---|
@@ -1620,10 +1621,10 @@ message could be *processed*. Three different statements on three clocks.
 | A GABi-Gas ALOCAT from the NB to the MGV | **45 minutes** |
 | Anything else, either Sparte | **6 hours** |
 
-**When no CONTRL can be sent.** §2.2.2.1: the CONTRL copies its Muss-Datenelemente
+**When no CONTRL can be sent.** Kap. 2.2.2.1: the CONTRL copies its Muss-Datenelemente
 out of the subject interchange, so a `UNB` that is itself unreadable makes a
 conformant CONTRL impossible — „Der Fehler muss dann durch andere Mittel als durch
-die CONTRL mitgeteilt werden." That interchange is dead-lettered instead. §2.2.2.2
+die CONTRL mitgeteilt werden." That interchange is dead-lettered instead. Kap. 2.2.2.2
 adds the other exception: never a CONTRL in answer to a CONTRL.
 
 ### ERP Integration

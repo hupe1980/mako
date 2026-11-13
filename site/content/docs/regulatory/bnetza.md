@@ -53,7 +53,7 @@ Sources:
 
 **APERAK Frist (GPKE):** **45 Minuten** für UTILMD und ORDERS; ein
 Samstagseingang bis Sonntag 12:00 Uhr; alles übrige bis 12:00 Uhr des nächsten
-Werktags (APERAK AHB 1.1 § 2.4.1). Das ist nicht die Antwortfrist des
+Werktags (APERAK AHB 1.1 Kap. 2.4.1). Das ist nicht die Antwortfrist des
 Geschäftsprozesses — siehe [unten](#antwortfristen-summary).
 
 **Laufende Verfahren:**
@@ -162,7 +162,7 @@ MPES Festlegung BK6-20-160 was gültig bis 05.06.2025. The erzeugende-MaLo PIDs
 2.4.2 / **2.4.2 Nr. 4** — the Verpflichtungsanfrage is Prozessschritt 3 of the
 *Ende Messstellenbetrieb*, not of Kap. 2.5 „Verpflichtung gMSB"). Samstage, Sonntage und gesetzliche Feiertage sind keine Werktage.
 
-> Davon zu unterscheiden ist die **APERAK**-Eingangsbestätigung: für UTILMD Strom **45 Minuten** (APERAK AHB 1.1 § 2.4.1).
+> Davon zu unterscheiden ist die **APERAK**-Eingangsbestätigung: für UTILMD Strom **45 Minuten** (APERAK AHB 1.1 Kap. 2.4.1).
 
 **Laufende Verfahren:**
 
@@ -285,7 +285,7 @@ a plant onto the Jahresmarktwert (Anlage 1 Nr. 2 Satz 3 EEG).
 
 **APERAK Frist (Gas):** Gas kennt nur die **Verarbeitbarkeitsfehlermeldung** —
 **nächster Werktag 12:00 Uhr** bei einem Folgeprozess, **3 Werktage** bei einem
-Initialprozess (APERAK AHB 1.1 § 2.3.1); auf jede APERAK folgt eine CONTRL.
+Initialprozess (APERAK AHB 1.1 Kap. 2.3.1); auf jede APERAK folgt eine CONTRL.
 Samstag, Sonntag und gesetzliche Feiertage zählen nicht.
 
 **Antwortfristen (GeLi Gas 3.0 Kap. 3.1–3.3):** Anmeldung **4 WT**, Abmeldung /

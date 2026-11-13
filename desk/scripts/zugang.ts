@@ -18,6 +18,9 @@
 //   primary action into the parameters;
 // - **Einrichtung** — the readiness checklist with makod's findings, then a
 //   Probelauf started from the keyboard (⌘↵ in its facts) and its verdict;
+// - **the Vorschlag** — a sentence typed and sent with ↵, the pre-fill's
+//   offers taken from the keyboard, and a gap's „Zur Frage" landing focus on
+//   the question that fills it;
 // - **the phone's width** — the sidebar as a sheet, opened from the top bar
 //   with the keyboard and closed with esc, focus back on its button.
 //
@@ -278,6 +281,36 @@ async function durchgang(browser: Browser, base: string, theme: "light" | "dark"
     await page.keyboard.press("ControlOrMeta+Enter");
     await page.locator("[data-urteil]").waitFor();
     await pruefen(page, zustand("Einrichtung, Probelauf"), "main");
+    await context.close();
+  }
+
+  // The Vorschlag: a sentence sent with ↵, the pre-fill's offers reached and
+  // taken from the keyboard, then a gap's „Zur Frage" moves focus to its question.
+  {
+    const { context, page } = await neu("beantwortet");
+    await page.goto(`${base}einrichtung`);
+    await page.getByRole("tablist", { name: "Dateien" }).waitFor();
+    const satz = page.getByRole("textbox", { name: "Aus einem Satz" });
+    await tabZu(page, satz, zustand("Vorschlag, Satz"));
+    await page.keyboard.type("Wir sind Lieferant Strom und Gas.");
+    await page.keyboard.press("Enter");
+    await page.getByRole("list", { name: "Vorgeschlagene Antworten" }).waitFor();
+    await pruefen(page, zustand("Einrichtung, Vorschlag"), "main");
+    const alle = page.getByRole("button", { name: "Alle übernehmen" });
+    await tabZu(page, alle, zustand("Vorschlag, Alle übernehmen"));
+    await page.keyboard.press("Enter");
+    await page.getByRole("textbox", { name: "MP-ID Lieferant Strom" }).waitFor();
+    const frage = page.getByRole("button", { name: "Zur Frage" }).first();
+    await frage.focus();
+    await page.keyboard.press("Enter");
+    const gelandet = await page
+      .waitForFunction(() => document.activeElement?.closest("[data-frage]") !== null, null, {
+        timeout: 2000,
+      })
+      .then(() => true)
+      .catch(() => false);
+    if (!gelandet)
+      fehler.push(`${zustand("Vorschlag, Zur Frage")}: der Fokus landet auf keiner Frage`);
     await context.close();
   }
 

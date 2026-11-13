@@ -78,7 +78,7 @@ async fn escalate_stuck(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
     Ok(true)
 }
 
-/// Announce every pending order past the § 3.5.1.2 Nr. 1 execution window, once.
+/// Announce every pending order past the Kap. 3.5.1.2 Nr. 1 execution window, once.
 ///
 /// This is a **regulatory** deadline, not a queue-depth signal: GPKE Teil 2
 /// gives the NB 6 Werktage after the frühestmöglicher Sperrtermin to carry the
@@ -98,7 +98,7 @@ async fn announce_overdue_executions(pool: &PgPool, tenant: &str) -> anyhow::Res
         tracing::warn!(
             order_id = %id, %malo_id, %faellig_am,
             "processd sperr: Sperrauftrag past the 6-Werktage execution window \
-             (BK6-24-174 GPKE Teil 2 § 3.5.1.2 Nr. 1)"
+             (BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 Nr. 1)"
         );
     }
     Ok(true)

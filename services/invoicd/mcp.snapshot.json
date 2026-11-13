@@ -223,6 +223,103 @@
     "outputSchema": null
   },
   {
+    "name": "list_held_receipts",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "GehalteneRechnung": {
+          "description": "One invoice the Entscheidungsbaum left open.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The receipt — the id `POST /api/v1/receipts/{id}/feststellungen` takes.",
+              "type": "string"
+            },
+            "process_id": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer",
+              "format": "int16",
+              "minimum": -32768,
+              "maximum": 32767
+            },
+            "sender_mp_id": {
+              "type": "string"
+            },
+            "rechnungsnummer": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bestellung_ref": {
+              "description": "`SG1 RFF+ACE` — the order a Leistungsnachweis names.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "frist": {
+              "description": "The end of the Berlin day of the Zahlungsziel, when there is one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "offen": {
+              "description": "The Prüfschritte the walk reached and no record answered: `pruefschritt`,\n`ebene` (with the Positionsnummer on the Positionsebene) and `detail`.",
+              "type": "array",
+              "items": true
+            }
+          },
+          "required": [
+            "id",
+            "process_id",
+            "pid",
+            "sender_mp_id",
+            "rechnungsnummer",
+            "bestellung_ref",
+            "frist",
+            "offen"
+          ]
+        }
+      },
+      "required": [
+        "gehalten",
+        "count",
+        "saturated"
+      ],
+      "type": "object",
+      "properties": {
+        "gehalten": {
+          "description": "The nearest Zahlungsziel first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GehalteneRechnung"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "At least 200 receipts matched.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
     "name": "list_overdue_remadv",
     "annotations": {
       "readOnlyHint": true,

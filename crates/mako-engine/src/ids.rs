@@ -144,7 +144,7 @@ impl TenantId {
     /// The accepted identifier formats are:
     /// - **BDEW code** (13-digit, agency `"293"`) — most common in German MaKo
     /// - **GLN** (13-digit GS1, agency `"9"`) — global GS1 scheme, rare in MaKo
-    /// - **EIC** (16-char ENTSO-E, agency `"305"`) — used by TSOs / Regelzonen
+    /// - **EIC** (16-char ENTSO-E) — used by TSOs / Regelzonen
     /// - Any other opaque string used as `--tenant-id`
     ///
     /// The namespace UUID is fixed and private to this crate:
@@ -160,7 +160,7 @@ impl TenantId {
     /// assert_eq!(id, TenantId::from_party_id("9900123456789"));
     /// assert_ne!(id, TenantId::from_party_id("9900357000004"));
     ///
-    /// // EIC code (ENTSO-E, agency 305) — e.g. for a TSO
+    /// // EIC code (ENTSO-E) — e.g. for a TSO
     /// let tso = TenantId::from_party_id("10XDE-EON-NETZ-C");
     /// assert_ne!(id, tso);
     /// ```

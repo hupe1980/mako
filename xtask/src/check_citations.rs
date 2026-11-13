@@ -476,8 +476,8 @@ mod tests {
     #[test]
     fn the_published_forms_pass() {
         assert!(offending_lines("/// GPKE Teil 4 Kap. 5 (BK6-22-024 Anlage 1d).").is_empty());
-        assert!(offending_lines("/// GPKE Teil 2 § 3.5 (BK6-24-174 Anlage 1b).").is_empty());
-        assert!(offending_lines("/// BK6-24-174 GPKE Teil 2 § 2.2.2").is_empty());
+        assert!(offending_lines("/// GPKE Teil 2 Kap. 3.5 (BK6-24-174 Anlage 1b).").is_empty());
+        assert!(offending_lines("/// BK6-24-174 GPKE Teil 2 Kap. 2.2.2").is_empty());
     }
 
     #[test]

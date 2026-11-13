@@ -378,7 +378,7 @@ CREATE INDEX fk_tenant ON fremdkosten_records (tenant, created_at DESC);
 --
 -- Regulatory basis: BK6-24-174 Anlage 3 (MaBiS), Lesefassung.
 --
--- ## Versionierung (§3.8.2)
+-- ## Versionierung (Kap. 3.8.2)
 --
 -- A Summenzeitreihe is identified by the 3-tuple
 -- (MaBiS-Zählpunkt, Bilanzierungsmonat, Version). The version is not a
@@ -393,7 +393,7 @@ CREATE INDEX fk_tenant ON fremdkosten_records (tenant, created_at DESC);
 -- correction qualifier, so the version is the only thing distinguishing a
 -- correction from the original.
 --
--- ## Datenstatus (§3.8.3)
+-- ## Datenstatus (Kap. 3.8.3)
 --
 -- Assigned exclusively by the BIKO — "Der Datenstatus wird ausschließlich vom
 -- BIKO vergeben" — and received inbound via IFTSTA (SG7 STS+Z04, PID 21003 to
@@ -406,7 +406,7 @@ CREATE INDEX fk_tenant ON fremdkosten_records (tenant, created_at DESC);
 -- ## Abrechnungslauf
 --
 -- BKA is the ordinary Bilanzkreisabrechnung; KBKA the
--- Korrekturbilanzkreisabrechnung that runs afterwards (§3.10, Tabelle 2). They
+-- Korrekturbilanzkreisabrechnung that runs afterwards (Kap. 3.10, Tabelle 2). They
 -- have separate clearing windows, so which run a submission belongs to decides
 -- which deadline applies.
 
@@ -429,7 +429,7 @@ CREATE TABLE submission_runs (
     -- Which settlement run this submission belongs to.
     abrechnungslauf         TEXT        NOT NULL DEFAULT 'BKA'
                             CHECK (abrechnungslauf IN ('BKA', 'KBKA')),
-    -- Phase the submission was made in (§3.10, Tabelle 2). Determines the
+    -- Phase the submission was made in (Kap. 3.10, Tabelle 2). Determines the
     -- Datenstatus the BIKO assigns: within Erstaufschlag a new version becomes
     -- 'Abrechnungsdaten' automatically, afterwards it is 'Prüfdaten' until a
     -- positive Prüfmitteilung promotes it.
@@ -446,7 +446,7 @@ CREATE TABLE submission_runs (
                             )),
     datenstatus_at          TIMESTAMPTZ,
     -- Run this one corrects, when it was sent in response to a negative
-    -- Prüfmitteilung (§9.8.1).
+    -- Prüfmitteilung (Kap. 9.8.1).
     corrects_run_id         UUID        REFERENCES submission_runs(id),
     sender_mp_id            TEXT        NOT NULL,
     receiver_mp_id          TEXT        NOT NULL,
@@ -491,7 +491,7 @@ CREATE TABLE submission_runs (
 COMMENT ON TABLE submission_runs IS
     'MaBiS Summenzeitreihe submission tracking (MSCONS PID 13003). One row per '
     'submission attempt. Identified by (Bilanzierungsgebiet, Bilanzierungsmonat, '
-    'Version) per BK6-24-174 Anlage 3 §3.8.2; Datenstatus is assigned by the BIKO '
+    'Version) per BK6-24-174 Anlage 3 Kap. 3.8.2; Datenstatus is assigned by the BIKO '
     'and arrives via IFTSTA 21003/21004.';
 
 CREATE INDEX sr_period    ON submission_runs (bilanzierungsgebiet_id, period_from, period_to);
@@ -504,7 +504,7 @@ CREATE INDEX sr_tenant_period ON submission_runs (tenant, period_from, period_to
 CREATE INDEX sr_triggered ON submission_runs (triggered_at DESC);
 
 -- Finding the version that settles: the highest one the BIKO has marked
--- 'Abrechnungsdaten' (§3.8.3).
+-- 'Abrechnungsdaten' (Kap. 3.8.3).
 CREATE INDEX sr_settling_version ON submission_runs
     (tenant, bilanzierungsgebiet_id, period_from, period_to, version DESC)
     WHERE datenstatus IN ('ABRECHNUNGSDATEN', 'ABRECHNUNGSDATEN_KBKA');
@@ -581,7 +581,7 @@ CREATE INDEX sml_malo   ON submission_malo_log (malo_id);
 --
 -- A negative Prüfmitteilung signals Korrekturbedarf: "Der ÜNB übermittelt bei
 -- Erhalt einer negativen Prüfmitteilung ggf. eine korrigierte BG-SZR"
--- (§9.8.1). Recording it is what lets a correction be traced back to the
+-- (Kap. 9.8.1). Recording it is what lets a correction be traced back to the
 -- objection that prompted it.
 
 CREATE TABLE pruefmitteilung (
@@ -604,7 +604,7 @@ CREATE TABLE pruefmitteilung (
 );
 
 COMMENT ON TABLE pruefmitteilung IS
-    'Inbound Prüfmitteilung (IFTSTA PID 21000/21001) per BK6-24-174 Anlage 3 §9.8.1. '
+    'Inbound Prüfmitteilung (IFTSTA PID 21000/21001) per BK6-24-174 Anlage 3 Kap. 9.8.1. '
     'A negative one requires a corrected Summenzeitreihe under a higher version.';
 
 CREATE INDEX pm_run       ON pruefmitteilung (run_id);

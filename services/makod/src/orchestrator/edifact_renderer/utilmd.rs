@@ -289,6 +289,7 @@ pub(super) fn render_utilmd(
     // |---|---|---|
     // | `bilanzierungsbeginn` | `158` | UTILMD 55238/55239 — AHB Strom 2.2 Kap. 11, Bedingung `[317]` makes it carry the same value as `DTM+92` |
     // | `bilanzierungsende` | `159` | Gas 44037/44038 „wenn eine Bilanzierung stattfindet" (AHB Gas Kap. 5.8 Bedingung `[29]`); UTILMD 55240–55243 beside `DTM+93` |
+    // | `geraeteausbaudatum` | `206` | 55007/55008 with `STS+7++Z33` (AHB Strom 2.2 Kap. 8.10, S. 189, Bedingung `[79]`) |
     //
     // The third, `vertragsbeginn` (`92`), is written above, before the process
     // date: the GeLi Gas Antwort auf Anfrage 44142 restates both `DTM+92` and
@@ -304,6 +305,11 @@ pub(super) fn render_utilmd(
             "bilanzierungsende",
             u.bilanzierungsende.as_deref(),
             edi_energy::utilmd_codes::dtm::BILANZIERUNGSENDE,
+        ),
+        (
+            "geraeteausbaudatum",
+            u.geraeteausbaudatum.as_deref(),
+            edi_energy::utilmd_codes::dtm::GERAETEAUSBAUDATUM,
         ),
     ] {
         if let Some(date) = field.filter(|s| !s.is_empty()) {
@@ -440,7 +446,7 @@ pub(super) fn render_utilmd(
         //
         // **Muss when the Antwortcode is `A50` or `A57`** (UTILMD AHB Strom
         // Bedingungen `[356]` / `[84]`): both mean „der LFA hat der Anfrage zur
-        // Beendigung der Zuordnung widersprochen", and GPKE Teil 2 § 2.1.2 Nr. 6
+        // Beendigung der Zuordnung widersprochen", and GPKE Teil 2 Kap. 2.1.2 Nr. 6
         // requires the NB to state that refusal's ground alongside its own.
         // Refusing to render is the only way this stays true — an Ablehnung
         // that omits it tells the LFN its Anmeldung failed and not why the
@@ -451,7 +457,7 @@ pub(super) fn render_utilmd(
             return Err(RenderError::MissingField {
                 message_type: mt.into(),
                 field: format!(
-                    "antwort_code {code} requires \"dritter_antwortcode\" — UTILMD AHB Strom                      marks SG4 STS+Z35 Muss alongside it, and GPKE Teil 2 § 2.1.2 Nr. 6 has the                      NB state the LFA's own Ablehnungsgrund"
+                    "antwort_code {code} requires \"dritter_antwortcode\" — UTILMD AHB Strom                      marks SG4 STS+Z35 Muss alongside it, and GPKE Teil 2 Kap. 2.1.2 Nr. 6 has the                      NB state the LFA's own Ablehnungsgrund"
                 )
                 .into(),
             });
@@ -1172,7 +1178,7 @@ fn utilmd_column(
 pub(super) fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
     use edi_energy::utilmd_codes::dtm;
     match pid {
-        // ── Zuordnungs-Meldungen (GPKE Teil 2 § 2.1.2 Nr. 2 / 10 / 13) ────
+        // ── Zuordnungs-Meldungen (GPKE Teil 2 Kap. 2.1.2 Nr. 2 / 10 / 13) ────
         //
         // Three adjacent PIDs, three different SG4 date columns. 55036 / 44036
         // has none at all ([`utilmd_carries_sg4_date`]); the Beendigung names a

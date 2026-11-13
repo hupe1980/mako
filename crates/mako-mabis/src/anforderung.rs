@@ -244,10 +244,49 @@ impl AnforderungKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AbonnementVorgang {
-    /// Start the subscription, or make a one-shot request.
+    /// Start the subscription (`IMD` `Z01` Start Abo); on a request with no
+    /// Abonnement (17204, 17205, 17208) the one-shot request.
     Bestellung,
-    /// End an existing subscription.
+    /// End an existing subscription (`IMD` `Z02` Ende Abo).
     Abbestellung,
+    /// Ask once without subscribing (`IMD` `Z03` ohne Abo) where the AHB
+    /// offers both (17202, 17203, 17206, 17210).
+    OhneAbo,
+}
+
+impl AbonnementVorgang {
+    /// The `IMD` DE 7081 code an ORDERS of `kind` carries for this Vorgang —
+    /// ORDERS AHB 1.1b Kap. 5.1 (S. 117): `Z01` Start Abo, `Z02` Ende Abo,
+    /// `Z03` ohne Abo, the last the only one on a request with no Abonnement.
+    #[must_use]
+    pub fn imd(self, kind: AnforderungKind) -> &'static str {
+        match self {
+            Self::Bestellung if kind.supports_abonnement() => "Z01",
+            Self::Abbestellung => "Z02",
+            Self::Bestellung | Self::OhneAbo => "Z03",
+        }
+    }
+}
+
+/// The column facts an Anforderung carries beyond its kind and Vorgang
+/// (ORDERS AHB 1.1b Kap. 5.1, S. 116–119); which are Muss is the column's
+/// question, and the renderer names a missing one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AnforderungAngaben {
+    /// `DTM+203` — the day the Abonnement starts or ends (`YYYY-MM-DD`).
+    pub ausfuehrungsdatum: Option<String>,
+    /// `DTM+273` — the Betrachtungszeitintervall, `CCYYMM`.
+    pub zeitintervall: Option<String>,
+    /// `SG34 RFF+AUU` — the Version of the Summenzeitreihe.
+    pub version: Option<String>,
+    /// `SG38 LOC+172` — the Zählpunkt of the list.
+    pub meldepunkt: Option<String>,
+    /// `SG38 LOC+237` — the Bilanzkreis (17203).
+    pub bilanzkreis: Option<String>,
+    /// `SG2 LOC+107` — the Bilanzierungsgebiet (17203 ohne Abo).
+    pub bilanzierungsgebiet: Option<String>,
+    /// `SG30 CCI` — the Profilgruppe (17201: `Z02`–`Z05`).
+    pub profilgruppe: Option<String>,
 }
 
 /// Every ORDERS Prüfidentifikator this workflow handles.
@@ -453,6 +492,12 @@ pub enum AnforderungCommand {
         vorgang: AbonnementVorgang,
         /// GLN of the party that maintains the list.
         receiver: MarktpartnerCode,
+        /// This participant's MP-ID — `NAD+MS`.
+        sender: MarktpartnerCode,
+        /// `BGM` DE 1004 of the ORDERS.
+        message_ref: MessageRef,
+        /// The column's further facts.
+        angaben: AnforderungAngaben,
     },
     /// Record an inbound Anforderung addressed to mako.
     ReceiveAnforderung {
@@ -549,6 +594,9 @@ impl Workflow for MabisAnforderungWorkflow {
                 kind,
                 vorgang,
                 receiver,
+                sender,
+                message_ref,
+                angaben,
             } => {
                 if !matches!(state, AnforderungState::New) {
                     return Ok(vec![].into());
@@ -567,14 +615,27 @@ impl Workflow for MabisAnforderungWorkflow {
                     WorkflowError::rejected(format!("invalid PID {}: {e}", kind.pid()))
                 })?;
 
-                let outbox = PendingOutbox::new(
-                    "ORDERS",
+                // ORDERS AHB 1.1b Kap. 5.1 (S. 116–119): the column's `BGM`
+                // follows the PID, `IMD` the Vorgang; the renderer names a
+                // Muss fact the Angaben lack.
+                let outbox = PendingOutbox::typed(
                     receiver.as_str(),
-                    serde_json::json!({
-                        "pid": kind.pid(),
-                        "vorgang": vorgang,
-                        "kind": kind,
-                    }),
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(kind.pid()),
+                        sender: Some(sender.as_str().to_owned()),
+                        sparte: Some(mako_engine::types::Sparte::Strom),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        document_id: Some(message_ref.as_str().to_owned()),
+                        abonnement: Some(vorgang.imd(kind).to_owned()),
+                        ausfuehrungsdatum: angaben.ausfuehrungsdatum,
+                        zeitintervall: angaben.zeitintervall,
+                        version: angaben.version,
+                        meldepunkt: angaben.meldepunkt,
+                        bilanzkreis: angaben.bilanzkreis,
+                        bilanzierungsgebiet: angaben.bilanzierungsgebiet,
+                        profilgruppe: angaben.profilgruppe,
+                        ..Default::default()
+                    },
                 );
 
                 Ok(WorkflowOutput {
@@ -750,6 +811,9 @@ mod tests {
                     kind,
                     vorgang: AbonnementVorgang::Abbestellung,
                     receiver: mp("9900123456789"),
+                    sender: mp("9900987654321"),
+                    message_ref: MessageRef::new("ANF-1"),
+                    angaben: AnforderungAngaben::default(),
                 },
             )
             .expect_err("must reject");
@@ -772,6 +836,9 @@ mod tests {
                     kind,
                     vorgang,
                     receiver: mp("9900123456789"),
+                    sender: mp("9900987654321"),
+                    message_ref: MessageRef::new("ANF-1"),
+                    angaben: AnforderungAngaben::default(),
                 },
             )
             .expect("accepted");

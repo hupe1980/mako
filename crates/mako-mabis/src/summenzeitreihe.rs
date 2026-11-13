@@ -8,7 +8,7 @@
 //!
 //! This module models the aggregation domain. The wire format is MSCONS
 //! Prüfidentifikator 13003 ("Übertragung Summenzeitreihe", MSCONS AHB 3.2
-//! §8.3.1) and its serialisation lives in `edi-energy`; UTILTS carries
+//! Kap. 8.3.1) and its serialisation lives in `edi-energy`; UTILTS carries
 //! Berechnungsformel and Zählzeitdefinitionen and has no Summenzeitreihe use
 //! case.
 //!
@@ -21,9 +21,9 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **BK6-24-174 Anlage 3 MaBiS**: Summenzeitreihe exchange, Versionierung (§3.8.2),
-//!   Datenstatus (§3.8.3) and Fristen (§3.10)
-//! - **MSCONS AHB 3.2 §8.3.1**: wire format for Prüfidentifikator 13003
+//! - **BK6-24-174 Anlage 3 MaBiS**: Summenzeitreihe exchange, Versionierung (Kap. 3.8.2),
+//!   Datenstatus (Kap. 3.8.3) and Fristen (Kap. 3.10)
+//! - **MSCONS AHB 3.2 Kap. 8.3.1**: wire format for Prüfidentifikator 13003
 //! - **MaBiS (Anlage 3 zur Festlegung BK6-24-174)**: Marktregeln für die
 //!   Durchführung der Bilanzkreisabrechnung Strom
 //!
@@ -106,7 +106,7 @@ pub struct Summenzeitreihe {
     pub period_to: OffsetDateTime,
     /// Ascending version within (Bilanzierungsgebiet, Bilanzierungsmonat).
     ///
-    /// BK6-24-174 Anlage 3 §3.8.2: "Die Version einer Summenzeitreihe ist
+    /// BK6-24-174 Anlage 3 Kap. 3.8.2: "Die Version einer Summenzeitreihe ist
     /// jeweils aufsteigend zu vergeben." It is a timestamp rather than a
     /// lifecycle state — MSCONS carries it as SG6 DTM+293
     /// (Fertigstellungsdatum/-zeit) — so a correction is the same series resent

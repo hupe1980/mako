@@ -310,7 +310,7 @@ async fn a_control_order_with_a_caller_mp_id_passes_the_identity_gate() {
 /// addressed to. Trusting it would let any authenticated participant place an
 /// iMSys installation order in another Netzbetreiber's name and have the answer
 /// delivered to them. This is the same rule `edi-energy` enforces between `UNB`
-/// and `NAD+MS` (Allgemeine Festlegungen §2.13).
+/// and `NAD+MS` (Allgemeine Festlegungen Kap. 2.13).
 const WIM_ANMELDUNG_URI: &str = "/wimBestellung/v1/anmeldung/?anmeldung=%7B%22meloId%22%3A%22DE0001234567890000000000000000001%22%2C%22netzbetreiberId%22%3A9900001000002%2C%22processDate%22%3A%222026-09-01%22%2C%22deviceCategory%22%3A%22iMSys%22%7D";
 
 fn wim_anmeldung(caller: Option<&str>, tx: &str) -> Request<Body> {

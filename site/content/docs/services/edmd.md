@@ -389,9 +389,14 @@ defaulted to zero.
 |-----------|-----------|--------|
 | `de.mako.process.completed` | MSCONS set | Store readings |
 | `de.mako.process.completed` | 55002 / 55078, verdict accepted | `LIEFERBEGINN` reading order (GPKE Beginn-/Schlussablesung) |
-| `de.mako.process.completed` | 55005 (Abmeldung confirmed) or 55008 (the Lieferant's Zustimmung to the NB's Lieferende, GPKE Teil 2 Kap. 2.5.2.2 Nr. 2), verdict accepted | `LIEFERENDE` reading order, planned for the completion's `process_date` |
+| `de.mako.process.completed` | 55005 (Abmeldung confirmed), 55008 (the Lieferant's Zustimmung to the NB's Lieferende, GPKE Teil 2 Kap. 2.5.2.2 Nr. 2) or 55007 with `ohne_antwort` (the NB's Beendigung aufgrund fehlender Antwort, Nr. 3), verdict accepted | `LIEFERENDE` reading order, planned for the completion's `process_date` |
 | `de.markt.malo.updated` | — | Re-read the MaLo's Bundesland at `marktd` into `malo_bundesland` |
 | anything else | — | 204 (ignored) |
+
+A GPKE order's `auftraggeber_rolle` is the `marktrole` marktd sets on the
+completion — the role whose process completed: `NB` for the NB's own
+(the 55005 it confirmed, the 55007 it sent), `LF` for the Lieferant's. A
+completion naming neither orders no reading.
 
 An INSRPT orders no reading: the Störungsbehebung in der Messlokation (WiM
 Teil 2 Kap. 1.1, S. 5) leaves the Zählerstand as read and has the MSB transmit
@@ -400,7 +405,7 @@ stores.
 
 An MSCONS payload names its `sparte`: without one, or with an unknown one, the
 event is refused with **422** rather than stored as Strom. The GPKE orders
-(55002/55078/55005/55008) are Strom by their PID. Every refusal is decided before
+(55002/55078/55005/55007/55008) are Strom by their PID. Every refusal is decided before
 anything is written, and the `meter_data_receipts` row is the delivery's last
 write: a refused delivery leaves no receipt, and one whose store write failed
 is answered 5xx and receipted on redelivery.
@@ -1135,7 +1140,7 @@ GROUP BY 1, 2 ORDER BY 1, 2;
 ## ESA „Werte nach Typ 2" {#esa-typ2}
 
 MSCONS **13027** values are non-authoritative: *Codeliste der Konfigurationen*
-1.4 Kap. 4.6 and WiM Strom Teil 2 §4 give them no bearing on Netznutzungs-,
+1.4 Kap. 4.6 and WiM Strom Teil 2 Kap. 4 give them no bearing on Netznutzungs-,
 Bilanzkreis- or Mehr-/Mindermengenabrechnung.
 
 - The webhook forks 13027 (`ESA_TYP2_PIDS`) to `esa_typ2_reads` before any
@@ -1143,7 +1148,7 @@ Bilanzkreis- or Mehr-/Mindermengenabrechnung.
 - Every billing read aggregates `meter_reads` only; the Typ-2 store has no
   billing periods, correction audit, substitutes or `allocation_version`.
 - `GET /api/v1/esa/typ2/{malo_id}` reads values back verbatim, multi-register
-  (a QUOTES 15003 names 1–23 OBIS codes, QUOTES AHB 1.1a §4.3 `[2073]`).
+  (a QUOTES 15003 names 1–23 OBIS codes, QUOTES AHB 1.1a Kap. 4.3 `[2073]`).
 - Kap. 4.6.2 deliveries arrive straight from the iMS over SM-PKI:
   `POST /api/v1/esa/typ2/{malo_id}` (Cedar `write-esa-typ2`). edmd does not
   terminate SM-PKI. The body is read leniently: a gateway on a newer BSI
@@ -1173,8 +1178,8 @@ Orders live in `ablese_auftraege`, linked to their origin by
 
 | Anlass | Auftraggeber | Triggered by |
 |---|---|---|
-| `LIEFERBEGINN` | LF | a confirmed GPKE Anmeldung (55002 / 55078), or `vertragd` |
-| `LIEFERENDE` | LF | a confirmed GPKE Abmeldung (55005), the Lieferant's Zustimmung to an NB-initiated Lieferende (55008), or `vertragd` |
+| `LIEFERBEGINN` | LF, NB | a confirmed GPKE Anmeldung (55002 / 55078), or `vertragd` |
+| `LIEFERENDE` | LF, NB | a confirmed GPKE Abmeldung (55005), the Lieferant's Zustimmung to an NB-initiated Lieferende (55008) or the NB's Beendigung without it (55007 `ohne_antwort`), or `vertragd` |
 | `JAHRESABLESUNG` | LF, NB | Campaign or ERP (§40 EnWG) |
 | `ZWISCHENABLESUNG` | LF, ESA | On demand; an ESA may order value delivery (WiM Strom Teil 2 Kap. 4 / § 60 Abs. 1 MsbG) |
 | `SPERRUNG` · `ENTSPERRUNG` | NB | `processd` Sperrauftrag queue (§41f EnWG; Wiederherstellung §41f Abs. 7) |
@@ -1388,7 +1393,7 @@ curl -s "http://edmd:8380/api/v1/surveillance/delivery?state=SILENT" -H "Authori
 
 **ESA Typ-2 stream** (`stream = 'TYP2'`, `typ2_enabled`): keyed on
 (Meldepunkt, subscription, register) from `SG9 PIA+5 … :SRW` and `SG1 RFF+AGI`
-(MSCONS AHB 3.2 §11.2 `[574]`). The threshold comes from the ordered Messprodukt,
+(MSCONS AHB 3.2 Kap. 11.2 `[574]`). The threshold comes from the ordered Messprodukt,
 resolved at marktd (`GET /api/v1/esa/subscriptions/{bestellung_ref}`): Rohdaten
 products („unverzüglich, jedoch spätestens bis 9:30 Uhr") go late after **33 h**;
 otherwise `typ2_silent_after_hours` (36). Only silence is scored.

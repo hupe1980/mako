@@ -18,7 +18,7 @@
 //!
 //! Two clocks, and they are not the same message. The **APERAK** is the
 //! technical acknowledgement — 45 Minuten for a Strom UTILMD (Sonntag 12:00 on a Saturday)
-//! (APERAK AHB 1.1 §2.4.1). The **Antwort** is the business Bestätigung or
+//! (APERAK AHB 1.1 Kap. 2.4.1). The **Antwort** is the business Bestätigung or
 //! Ablehnung, due in 3 / 5 / 7 / 1 Werktagen per Prüfidentifikator.
 //! Saturdays, Sundays and federal holidays are not Werktage.
 

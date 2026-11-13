@@ -48,6 +48,8 @@ pub enum TaskKind {
     AblesungEnde,
     /// `accountingd` billing account for a contract that went AKTIV.
     Abrechnungskonto,
+    /// `accountingd` § 13 BGB Verbraucher status of the contract.
+    Verbraucher,
 }
 
 impl TaskKind {
@@ -58,6 +60,7 @@ impl TaskKind {
         Self::AblesungBeginn,
         Self::AblesungEnde,
         Self::Abrechnungskonto,
+        Self::Verbraucher,
     ];
 
     #[must_use]
@@ -68,6 +71,7 @@ impl TaskKind {
             Self::AblesungBeginn => "ABLESUNG_BEGINN",
             Self::AblesungEnde => "ABLESUNG_ENDE",
             Self::Abrechnungskonto => "ABRECHNUNGSKONTO",
+            Self::Verbraucher => "VERBRAUCHER",
         }
     }
 
@@ -80,6 +84,7 @@ impl TaskKind {
             "ABLESUNG_BEGINN" => Self::AblesungBeginn,
             "ABLESUNG_ENDE" => Self::AblesungEnde,
             "ABRECHNUNGSKONTO" => Self::Abrechnungskonto,
+            "VERBRAUCHER" => Self::Verbraucher,
             _ => None?,
         })
     }
@@ -457,6 +462,35 @@ pub fn abrechnungskonto(komp_id: Uuid, malo_id: &str, lf_mp_id: &str) -> Task {
     }
 }
 
+/// The contract's § 13 BGB Verbraucher status for accountingd's account on a
+/// confirmed component — `PUT /api/v1/accounts/{malo_id}/verbraucher`.
+///
+/// The contract is that status's one source, and this command its one writer
+/// (accountingd's Cedar `sync-verbraucher` is held to vertragd's principal):
+/// accountingd charges the § 288 Abs. 2 BGB Verzugszins and the Abs. 5
+/// Pauschale from it. It states `null` for an unrecorded status, so a value
+/// written for an earlier contract on the MaLo is cleared rather than kept, and
+/// **the key carries the component**, so a later contract on the same MaLo
+/// sends its own status instead of colliding with the first one's key.
+#[must_use]
+pub fn verbraucher(
+    komp_id: Uuid,
+    malo_id: &str,
+    lf_mp_id: &str,
+    verbraucher: Option<bool>,
+) -> Task {
+    Task {
+        kind: TaskKind::Verbraucher,
+        komp_id: Some(komp_id),
+        payload: serde_json::json!({
+            "malo_id": malo_id,
+            "lf_mp_id": lf_mp_id,
+            "verbraucher": verbraucher,
+        }),
+        dedupe_key: format!("VERBRAUCHER:{malo_id}:{komp_id}"),
+    }
+}
+
 // ── Enqueue ───────────────────────────────────────────────────────────────────
 
 /// The outbox upstream names, one worker each.
@@ -507,31 +541,43 @@ pub fn command(tenant: &str, task: &Task) -> Result<Command> {
             "/api/v1/reading-orders".to_owned(),
             task.payload.clone(),
         ),
-        TaskKind::Abrechnungskonto => {
-            // `PUT /api/v1/accounts/{malo_id}?lf_mp_id=…`: both identifiers are
-            // addressing, not body fields. `UpdateAccountRequest` denies
+        TaskKind::Abrechnungskonto | TaskKind::Verbraucher => {
+            // `PUT /api/v1/accounts/{malo_id}[/verbraucher]?lf_mp_id=…`: both
+            // identifiers are addressing, not body fields — accountingd denies
             // unknown fields, so sending them would be a 422.
             let malo_id = task
                 .payload
                 .get("malo_id")
                 .and_then(serde_json::Value::as_str)
-                .context("Abrechnungskonto task carries no malo_id")?;
+                .context("accountingd task carries no malo_id")?;
             let lf_mp_id = task
                 .payload
                 .get("lf_mp_id")
                 .and_then(serde_json::Value::as_str)
-                .context("Abrechnungskonto task carries no lf_mp_id")?;
+                .context("accountingd task carries no lf_mp_id")?;
             anyhow::ensure!(
                 malo_id.chars().all(|c| c.is_ascii_alphanumeric())
                     && lf_mp_id.chars().all(|c| c.is_ascii_alphanumeric()),
-                "Abrechnungskonto identifiers must be alphanumeric \
+                "accountingd identifiers must be alphanumeric \
                  (malo_id={malo_id}, lf_mp_id={lf_mp_id})",
             );
+            let (pfad, body) = if task.kind == TaskKind::Verbraucher {
+                // `verbraucher` always: `null` clears a status an earlier
+                // contract on the MaLo recorded.
+                let v = task
+                    .payload
+                    .get("verbraucher")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                ("/verbraucher", serde_json::json!({ "verbraucher": v }))
+            } else {
+                ("", serde_json::json!({}))
+            };
             (
                 "accountingd",
                 CommandMethod::Put,
-                format!("/api/v1/accounts/{malo_id}?lf_mp_id={lf_mp_id}"),
-                serde_json::json!({}),
+                format!("/api/v1/accounts/{malo_id}{pfad}?lf_mp_id={lf_mp_id}"),
+                body,
             )
         }
     };
@@ -1159,5 +1205,37 @@ mod tests {
         assert_eq!(komp_of(&key("9800000000016", &task)), Some(komp));
         let konto = abrechnungskonto(komp, "51238696012", "9800000000016");
         assert_eq!(komp_of(&key("9800000000016", &konto)), None);
+    }
+
+    /// The account accountingd keeps reads its § 13 BGB status from the
+    /// contract: the status has its own route, and it states `null` when the
+    /// contract records none, so a stale value from an earlier contract on the
+    /// MaLo does not survive. The account command carries no status at all.
+    #[test]
+    fn the_verbraucher_command_states_the_contracts_status() {
+        let komp = Uuid::new_v4();
+        for status in [Some(true), Some(false), None] {
+            let cmd = command(
+                "9800000000016",
+                &verbraucher(komp, "51238696012", "9800000000016", status),
+            )
+            .expect("command");
+            assert_eq!(
+                cmd.path,
+                "/api/v1/accounts/51238696012/verbraucher?lf_mp_id=9800000000016"
+            );
+            assert_eq!(cmd.body, serde_json::json!({ "verbraucher": status }));
+        }
+        let konto = command(
+            "9800000000016",
+            &abrechnungskonto(komp, "51238696012", "9800000000016"),
+        )
+        .expect("command");
+        assert_eq!(konto.body, serde_json::json!({}));
+        assert_ne!(
+            verbraucher(komp, "51238696012", "9800000000016", None).dedupe_key,
+            verbraucher(Uuid::new_v4(), "51238696012", "9800000000016", None).dedupe_key,
+            "a later contract on the same MaLo sends its own status"
+        );
     }
 }

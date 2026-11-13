@@ -21,8 +21,10 @@ use url::Url;
 
 let base = Url::parse("https://verzeichnisdienst.example.de/")?;
 let client = DirectoryServiceClient::new_insecure(base)?;
-let (record, _cert, _sig) = client
-    .get_record("1234567890123", "controlMeasuresV1", 1)
+// The provider's EMT.API signature key, obtained from the issuing Sub-CA: the
+// record is returned only when its JWS verifies against it.
+let record = client
+    .get_record("1234567890123", "controlMeasuresV1", 1, &[provider_key])
     .await?;
 println!("{}", record.url);
 ```
@@ -44,7 +46,7 @@ callbacks and the directory client.
 |---|---|---|
 | `client` | | MaLo-Ident and directory HTTP clients (reqwest + rustls) |
 | `server` | | Axum router factories for server implementations |
-| `websocket` | | WebSocket subscription client (tokio-tungstenite) |
+| `websocket` | | WebSocket subscription client (tokio-tungstenite); every pushed record is verified like `get_record` (`directory::verify_record`), a refused one arrives as an `Err` |
 
 TR-03116-3 content signing (RFC 8785 canonical JSON) and JWS verification are
 always compiled: a request is signed exactly when the client has a signing key.

@@ -16,6 +16,7 @@
 //! | `get_zahlungsstatus`       | Payment status per MaLo-ID (settled / pending / overdue) |
 //! | `summarize_billing_month`  | Monthly billing volume and dispute rate per NB |
 //! | `list_exceptions`          | The two operator queues: undispatched answers and dead-lettered INVOICs |
+//! | `list_held_receipts`       | Invoices held `Offen`, each with the Prüfschritte a person has to state |
 //!
 //! ## Prompts
 //!
@@ -192,6 +193,35 @@ pub struct Disputes {
     /// How many receipts `disputes` holds.
     pub count: usize,
     /// At least 200 receipts matched: more may be disputed than were listed.
+    pub saturated: bool,
+}
+
+/// One invoice the Entscheidungsbaum left open.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct GehalteneRechnung {
+    /// The receipt — the id `POST /api/v1/receipts/{id}/feststellungen` takes.
+    pub id: String,
+    pub process_id: String,
+    pub pid: i16,
+    pub sender_mp_id: String,
+    pub rechnungsnummer: Option<String>,
+    /// `SG1 RFF+ACE` — the order a Leistungsnachweis names.
+    pub bestellung_ref: Option<String>,
+    /// The end of the Berlin day of the Zahlungsziel, when there is one.
+    pub frist: Option<String>,
+    /// The Prüfschritte the walk reached and no record answered: `pruefschritt`,
+    /// `ebene` (with the Positionsnummer on the Positionsebene) and `detail`.
+    #[schemars(with = "Vec<serde_json::Value>")]
+    pub offen: serde_json::Value,
+}
+
+/// `list_held_receipts`' answer.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct GehalteneRechnungen {
+    /// The nearest Zahlungsziel first.
+    pub gehalten: Vec<GehalteneRechnung>,
+    pub count: usize,
+    /// At least 200 receipts matched.
     pub saturated: bool,
 }
 
@@ -385,6 +415,83 @@ impl InvoicdMcpHandler {
         ))
     }
 
+    /// The invoices held `Offen`: each walk reached a Prüfschritt no record
+    /// answers, so no REMADV went out. Deciding one goes through REST — a
+    /// Leistungsnachweis (`POST /api/v1/leistungsnachweise`) or a statement on
+    /// the invoice (`POST /api/v1/receipts/{id}/feststellungen`) — which walks
+    /// it again in place.
+    #[tool(
+        description = "INVOIC receipts held Offen (the Entscheidungsbaum reached a Prüfschritt no record answers; no REMADV was sent), the nearest Zahlungsziel first, at most 200. `offen` lists each unanswered Prüfschritt with its Ebene/Positionsnummer and the missing fact. Prüfschritt 310 is answered by recording a Leistungsnachweis for `bestellung_ref` (POST /api/v1/leistungsnachweise); 310/320/330/80, and in the second round after a COMDIS 29001 (E_0266) Prüfschritt 1 `einwaende_entkraeftet`, by a statement on the receipt (POST /api/v1/receipts/{id}/feststellungen) — both walk the invoice again.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<GehalteneRechnungen>()
+    )]
+    async fn list_held_receipts(&self) -> Result<CallToolResult, McpError> {
+        const LIMIT: usize = 200;
+        let rows = sqlx::query_as::<
+            _,
+            (
+                uuid::Uuid,
+                uuid::Uuid,
+                i16,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<time::OffsetDateTime>,
+                serde_json::Value,
+            ),
+        >(
+            r"SELECT id, process_id, pid, sender_mp_id, rechnungsnummer, bestellung_ref,
+                     pay_by, offen
+                FROM invoic_receipts
+               WHERE tenant = $1 AND outcome = 'Offen' AND dispatched_at IS NULL
+               ORDER BY pay_by ASC NULLS LAST
+               LIMIT 200",
+        )
+        .bind(&self.state.tenant)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let gehalten: Vec<GehalteneRechnung> = rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    process_id,
+                    pid,
+                    sender_mp_id,
+                    rechnungsnummer,
+                    bestellung_ref,
+                    pay_by,
+                    offen,
+                )| {
+                    GehalteneRechnung {
+                        id: id.to_string(),
+                        process_id: process_id.to_string(),
+                        pid,
+                        sender_mp_id,
+                        rechnungsnummer,
+                        bestellung_ref,
+                        frist: pay_by.and_then(|t| {
+                            mako_fristen::berlin_date(t)
+                                .next_day()
+                                .map(mako_fristen::berlin_midnight)
+                                .map(rfc3339)
+                        }),
+                        offen,
+                    }
+                },
+            )
+            .collect();
+        Ok(CallToolResult::structured(
+            serde_json::to_value(GehalteneRechnungen {
+                count: gehalten.len(),
+                saturated: gehalten.len() >= LIMIT,
+                gehalten,
+            })
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
+    }
+
     /// Get plausibility check findings for an INVOIC receipt.
     ///
     /// Returns the structured `findings` array from the `invoic-checker`
@@ -439,7 +546,9 @@ impl InvoicdMcpHandler {
     /// Returns receipts where `pay_by < now() + 3 days` AND `dispatched_at IS NULL`.
     /// These are at risk of missing the payment deadline. Alert if non-empty.
     ///
-    /// Source: GPKE BK6-22-024; Allgemeine Festlegungen §7 Zahlungsziel.
+    /// The recipient answers by the Zahlungsziel the invoice states: GPKE
+    /// Teil 2 Kap. 3.3.2 Nr. 2 („spätester ÜT ist der 4. WT vor dem
+    /// Zahlungsziel"), WiM Teil 1 Kap. 3.6.3.8.2 („zum Zahlungsziel").
     #[tool(
         description = "List receipts approaching Zahlungsziel without dispatched REMADV (regulatory deadline risk). Returns up to 50 overdue entries.",
         annotations(read_only_hint = true, open_world_hint = false)
@@ -482,7 +591,7 @@ impl InvoicdMcpHandler {
             "overdue_count": items.len(),
             "items": items,
             "alert": !items.is_empty(),
-            "note": "REMADV dispatch must occur before pay_by to satisfy §7 Allgemeine Festlegungen",
+            "note": "the REMADV is due by the invoice's Zahlungsziel (pay_by) — for a Netznutzungsrechnung by the 4th Werktag before it (GPKE Teil 2 Kap. 3.3.2 Nr. 2)",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -885,6 +994,7 @@ impl ServerHandler for InvoicdMcpHandler {
              - `get_zahlungsstatus`      — payment status per MaLo-ID (settled/pending/overdue)\n\
              - `summarize_billing_month` — monthly volume + dispute rate per NB\n\
              - `list_exceptions`         — undispatched answers and dead-lettered INVOICs\n\
+             - `list_held_receipts`      — invoices held Offen and the Prüfschritte to state\n\
              \n\
              ## Prompts\n\
              - `resolve-dispute`          — guided dispute investigation workflow\n\

@@ -58,11 +58,11 @@
 //!
 //! # Regulatory basis
 //!
-//! - **GPKE Teil 4 (BK6-22-024 Anlage 1d)** §1.4 Stammdatenänderung
+//! - **GPKE Teil 4 (BK6-22-024 Anlage 1d)** Kap. 1.4 Stammdatenänderung
 //! - **UTILMD AHB Strom 2.1** ch. 3 (object → PID → LOC map)
 //! - **EBD 4.3** (Entscheidungsbaum-Diagramme und Codelisten, binding from
 //!   01.10.2026) E_0408/E_0409/E_0410/E_0412/E_0415/… (Rückmeldung A01/A02)
-//! - **APERAK AHB 1.1 §2.4.1** — Strom UTILMD 45-min APERAK Frist
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — Strom UTILMD 45-min APERAK Frist
 
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
@@ -841,20 +841,20 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                             data.pruefidentifikator
                         ))
                     })?;
-                let outbox = vec![PendingOutbox::new(
-                    "UTILMD",
+                let outbox = vec![PendingOutbox::typed(
                     data.sender.as_str(),
-                    serde_json::json!({
-                        "pid":          response_pid.as_u32(),
-                        "sender":       data.receiver.as_str(),
-                        "receiver":     data.sender.as_str(),
-                        "malo":         data.location_id.as_str(),
-                        "process_date": data.aenderungsdatum,
+                    &mako_engine::payload::UtilmdPayload {
+                        pid: response_pid.as_u32(),
+                        sender: data.receiver.as_str().to_owned(),
+                        receiver: Some(data.sender.as_str().to_owned()),
+                        malo: Some(data.location_id.as_str().to_owned()),
+                        process_date: Some(data.aenderungsdatum.clone()),
                         // `SG4 STS+E01` — the Qualitätsrückmeldung's code
                         // (`A01`/`A02`, EBD 4.3 Kap. 6.19.1 `E_0408` …); the
                         // renderer writes the tree the column names in DE 1131.
-                        "antwort_code": qualitaet.code(),
-                    }),
+                        antwort_code: Some(qualitaet.code().to_owned()),
+                        ..Default::default()
+                    },
                 )];
                 Ok(WorkflowOutput::with_outbox(
                     vec![StammdatenEvent::RueckmeldungGesendet {
@@ -881,16 +881,16 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                         "PID {pid} is not a Stammdatenänderung Änderung PID",
                     )));
                 };
-                let utilmd = PendingOutbox::new(
-                    "UTILMD",
+                let utilmd = PendingOutbox::typed(
                     receiver.as_str(),
-                    serde_json::json!({
-                        "pid":          pid.as_u32(),
-                        "sender":       sender.as_str(),
-                        "receiver":     receiver.as_str(),
-                        "malo":         location_id.as_str(),
-                        "process_date": aenderungsdatum,
-                    }),
+                    &mako_engine::payload::UtilmdPayload {
+                        pid: pid.as_u32(),
+                        sender: sender.as_str().to_owned(),
+                        receiver: Some(receiver.as_str().to_owned()),
+                        malo: Some(location_id.as_str().to_owned()),
+                        process_date: Some(aenderungsdatum.clone()),
+                        ..Default::default()
+                    },
                 );
                 Ok(WorkflowOutput::with_outbox(
                     vec![StammdatenEvent::AenderungGesendet {

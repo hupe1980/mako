@@ -523,23 +523,9 @@ async fn debtor(
     )
     .await
     .unwrap();
-    pg::update_account_tenanted(
-        pool,
-        &malo,
-        "LF1",
-        TENANT,
-        None,
-        pg::UpdateAccountRequest {
-            iban: None,
-            mandatsref: None,
-            abschlag_ct: None,
-            billing_day: None,
-            address: Default::default(),
-            verbraucher,
-        },
-    )
-    .await
-    .unwrap();
+    pg::set_verbraucher(pool, &malo, "LF1", TENANT, verbraucher)
+        .await
+        .unwrap();
     (malo, account_id)
 }
 
@@ -884,4 +870,88 @@ async fn a_plan_or_a_lock_holds_automatic_dunning_back_until_it_ends() {
         Some(1),
         "a live lock still holds"
     );
+}
+
+/// § 288 BGB reads one fact — the account's recorded Verbraucher status (§ 13
+/// BGB), synced from the vertragd contract — for both the rate and the
+/// Pauschale: a Verbraucher pays five Prozentpunkte über dem Basiszinssatz
+/// (Abs. 1) and no Pauschale, a business customer nine (Abs. 2) and the
+/// Pauschale (Abs. 5). An unrecorded status charges neither the Abs. 2 rate
+/// nor the Pauschale, because both rest on a fact nobody established.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_rate_and_the_pauschale_follow_the_recorded_verbraucher_status() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    for (status, basis, aufschlag, pauschale_ct) in [
+        (Some(true), "§288 Abs. 1 BGB", 5, 0),
+        (Some(false), "§288 Abs. 2 BGB", 9, pg::VERZUGSPAUSCHALE_CT),
+        (None, "§288 Abs. 1 BGB", 5, 0),
+    ] {
+        let (malo, id) = debtor(&pool, &ledger, status).await;
+        let row = pg::create_interest_charge(
+            &ledger,
+            &pool,
+            id,
+            TENANT,
+            &malo,
+            "LF1",
+            None,
+            100_000,
+            date!(2026 - 02 - 01),
+            date!(2026 - 05 - 01),
+        )
+        .await
+        .unwrap();
+        assert_eq!(row.legal_basis, basis, "{status:?}");
+        // The period lies inside one Basiszinssatz half-year, so one segment.
+        assert_eq!(
+            row.rate_segments[0]["rate_pct"],
+            (row.ecb_base_rate_pct + rust_decimal::Decimal::from(aufschlag))
+                .normalize()
+                .to_string(),
+            "{status:?}: Basiszinssatz + {aufschlag} Prozentpunkte"
+        );
+        mahnung(&pool, &ledger, &malo, id, 1, 0).await;
+        assert_eq!(
+            pauschale(&pool, &malo).await,
+            (pauschale_ct, 0),
+            "{status:?}"
+        );
+    }
+}
+
+/// The account's Verbraucher status is the vertragd contract's: the master-data
+/// PUT leaves it alone, and the contract's `null` clears it — a later contract
+/// on the MaLo that records no status must not inherit the earlier one's „kein
+/// Verbraucher".
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_stated_null_clears_the_verbraucher_status_and_master_data_keeps_it() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let (malo, id) = debtor(&pool, &ledger, Some(false)).await;
+    let status = || async {
+        sqlx::query_scalar::<_, Option<bool>>(
+            "SELECT verbraucher FROM accounts WHERE account_id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let req: pg::UpdateAccountRequest =
+        serde_json::from_value(serde_json::json!({ "abschlag_ct": 5_000 })).unwrap();
+    pg::update_account_tenanted(&pool, &malo, "LF1", TENANT, None, req)
+        .await
+        .unwrap();
+    assert_eq!(status().await, Some(false), "master data leaves the status");
+    let req: pg::SetVerbraucherRequest =
+        serde_json::from_value(serde_json::json!({ "verbraucher": null })).unwrap();
+    pg::set_verbraucher(&pool, &malo, "LF1", TENANT, req.verbraucher.flatten())
+        .await
+        .unwrap();
+    assert_eq!(status().await, None, "the contract's null clears it");
 }

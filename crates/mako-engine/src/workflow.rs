@@ -101,7 +101,7 @@ impl PendingDeadline {
 /// inside [`Process::run`].
 ///
 /// When the command must register a regulatory deadline (e.g. APERAK 45-min
-/// sending window per APERAK AHB 1.1 §2.4.1), add a [`PendingDeadline`].
+/// sending window per APERAK AHB 1.1 Kap. 2.4.1), add a [`PendingDeadline`].
 /// The engine injects the process-identity fields from [`CommandContext`] and
 /// persists the deadline atomically with the events.
 ///

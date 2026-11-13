@@ -118,7 +118,7 @@ CREATE INDEX ad_affiliate      ON anmeldung_decisions (tenant, initiator_is_affi
 
 -- ── NB Abmeldeanfragen: the Anmeldung decision that is waiting on an LFA ──────
 --
--- GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 makes the NB's answer
+-- GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 makes the NB's answer
 -- two-phase whenever the Marktlokation is already assigned: ask the incumbent
 -- LFA to release it (55010, Nr. 3), then decide (Nr. 5/6) once the LFA answers
 -- or its 09:00 window lapses. `E_0623` Prüfschritte 20-50 read that answer.
@@ -172,7 +172,7 @@ CREATE TABLE abmeldeanfragen (
 
 COMMENT ON TABLE abmeldeanfragen IS
     'NB two-phase Anmeldung decisions waiting on the LFA''s answer to a 55010. '
-    'Written when mako-pruefung answers AnfrageErforderlich (GPKE Teil 2 § 2.1.2 '
+    'Written when mako-pruefung answers AnfrageErforderlich (GPKE Teil 2 Kap. 2.1.2 '
     'Nr. 1 Prüfschritt 4); resolved when the LFA answers 55011/55012 or its 09:00 '
     'window lapses — which the Festlegung reads as a Zustimmung, not a timeout.';
 
@@ -223,7 +223,7 @@ CREATE INDEX eog_timer ON eog_activations (tenant, eog_seit)
 
 -- ── NB Neuanlage — the 60-Werktage Prüflauf (E_0608) ─────────────────────────
 --
--- GPKE Teil 2 § 2.2.2 and `E_0608` Prüfschritte 110 / 590: an Anmeldung whose
+-- GPKE Teil 2 Kap. 2.2.2 and `E_0608` Prüfschritte 110 / 590: an Anmeldung whose
 -- newly commissioned Marktlokation cannot yet be identified must **not** be
 -- refused. The NB re-checks it daily for 60 Werktage and only then answers
 -- `A07` / `A16` — which is why the answer window is „00:00 Uhr des 61. WT nach
@@ -417,16 +417,16 @@ CREATE INDEX pp_affiliate    ON process_projections (tenant, initiator_is_affili
 --   pending → cancelled  (withdrawn before execution; no IFTSTA)
 --
 -- Sources, verified against the documents rather than paraphrased:
---   * ORDERS AHB 1.1b §4.3 — Sperrauftrag 17115 / Anfrage Sperrung 17116 /
+--   * ORDERS AHB 1.1b Kap. 4.3 — Sperrauftrag 17115 / Anfrage Sperrung 17116 /
 --     Entsperrauftrag 17117: BGM+Z51/Z52, DTM+203 Ausführungsdatum XOR DTM+469
 --     frühestes Startdatum, IMD+7081 Z53/Z54 Arbeitszeit (Entsperrauftrag),
 --     SG2 NAD+Z24 Treffpunkt, SG29 FTX+ACB freier Text.
---   * IFTSTA AHB 2.1 §7.2 — Auftragsstatus 21039: SG15 STS+Z37 (Sperren) or
+--   * IFTSTA AHB 2.1 Kap. 7.2 — Auftragsstatus 21039: SG15 STS+Z37 (Sperren) or
 --     STS+Z38 (Entsperren), DE4405 Z13 gescheitert / Z14 erfolgreich / Z32
 --     abgelehnt, DE1131 EBD number, DE9013 Code des Prüfschritts, and
 --     DTM+293 Fertigstellungsdatum (Muss on Z14, and ≤ the document date).
 --
--- Three regulatory clocks run on one order, and GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2
+-- Three regulatory clocks run on one order, and GPKE Teil 2 Kap. 3.5.1.2 / 3.5.2.2
 -- (BK6-24-174) states all three:
 --
 --   1. The **ORDRSP** answering the order: „spätester ÜT ist der 1. WT nach dem
@@ -486,7 +486,7 @@ CREATE TABLE sperr_orders (
     -- SG29 FTX+ACB — the LF's free-text hints.
     hinweis             TEXT,
 
-    -- ── The regulatory execution window (GPKE Teil 2 § 3.5.1.2 Nr. 1) ────────
+    -- ── The regulatory execution window (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1) ────────
     -- „…spätestens innerhalb von 6 WT nach dem frühestmöglichen Sperrtermin."
     -- Computed on insert from COALESCE(ausfuehrung_am, fruehestens_am) with the
     -- BDEW-MaKo Werktag calendar; NULL when the order names no date at all
@@ -496,7 +496,7 @@ CREATE TABLE sperr_orders (
     -- window is reported once instead of on every sweep.
     ausfuehrung_eskaliert_at TIMESTAMPTZ,
 
-    -- ── The *Lieferant's* Vorlauffrist (GPKE Teil 2 § 3.5.1.2 Nr. 1) ─────────
+    -- ── The *Lieferant's* Vorlauffrist (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1) ─────────
     -- Two windows, and the DTM the order carries tells them apart: 6 WT before
     -- the frühestmöglicher Sperrtermin for a `DTM+469` order, **12 WT** before
     -- the Sperrtermin for a `DTM+203` one, which fixes date, time and place
@@ -517,7 +517,7 @@ CREATE TABLE sperr_orders (
     status              TEXT        NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'executed', 'failed', 'cancelled')),
     -- „Der NB führt bis zu zwei Sperrversuche innerhalb eines Sperrauftrags
-    -- durch" (GPKE Teil 2 § 3.5.1.2 Nr. 5). A first unsuccessful attempt is
+    -- durch" (GPKE Teil 2 Kap. 3.5.1.2 Nr. 5). A first unsuccessful attempt is
     -- recorded and the order stays `pending`: reporting Z13 gescheitert after
     -- one try ends a process the Festlegung says still owes a second visit.
     sperrversuche       INTEGER     NOT NULL DEFAULT 0
@@ -546,7 +546,7 @@ CREATE TABLE sperr_orders (
     -- `iftsta_dispatched_at`, and its attempts and last error are read off the
     -- command.
     -- „…spätester ÜT ist der 1. WT nach dem Abschluss des Sperrauftrags"
-    -- (GPKE Teil 2 § 3.5.1.2 Nr. 5 / § 3.5.2.2 Nr. 4). Set when the order turns
+    -- (GPKE Teil 2 Kap. 3.5.1.2 Nr. 5 / Kap. 3.5.2.2 Nr. 4). Set when the order turns
     -- terminal; an outstanding IFTSTA past this date is a missed Frist, not
     -- merely a queue backlog.
     iftsta_faellig_am   DATE,
@@ -565,7 +565,7 @@ CREATE TABLE sperr_orders (
 COMMENT ON TABLE sperr_orders IS
     'Sperr-/Entsperrauftrag execution queue (NB role). Fed by inbound ORDERS '
     '17115/17117 and by operators; drained by the field team. Terminal orders '
-    'are reported to the LF with IFTSTA 21039 (AHB 2.1 §7.2).';
+    'are reported to the LF with IFTSTA 21039 (AHB 2.1 Kap. 7.2).';
 
 COMMENT ON COLUMN sperr_orders.iftsta_dispatched_at IS
     'When the IFTSTA 21039 command reached makod. NULL on a terminal order means '
@@ -578,7 +578,7 @@ CREATE INDEX so_malo_status   ON sperr_orders (malo_id, status);
 -- fixed and the earliest date into the one ordering key a dispatcher works from.
 CREATE INDEX so_pending_due   ON sperr_orders (tenant, COALESCE(ausfuehrung_am, fruehestens_am))
     WHERE status = 'pending';
--- The § 3.5.1.2 Nr. 1 execution-window sweep: which pending orders are past the
+-- The Kap. 3.5.1.2 Nr. 1 execution-window sweep: which pending orders are past the
 -- 6-Werktage deadline the Festlegung sets, soonest first.
 -- Orders the LF sent too late — the operator queue, and the number a
 -- Lieferantenrahmenvertrag review asks about.

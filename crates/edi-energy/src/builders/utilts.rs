@@ -600,7 +600,7 @@ impl<S, R> UtiltsBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
@@ -608,7 +608,7 @@ impl<S, R> UtiltsBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
 

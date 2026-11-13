@@ -10,3 +10,4 @@ mod mabis;
 mod mcp_round_trips;
 mod router_builds;
 mod schema_enum_guard;
+mod zahlungsziel;

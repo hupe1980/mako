@@ -44,6 +44,35 @@ struct OrdersBuilderInner {
     contact: Option<(String, Vec<(String, String)>)>,
     /// `SG29` positions, numbered from 1 in order.
     positions: Vec<OrdersPosition>,
+    /// `DTM+273` Betrachtungszeitintervall, `CCYYMM` (format `610`).
+    zeitintervall: Option<String>,
+    /// `IMD` DE 7009 beside the coded DE 7081 — `IMD++Z14+Z06` Lieferrichtung
+    /// Erzeugung on 17134.
+    merkmal_detail: Option<String>,
+    /// A second coded `IMD++<7081>` — `Z66`/`Z67` on 17134.
+    zweites_merkmal: Option<String>,
+    /// `FTX+AFH++<code>:<EBD>` Reklamation (17211).
+    reklamation: Option<(String, String)>,
+    /// `LOC` in the receiver's `SG2` — `107` Bilanzierungsgebiet / `231`
+    /// Regelzone.
+    receiver_location: Option<(String, String)>,
+    /// `SG3 RFF` in the Meldepunkt's `SG2` — `Z18` Marktlokation, `Z20`
+    /// Tranche, `Z59` …
+    location_references: Vec<(String, String)>,
+    /// Further `SG2 NAD` parties after the Meldepunkt, each with its `SG3 RFF`s.
+    parties: Vec<OrdersParty>,
+}
+
+/// A further `SG2 NAD` party of an ORDERS — `DEB` MSB der Marktlokation,
+/// `SU` Lieferant, `Z31` ÜNB — with the `SG3 RFF` references of its group.
+#[derive(Debug, Clone, Default)]
+pub struct OrdersParty {
+    /// `NAD` DE 3035.
+    pub qualifier: String,
+    /// `NAD` DE 3039 — the MP-ID.
+    pub mp_id: String,
+    /// `SG3 RFF` as `(1153, 1154)`.
+    pub referenzen: Vec<(String, String)>,
 }
 
 /// One `SG29` position of an ORDERS.
@@ -60,8 +89,17 @@ pub struct OrdersPosition {
     /// `SG30 CCI+++<7037>` — the Geräteart (17009).
     pub geraeteart: Option<String>,
     /// `SG34 RFF` references as `(1153, 1154)` — `Z03` Positionsnummer des
-    /// Angebots (17001), `Z09` Gerätenummer (17009).
+    /// Angebots (17001), `Z09` Gerätenummer (17009), `AUU` Version (`MaBiS`).
     pub referenzen: Vec<(String, String)>,
+    /// `LIN` DE 1229 — the Handlungsbedarf (`Z19` Erforderliches Produkt der
+    /// Messlokation on 17011).
+    pub handlung: Option<String>,
+    /// `PIA+5+<code>:Z11` — a Produkt-Code (17011).
+    pub produkt: Option<String>,
+    /// `SG30 CCI+<7059>` — a coded Merkmal (Profilgruppe on 17201).
+    pub klasse: Option<String>,
+    /// `SG38 LOC` as `(3227, 3225)` — `172` Meldepunkt, `237` Bilanzkreis.
+    pub orte: Vec<(String, String)>,
 }
 
 /// Fluent builder for `ORDERS` (Purchase Order) messages.
@@ -119,6 +157,13 @@ impl OrdersBuilder<Unset, Unset> {
                 positionszeitraum: None,
                 contact: None,
                 positions: Vec::new(),
+                zeitintervall: None,
+                merkmal_detail: None,
+                zweites_merkmal: None,
+                reklamation: None,
+                receiver_location: None,
+                location_references: Vec::new(),
+                parties: Vec::new(),
             },
         }
     }
@@ -218,7 +263,7 @@ impl<S, R> OrdersBuilder<S, R> {
 
     /// Set `DTM+203` Ausführungsdatum (`CCYYMMDDHHMM`).
     ///
-    /// **Muss** on ORDERS 17007/17008 (ORDERS AHB 1.1b §4.15): on a Bestellung
+    /// **Muss** on ORDERS 17007/17008 (ORDERS AHB 1.1b Kap. 4.15): on a Bestellung
     /// it is when the delivery is to start, on an Abbestellung when it stops.
     pub fn ausfuehrungsdatum(mut self, ccyymmddhhmm: impl Into<String>) -> Self {
         self.inner.ausfuehrungsdatum = Some(ccyymmddhhmm.into());
@@ -285,6 +330,63 @@ impl<S, R> OrdersBuilder<S, R> {
         self
     }
 
+    /// Set `DTM+273` Betrachtungszeitintervall — a month `CCYYMM`, format
+    /// `610` (`MaBiS` Anforderungen, ORDERS AHB 1.1b Kap. 5).
+    pub fn zeitintervall(mut self, ccyymm: impl Into<String>) -> Self {
+        self.inner.zeitintervall = Some(ccyymm.into());
+        self
+    }
+
+    /// Set the `IMD` DE 7009 beside the coded DE 7081 — `IMD++Z14+Z06` on
+    /// 17134 (ORDERS AHB 1.1b Kap. 4.17.1).
+    pub fn merkmal_detail(mut self, code: impl Into<String>) -> Self {
+        self.inner.merkmal_detail = Some(code.into());
+        self
+    }
+
+    /// A second coded `IMD++<7081>` after the first (`Z66`/`Z67` on 17134).
+    pub fn zweites_merkmal(mut self, code: impl Into<String>) -> Self {
+        self.inner.zweites_merkmal = Some(code.into());
+        self
+    }
+
+    /// Set `FTX+AFH++<code>:<EBD>` — the Reklamation of a Profil (17211,
+    /// ORDERS AHB 1.1b Kap. 5.5).
+    pub fn reklamation(mut self, code: impl Into<String>, ebd: impl Into<String>) -> Self {
+        self.inner.reklamation = Some((code.into(), ebd.into()));
+        self
+    }
+
+    /// Set the `LOC` of the receiver's `SG2` — `107` Bilanzierungsgebiet,
+    /// `231` Regelzone (17203).
+    pub fn receiver_location(
+        mut self,
+        qualifier: impl Into<String>,
+        id: impl Into<String>,
+    ) -> Self {
+        self.inner.receiver_location = Some((qualifier.into(), id.into()));
+        self
+    }
+
+    /// Add an `SG3 RFF` to the Meldepunkt's `SG2` — `Z18` Marktlokation on
+    /// 17011.
+    pub fn location_reference(
+        mut self,
+        qualifier: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.inner
+            .location_references
+            .push((qualifier.into(), value.into()));
+        self
+    }
+
+    /// Add a further `SG2 NAD` party after the Meldepunkt.
+    pub fn party(mut self, party: OrdersParty) -> Self {
+        self.inner.parties.push(party);
+        self
+    }
+
     /// Append an `SG29` position; positions are numbered `LIN+1`, `LIN+2`, …
     pub fn position(mut self, position: OrdersPosition) -> Self {
         self.inner.positions.push(position);
@@ -294,7 +396,14 @@ impl<S, R> OrdersBuilder<S, R> {
     /// The `SG29` positions, numbered from 1.
     fn emit_positions<W: std::io::Write>(&self, w: &mut Writer<W>) -> Result<(), Error> {
         for (n, position) in self.inner.positions.iter().enumerate() {
-            emit_seg!(w, "LIN", &(n + 1).to_string());
+            if let Some(h) = &position.handlung {
+                emit_seg!(w, "LIN", &(n + 1).to_string(), h);
+            } else {
+                emit_seg!(w, "LIN", &(n + 1).to_string());
+            }
+            if let Some(code) = &position.produkt {
+                emit_comp!(w, "PIA", ["5"], [code, "Z11"]);
+            }
             if let Some(code) = &position.merkmal {
                 emit_comp!(w, "IMD", [""], [code]);
             }
@@ -305,10 +414,69 @@ impl<S, R> OrdersBuilder<S, R> {
                     ["7", &super::ccyymmddhhmm_utc("7", instant)?, "303"]
                 );
             }
+            if let Some(klasse) = &position.klasse {
+                emit_seg!(w, "CCI", klasse);
+            }
             if let Some(art) = &position.geraeteart {
                 emit_comp!(w, "CCI", [""], [""], [art]);
             }
             for (q, v) in &position.referenzen {
+                emit_comp!(w, "RFF", [q, v]);
+            }
+            for (q, id) in &position.orte {
+                emit_seg!(w, "LOC", q, id);
+            }
+        }
+        Ok(())
+    }
+
+    /// `SG2`: the sender (with its `SG5`), the receiver (with its `LOC`),
+    /// the Meldepunkt (with its `SG3 RFF`s) and every further party.
+    fn emit_parties<W: std::io::Write>(&self, w: &mut Writer<W>) -> Result<(), Error> {
+        // ── SG2: parties + location ──────────────────────────────────────────
+        if let Some(id) = &self.inner.sender_id {
+            emit_comp!(
+                w,
+                "NAD",
+                ["MS"],
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
+            );
+            // `SG5` Ansprechpartner belongs to the sender's `SG2`.
+            if let Some((name, channels)) = &self.inner.contact {
+                emit_comp!(w, "CTA", ["IC"], ["", name]);
+                for (address, code) in channels {
+                    emit_comp!(w, "COM", [address, code]);
+                }
+            }
+        }
+        if let Some(id) = &self.inner.receiver_id {
+            emit_comp!(
+                w,
+                "NAD",
+                ["MR"],
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
+            );
+            if let Some((q, loc)) = &self.inner.receiver_location {
+                emit_seg!(w, "LOC", q, loc);
+            }
+        }
+        if let Some(loc) = &self.inner.location {
+            // `SG2` Meldepunkt: the `NAD+DP` opens the group the `LOC+172`
+            // belongs to (ORDERS MIG Nr 00028/00029), and its `SG3 RFF`s follow.
+            emit_seg!(w, "NAD", "DP");
+            emit_seg!(w, "LOC", "172", loc);
+            for (q, v) in &self.inner.location_references {
+                emit_comp!(w, "RFF", [q, v]);
+            }
+        }
+        for party in &self.inner.parties {
+            emit_comp!(
+                w,
+                "NAD",
+                [&party.qualifier],
+                [&party.mp_id, "", super::agency_for(None, &party.mp_id)?]
+            );
+            for (q, v) in &party.referenzen {
                 emit_comp!(w, "RFF", [q, v]);
             }
         }
@@ -357,10 +525,25 @@ impl<S, R> OrdersBuilder<S, R> {
                 ["203", &super::ccyymmddhhmm_utc("203", ausf)?, "303"]
             );
         }
+        // `DTM+273` Betrachtungszeitintervall — format `610` `CCYYMM`.
+        if let Some(monat) = &self.inner.zeitintervall {
+            emit_comp!(w, "DTM", ["273", monat, "610"]);
+        }
         // Abonnement — `IMD++<7081>`. DE 7081 sits in C272 (element 2), which
-        // is why DE 7077 (element 1) stays empty.
+        // is why DE 7077 (element 1) stays empty; DE 7009 is C273 (element 3).
         if let Some(code) = &self.inner.merkmal {
+            if let Some(detail) = &self.inner.merkmal_detail {
+                emit_comp!(w, "IMD", [""], [code], [detail]);
+            } else {
+                emit_comp!(w, "IMD", [""], [code]);
+            }
+        }
+        if let Some(code) = &self.inner.zweites_merkmal {
             emit_comp!(w, "IMD", [""], [code]);
+        }
+        // `FTX+AFH++<code>:<EBD>` — the Reklamation (Nr 00014), after the IMDs.
+        if let Some((code, ebd)) = &self.inner.reklamation {
+            emit_comp!(w, "FTX", ["AFH"], [""], [code, ebd]);
         }
         // Free-form item description (7077 = A), for the non-ESA order PIDs.
         if self.inner.merkmal.is_none() && self.inner.item_description.is_some() {
@@ -375,36 +558,7 @@ impl<S, R> OrdersBuilder<S, R> {
         if let Some(pid) = self.inner.pruefidentifikator {
             emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
         }
-        // ── SG2: parties + location ──────────────────────────────────────────
-        if let Some(id) = &self.inner.sender_id {
-            emit_comp!(
-                w,
-                "NAD",
-                ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
-            );
-            // `SG5` Ansprechpartner belongs to the sender's `SG2`.
-            if let Some((name, channels)) = &self.inner.contact {
-                emit_comp!(w, "CTA", ["IC"], ["", name]);
-                for (address, code) in channels {
-                    emit_comp!(w, "COM", [address, code]);
-                }
-            }
-        }
-        if let Some(id) = &self.inner.receiver_id {
-            emit_comp!(
-                w,
-                "NAD",
-                ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
-            );
-        }
-        if let Some(loc) = &self.inner.location {
-            // `SG2` Meldepunkt: the `NAD+DP` opens the group the `LOC+172`
-            // belongs to (ORDERS MIG Nr 00028/00029).
-            emit_seg!(w, "NAD", "DP");
-            emit_seg!(w, "LOC", "172", loc);
-        }
+        self.emit_parties(&mut w)?;
         // ── SG29: Positionsdaten — the Zeitraum of a Wertanfrage ─────────────
         if let Some((beginn, ende)) = &self.inner.positionszeitraum {
             emit_seg!(w, "LIN", "1");

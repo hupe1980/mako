@@ -21,10 +21,13 @@
 // Re-export all directory types so callers can `use energy_api::directory::*`.
 pub use crate::models::directory::*;
 
+mod verify;
+pub use verify::{TrustedSigners, verify_notification, verify_record};
+
 #[cfg(feature = "client")]
 mod client;
 #[cfg(feature = "client")]
-pub use client::DirectoryServiceClient;
+pub use client::{DirectoryServiceClient, MAX_REDIRECTS};
 
 #[cfg(feature = "websocket")]
 mod ws;

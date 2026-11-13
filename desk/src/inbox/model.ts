@@ -5,7 +5,7 @@
 import type { Anker } from "../data/agent";
 import type { GeparkteBuchung } from "../data/gen/accountingd";
 import type { Pruefposten } from "../data/gen/billingd";
-import type { Disput } from "../data/gen/invoicd";
+import type { Disput, GehalteneRechnung } from "../data/gen/invoicd";
 import type { Freigabe } from "../data/gen/processd";
 import type { Instant } from "../format/brands";
 
@@ -39,6 +39,8 @@ export interface Eintrag {
   disput?: Disput;
   pruefposten?: Pruefposten;
   geparkt?: GeparkteBuchung;
+  /** An INVOIC whose Entscheidungsbaum stopped at Prüfschritte no record answers. */
+  gehalten?: GehalteneRechnung;
 }
 
 /** Every source Heute reads, in no particular order. */
@@ -50,6 +52,7 @@ export const QUELLE_IDS = [
   "korrekturbedarf",
   "ableseauftraege",
   "dispute",
+  "gehalten",
   "pruefposten",
   "geparkt",
   "hinweise",
@@ -70,6 +73,8 @@ export const OHNE_WARUM: Partial<Record<QuelleId, string>> = {
     "Der Assistent liest keine Ableseaufträge; zur MaLo nennte er Prozesse, nicht den Auftrag.",
   pruefposten:
     "Der Assistent liest die Rechnungsprüfung nicht; zur MaLo nennte er nicht, warum die Rechnung angehalten ist.",
+  gehalten:
+    "Der Assistent liest die offenen Prüfschritte nicht; warum die Rechnung gehalten ist, steht schon in der Zeile.",
 };
 
 /** The Anker „Warum?" asks about for an item, or null where it is not offered. */

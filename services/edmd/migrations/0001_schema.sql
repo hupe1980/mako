@@ -692,7 +692,7 @@ CREATE TABLE delivery_surveillance (
     -- dark while the others keep arriving.
     obis_code         TEXT        NOT NULL DEFAULT '',
     -- `SG1 RFF+AGI` on the delivering MSCONS 13027 — the Belegnummer of the
-    -- ORDERS 17007 that ordered the values (MSCONS AHB 3.2 §11.2 hint [574]).
+    -- ORDERS 17007 that ordered the values (MSCONS AHB 3.2 Kap. 11.2 hint [574]).
     -- Empty for TYP1, which has no subscription, and for a Typ-2 delivery whose
     -- sender omitted the Muss.
     --

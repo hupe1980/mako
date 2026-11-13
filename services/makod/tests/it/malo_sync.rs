@@ -117,7 +117,7 @@ async fn harness() -> Harness {
     let marktd: Shared = Arc::default();
     let url = spawn_marktd(Arc::clone(&marktd)).await;
     let store = SlateDbStore::open_in_memory().await.expect("store");
-    let cache = SlateDbMaloCache::new(store);
+    let cache = SlateDbMaloCache::new(store, mako_engine::ids::TenantId::from_party_id(TENANT));
     let registry = Arc::new(
         MpIdRegistry::from_config(&[PartyConfig {
             mp_id: TENANT.to_owned(),
@@ -135,7 +135,6 @@ async fn harness() -> Harness {
         "http://makod:8080/webhooks/marktd",
         Some(SecretString::from(SECRET)),
         cache.clone(),
-        TENANT,
         registry,
     ));
     Harness {
@@ -147,7 +146,7 @@ async fn harness() -> Harness {
 
 impl Harness {
     async fn cached_msb(&self) -> Option<String> {
-        let rec = self.cache.get(TENANT, MALO).await.expect("cache read")?;
+        let rec = self.cache.get(MALO).await.expect("cache read")?;
         rec.data_market_location
             .data_market_location_measuring_point_operators
             .and_then(|v| v.first().map(|p| p.market_partner_id.to_string()))
@@ -290,5 +289,5 @@ async fn a_record_marktd_no_longer_has_is_dropped() {
     h.sync.backfill().await.expect("backfill");
     h.set_record(None);
     assert_eq!(h.deliver(SECRET).await, StatusCode::NO_CONTENT);
-    assert!(h.cache.get(TENANT, MALO).await.expect("read").is_none());
+    assert!(h.cache.get(MALO).await.expect("read").is_none());
 }

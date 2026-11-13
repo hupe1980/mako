@@ -246,6 +246,16 @@ CREATE TABLE versorgungsvertraege (
     vertragsende            DATE
                         CHECK (vertragsende IS NULL OR vertragsbeginn <= vertragsende),
     kundentyp               TEXT        NOT NULL,
+    -- § 13 BGB: whether the Kunde concludes this contract as a Verbraucher —
+    -- „zu Zwecken …, die überwiegend weder ihrer gewerblichen noch ihrer
+    -- selbständigen beruflichen Tätigkeit zugerechnet werden können". A fact
+    -- about the Rechtsgeschäft, so it lives on the contract and is neither
+    -- `kundentyp` (a segment label) nor `kunden.haushaltskunde` (§ 3 Nr. 57
+    -- EnWG, a consumption threshold). accountingd receives it with the
+    -- Abrechnungskonto command and charges the § 288 Abs. 2 BGB rate and the
+    -- Abs. 5 Pauschale only on `false`. NULL = not recorded, never read as
+    -- either answer.
+    verbraucher             BOOLEAN,
     -- § 41 EnWG Preisgarantie
     preisgarantie_bis       DATE,
     preisgarantie           JSONB,      -- BO4E Preisgarantie COM (synced with preisgarantie_bis)

@@ -49,7 +49,7 @@
 //!
 //! - **BDEW GPKE Teil 2** — Beendigung der Zuordnung
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK AHB 1.1 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — technical acknowledgement, **45 Minuten** on a
 //!   weekday for a UTILMD. A separate clock from the business answer window,
 //!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
 //!   dem ÜT.
@@ -104,11 +104,37 @@ pub const ANTWORT_PIDS: &[u32] = &[55_011, 55_012];
 /// share a label.
 pub const NB_ANFRAGE_WINDOW_LABEL: &str = "gpke-beendigung-zuordnung-lfa-antwort";
 
+/// Deadline label for the Information über existierende Zuordnung (55036) the
+/// NB owes the LFN — 07:00 Uhr des 1. WT nach dem ÜT der Anmeldung (GPKE Teil 2
+/// Kap. 2.1.2 Nr. 2, S. 20).
+///
+/// It is owed exactly where this Anfrage is: Prüfschritt 4 sends the NB to Nr. 2
+/// whenever the Marktlokation „zum Zuordnungsbeginn einem LF zugeordnet" is, and
+/// Nr. 3 is „Parallel zu Nr. 2" (S. 19 f.). So the Anfrage carries the window,
+/// and the Meldung's own door discharges it.
+pub const MELDEPFLICHT_INFORMATION_LABEL: &str = "gpke-beendigung-zuordnung-meldepflicht-55036";
+
+/// Deadline label for the Beendigung der Zuordnung (55037) the NB owes the LFA
+/// — „unverzüglich nach dem ÜZ von Nr. 5, jedoch spätester ÜZ ist 12:00 Uhr
+/// des 1. WT nach dem ÜT von Nr. 1" (Nr. 10, S. 22 f.). Owed once the LFA
+/// released the Marktlokation and is not the LFN.
+pub const MELDEPFLICHT_BEENDIGUNG_LABEL: &str = "gpke-beendigung-zuordnung-meldepflicht-55037";
+
+/// The NB-side deadline label of the Meldepflicht `pid` this Anfrage carries.
+#[must_use]
+pub fn meldepflicht_label(pid: u32) -> Option<&'static str> {
+    match pid {
+        crate::zuordnungsmeldung::INFORMATION_PID => Some(MELDEPFLICHT_INFORMATION_LABEL),
+        crate::zuordnungsmeldung::BEENDIGUNG_PID => Some(MELDEPFLICHT_BEENDIGUNG_LABEL),
+        _ => None,
+    }
+}
+
 /// Deadline label for the **business** answer window — 09:00 Uhr des 1. WT nach
 /// dem ÜT (GPKE Teil 2 Kap. 2.1.2), resolved by `mako_fristen::antwort`.
 ///
 /// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.1
-/// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
+/// Kap. 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
 pub const BEENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL: &str =
     "gpke-beendigung-zuordnung-antwortfrist";
 
@@ -185,6 +211,21 @@ pub enum BeendigungZuordnungEvent {
         /// The Anmeldung this Anfrage serves, so `processd` can resume the
         /// right decision when the answer lands.
         anmeldung_process_id: String,
+        /// The Neulieferant. A Beendigung (55037) is owed to the LFA only when
+        /// it is not also the LFN.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lfn_mp_id: Option<String>,
+    },
+    /// **NB side.** A Meldung this Anfrage carries the window of went out.
+    MeldungGesendet {
+        /// 55036 or 55037.
+        pid: u32,
+    },
+    /// **NB side.** A Meldepflicht's window closed with its Meldung owed and
+    /// unsent.
+    MeldepflichtVerstrichen {
+        /// The window's label.
+        label: Box<str>,
     },
     /// **NB side.** The LFA answered (55011 / 55012), or the 09:00 window
     /// lapsed and the Festlegung answered for it.
@@ -217,6 +258,8 @@ impl EventPayload for BeendigungZuordnungEvent {
             Self::DeadlineExpired { .. } => "BeendigungZuordnungDeadlineExpired",
             Self::AnfrageGesendet { .. } => "BeendigungZuordnungAnfrageGesendet",
             Self::LfaAntwortErhalten { .. } => "BeendigungZuordnungLfaAntwortErhalten",
+            Self::MeldungGesendet { .. } => "BeendigungZuordnungMeldungGesendet",
+            Self::MeldepflichtVerstrichen { .. } => "BeendigungZuordnungMeldepflichtVerstrichen",
         }
     }
 
@@ -249,7 +292,12 @@ impl EventPayload for BeendigungZuordnungEvent {
                 pid: Some(p.as_u32()),
                 message_ref: None,
             }),
-            Self::Beendet | Self::DeadlineExpired { .. } => None,
+            // The Meldung is its own process's message; this records only that
+            // it went out.
+            Self::Beendet
+            | Self::DeadlineExpired { .. }
+            | Self::MeldungGesendet { .. }
+            | Self::MeldepflichtVerstrichen { .. } => None,
             // `ValidationPassed` is emitted only beside the APERAK 312
             // Anerkennungsmeldung `handle` queues for it, `Rejected` only beside
             // the APERAK 313 Verarbeitbarkeitsfehlermeldung; an APERAK carries
@@ -341,6 +389,9 @@ pub enum BeendigungZuordnungState {
         data: BeendigungZuordnungData,
         /// The Anmeldung this Anfrage serves.
         anmeldung_process_id: String,
+        /// The Meldepflichten this Anfrage carries.
+        #[serde(default)]
+        meldepflichten: Meldepflichten,
     },
     /// **NB side.** Terminal: the LFA answered, or the window lapsed and the
     /// Festlegung answered for it.
@@ -353,6 +404,9 @@ pub enum BeendigungZuordnungState {
         zustimmung: bool,
         /// The `E_0624` code, `None` on silence.
         antwortcode: Option<String>,
+        /// The Meldepflichten this Anfrage carries.
+        #[serde(default)]
+        meldepflichten: Meldepflichten,
     },
     /// A window lapsed while the process still waited in `offen`, and no
     /// Festlegung gives that lapse an outcome.
@@ -367,6 +421,52 @@ pub enum BeendigungZuordnungState {
         /// The state the process was waiting in.
         offen: Box<BeendigungZuordnungState>,
     },
+}
+
+/// The Meldepflichten of the SD Lieferbeginn the NB-side Anfrage carries: who
+/// the LFN is, and which Meldungen have gone out.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Meldepflichten {
+    /// The Neulieferant, when the Anfrage named it.
+    pub lfn_mp_id: Option<String>,
+    /// The Prüfidentifikatoren of the Meldungen sent.
+    pub gesendet: Vec<u32>,
+}
+
+impl BeendigungZuordnungState {
+    /// Whether the Meldung `pid` is owed and unsent in this state.
+    ///
+    /// 55036 is owed from the Anfrage on — the two share their condition
+    /// (Prüfschritt 4, S. 19 f.). 55037 is owed once the LFA released the
+    /// Marktlokation, silence included, unless the LFA is also the LFN: then
+    /// nothing ends.
+    #[must_use]
+    pub fn meldung_offen(&self, pid: u32) -> bool {
+        let (m, freigegeben, lfa) = match self {
+            Self::AnfrageGesendet {
+                meldepflichten,
+                data,
+                ..
+            } => (meldepflichten, false, &data.receiver),
+            Self::LfaAntwort {
+                meldepflichten,
+                zustimmung,
+                data,
+                ..
+            } => (meldepflichten, *zustimmung, &data.receiver),
+            _ => return false,
+        };
+        if m.gesendet.contains(&pid) {
+            return false;
+        }
+        match pid {
+            crate::zuordnungsmeldung::INFORMATION_PID => true,
+            crate::zuordnungsmeldung::BEENDIGUNG_PID => {
+                freigegeben && m.lfn_mp_id.as_deref() != Some(lfa.as_str())
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Whether a Beendigung der Zuordnung still holds its Marktlokation against a new one.
@@ -520,6 +620,17 @@ pub enum BeendigungZuordnungCommand {
     AntwortfristAbgelaufen,
     /// Record that the Zuordnung has ended.
     BeendenBestaetigen,
+    /// **NB side.** The Meldung `pid` (55036 / 55037) went out from its own
+    /// door; the window this Anfrage carries for it is discharged.
+    MeldungGesendet {
+        /// 55036 or 55037.
+        pid: u32,
+    },
+    /// **NB side.** A Meldepflicht window fired.
+    MeldepflichtVerstrichen {
+        /// The window's label.
+        label: Box<str>,
+    },
     /// A registered deadline fired; close the process.
     TimeoutExpired {
         /// Unique deadline ID.
@@ -536,6 +647,18 @@ impl CommandPayload for BeendigungZuordnungCommand {}
 /// GPKE Anfrage-zur-Beendigung-der-Zuordnung workflow (55010 inbound, 55011/55012
 /// outbound).
 pub struct GpkeBeendigungZuordnungWorkflow;
+
+/// Is the Meldepflicht window `label` still open — its Meldung owed and unsent?
+fn meldepflicht_offen(label: &str, state: &BeendigungZuordnungState) -> bool {
+    let pid = if label == MELDEPFLICHT_INFORMATION_LABEL {
+        crate::zuordnungsmeldung::INFORMATION_PID
+    } else if label == MELDEPFLICHT_BEENDIGUNG_LABEL {
+        crate::zuordnungsmeldung::BEENDIGUNG_PID
+    } else {
+        return false;
+    };
+    state.meldung_offen(pid)
+}
 
 /// Is the LFA's own answer window still open — the answer owed
 /// (`Eingegangen`, `ValidationPassed`) and not yet lapsed?
@@ -554,6 +677,8 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
     const DEADLINE_LABELS: &'static [&'static str] = &[
         BEENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
         NB_ANFRAGE_WINDOW_LABEL,
+        MELDEPFLICHT_INFORMATION_LABEL,
+        MELDEPFLICHT_BEENDIGUNG_LABEL,
     ];
 
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
@@ -571,6 +696,13 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
             // which records a Frist breach.
             (NB_ANFRAGE_WINDOW_LABEL, BeendigungZuordnungState::AnfrageGesendet { .. }) => {
                 Some(BeendigungZuordnungCommand::AntwortfristAbgelaufen)
+            }
+            (label @ (MELDEPFLICHT_INFORMATION_LABEL | MELDEPFLICHT_BEENDIGUNG_LABEL), _)
+                if meldepflicht_offen(label, state) =>
+            {
+                Some(BeendigungZuordnungCommand::MeldepflichtVerstrichen {
+                    label: label.into(),
+                })
             }
             _ => None,
         }
@@ -642,6 +774,7 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                 process_date,
                 vorgangsnummer,
                 anmeldung_process_id,
+                lfn_mp_id,
                 ..
             } => BeendigungZuordnungState::AnfrageGesendet {
                 data: BeendigungZuordnungData {
@@ -655,6 +788,10 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                     vorgangsnummer: Some(vorgangsnummer.clone()),
                 },
                 anmeldung_process_id: anmeldung_process_id.clone(),
+                meldepflichten: Meldepflichten {
+                    lfn_mp_id: lfn_mp_id.clone(),
+                    gesendet: Vec::new(),
+                },
             },
             BeendigungZuordnungEvent::LfaAntwortErhalten {
                 zustimmung,
@@ -664,14 +801,48 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                 BeendigungZuordnungState::AnfrageGesendet {
                     data,
                     anmeldung_process_id,
+                    meldepflichten,
                 } => BeendigungZuordnungState::LfaAntwort {
                     data,
                     anmeldung_process_id,
                     zustimmung: *zustimmung,
                     antwortcode: antwortcode.clone(),
+                    meldepflichten,
                 },
                 other => other,
             },
+            BeendigungZuordnungEvent::MeldungGesendet { pid } => match state {
+                BeendigungZuordnungState::AnfrageGesendet {
+                    data,
+                    anmeldung_process_id,
+                    mut meldepflichten,
+                } => {
+                    meldepflichten.gesendet.push(*pid);
+                    BeendigungZuordnungState::AnfrageGesendet {
+                        data,
+                        anmeldung_process_id,
+                        meldepflichten,
+                    }
+                }
+                BeendigungZuordnungState::LfaAntwort {
+                    data,
+                    anmeldung_process_id,
+                    zustimmung,
+                    antwortcode,
+                    mut meldepflichten,
+                } => {
+                    meldepflichten.gesendet.push(*pid);
+                    BeendigungZuordnungState::LfaAntwort {
+                        data,
+                        anmeldung_process_id,
+                        zustimmung,
+                        antwortcode,
+                        meldepflichten,
+                    }
+                }
+                other => other,
+            },
+            BeendigungZuordnungEvent::MeldepflichtVerstrichen { .. } => state,
             BeendigungZuordnungEvent::Rejected { reason } => BeendigungZuordnungState::Rejected {
                 reason: reason.clone(),
             },
@@ -736,7 +907,7 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                     events.push(BeendigungZuordnungEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // APERAK BGM+312 (Anerkennungsmeldung) — APERAK AHB 1.1 §2.4.
+                    // APERAK BGM+312 (Anerkennungsmeldung) — APERAK AHB 1.1 Kap. 2.4.
                     let outbox = vec![
                         // The business notification. `processd`'s LF module
                         // decides this process, and it only ever sees a message
@@ -765,7 +936,7 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                     events.push(BeendigungZuordnungEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // APERAK BGM+313 — APERAK AHB 1.1 §2.1.1.
+                    // APERAK BGM+313 — APERAK AHB 1.1 Kap. 2.1.1.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -847,33 +1018,30 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                 // `SG5 LOC+Z21` when the Vorgang is about a Tranche. Both carry
                 // a MaLo-ID, so the qualifier is the only thing that says which
                 // object the LFA is being asked to release.
-                let mut payload = serde_json::json!({
-                    "pid":               ANFRAGE_PID,
-                    "sender":            sender.as_str(),
-                    "receiver":          receiver.as_str(),
-                    "malo":              location_id.as_str(),
-                    "process_date":      process_date,
-                    "vorgangsnummer":    vorgangsnummer,
-                    "document_code":     "E02",
-                    "lokationstyp":      if tranche { "Z21" } else { "Z16" },
-                });
-                let obj = payload.as_object_mut().expect("json! built an object");
                 // `SG12 NAD+Z09` „Kunde des LF" — Muss on a verbrauchende oder
                 // ruhende Marktlokation (UTILMD AHB Strom Bedingung [279]),
                 // „Kundenname aus Anmeldung Lieferant neu" ([572]). It is how
                 // the LFA tells an Einzug from a Wechsel, which `E_0624`
-                // Prüfschritt 30 branches on.
-                if let Some(name) = kunde_name.filter(|n| !n.is_empty()) {
-                    obj.insert("kunde_name".into(), name.into());
-                }
-                // `SG12 NAD+VY` — the Neulieferant (Bedingung [567]).
-                if let Some(lfn) = lfn_mp_id.filter(|m| !m.is_empty()) {
-                    obj.insert(
-                        "beteiligte_marktpartner".into(),
-                        serde_json::Value::Array(vec![serde_json::Value::String(lfn)]),
-                    );
-                }
-                let outbox = vec![PendingOutbox::new("UTILMD", receiver.as_str(), payload)];
+                // Prüfschritt 30 branches on. `SG12 NAD+VY` — the Neulieferant
+                // (Bedingung [567]).
+                let lfn_fuer_meldung = lfn_mp_id.clone().filter(|m| !m.is_empty());
+                let payload = mako_engine::payload::UtilmdPayload {
+                    pid: ANFRAGE_PID,
+                    sender: sender.as_str().to_owned(),
+                    receiver: Some(receiver.as_str().to_owned()),
+                    malo: Some(location_id.as_str().to_owned()),
+                    process_date: Some(process_date.clone()),
+                    vorgangsnummer: Some(vorgangsnummer.clone()),
+                    document_code: Some("E02".to_owned()),
+                    lokationstyp: Some(if tranche { "Z21" } else { "Z16" }.to_owned()),
+                    kunde_name: kunde_name.filter(|n| !n.is_empty()),
+                    beteiligte_marktpartner: lfn_mp_id
+                        .filter(|m| !m.is_empty())
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                };
+                let outbox = vec![PendingOutbox::typed(receiver.as_str(), &payload)];
                 Ok(WorkflowOutput::with_outbox(
                     vec![BeendigungZuordnungEvent::AnfrageGesendet {
                         pid: ANFRAGE_PID,
@@ -883,6 +1051,7 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                         process_date,
                         vorgangsnummer,
                         anmeldung_process_id,
+                        lfn_mp_id: lfn_fuer_meldung,
                     }],
                     outbox,
                 ))
@@ -898,6 +1067,7 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                 let BeendigungZuordnungState::AnfrageGesendet {
                     data,
                     anmeldung_process_id,
+                    ..
                 } = state
                 else {
                     // „Nach Ablauf der Frist eingehende Antworten sind für den
@@ -939,6 +1109,7 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                 let BeendigungZuordnungState::AnfrageGesendet {
                     data,
                     anmeldung_process_id,
+                    ..
                 } = state
                 else {
                     // Already answered — the scheduler and the inbound message
@@ -967,6 +1138,22 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                         true,
                     )],
                 ))
+            }
+
+            BeendigungZuordnungCommand::MeldungGesendet { pid } => {
+                if !state.meldung_offen(pid) {
+                    // Not owed here, or already recorded: a redelivered door
+                    // call changes nothing.
+                    return Ok(vec![].into());
+                }
+                Ok(vec![BeendigungZuordnungEvent::MeldungGesendet { pid }].into())
+            }
+
+            BeendigungZuordnungCommand::MeldepflichtVerstrichen { label } => {
+                if !meldepflicht_offen(&label, state) {
+                    return Ok(vec![].into());
+                }
+                Ok(vec![BeendigungZuordnungEvent::MeldepflichtVerstrichen { label }].into())
             }
 
             BeendigungZuordnungCommand::BeendenBestaetigen => {
@@ -1150,6 +1337,7 @@ mod tests {
             process_date: "20260101".to_owned(),
             vorgangsnummer: "V1".to_owned(),
             anmeldung_process_id: "p".to_owned(),
+            lfn_mp_id: None,
         };
         assert_eq!(
             anfrage.verlauf(),
@@ -1291,6 +1479,127 @@ mod nb_initiator_tests {
             .fold(BeendigungZuordnungState::New, |st, e| {
                 GpkeBeendigungZuordnungWorkflow::apply(st, e)
             })
+    }
+
+    fn deadline(label: &str) -> mako_engine::deadline::Deadline {
+        mako_engine::deadline::Deadline::new(
+            mako_engine::ids::StreamId::new("test-stream-anfrage"),
+            mako_engine::ids::ProcessId::new(),
+            mako_engine::ids::TenantId::from_party_id("9900357000004"),
+            mako_engine::version::WorkflowId::new(WORKFLOW_NAME, "FV2026-10-01"),
+            label,
+            time::OffsetDateTime::UNIX_EPOCH,
+        )
+    }
+
+    fn run(
+        state: BeendigungZuordnungState,
+        cmd: BeendigungZuordnungCommand,
+    ) -> (BeendigungZuordnungState, Vec<BeendigungZuordnungEvent>) {
+        let out = GpkeBeendigungZuordnungWorkflow::handle(&state, cmd).expect("handled");
+        let next = out
+            .events
+            .iter()
+            .fold(state, GpkeBeendigungZuordnungWorkflow::apply);
+        (next, out.events)
+    }
+
+    /// GPKE Teil 2 Kap. 2.1.2 (S. 19 f.): the Information über existierende
+    /// Zuordnung (Nr. 2) is owed exactly where this Anfrage (Nr. 3, „Parallel zu
+    /// Nr. 2") is. Its window fires while it is unsent and is discharged by
+    /// the Meldung door.
+    #[test]
+    fn the_information_is_owed_from_the_anfrage_until_it_is_sent() {
+        let state = after_anfrage();
+        let cmd = GpkeBeendigungZuordnungWorkflow::on_deadline(
+            &deadline(MELDEPFLICHT_INFORMATION_LABEL),
+            &state,
+        )
+        .expect("owed and unsent");
+        let (state, events) = run(state, cmd);
+        assert!(matches!(
+            events[..],
+            [BeendigungZuordnungEvent::MeldepflichtVerstrichen { .. }]
+        ));
+        let (state, _) = run(
+            state,
+            BeendigungZuordnungCommand::MeldungGesendet { pid: 55_036 },
+        );
+        assert!(
+            GpkeBeendigungZuordnungWorkflow::on_deadline(
+                &deadline(MELDEPFLICHT_INFORMATION_LABEL),
+                &state
+            )
+            .is_none()
+        );
+        // A redelivered door call records nothing twice.
+        assert!(
+            run(
+                state,
+                BeendigungZuordnungCommand::MeldungGesendet { pid: 55_036 }
+            )
+            .1
+            .is_empty()
+        );
+    }
+
+    /// Nr. 10 (S. 22 f.): the Beendigung der Zuordnung (55037) is owed once
+    /// the LFA released the Marktlokation — silence included — and never to an
+    /// LFA that is also the LFN.
+    #[test]
+    fn the_beendigung_is_owed_once_the_lfa_released() {
+        let waiting = after_anfrage();
+        assert!(!waiting.meldung_offen(55_037), "nothing is released yet");
+        let (released, _) = run(waiting, BeendigungZuordnungCommand::AntwortfristAbgelaufen);
+        assert!(released.meldung_offen(55_037));
+        assert!(
+            GpkeBeendigungZuordnungWorkflow::on_deadline(
+                &deadline(MELDEPFLICHT_BEENDIGUNG_LABEL),
+                &released
+            )
+            .is_some()
+        );
+        let (sent, _) = run(
+            released,
+            BeendigungZuordnungCommand::MeldungGesendet { pid: 55_037 },
+        );
+        assert!(!sent.meldung_offen(55_037));
+
+        let BeendigungZuordnungCommand::Anfragen {
+            sender,
+            receiver,
+            location_id,
+            tranche,
+            process_date,
+            vorgangsnummer,
+            anmeldung_process_id,
+            kunde_name,
+            ..
+        } = anfragen()
+        else {
+            unreachable!("an Anfrage")
+        };
+        let selbst = BeendigungZuordnungCommand::Anfragen {
+            lfn_mp_id: Some(receiver.as_str().to_owned()),
+            sender,
+            receiver,
+            location_id,
+            tranche,
+            process_date,
+            vorgangsnummer,
+            anmeldung_process_id,
+            kunde_name,
+        };
+        let (state, _) = run(BeendigungZuordnungState::New, selbst);
+        let (state, _) = run(state, BeendigungZuordnungCommand::AntwortfristAbgelaufen);
+        assert!(
+            !state.meldung_offen(55_037),
+            "LFA and LFN are one: nothing ends"
+        );
+        assert!(
+            state.meldung_offen(55_036),
+            "„auch dann …, sofern LFA und LFN identisch sind\""
+        );
     }
 
     /// The NB-initiated arm: a 55010 carrying the SG12 parties `[279]` requires.

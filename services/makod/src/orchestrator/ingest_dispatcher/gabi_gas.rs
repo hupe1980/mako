@@ -65,15 +65,38 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
-            // ── GaBi Gas MMMA — Gas Allokationsliste MSCONS (PID 13013) ──────
+            // ── GaBi Gas MMMA — ORDERS 17110 (GNB) and MSCONS 13013 (LF) ─────
             // PID 13013: NB delivers Gas MMM Allokationsliste to LF — resume the
-            // GpkeAllokationslisteWorkflow process spawned when LF sent ORDERS 17110.
-            //
-            // The PidRouter routes 13013 to "gabi-gas-mmma" (registered by
-            // GaBiGasModule).  Since gabi-gas-mmma has no independent workflow
-            // implementation yet, we delegate the MSCONS delivery to the existing
-            // GpkeAllokationslisteWorkflow using the same resume path as PID 13014.
+            // GpkeAllokationslisteWorkflow process spawned when LF sent ORDERS
+            // 17110, on the same resume path as PID 13014.
             "gabi-gas-mmma" => match pid {
+                // ORDERS 17110 — the LF's Anforderung reaches the GNB. One
+                // process per Anforderung, keyed on its `BGM` DE 1004, which
+                // the 19110 echoes (ORDRSP AHB 1.1b Kap. 4.2, `[525]`). No
+                // window: the answer is „Unverzüglich", „Nur bei Ablehnung"
+                // (MMM AWH V2.1 Kap. 6.2.2 Nr. 2, S. 17).
+                17110 => {
+                    let cmd = adapters::gabi_gas_mmma_registry().dispatch(raw, &fv)?;
+                    let mako_gabi_gas::MmmaCommand::ReceiveAnforderung { anforderung, .. } = &cmd
+                    else {
+                        unreachable!("the adapter builds ReceiveAnforderung");
+                    };
+                    let key = mako_gabi_gas::mmma::anforderung_key(
+                        anforderung.lf.as_str(),
+                        &anforderung.dokumentennummer,
+                    );
+                    self.spawn_or_resume_keyed::<mako_gabi_gas::GaBiGasMmmaWorkflow>(
+                        inbound,
+                        &key,
+                        mako_gabi_gas::MMMA_WORKFLOW_NAME,
+                        cmd,
+                        &fv,
+                        &[],
+                        &[],
+                        Some(|s: &mako_gabi_gas::MmmaState| !s.is_terminal()),
+                    )
+                    .await
+                }
                 13013 => {
                     let cmd =
                         adapters::gpke_allokationsliste_mscons_registry().dispatch(raw, &fv)?;

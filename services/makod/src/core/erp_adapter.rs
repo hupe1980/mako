@@ -766,7 +766,7 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
         "GabiNominationCurtailed" => ErpEventType::GabiNominationCurtailed,
         "GabiNominationRejected" => ErpEventType::GabiNominationRejected,
         "GabiNomresMissing" => ErpEventType::GabiNomresMissing,
-        // GPKE Teil 2 § 2.1.2 Nr. 4 — the LFA released the Marktlokation, or
+        // GPKE Teil 2 Kap. 2.1.2 Nr. 4 — the LFA released the Marktlokation, or
         // its window lapsed and the Festlegung released it for them.
         "LfaAntwortAufAbmeldeanfrage" => ErpEventType::AbmeldeanfrageBeantwortet,
         // A process whose Marktnachricht could not be delivered; the worker

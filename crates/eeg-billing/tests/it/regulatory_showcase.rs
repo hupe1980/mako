@@ -9,7 +9,7 @@
 //!
 //! - **EEG 2023**: Erneuerbare-Energien-Gesetz (BGBl. I Nr. 28, 2023)
 //!   [§§20–50 feed-in settlement, §52 sanctions, §51 negative prices]
-//! - **KWKG 2023**: Kraft-Wärme-Kopplungsgesetz (BGBl. I Nr. 59, 2023)
+//! - **KWKG**: Kraft-Wärme-Kopplungsgesetz vom 21. Dezember 2015 (BGBl. I S. 2498), zuletzt geändert durch Art. 24 G v. 18.12.2025 (BGBl. 2025 I Nr. 347)
 //!   [§7 KWK-Zuschlag rates, §8 Förderdauer]
 //! - **BNetzA AHB / Strom**: quarterly Vergütungssätze publications
 //!
@@ -608,10 +608,10 @@ fn s51_reduces_the_marktpraemie_for_negative_price_intervals() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §7 KWKG 2023 — KWK-Zuschlag
+// §7 KWKG — KWK-Zuschlag
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §7 KWKG 2023 — Small CHP ≤50 kW_el: KWK-Zuschlag 8.0 ct/kWh.
+/// §7 KWKG — Small CHP ≤50 kW_el: KWK-Zuschlag 8.0 ct/kWh.
 /// January: 7,000 kWh (70% capacity factor, 720h).
 /// Payment: 7,000 × 8.0 / 100 = 560 EUR
 #[test]
@@ -630,7 +630,7 @@ fn s7_kwkg_small_chp_leq50kw() {
     assert_eq!(out.settlement_eur, Some(d("560.00")));
 }
 
-/// §7 KWKG 2023 — Large CHP >2 MW, hour-limit approaching.
+/// §7 KWKG — Large CHP >2 MW, hour-limit approaching.
 /// Plant has 29,900 kWh paid. Max 30,000 kWh. This period: 400 kWh.
 /// Only 100 kWh eligible (prorated last period). Status = FoerderungBeendet.
 #[test]
@@ -650,7 +650,7 @@ fn s7_kwkg_large_chp_limit_reached_prorated() {
     assert_eq!(out.settlement_eur, Some(d("3.1"))); // 100 × 3.1 / 100
 }
 
-/// §7 KWKG 2023 — Förderung already fully exhausted: EUR 0, FoerderungBeendet.
+/// §7 KWKG — Förderung already fully exhausted: EUR 0, FoerderungBeendet.
 #[test]
 fn s7_kwkg_already_exhausted() {
     let out = calculate_settlement(&SettleInput {
@@ -668,7 +668,7 @@ fn s7_kwkg_already_exhausted() {
     assert_eq!(out.eligible_kwh, Some(Decimal::ZERO));
 }
 
-/// §7 KWKG 2023 — Year-limited plant (≤2 MW, no hour-limit): full period.
+/// §7 KWKG — Year-limited plant (≤2 MW, no hour-limit): full period.
 #[test]
 fn s7_kwkg_year_limited_no_hour_limit() {
     let out = calculate_settlement(&SettleInput {
@@ -794,7 +794,7 @@ fn kwkg_abs4_caps_the_calendar_year() {
     );
 }
 
-/// §8 KWKG 2023 — Maximum kWh formula: rated_kW × full_load_hours.
+/// §8 KWKG — Maximum kWh formula: rated_kW × full_load_hours.
 /// Critical: NOT just full_load_hours (a common implementation bug).
 #[test]
 fn kwk_max_kwh_correct_formula() {
@@ -1193,7 +1193,7 @@ fn positions_flexibilitaet_two_lines() {
     assert_eq!(out.settlement_eur, Some(d("14400.00")));
 }
 
-/// KWKG: single position with §7 KWKG 2023 legal basis.
+/// KWKG: single position with §7 KWKG legal basis.
 #[test]
 fn positions_kwkg_single_line() {
     let out = calculate_settlement(&SettleInput {
@@ -1207,7 +1207,7 @@ fn positions_kwkg_single_line() {
         ..SettleInput::default()
     });
     assert_eq!(out.positions.len(), 1);
-    assert_eq!(out.positions[0].legal_basis, "§7 KWKG 2023");
+    assert_eq!(out.positions[0].legal_basis, "§7 KWKG");
     assert_eq!(out.positions[0].kwh, d("7000"));
     assert_eq!(out.positions[0].eur, d("560.00"));
 }
@@ -3166,7 +3166,7 @@ fn sect52_two_simultaneous_violations_pflichtzahlung() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// KWKG 2023 — Hour limit enforcement
+// KWKG — Hour limit enforcement
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// KWKG §8 — year limit: when cumulative kWh approaches max, eligible kWh is capped.

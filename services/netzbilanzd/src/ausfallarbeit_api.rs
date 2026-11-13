@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use axum::Extension;
 use mako_redispatch::ausfallarbeit as engine;
+use mako_redispatch::{bilarem, fristen};
 use mako_service::{ApiError, ApiResult, Json, oidc::Claims};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -146,29 +147,75 @@ pub struct NichtfluktuierendIntervall {
     pub p_bean: Option<Decimal>,
 }
 
+/// The TR a compute request settles, as `BilAReM` Kap. 3.2.1 / 3.3 decides
+/// its Abrechnungsvariante. Every field but the Festlegung is required: a
+/// missing fact would otherwise pick the variant.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrZuordnung {
+    /// The Europe/Berlin day of the Maßnahme. A variant changes only at a
+    /// Jahreswechsel, so a Maßnahme across one is two requests.
+    pub massnahme_tag: time::Date,
+    /// The SR's Bilanzierungsmodell.
+    pub modell: bilarem::Bilanzierungsmodell,
+    /// The TR was in Pauschal-Abrechnung at the Bekanntmachung of BK6-23-241.
+    pub pauschal_bei_bekanntmachung: bool,
+    /// Viertelstundenscharfe Erfassung (`"keine"` or `{"seit": "YYYY-MM-DD"}`).
+    pub viertelstundenerfassung: bilarem::Viertelstundenerfassung,
+    /// Geeignete Wetterdaten are measured at the TR, which closes the
+    /// vereinfachte Spitzabrechnung to it (Kap. 3.2.1).
+    pub wetterdaten_an_der_tr_gemessen: bool,
+    /// The Anlagenbetreiber's latest Festlegung; absent where none was made,
+    /// which Kap. 3.2.1 answers with its own default.
+    #[serde(default)]
+    pub festlegung: Option<bilarem::Verfahrensfestlegung>,
+}
+
 /// Compute request — tagged by BilAReM Kap.-3 Abrechnungsvariante.
 ///
 /// Fluktuierende variants (Kap. 3.2) are defined for negativen Redispatch
 /// only; the nicht-fluktuierenden variants (Kap. 3.3) carry the direction.
+/// Every variant names its TR, and the request is refused when the variant
+/// is not the one Kap. 3.2.1 / 3.3 assigns it.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "verfahren", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AusfallarbeitComputeRequest {
     /// Kap. 3.2.2.1/3.2.2.2 (and 3.2.3.2 with `kf` = `KF_Bin`).
-    WindSpitz { intervalle: Vec<WindSpitzIntervall> },
-    /// Kap. 3.2.2.3 (grandfathered TR only, until 31.12.2028).
+    WindSpitz {
+        /// The TR settled.
+        tr: TrZuordnung,
+        /// Who supplied the Wetterdaten the series rests on.
+        wetterdaten: fristen::Wetterdatenherkunft,
+        /// The quarter-hour series.
+        intervalle: Vec<WindSpitzIntervall>,
+    },
+    /// Kap. 3.2.2.3.
     WindPauschal {
+        /// The TR settled.
+        tr: TrZuordnung,
+        /// The quarter-hour series.
         intervalle: Vec<WindPauschalIntervall>,
     },
     /// Kap. 3.2.4.1/3.2.4.2.
     SolarSpitz {
+        /// The TR settled.
+        tr: TrZuordnung,
+        /// Who supplied the Wetterdaten the series rests on.
+        wetterdaten: fristen::Wetterdatenherkunft,
+        /// The quarter-hour series.
         intervalle: Vec<SolarSpitzIntervall>,
     },
-    /// Kap. 3.2.4.3 (grandfathered TR only, until 31.12.2028).
+    /// Kap. 3.2.4.3.
     SolarPauschal {
+        /// The TR settled.
+        tr: TrZuordnung,
+        /// The quarter-hour series.
         intervalle: Vec<SolarPauschalIntervall>,
     },
     /// Kap. 3.3.1 (Planwertmodell; Prognosemodell on request).
     NichtfluktuierendSpitz {
+        /// The TR settled.
+        tr: TrZuordnung,
         /// Positiver or negativer Redispatch.
         richtung: engine::RedispatchRichtung,
         /// The quarter-hour series.
@@ -176,6 +223,8 @@ pub enum AusfallarbeitComputeRequest {
     },
     /// Kap. 3.3.2 (Prognosemodell default).
     NichtfluktuierendPauschal {
+        /// The TR settled.
+        tr: TrZuordnung,
         /// Positiver or negativer Redispatch.
         richtung: engine::RedispatchRichtung,
         /// The quarter-hour series.
@@ -186,6 +235,10 @@ pub enum AusfallarbeitComputeRequest {
 /// Per-Viertelstunde Ausfallarbeit plus totals.
 #[derive(Debug, Serialize)]
 pub struct AusfallarbeitComputeResponse {
+    /// The Abrechnungsvariante Kap. 3.2.1 / 3.3 assigns the TR — for a
+    /// `wind_spitz` or `solar_spitz` request, which of Spitz and vereinfachte
+    /// Spitzabrechnung the series was formed under.
+    pub abrechnungsverfahren: bilarem::Abrechnungsverfahren,
     /// `W_A,i` per Viertelstunde in kWh (BilAReM sign convention: ≥ 0 for
     /// negativen, ≤ 0 for positiven Redispatch).
     pub w_a_kwh: Vec<Decimal>,
@@ -217,7 +270,7 @@ pub struct UeberbauungResponse {
 fn compute(req: &AusfallarbeitComputeRequest) -> Result<Vec<Decimal>, String> {
     use engine::RedispatchRichtung::Negativ;
     let series: Vec<Decimal> = match req {
-        AusfallarbeitComputeRequest::WindSpitz { intervalle } => intervalle
+        AusfallarbeitComputeRequest::WindSpitz { intervalle, .. } => intervalle
             .iter()
             .map(|iv| {
                 engine::wind_spitz(&engine::WindSpitzInput {
@@ -230,7 +283,7 @@ fn compute(req: &AusfallarbeitComputeRequest) -> Result<Vec<Decimal>, String> {
                 })
             })
             .collect(),
-        AusfallarbeitComputeRequest::WindPauschal { intervalle } => intervalle
+        AusfallarbeitComputeRequest::WindPauschal { intervalle, .. } => intervalle
             .iter()
             .map(|iv| {
                 engine::wind_pauschal(
@@ -242,7 +295,7 @@ fn compute(req: &AusfallarbeitComputeRequest) -> Result<Vec<Decimal>, String> {
                 )
             })
             .collect(),
-        AusfallarbeitComputeRequest::SolarSpitz { intervalle } => intervalle
+        AusfallarbeitComputeRequest::SolarSpitz { intervalle, .. } => intervalle
             .iter()
             .map(|iv| {
                 engine::solar_spitz(&engine::SolarSpitzInput {
@@ -258,7 +311,7 @@ fn compute(req: &AusfallarbeitComputeRequest) -> Result<Vec<Decimal>, String> {
                 .map_err(|e| e.to_string())
             })
             .collect::<Result<_, _>>()?,
-        AusfallarbeitComputeRequest::SolarPauschal { intervalle } => intervalle
+        AusfallarbeitComputeRequest::SolarPauschal { intervalle, .. } => intervalle
             .iter()
             .map(|iv| {
                 engine::solar_pauschal(
@@ -274,6 +327,7 @@ fn compute(req: &AusfallarbeitComputeRequest) -> Result<Vec<Decimal>, String> {
         AusfallarbeitComputeRequest::NichtfluktuierendSpitz {
             richtung,
             intervalle,
+            ..
         } => intervalle
             .iter()
             .map(|iv| {
@@ -287,6 +341,7 @@ fn compute(req: &AusfallarbeitComputeRequest) -> Result<Vec<Decimal>, String> {
         AusfallarbeitComputeRequest::NichtfluktuierendPauschal {
             richtung,
             intervalle,
+            ..
         } => intervalle
             .iter()
             .map(|iv| {
@@ -302,12 +357,70 @@ fn compute(req: &AusfallarbeitComputeRequest) -> Result<Vec<Decimal>, String> {
     Ok(series)
 }
 
+/// The Abrechnungsvariante `BilAReM` Kap. 3.2.1 / 3.3 assigns the request's
+/// TR, refused when the request's variant is not it.
+///
+/// For a Spitz variant of a fluctuating TR the Wetterdaten basis is judged
+/// against the Kap.-3.2.1 Frist on `heute`: a delivery after it is replaced
+/// by the ANB's Ersatzwerte, and those exist only once it has passed.
+fn verfahren_pruefen(
+    req: &AusfallarbeitComputeRequest,
+    heute: time::Date,
+) -> Result<bilarem::Abrechnungsverfahren, String> {
+    use AusfallarbeitComputeRequest as R;
+    use bilarem::{Abrechnungsverfahren as A, Erzeugungsart as E};
+    let (tr, erzeugung, zugelassen, wetterdaten): (_, _, &[A], _) = match req {
+        R::WindSpitz {
+            tr, wetterdaten, ..
+        }
+        | R::SolarSpitz {
+            tr, wetterdaten, ..
+        } => (
+            tr,
+            E::Fluktuierend,
+            &[A::Spitz, A::VereinfachteSpitz],
+            Some(*wetterdaten),
+        ),
+        R::WindPauschal { tr, .. } | R::SolarPauschal { tr, .. } => {
+            (tr, E::Fluktuierend, &[A::Pauschal], None)
+        }
+        R::NichtfluktuierendSpitz { tr, .. } => (tr, E::NichtFluktuierend, &[A::Spitz], None),
+        R::NichtfluktuierendPauschal { tr, .. } => (tr, E::NichtFluktuierend, &[A::Pauschal], None),
+    };
+    let merkmale = bilarem::TrMerkmale {
+        erzeugung,
+        modell: tr.modell,
+        pauschal_bei_bekanntmachung: tr.pauschal_bei_bekanntmachung,
+        viertelstundenerfassung: tr.viertelstundenerfassung,
+        wetterdaten_an_der_tr_gemessen: tr.wetterdaten_an_der_tr_gemessen,
+    };
+    let verfahren = bilarem::abrechnungsverfahren(&merkmale, tr.festlegung, tr.massnahme_tag)
+        .map_err(|e| e.to_string())?;
+    if !zugelassen.contains(&verfahren) {
+        return Err(format!(
+            "die TR ist am {} der Abrechnungsvariante {verfahren:?} zugeordnet, nicht der \
+             angefragten (BilAReM Kap. 3.2.1 / 3.3)",
+            tr.massnahme_tag
+        ));
+    }
+    if let Some(herkunft) = wetterdaten {
+        fristen::wetterdaten_zulaessig(
+            herkunft,
+            tr.massnahme_tag,
+            heute,
+            mako_fristen::HolidayCalendar::BdewMaKo,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(verfahren)
+}
+
 fn interval_count(req: &AusfallarbeitComputeRequest) -> usize {
     match req {
-        AusfallarbeitComputeRequest::WindSpitz { intervalle } => intervalle.len(),
-        AusfallarbeitComputeRequest::WindPauschal { intervalle } => intervalle.len(),
-        AusfallarbeitComputeRequest::SolarSpitz { intervalle } => intervalle.len(),
-        AusfallarbeitComputeRequest::SolarPauschal { intervalle } => intervalle.len(),
+        AusfallarbeitComputeRequest::WindSpitz { intervalle, .. } => intervalle.len(),
+        AusfallarbeitComputeRequest::WindPauschal { intervalle, .. } => intervalle.len(),
+        AusfallarbeitComputeRequest::SolarSpitz { intervalle, .. } => intervalle.len(),
+        AusfallarbeitComputeRequest::SolarPauschal { intervalle, .. } => intervalle.len(),
         AusfallarbeitComputeRequest::NichtfluktuierendSpitz { intervalle, .. }
         | AusfallarbeitComputeRequest::NichtfluktuierendPauschal { intervalle, .. } => {
             intervalle.len()
@@ -322,7 +435,9 @@ fn interval_count(req: &AusfallarbeitComputeRequest) -> usize {
 /// # Errors
 ///
 /// - `400` for an empty or oversized interval series.
-/// - `422` when a variant's inputs do not describe a computable Ausfallarbeit.
+/// - `422` when the variant is not the one `BilAReM` Kap. 3.2.1 / 3.3 assigns
+///   the TR, when its Wetterdaten basis misses the Kap.-3.2.1 Frist, or when
+///   its inputs do not describe a computable Ausfallarbeit.
 pub async fn post_ausfallarbeit_compute(
     claims: Claims,
     Extension(cedar): Authz,
@@ -339,9 +454,15 @@ pub async fn post_ausfallarbeit_compute(
             "too many intervalle: {n} (max {MAX_INTERVALLE}, about one year of quarter-hours)"
         )));
     }
+    let abrechnungsverfahren =
+        verfahren_pruefen(&req, mako_fristen::heute()).map_err(ApiError::Unprocessable)?;
     let w_a_kwh = compute(&req).map_err(ApiError::Unprocessable)?;
     let summe_kwh = w_a_kwh.iter().copied().sum();
-    Ok(Json(AusfallarbeitComputeResponse { w_a_kwh, summe_kwh }))
+    Ok(Json(AusfallarbeitComputeResponse {
+        abrechnungsverfahren,
+        w_a_kwh,
+        summe_kwh,
+    }))
 }
 
 /// `POST /api/v1/redispatch/ausfallarbeit/ueberbauung`
@@ -548,6 +669,12 @@ mod tests {
     fn wind_spitz_request_computes_series_and_sum() {
         let req: AusfallarbeitComputeRequest = serde_json::from_value(serde_json::json!({
             "verfahren": "wind_spitz",
+            "tr": {
+                "massnahme_tag": "2027-01-15", "modell": "prognosemodell",
+                "pauschal_bei_bekanntmachung": false, "wetterdaten_an_der_tr_gemessen": false,
+                "viertelstundenerfassung": { "seit": "2020-01-01" }
+            },
+            "wetterdaten": { "anlagenbetreiber": "2027-02-01" },
             "intervalle": [
                 {
                     "limitierung": { "fall": "aufforderung", "p_ist": "380", "vorgabe": "400" },
@@ -566,10 +693,117 @@ mod tests {
         assert_eq!(series, vec![dec(350.0), dec(150.0)]);
     }
 
+    /// A Pauschal request for the TR on `tag`, fluctuating (Wind) or not.
+    fn pauschal(
+        fluktuierend: bool,
+        tag: &str,
+        erfassung: serde_json::Value,
+    ) -> AusfallarbeitComputeRequest {
+        let tr = serde_json::json!({
+            "massnahme_tag": tag, "modell": "prognosemodell",
+            "pauschal_bei_bekanntmachung": true, "wetterdaten_an_der_tr_gemessen": false,
+            "viertelstundenerfassung": erfassung
+        });
+        let limitierung = serde_json::json!({ "fall": "duldung", "p_ist": "400" });
+        serde_json::from_value(if fluktuierend {
+            serde_json::json!({
+                "verfahren": "wind_pauschal", "tr": tr,
+                "intervalle": [{ "limitierung": limitierung, "p_0": "1800", "p_inst": "3000" }]
+            })
+        } else {
+            serde_json::json!({
+                "verfahren": "nichtfluktuierend_pauschal", "tr": tr, "richtung": "negativ",
+                "intervalle": [{ "limitierung": limitierung, "p_wert": "1800" }]
+            })
+        })
+        .expect("valid request")
+    }
+
+    /// BilAReM Kap. 3.2.1 / 3.3: after 31.12.2028 the grandfathered
+    /// Pauschal-Abrechnung ends for a fluctuating, viertelstundenscharf
+    /// erfasste TR — and only for it.
+    #[test]
+    fn the_compute_path_ends_pauschal_only_where_the_festlegung_does() {
+        use bilarem::Abrechnungsverfahren as A;
+        let heute = time::macros::date!(2029 - 03 - 01);
+        let erfasst = serde_json::json!({ "seit": "2020-01-01" });
+        assert_eq!(
+            verfahren_pruefen(&pauschal(true, "2028-12-31", erfasst.clone()), heute),
+            Ok(A::Pauschal)
+        );
+        let refused = verfahren_pruefen(&pauschal(true, "2029-01-01", erfasst.clone()), heute)
+            .expect_err("a fluctuating, erfasste TR leaves Pauschal on 01.01.2029");
+        assert!(refused.contains("VereinfachteSpitz"), "{refused}");
+        // Nicht-fluktuierend: Pauschal stays.
+        assert_eq!(
+            verfahren_pruefen(&pauschal(false, "2029-01-01", erfasst), heute),
+            Ok(A::Pauschal)
+        );
+        // Not viertelstundenscharf erfasst: Pauschal stays.
+        assert_eq!(
+            verfahren_pruefen(
+                &pauschal(true, "2029-01-01", serde_json::json!("keine")),
+                heute
+            ),
+            Ok(A::Pauschal)
+        );
+    }
+
+    /// BilAReM Kap. 3.2.1: Wetterdaten delivered after the 4. Werktag of the
+    /// following month are not the basis; the ANB's Ersatzwerte are.
+    #[test]
+    fn late_wetterdaten_are_refused_for_the_ersatzwert() {
+        let req = |wetterdaten: serde_json::Value| -> AusfallarbeitComputeRequest {
+            serde_json::from_value(serde_json::json!({
+                "verfahren": "wind_spitz",
+                "tr": {
+                    "massnahme_tag": "2027-01-15", "modell": "prognosemodell",
+                    "pauschal_bei_bekanntmachung": false, "wetterdaten_an_der_tr_gemessen": false,
+                    "viertelstundenerfassung": { "seit": "2020-01-01" }
+                },
+                "wetterdaten": wetterdaten,
+                "intervalle": [{
+                    "limitierung": { "fall": "duldung", "p_ist": "400" },
+                    "kf": "0.9", "p_theo": "2000", "p_nenn": "3000"
+                }]
+            }))
+            .expect("valid request")
+        };
+        let heute = time::macros::date!(2027 - 03 - 01);
+        assert!(
+            verfahren_pruefen(
+                &req(serde_json::json!({ "anlagenbetreiber": "2027-02-04" })),
+                heute
+            )
+            .is_ok()
+        );
+        assert!(
+            verfahren_pruefen(
+                &req(serde_json::json!({ "anlagenbetreiber": "2027-02-05" })),
+                heute
+            )
+            .is_err()
+        );
+        assert!(verfahren_pruefen(&req(serde_json::json!("ersatzwert_anb")), heute).is_ok());
+        assert!(
+            verfahren_pruefen(
+                &req(serde_json::json!("ersatzwert_anb")),
+                time::macros::date!(2027 - 02 - 04)
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn solar_spitz_divisor_error_maps_to_message() {
         let req: AusfallarbeitComputeRequest = serde_json::from_value(serde_json::json!({
             "verfahren": "solar_spitz",
+            "tr": {
+                "massnahme_tag": "2027-01-15", "modell": "prognosemodell",
+                "pauschal_bei_bekanntmachung": false, "wetterdaten_an_der_tr_gemessen": false,
+                "viertelstundenerfassung": { "seit": "2020-01-01" }
+            },
+            "wetterdaten": "ersatzwert_anb",
             "intervalle": [{
                 "limitierung": { "fall": "referenzprofil", "vorgabe": "100" },
                 "p_vz_ist": "800", "g_vz": "0", "g_i": "0.5", "p_wr": "1500", "p_nenn": "1400"
@@ -583,6 +817,11 @@ mod tests {
     fn nichtfluktuierend_positiv_yields_mehrarbeit() {
         let req: AusfallarbeitComputeRequest = serde_json::from_value(serde_json::json!({
             "verfahren": "nichtfluktuierend_spitz",
+            "tr": {
+                "massnahme_tag": "2027-01-15", "modell": "planwertmodell",
+                "pauschal_bei_bekanntmachung": false, "wetterdaten_an_der_tr_gemessen": false,
+                "viertelstundenerfassung": "keine"
+            },
             "richtung": "positiv",
             "intervalle": [{
                 "limitierung": { "fall": "aufforderung", "p_ist": "950", "vorgabe": "1000" },
@@ -806,6 +1045,12 @@ mod tests {
         let with = |key: &str| {
             serde_json::from_value::<AusfallarbeitComputeRequest>(serde_json::json!({
                 "verfahren": "wind_spitz",
+                "tr": {
+                    "massnahme_tag": "2027-01-15", "modell": "prognosemodell",
+                    "pauschal_bei_bekanntmachung": false, "wetterdaten_an_der_tr_gemessen": false,
+                    "viertelstundenerfassung": "keine"
+                },
+                "wetterdaten": "ersatzwert_anb",
                 "intervalle": [{
                     "limitierung": { "fall": "duldung", "p_ist": "400" },
                     "kf": "0.9", "p_theo": "2000", "p_nenn": "3000", key: "1000"

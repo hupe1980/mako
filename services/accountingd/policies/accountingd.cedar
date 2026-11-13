@@ -28,6 +28,12 @@
 //                          that span the whole tenant rather than one customer.
 //   "write-account"      — PUT  account master data, Abschlag, Vorauszahlung,
 //                          Zahlungsinformation, business-partner link
+//   "sync-verbraucher"   — PUT  an account's § 13 BGB Verbraucher status. Held
+//                          to vertragd's service principal (the
+//                          `[[oidc.service_keys]]` entry named `vertragd`): the
+//                          contract is the status's one source, and the status
+//                          decides the § 288 Abs. 2 BGB rate and the Abs. 5
+//                          Pauschale
 //   "post-entry"         — POST a manual ledger booking, a clearing, a clearing
 //                          reset, an interest charge, a reconcile, a parked
 //                          booking's rebook or discard
@@ -130,6 +136,17 @@ permit(
 ) when {
     context.principal_tenant == context.resource_tenant &&
     context.principal_roles.containsAny(["LF", "MSB"])
+};
+
+// ── The § 13 BGB status: one writer ──────────────────────────────────────────
+// No market role grants it: an operator holding `LF` writes the account's
+// master data, not the Verbraucher status of the contract behind it.
+permit(
+    principal == User::"vertragd",
+    action == Action::"sync-verbraucher",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant
 };
 
 // ── EnFG Belastungsausgleich ──────────────────────────────────────────────────
@@ -235,6 +252,7 @@ forbid(
     principal,
     action in [
         Action::"write-account",
+        Action::"sync-verbraucher",
         Action::"post-entry",
         Action::"manage-dunning",
         Action::"manage-sepa",

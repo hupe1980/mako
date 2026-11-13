@@ -77,8 +77,8 @@ Use this crate for:
 - Sending and receiving iMS grid control commands (`controlMeasuresV1`).
 - MaLo-ID queries (`maloIdentV1`).
 - Looking up endpoint URLs via the Verzeichnisdienst (directory service).
-- Reading directory records with the `X-BDEW-CERT` / `X-BDEW-SIGNATURE` JWS the
-  Verzeichnisdienst returns over the RFC 8785 canonical record.
+- Reading directory records, returned only once the `X-BDEW-SIGNATURE` JWS over
+  the RFC 8785 canonical record verifies against the provider's EMT.API key.
 
 ---
 
@@ -127,9 +127,13 @@ sequenceDiagram
     NB_WEB-->>MSB: 200 OK (receipt)
 ```
 
-`DirectoryServiceClient::get_record(provider_id, api_id, major_version)`
-returns the record with its certificate and signature headers, so the caller
-verifies the JWS before trusting the endpoint URL. The `/[Post]/` prefix on the
+`DirectoryServiceClient::get_record(provider_id, api_id, major_version, signers)`
+returns the record only when its JWS verifies against one of `signers` — the
+provider's EMT.API signature keys, which the issuing Sub-CA distributes and the
+directory does not (Regelungen zum Verzeichnisdienst 1.1, Kap. 1.6, S. 4;
+Kap. 2.2, S. 6) — and it names the entry requested; it follows a `307` and holds
+the record it leads to to the same check, and refuses anything else with
+`Error::UnverifiedRecord`. The `/[Post]/` prefix on the
 Steuerbefehl routes is the BDEW OpenAPI path template, mirrored verbatim.
 
 ```rust
@@ -153,12 +157,14 @@ fn handle_as4_message(payload: &[u8]) -> Result<(), edi_energy::Error> {
 // ── REST/JSON channel ────────────────────────────────────────────────────────
 // Look up the MSB endpoint for a given MaLo before sending a control command:
 #[cfg(feature = "client")]
-async fn lookup_msb_endpoint() -> Result<(), energy_api::Error> {
+async fn lookup_msb_endpoint(
+    msb_key: energy_api::transport::jws::RecordVerifyingKey,
+) -> Result<(), energy_api::Error> {
     let dir = DirectoryServiceClient::new_insecure(
         Url::parse("https://verzeichnisdienst.example.de/").unwrap(),
     )?;
-    let (record, _cert, _sig) = dir
-        .get_record("1234567890123", "controlMeasuresV1", 1)
+    let record = dir
+        .get_record("1234567890123", "controlMeasuresV1", 1, &[msb_key])
         .await?;
     println!("MSB endpoint: {}", record.url);
     Ok(())

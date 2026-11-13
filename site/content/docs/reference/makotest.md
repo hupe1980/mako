@@ -45,7 +45,7 @@ test ergonomics is Python.**
 |---|---|
 | EDIFACT build + MIG/AHB/semantic validation | Rust — `edi-energy` |
 | Release per format version | Rust — `edi-energy::registry` |
-| Identifier check digits (MaLo, MP-ID, EIC, §8.2 resources) | Rust — `rubo4e::identifiers` |
+| Identifier check digits (MaLo, MP-ID, EIC, Kap. 8.2 resources) | Rust — `rubo4e::identifiers` |
 | Werktag calendar and acknowledgement clocks | Rust — `mako-fristen` |
 | Answer Fristen per Prüfidentifikator | Rust — `mako-fristen::antwort` |
 | Antwortcodes per Entscheidungsbaum | Rust — `mako-pruefung::codes` |
@@ -135,16 +135,16 @@ from makotest import (
 )
 
 malo_from_base("5123869601")                    # '51238696012'
-mp_id_from_base("990035700000", "bdew")         # '9900357000003' — §8.1
+mp_id_from_base("990035700000", "bdew")         # '9900357000003' — Kap. 8.1
 mp_id_from_base("401234500002", "gln")          # '4012345000023' — EAN-13
 bilanzkreis_from_prefix("11XSWKIEL------")      # EIC Party  — a Bilanzkreis
 bilanzierungsgebiet_from_prefix("11YSWKIEL------")  # EIC Area — a Gebiet
-resource_id_from_base("nelo", "E000000001")     # 'E0000000019' — §8.2
+resource_id_from_base("nelo", "E000000001")     # 'E0000000019' — Kap. 8.2
 ```
 
 Two traps the API keeps apart.
 
-**A Marktpartner-ID has two check-digit procedures.** §2.3 of the BDEW
+**A Marktpartner-ID has two check-digit procedures.** Kap. 2.3 of the BDEW
 Anwendungshilfe defines the Lok- und Waggon-Kennzeichnungsverfahren for BDEW- and
 DVGW-Codenummern and the GS1/EAN-13 procedure for a GLN. They disagree on almost
 every base, and the prefix does not decide it — which is why `mp_id_from_base`
@@ -592,8 +592,8 @@ The catalogue serves **three wires**: `SG4 STS+E01` on a UTILMD, `AJT` on a
 REMADV, `SG2 AJT` on an ORDRSP. One `antwort_code(tree, code)` for all of them.
 
 Which matters because an obligation whose answer message type cannot be built is
-one no test can answer. All **70** published obligations are answerable — UTILMD
-43, ORDRSP 14, IFTSTA 7, QUOTES 5, ORDERS 1 — and
+one no test can answer. All **72** published obligations are answerable — UTILMD
+43, ORDRSP 14, IFTSTA 9, QUOTES 5, ORDERS 1 — and
 `TestCoverage::test_every_published_obligation_is_answerable`
 (`makotest/tests/test_wim_esa.py`) holds it there.
 
@@ -767,7 +767,7 @@ Rust core, which is the point: a drawn value is one the platform **accepts**.
 | `marktpartner_ids(kind=…)` | BDEW (`99…`), DVGW (`98…`) or GLN codes, each with its own check digit |
 | `bilanzkreise()` | EIC **Party** codes (`11X…`) with a real check character |
 | `bilanzierungsgebiete()` | EIC **Area** codes (`11Y…`) |
-| `resource_ids(kind=…)` | the seven BDEW §8.2 families: `nelo`, `nebe`, `cr`, `sg`, `sr`, `tr`, `paket` |
+| `resource_ids(kind=…)` | the seven Identifikatoren Kap. 8.2 families: `nelo`, `nebe`, `cr`, `sg`, `sr`, `tr`, `paket` |
 | `pruefidentifikatoren(message_type=…, sparte=…, on=…)` | PIDs with real AHB rules |
 | `antwort_pids()` | inbound PIDs with a published answer Frist |
 | `antwort_codes(ebd=…, accepted=…)` | Antwortcodes that Entscheidungsbaum publishes |

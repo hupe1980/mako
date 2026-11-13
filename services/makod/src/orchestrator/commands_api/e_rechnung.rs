@@ -304,7 +304,10 @@ mod tests {
             snapshot_interval: 100,
             cedar: Arc::new(CedarAuthorizer::unauthenticated().expect("infallible")),
             snapshot_store: store.as_snapshot_store(),
-            malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+            malo_cache: Arc::new(SlateDbMaloCache::new(
+                store.clone(),
+                mako_engine::ids::TenantId::from_party_id("9900357000004"),
+            )),
             maloid_result_cache: MaloIdentResultCache::new(store.clone()),
             store: Arc::new(store),
             marktd_client: marktd.map(Arc::new),

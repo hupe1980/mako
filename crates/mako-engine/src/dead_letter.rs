@@ -305,7 +305,7 @@ pub enum DeadLetterReason {
     /// An interchange flagged with UNB DE0035 = 1 (test indicator) was received
     /// on a production endpoint.
     ///
-    /// Per Allgemeine Festlegungen V6.1d §3, test interchanges **must not** be
+    /// Per Allgemeine Festlegungen V6.1d Kap. 3, test interchanges **must not** be
     /// processed as production. The interchange is rejected at the ingest boundary
     /// without being forwarded to any workflow.
     TestMessage {
@@ -316,7 +316,7 @@ pub enum DeadLetterReason {
     /// A business message arrived without the `NAD` party the answer is
     /// addressed with, or the one the Sparte is resolved from.
     ///
-    /// BDEW Allgemeine Festlegungen V6.1d §2.13 identifies the *fachliche*
+    /// BDEW Allgemeine Festlegungen V6.1d Kap. 2.13 identifies the *fachliche*
     /// sender and receiver on message level in `NAD+MS` / `NAD+MR` DE 3035 and
     /// states the approach applies "für alle EDI@Energy EDIFACT Nachrichten und
     /// -dateien einheitlich". Both are load-bearing here: the sender is who the
@@ -443,7 +443,7 @@ impl std::fmt::Display for DeadLetterReason {
             ),
             Self::MissingInterchangeParty { qualifier, .. } => write!(
                 f,
-                "message carries no NAD+{qualifier} party (Allgemeine Festlegungen §2.13)"
+                "message carries no NAD+{qualifier} party (Allgemeine Festlegungen Kap. 2.13)"
             ),
             Self::NotDispatchable {
                 workflow_name,

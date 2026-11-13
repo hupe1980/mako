@@ -1580,7 +1580,7 @@ async fn a_tranchen_split_beyond_the_whole_is_refused() {
     );
 }
 
-/// GPKE Teil 1 § 3.2.1.5: „Der Prozentsatz einer Tranche ist immer größer 0%
+/// GPKE Teil 1 Kap. 3.2.1.5: „Der Prozentsatz einer Tranche ist immer größer 0%
 /// und kleiner als 100%." A named Tranche holding the whole Marktlokation is
 /// Geschäftsvorfall 1 wearing a Tranchen-ID, and it makes `E_0623` Prüfschritt
 /// 530 read a remainder of zero on a Marktlokation that was never split.
@@ -1743,7 +1743,7 @@ fn gnb_answers_a_gas_anmeldung(
             validation_errors: vec![],
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
-            vorgang: mako_engine::lf_vorgang::LfVorgangsdaten::default(),
+            vorgang: Box::default(),
             fallgruppe: None,
             gasqualitaet: None,
         },
@@ -2008,4 +2008,105 @@ async fn a_55005_from_both_sides_announces_the_gap_once() {
         .filter(|e| e.ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED)
         .count();
     assert_eq!(gaps, 1, "one Lieferende, one § 38 gap: {derived:#?}");
+}
+
+/// The NB's own Lieferende (GPKE Teil 2 Kap. 2.5.2.2, S. 60–62), as its
+/// workflow queues the completions: the Ankündigung 55007, then either the
+/// LF's answer or — on silence — the 05:00 window that sends Nr. 3.
+fn nb_ends_the_zuordnung(antwort: Option<u32>) -> Vec<(&'static str, u32, serde_json::Value)> {
+    use mako_engine::types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow as _;
+    use mako_gpke::nb_lieferende::LF_ANTWORT_WINDOW_LABEL;
+    use mako_gpke::{
+        GpkeNbLieferendeWorkflow as W, NbLieferendeAnkuendigung, NbLieferendeCommand,
+        NbLieferendeState,
+    };
+    let frist = time::macros::datetime!(2026-10-21 03:00 UTC);
+    let announced = W::handle(
+        &NbLieferendeState::New,
+        NbLieferendeCommand::Ankuendigen(Box::new(NbLieferendeAnkuendigung {
+            sender: MarktpartnerCode::new(NB),
+            receiver: MarktpartnerCode::new("9911111111111"),
+            location_id: MaLo::new(MALO),
+            zuordnungsende: "20261130".to_owned(),
+            transaktionsgrund: "ZQ7".to_owned(),
+            transaktionsgrund_ergaenzung: "ZW4".to_owned(),
+            vorgangsnummer: "VG-1".to_owned(),
+            beendigung_vorgangsnummer: "VG-3".to_owned(),
+            antwortfrist: frist,
+            stilllegung: None,
+        })),
+    )
+    .expect("the 55007 is queued");
+    let state = announced
+        .events
+        .iter()
+        .fold(NbLieferendeState::New, W::apply);
+    let decided = match antwort {
+        Some(pid) => W::handle(
+            &state,
+            NbLieferendeCommand::ReceiveAntwort {
+                response_pid: Pruefidentifikator::new(pid).expect("pid"),
+                antwort: None,
+                reason: None,
+                response_ref: MessageRef::new("LF-ANTWORT"),
+                received_at: frist,
+            },
+        ),
+        None => W::handle(
+            &state,
+            NbLieferendeCommand::OhneAntwortBeenden {
+                label: LF_ANTWORT_WINDOW_LABEL.into(),
+            },
+        ),
+    }
+    .expect("the process is decided");
+    as_delivered(announced.outbox.into_iter().chain(decided.outbox))
+}
+
+/// An unanswered 55007 ends the Zuordnung zum Zuordnungsende, and the § 38
+/// gap behind it is announced.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_unanswered_55007_ends_the_supply_on_the_zuordnungsende() {
+    let Some((pool, _pg)) = test_pool("nb_lieferende_silence").await else {
+        return;
+    };
+    project_all(&pool, nb_answers_an_anmeldung(None)).await;
+    let derived = project_all(&pool, nb_ends_the_zuordnung(None)).await;
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    let after = vs.find(&malo(), TENANT).await.expect("find").expect("row");
+    assert_eq!(after.lf_mp_id(), None, "the LF's Zuordnung ended");
+    assert_eq!(after.lieferende, Some(date!(2026 - 11 - 30)));
+    assert!(
+        derived
+            .iter()
+            .any(|e| e.ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED),
+        "{derived:#?}"
+    );
+}
+
+/// The LF's Zustimmung 55008 ends it on the same day; its Ablehnung 55009
+/// leaves the LF zugeordnet.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_answered_55007_ends_the_supply_only_on_a_zustimmung() {
+    let Some((pool, _pg)) = test_pool("nb_lieferende_answered").await else {
+        return;
+    };
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    project_all(&pool, nb_answers_an_anmeldung(None)).await;
+
+    project_all(&pool, nb_ends_the_zuordnung(Some(55_009))).await;
+    let kept = vs.find(&malo(), TENANT).await.expect("find").expect("row");
+    assert_eq!(
+        kept.lf_mp_id(),
+        Some("9911111111111"),
+        "a 55009 keeps the LF"
+    );
+
+    project_all(&pool, nb_ends_the_zuordnung(Some(55_008))).await;
+    let ended = vs.find(&malo(), TENANT).await.expect("find").expect("row");
+    assert_eq!(ended.lf_mp_id(), None, "a 55008 ends the Zuordnung");
+    assert_eq!(ended.lieferende, Some(date!(2026 - 11 - 30)));
 }

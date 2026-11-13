@@ -17,7 +17,6 @@
 //!                                                 → asserts UNH ref ≠ "1"
 //!                                                 → asserts adapter preserves ref
 //!                                               send_antwort(accepted=true)
-//!                                                 → asserts MSCONS 13015 present
 //!                                                 → renders UTILMD 55002 wire
 //!                        ◄─── UTILMD 55002 ────
 //!   receive_antwort(wire)
@@ -43,7 +42,7 @@ use mako_engine::{
 };
 use mako_gpke::{
     GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow, LfAnmeldungCommand, LfAnmeldungState,
-    SupplierChangeCommand, SupplierChangeState, post_acceptance,
+    SupplierChangeCommand, SupplierChangeState,
 };
 use makod::{
     adapters::{gpke_lf_anmeldung_registry, gpke_registry},
@@ -294,18 +293,12 @@ impl MockNb {
     /// (`accepted = false`) for the pending supplier-change request.
     ///
     /// Asserts outbox content:
-    /// - `accepted = true`  → UTILMD 55002 + MSCONS 13015 (Bewegungsdaten).
-    /// - `accepted = false` → UTILMD 55003 only (no MSCONS).
+    /// - `accepted = true`  → UTILMD 55002 and its ProcessCompleted.
+    /// - `accepted = false` → UTILMD 55003 and its ProcessCompleted.
     ///
     /// Returns the rendered UTILMD wire bytes for transport back to the LFN.
     async fn send_antwort(&self, accepted: bool, reason: Option<&str>) -> Vec<u8> {
-        let malo = mako_engine::types::MaLo::from(MALO_ID);
-        let new_supplier = mako_engine::types::MarktpartnerCode::from(LFN_ID);
-        let obligations = if accepted {
-            post_acceptance::lieferbeginn_obligations(55001, &malo, &new_supplier, None)
-        } else {
-            vec![]
-        };
+        let obligations = Vec::new();
         let (_, outbox) = self
             .process
             .run(
@@ -351,35 +344,13 @@ impl MockNb {
             Some(if accepted { "accepted" } else { "rejected" })
         );
 
-        if accepted {
-            // Bestätigung also enqueues MSCONS 13015 (Bewegungsdaten-Anforderung).
-            let mscons = outbox
-                .iter()
-                .find(|e| e.message_type.as_ref() == "MSCONS")
-                .expect("accepted SendAntwort must include MSCONS 13015");
-            assert_eq!(
-                mscons.payload["pid"].as_u64().unwrap(),
-                13015,
-                "MSCONS must be PID 13015 (Bewegungsdaten)"
-            );
-            assert_eq!(
-                mscons.payload["malo"].as_str().unwrap(),
-                MALO_ID,
-                "MSCONS must reference the same MaLo"
-            );
-            assert_eq!(
-                mscons.recipient.as_ref(),
-                LFN_ID,
-                "MSCONS 13015 must be addressed to the LFN"
-            );
-        } else {
-            assert_eq!(
-                outbox.len(),
-                2,
-                "rejection must enqueue only UTILMD {expected_pid} and its ProcessCompleted \
-                 (no MSCONS)"
-            );
-        }
+        // Both answers queue the UTILMD and its ProcessCompleted, nothing
+        // else: the MSCONS 13015 answers an Anforderung through its own door.
+        assert_eq!(
+            outbox.len(),
+            2,
+            "UTILMD {expected_pid} and its ProcessCompleted"
+        );
 
         render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB"))
             .expect("NB: render_to_wire_bytes")

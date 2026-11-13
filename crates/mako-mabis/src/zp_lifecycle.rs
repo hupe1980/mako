@@ -167,6 +167,7 @@ use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
+    payload::UtilmdPayload,
     types::{BillingPeriod, MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -292,6 +293,39 @@ impl ZpSerie {
     #[must_use]
     pub fn gilt_am(self, date: time::Date) -> bool {
         self.endet_am().is_none_or(|ende| date <= ende)
+    }
+
+    /// The Summenzeitreihe this activated MaBiS-ZP carries.
+    ///
+    /// A MSCONS 13003 names its series only through the MaBiS-ZP in `SG6
+    /// LOC+172` — the column carries no `CCI` (MSCONS AHB 3.2 Kap. 8.3.3, S.
+    /// 94–97) — and the ZP is activated before any version is sent: „Der NB hat
+    /// den MaBiS-ZP für die LF-SZR (Kategorie A) beim LF für den betrachteten
+    /// Zeitraum aktiviert" (BK6-24-174 Anlage 3 Kap. 7.4.1, S. 83). The
+    /// activation is therefore the record a receiver reads the series from.
+    ///
+    /// `None` for what is no Summenzeitreihe: the Zuordnungsermächtigung and the
+    /// Zuordnung of a Netzgangzeitreihe.
+    #[must_use]
+    pub fn zeitreihe(self) -> Option<crate::zeitreihen::Zeitreihe> {
+        use crate::zeitreihen::{Familie as F, Kategorie as K, Zeitreihe};
+        let (familie, kategorie) = match self {
+            Self::NetzzeitreiheNachbarNb | Self::NetzzeitreiheBiko => (F::Nzr, None),
+            Self::LieferantensummenzeitreiheNb => (F::LfSzr, Some(K::A)),
+            Self::LieferantensummenzeitreiheUenb => (F::LfSzr, Some(K::B)),
+            Self::Bilanzierungsgebietssummenzeitreihe => (F::BgSzr, Some(K::B)),
+            Self::TaeglicheBgSzr => (F::BgSzr, Some(K::C)),
+            Self::BilanzkreissummenzeitreiheNb => (F::BkSzr, Some(K::A)),
+            Self::BilanzkreissummenzeitreiheUenb => (F::BkSzr, Some(K::B)),
+            Self::TaeglicheBkSzr => (F::BkSzr, Some(K::C)),
+            Self::Deltazeitreihenuebertrag => (F::Dzue, None),
+            Self::Abrechnungssummenzeitreihe => (F::Abrechnungssummenzeitreihe, None),
+            Self::TaeglicheAauez => (F::TaeglicheAauez, None),
+            Self::LfAaszr => (F::LfAaszr, None),
+            Self::MonatlicheAauezBkvLf | Self::MonatlicheAauezBkvAnfNb => (F::Aauez, None),
+            Self::Zuordnungsermaechtigung | Self::NetzgangzeitreiheNzr => return None,
+        };
+        Zeitreihe::new(familie, kategorie).ok()
     }
 
     /// Resolve the series from what the UTILMD actually carries.
@@ -1387,18 +1421,22 @@ impl Workflow for MabisZpLifecycleWorkflow {
                 // Bilanzierungsbeginn on an Aktivierung, `DTM+159` the
                 // Bilanzierungsende on a Deaktivierung (UTILMD AHB Strom 2.2
                 // Kap. 13.3).
-                let mut payload = serde_json::json!({
-                    "pid": familie.anfrage,
-                    "sender": sender.as_str(),
-                    "receiver": empfaenger.as_str(),
-                    "mabis_zaehlpunkt": mabis_zp_id.as_str(),
-                });
-                let datum_key = match vorgang {
-                    ZpVorgang::Aktivierung => "bilanzierungsbeginn",
-                    ZpVorgang::Deaktivierung => "bilanzierungsende",
+                let mut payload = UtilmdPayload {
+                    pid: familie.anfrage,
+                    sender: sender.as_str().to_owned(),
+                    receiver: Some(empfaenger.as_str().to_owned()),
+                    mabis_zaehlpunkt: Some(mabis_zp_id.as_str().to_owned()),
+                    ..Default::default()
                 };
-                payload[datum_key] = serde_json::Value::String(document_date.clone());
-                let outbox = PendingOutbox::new("UTILMD", empfaenger.as_str(), payload);
+                match vorgang {
+                    ZpVorgang::Aktivierung => {
+                        payload.bilanzierungsbeginn = Some(document_date.clone());
+                    }
+                    ZpVorgang::Deaktivierung => {
+                        payload.bilanzierungsende = Some(document_date.clone());
+                    }
+                }
+                let outbox = PendingOutbox::typed(empfaenger.as_str(), &payload);
 
                 Ok(WorkflowOutput {
                     events: vec![ZpLifecycleEvent::AnfrageGesendet {
@@ -1521,30 +1559,32 @@ impl Workflow for MabisZpLifecycleWorkflow {
                 // **MaBiS-Zählpunkt** and no Marktlokation, so the ZP is the
                 // primary `SG5 LOC+Z15`; the answer travels back the way the
                 // Anfrage came, so the parties swap.
-                let mut payload = serde_json::json!({
-                    "pid": antwort_pid_code,
-                    "sender": data.receiver.as_str(),
-                    "receiver": data.sender.as_str(),
-                    "mabis_zaehlpunkt": data.mabis_zp_id,
+                let mut payload = UtilmdPayload {
+                    pid: antwort_pid_code,
+                    sender: data.receiver.as_str().to_owned(),
+                    receiver: Some(data.sender.as_str().to_owned()),
+                    mabis_zaehlpunkt: Some(data.mabis_zp_id.clone()),
                     // `SG4 STS+E01` DE 1131 — the tree this answer belongs to.
                     // 55064 is answered out of twelve of them, so the Antwort
                     // is unreadable without it. DE 9013 is not stated: see
                     // `SendAntwort`.
-                    "antwort_codeliste": ebd,
-                });
+                    antwort_codeliste: Some(ebd.to_owned()),
+                    bemerkung: grund.clone(),
+                    ..Default::default()
+                };
                 // `SG4 DTM+158` on an answer to an Aktivierung, `DTM+159` on
                 // one to a Deaktivierung (UTILMD AHB Strom 2.2 Kap. 13.3,
                 // Bedingungen `[30]`/`[34]`). The lifecycle has no
                 // Vertragsdatum: a Zählpunkt has no contract.
-                let datum_key = match data.vorgang {
-                    ZpVorgang::Aktivierung => "bilanzierungsbeginn",
-                    ZpVorgang::Deaktivierung => "bilanzierungsende",
-                };
-                payload[datum_key] = serde_json::Value::String(data.document_date.clone());
-                if let Some(ref text) = grund {
-                    payload["bemerkung"] = serde_json::Value::String(text.clone());
+                match data.vorgang {
+                    ZpVorgang::Aktivierung => {
+                        payload.bilanzierungsbeginn = Some(data.document_date.clone());
+                    }
+                    ZpVorgang::Deaktivierung => {
+                        payload.bilanzierungsende = Some(data.document_date.clone());
+                    }
                 }
-                let outbox = PendingOutbox::new("UTILMD", data.sender.as_str(), payload);
+                let outbox = PendingOutbox::typed(data.sender.as_str(), &payload);
 
                 Ok(WorkflowOutput {
                     events: vec![ZpLifecycleEvent::AntwortGesendet {
@@ -1588,16 +1628,16 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     ))
                 })?;
 
-                let outbox = PendingOutbox::new(
-                    "UTILMD",
+                let outbox = PendingOutbox::typed(
                     empfaenger.as_str(),
-                    serde_json::json!({
-                        "pid": weiterleitung,
-                        "sender": data.receiver.as_str(),
-                        "receiver": empfaenger.as_str(),
-                        "mabis_zaehlpunkt": data.mabis_zp_id,
-                        "bilanzierungsbeginn": data.document_date,
-                    }),
+                    &UtilmdPayload {
+                        pid: weiterleitung,
+                        sender: data.receiver.as_str().to_owned(),
+                        receiver: Some(empfaenger.as_str().to_owned()),
+                        mabis_zaehlpunkt: Some(data.mabis_zp_id.clone()),
+                        bilanzierungsbeginn: Some(data.document_date.clone()),
+                        ..Default::default()
+                    },
                 );
 
                 Ok(WorkflowOutput {
@@ -2563,5 +2603,33 @@ mod wire_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod zeitreihe_tests {
+    use super::*;
+
+    /// Every series activated with 55062/55063 names a Tabelle-1 row, and the
+    /// Kategorie follows the Verantwortliche (MaBiS Kap. 2, Tabelle 1).
+    #[test]
+    fn every_activated_series_names_its_summenzeitreihe() {
+        use crate::zeitreihen::{Familie, Kategorie};
+        for f in ZP_FAMILIEN {
+            let z = f.serie.zeitreihe();
+            match f.serie {
+                ZpSerie::Zuordnungsermaechtigung | ZpSerie::NetzgangzeitreiheNzr => {
+                    assert!(z.is_none(), "{:?}", f.serie);
+                }
+                _ => assert!(z.is_some(), "{:?}", f.serie),
+            }
+        }
+        let lf = ZpSerie::LieferantensummenzeitreiheUenb
+            .zeitreihe()
+            .expect("LF-SZR");
+        assert_eq!(
+            (lf.familie(), lf.kategorie()),
+            (Familie::LfSzr, Some(Kategorie::B))
+        );
     }
 }

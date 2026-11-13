@@ -42,7 +42,10 @@ fn command_state(store: &Arc<SlateDbStore>, tenant: TenantId) -> CommandsApiStat
             makod::cedar_authz::CedarAuthorizer::unauthenticated().expect("infallible"),
         ),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new((**store).clone())),
+        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
+            (**store).clone(),
+            tenant,
+        )),
         maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((**store).clone()),
         store: Arc::clone(store),
         marktd_client: None,
@@ -117,7 +120,7 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
 
     state
         .malo_cache
-        .upsert(&tenant.to_string(), &malo_record())
+        .upsert(&malo_record())
         .await
         .expect("seed MaLo cache");
 
@@ -222,7 +225,7 @@ async fn a_follow_up_command_still_resolves_after_a_replacement_process_spawns()
     let state = command_state(&store, tenant);
     state
         .malo_cache
-        .upsert(&tenant.to_string(), &malo_record())
+        .upsert(&malo_record())
         .await
         .expect("seed MaLo cache");
 

@@ -73,17 +73,24 @@ pub(super) fn render_dvgw(
     };
     let validity = period(family, "validity_period", p.get("validity_period"))?;
 
+    let agency = |id: &str| {
+        edi_energy::AgencyCode::for_mp_id(id)
+            .map(edi_energy::AgencyCode::as_str)
+            .ok_or_else(|| {
+                RenderError::BuilderError(format!(
+                    "{family}: {id:?} is no MP-ID (DVGW-/BDEW-Codenummer or GLN, 13 digits)"
+                ))
+            })
+    };
+    let (sender_agency, receiver_agency) = (agency(sender)?, agency(receiver)?);
     let mut b = MessageBuilder::new(document)
         .message_ref(&message_ref)
         .document_number(document_number)
         .pruefidentifikator(pid)
         .message_datetime(message_datetime)
         .validity_period(validity)
-        .sender_coded(sender, edi_energy::AgencyCode::for_mp_id(sender).as_str())
-        .receiver_coded(
-            receiver,
-            edi_energy::AgencyCode::for_mp_id(receiver).as_str(),
-        );
+        .sender_coded(sender, sender_agency)
+        .receiver_coded(receiver, receiver_agency);
     if let Some(v) = p.get("version").and_then(|v| v.as_str()) {
         b = b.version(v);
     }

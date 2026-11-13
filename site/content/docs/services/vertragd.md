@@ -43,6 +43,19 @@ chosen by contract type and customer:
   a commercial customer under 10 000 kWh a year is a Haushaltskunde. It defaults
   to `kundentyp == "B2C"` and is correctable.
 
+### The Verbraucher status reaches accountingd
+
+`versorgungsvertraege.verbraucher` (§ 13 BGB — a Verbraucher concludes the
+contract for purposes „die überwiegend weder ihrer gewerblichen noch ihrer
+selbständigen beruflichen Tätigkeit zugerechnet werden können") is set on
+`POST /kunden/{id}/vertraege` and is neither `kundentyp` nor `haushaltskunde`.
+When the NB confirms a component, a durable outbox command sends it to
+accountingd's `PUT /accounts/{malo_id}/verbraucher`, as `null` when unrecorded;
+accountingd admits that route to the principal `vertragd` alone, so its
+`[[oidc.service_keys]]` entry for vertragd must carry that name. accountingd charges the § 288 Abs. 2
+BGB rate (Basiszinssatz + 9 Prozentpunkte) and the Abs. 5 Pauschale only on
+`false`.
+
 ### What the `rechnungsempfaenger` block tells billing about e-invoicing
 
 `GET /vertraege/by-malo/{id}`, `GET /rahmenvertraege/{id}/malos` and

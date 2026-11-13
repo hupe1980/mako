@@ -84,6 +84,11 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
   }'
 ```
 
+`due_date` is optional: absent, each invoice falls due `zahlungsziel_werktage` Werktage after
+`invoice_date`. Stated or not, a Zahlungsziel short of 10 WT after receipt (GPKE Teil 2 Kap.
+3.3.2 Nr. 1) or 10 WT after its Rechnungsdatum where INVOIC AHB 1.0b `[24]` applies (a 31005, for
+one), or a Rückerstattung due more than 10 WT after its Rechnungsdatum (`[25]`), is refused with `422` `zahlungsziel_unzulaessig`.
+
 ## Routes
 
 | Area | Routes |
@@ -112,7 +117,7 @@ Gas.
   higher version.
 - **The BIKO assigns the Datenstatus** (inbound via IFTSTA); `netzbilanzd`
   records it and never derives one. The phase follows the Werktag calendar of
-  § 3.10 Tabelle 2 (BG-SZR rows):
+  Kap. 3.10 Tabelle 2 (BG-SZR rows):
 
 | Window | Werktage after period end | Datenstatus of a new version |
 |---|---|---|
@@ -145,6 +150,11 @@ erp_webhook_secret = "env:NETZBILANZD_WEBHOOK_SECRET"
 
 # Verifies inbound REMADV CloudEvents.
 inbound_secret = "env:NETZBILANZD_INBOUND_SECRET"
+
+# The Netzbetreiber's payment term: Werktage after the Rechnungsdatum for an
+# invoice whose request states no due_date. Required, at least 10 (GPKE Teil 2
+# Kap. 3.3.2 Nr. 1); a Rückerstattung falls due at most 10 WT after its date.
+zahlungsziel_werktage = 14
 
 # Alert workers. 0 disables either one.
 dispatch_alert_interval_secs    = 3600

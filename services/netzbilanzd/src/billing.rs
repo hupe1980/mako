@@ -390,22 +390,40 @@ pub fn render_and_check(
             p.artikel_id = Some(id.clone());
         }
     }
-    let report = check(&rechnung, document.settlement.sender_mp_id.as_str(), pid);
+    // The earliest the recipient can have it is the day it is dated; the
+    // dispatch re-checks against the day it actually leaves.
+    let report = check(
+        &rechnung,
+        document.settlement.sender_mp_id.as_str(),
+        pid,
+        document.invoice_date,
+        document.settlement.sparte,
+    );
     SettledInvoice {
         rechnungsnummer: document.rechnungsnummer,
         // What is actually owed, after any Abschläge — the figure the ledger
         // and the payment run care about.
-        zu_zahlen_eur: document.settlement.steuer.brutto_eur()
-            - document
-                .abschlaege
-                .iter()
-                .map(|a| a.betrag_brutto_eur)
-                .sum::<Decimal>(),
+        zu_zahlen_eur: zu_zahlen_eur(&document.settlement, &document.abschlaege),
         settlement: document.settlement,
         rechnung,
         report,
         pid,
     }
+}
+
+/// What the invoice leaves to collect: its gross, less the Abschläge it
+/// settles. Negative, it is a Rückerstattung — the fälliger Betrag
+/// (`SG50 MOA+9`) the Zahlungsziel bounds branch on.
+#[must_use]
+pub fn zu_zahlen_eur(
+    settlement: &SettlementResult,
+    abschlaege: &[grid_billing::Abschlagsverrechnung],
+) -> Decimal {
+    settlement.steuer.brutto_eur()
+        - abschlaege
+            .iter()
+            .map(|a| a.betrag_brutto_eur)
+            .sum::<Decimal>()
 }
 
 /// Refuse a draft whose INVOIC could not go out: a fact the AHB requires that
@@ -628,6 +646,12 @@ pub fn fuer_die_invoic(
 
 /// Run `invoic-checker` over a rendered document.
 ///
+/// `fruehester_eingang` is the earliest day the recipient can receive it —
+/// the day it is sent, never earlier. The recipient measures the
+/// 10-Werktage Zahlungsziel floor from its receipt, so the issuer measures
+/// from the earliest receipt possible: a document that fails here fails
+/// there.
+///
 /// The Preisblatt store is empty: `netzbilanzd` is the *issuer*, and the rates
 /// it billed are the rates it published, so a tariff cross-check here would
 /// compare a price sheet against itself. Stages 0–3 — Storno reference, period
@@ -654,14 +678,32 @@ pub fn check(
     rechnung: &rubo4e::current::Rechnung,
     sender_mp_id: &str,
     pid: u32,
+    fruehester_eingang: time::Date,
+    sparte: Sparte,
 ) -> invoic_checker::CheckReport {
     InvoicCheckEngine::check(
         pid,
         sender_mp_id,
         rechnung,
         &InMemoryPreisblattStore::new(),
-        &CheckConfig::default(),
+        fruehester_eingang,
+        &CheckConfig {
+            empfaenger_sparte: Some(empfaenger_sparte(sparte)),
+            ..CheckConfig::default()
+        },
     )
+}
+
+/// The recipient's Sparte as `invoic-checker` asks for it (INVOIC AHB
+/// `[492]`/`[493]`). The recipient holds one MP-ID per Rolle and Sparte
+/// (BDEW-AWH Identifikatoren V1.2, Kap. 2.1, S. 4), so an invoice of one Sparte reaches a
+/// recipient MP-ID of that Sparte.
+#[must_use]
+pub const fn empfaenger_sparte(sparte: Sparte) -> invoic_checker::EmpfaengerSparte {
+    match sparte {
+        Sparte::Strom => invoic_checker::EmpfaengerSparte::Strom,
+        Sparte::Gas => invoic_checker::EmpfaengerSparte::Gas,
+    }
 }
 
 /// An amount in units of 10⁻⁵ EUR, as stored.

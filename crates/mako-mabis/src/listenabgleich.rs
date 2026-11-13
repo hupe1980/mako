@@ -122,6 +122,7 @@ use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
+    payload::{ListenPosition, UtilmdPayload},
     types::{BillingPeriod, MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -1016,30 +1017,31 @@ impl Workflow for MabisListenabgleichWorkflow {
                 // swap. `antwort_codeliste` is the DE 1131 key the renderer
                 // reads; the per-position codes ride `positionen`, which the
                 // renderer refuses rather than flattening — see below.
-                let outbox = PendingOutbox::new(
-                    "UTILMD",
+                let outbox = PendingOutbox::typed(
                     data.sender.as_str(),
-                    serde_json::json!({
-                        "pid": familie.antwort,
-                        "sender": data.receiver.as_str(),
-                        "receiver": data.sender.as_str(),
-                        "antwort_codeliste": ebd,
+                    &UtilmdPayload {
+                        pid: familie.antwort,
+                        sender: data.receiver.as_str().to_owned(),
+                        receiver: Some(data.sender.as_str().to_owned()),
+                        antwort_codeliste: Some(ebd.to_owned()),
                         // The head of the `IDE+Z01` list: which
                         // Summenzeitreihe, which version, and the Listennummer
                         // the answer echoes in `SG6 RFF+TN`.
-                        "mabis_zaehlpunkt": data.mabis_zaehlpunkt,
-                        "zeitreihen_version": data.zeitreihen_version,
-                        "listennummer": format!("{}-K", data.listennummer),
-                        "referenz_listennummer": data.listennummer,
-                        "positionen": eintraege
+                        mabis_zaehlpunkt: Some(data.mabis_zaehlpunkt.clone()),
+                        zeitreihen_version: Some(data.zeitreihen_version.clone()),
+                        listennummer: Some(format!("{}-K", data.listennummer)),
+                        referenz_listennummer: Some(data.listennummer.clone()),
+                        positionen: eintraege
                             .iter()
-                            .map(|(malo, code)| serde_json::json!({
-                                "malo": malo,
-                                "antwort_code": code.code,
-                            }))
-                            .collect::<Vec<_>>(),
-                        "billing_period": data.billing_period.as_str(),
-                    }),
+                            .map(|(malo, code)| ListenPosition {
+                                malo: malo.clone(),
+                                antwort_code: code.code.to_owned(),
+                                ..Default::default()
+                            })
+                            .collect(),
+                        billing_period: Some(data.billing_period.as_str().to_owned()),
+                        ..Default::default()
+                    },
                 );
 
                 Ok(WorkflowOutput {
@@ -1103,24 +1105,23 @@ impl Workflow for MabisListenabgleichWorkflow {
                     }
                 };
 
-                let outbox = PendingOutbox::new(
-                    "UTILMD",
+                let outbox = PendingOutbox::typed(
                     data.sender.as_str(),
-                    serde_json::json!({
-                        "pid": familie.antwort,
-                        "sender": data.receiver.as_str(),
-                        "receiver": data.sender.as_str(),
-                        "antwort_code": antwort.code,
-                        "antwort_codeliste": ebd,
-                        "mabis_zaehlpunkt": data.mabis_zaehlpunkt,
-                        "zeitreihen_version": data.zeitreihen_version,
-                        "listennummer": format!("{}-A", data.listennummer),
-                        "referenz_listennummer": data.listennummer,
+                    &UtilmdPayload {
+                        pid: familie.antwort,
+                        sender: data.receiver.as_str().to_owned(),
+                        receiver: Some(data.sender.as_str().to_owned()),
+                        antwort_code: Some(antwort.code.clone()),
+                        antwort_codeliste: Some(ebd.to_owned()),
+                        mabis_zaehlpunkt: Some(data.mabis_zaehlpunkt.clone()),
+                        zeitreihen_version: Some(data.zeitreihen_version.clone()),
+                        listennummer: Some(format!("{}-A", data.listennummer)),
+                        referenz_listennummer: Some(data.listennummer.clone()),
                         // No positions: an AblehnungDerGesamtenListe names
                         // no Marktlokation.
-                        "positionen": [],
-                        "billing_period": data.billing_period.as_str(),
-                    }),
+                        billing_period: Some(data.billing_period.as_str().to_owned()),
+                        ..Default::default()
+                    },
                 );
 
                 Ok(WorkflowOutput {
@@ -1190,20 +1191,20 @@ impl Workflow for MabisListenabgleichWorkflow {
                     antwort_ebd: ebd.to_owned(),
                     positionen: u32::try_from(positionen.len()).unwrap_or(u32::MAX),
                 };
-                let outbox = PendingOutbox::new(
-                    "UTILMD",
+                let outbox = PendingOutbox::typed(
                     receiver.as_str(),
-                    serde_json::json!({
-                        "pid": familie.liste,
-                        "sender": sender.as_str(),
-                        "receiver": receiver.as_str(),
-                        "anfrage_referenz": anfrage_referenz,
-                        "mabis_zaehlpunkt": mabis_zaehlpunkt,
-                        "zeitreihen_version": zeitreihen_version,
-                        "listennummer": listennummer,
-                        "billing_period": billing_period.as_str(),
-                        "listenmitglieder": positionen,
-                    }),
+                    &UtilmdPayload {
+                        pid: familie.liste,
+                        sender: sender.as_str().to_owned(),
+                        receiver: Some(receiver.as_str().to_owned()),
+                        anfrage_referenz: Some(anfrage_referenz),
+                        mabis_zaehlpunkt: Some(mabis_zaehlpunkt),
+                        zeitreihen_version: Some(zeitreihen_version),
+                        listennummer: Some(listennummer),
+                        billing_period: Some(billing_period.as_str().to_owned()),
+                        listenmitglieder: positionen,
+                        ..Default::default()
+                    },
                 );
                 Ok(WorkflowOutput {
                     events: vec![ListenabgleichEvent::ListeGesendet(Box::new(liste))],
@@ -1538,8 +1539,10 @@ mod tests {
         assert_eq!(out.outbox.len(), 1, "a clean list still owes a reply");
         assert_eq!(out.outbox[0].payload["pid"], 55224);
         assert_eq!(
-            out.outbox[0].payload["positionen"].as_array().map(Vec::len),
-            Some(0)
+            out.outbox[0].payload["positionen"]
+                .as_array()
+                .map_or(0, Vec::len),
+            0
         );
     }
 
@@ -1700,7 +1703,7 @@ mod tests {
         .expect("an unordered Abonnement refuses the list");
 
         let payload = &out.outbox[0].payload;
-        assert_eq!(payload["positionen"].as_array().map(Vec::len), Some(0));
+        assert_eq!(payload["positionen"].as_array().map_or(0, Vec::len), 0);
         // The code must come out of the whole-list cluster. A Korrekturgrund
         // code carried on a message with no positions would name a
         // Marktlokation the message does not contain.
@@ -1806,8 +1809,10 @@ mod tests {
         .expect("an inadmissible version refuses the list");
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0047");
         assert_eq!(
-            out.outbox[0].payload["positionen"].as_array().map(Vec::len),
-            Some(0)
+            out.outbox[0].payload["positionen"]
+                .as_array()
+                .map_or(0, Vec::len),
+            0
         );
     }
 

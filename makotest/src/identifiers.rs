@@ -3,7 +3,7 @@
 //! Every function here delegates to `rubo4e::identifiers`, the same code the
 //! platform validates with. None of the arithmetic is reimplemented: a harness
 //! carrying its own copy of the BDEW check-digit procedures
-//! ("Identifikatoren in der Marktkommunikation" v1.2 §8.1/§8.2) or of the
+//! ("Identifikatoren in der Marktkommunikation" v1.2 Kap. 8.1/Kap. 8.2) or of the
 //! ENTSO-E check character would generate values the platform refuses.
 //!
 //! ## Why generation, not just validation
@@ -35,7 +35,7 @@ pub fn malo_is_valid(value: &str) -> bool {
     MaloId::new(value).is_ok()
 }
 
-/// The BDEW §8.1 check digit for a 10-digit MaLo base.
+/// The Identifikatoren Kap. 8.1 check digit for a 10-digit MaLo base.
 ///
 /// Raises `ValueError` when `base` is not exactly 10 digits, or when its first
 /// digit is `0` — position 1 is the Codevergabestelle and `0` is unissued.
@@ -68,8 +68,8 @@ pub fn melo_is_valid(value: &str) -> bool {
 /// `True` when `value` is 13 decimal digits — the structural test alone.
 ///
 /// This is what the platform enforces at its boundary. It deliberately does
-/// **not** check the check digit: §2.3 defines two different procedures (BDEW
-/// §8.1 and GS1/EAN-13) and the leading digits do not reliably say which
+/// **not** check the check digit: Kap. 2.3 defines two different procedures (BDEW
+/// Kap. 8.1 and GS1/EAN-13) and the leading digits do not reliably say which
 /// applies, so rejecting on a guess would drop identifiers that are in
 /// production use. Use [`mp_id_check_digit_schemes`] to ask which one it
 /// satisfies.
@@ -102,7 +102,7 @@ pub fn mp_id_check_digit_schemes(value: &str) -> Vec<String> {
 /// Complete a 12-digit base into a 13-digit Marktpartner-ID.
 ///
 /// `scheme` selects the check-digit procedure — `"bdew"` for a BDEW- or
-/// DVGW-Codenummer (§8.1, the `99…`/`98…` ranges) and `"gln"` for a GS1 Global
+/// DVGW-Codenummer (Kap. 8.1, the `99…`/`98…` ranges) and `"gln"` for a GS1 Global
 /// Location Number (EAN-13). The two disagree on almost every base, and the
 /// prefix does not decide it: pick the one matching the counterparty you are
 /// simulating.
@@ -232,9 +232,9 @@ pub fn bilanzierungsgebiet_is_valid(value: &str) -> bool {
     BilanzierungsgebietId::new(value).is_ok()
 }
 
-// ── §8.2 ASCII identifiers (NeLo, NeBe, Redispatch resources, Paket) ──────────
+// ── Kap. 8.2 ASCII identifiers (NeLo, NeBe, Redispatch resources, Paket) ──────────
 
-/// The seven BDEW §8.2 identifier families, by the name `resource_id_*` takes.
+/// The seven Identifikatoren Kap. 8.2 identifier families, by the name `resource_id_*` takes.
 ///
 /// The Codetyp is the first character (two for the Paket-ID) and is fixed by
 /// the BDEW document, so it is part of the base rather than something a caller
@@ -262,7 +262,7 @@ fn ascii_kind_prefix(kind: &str) -> PyResult<&'static str> {
         })
 }
 
-/// Complete a 10-character base into an 11-character §8.2 identifier.
+/// Complete a 10-character base into an 11-character Kap. 8.2 identifier.
 ///
 /// `kind` is one of `nelo`, `nebe`, `cr`, `sg`, `sr`, `tr`, `paket`. The base
 /// must already start with that family's Codetyp (`E`, `F`, `A`, `B`, `C`, `D`,
@@ -342,7 +342,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
 
-    /// The BDEW §8.1 worked example, so the binding is pinned to the document
+    /// The Identifikatoren Kap. 8.1 worked example, so the binding is pinned to the document
     /// rather than to whatever `rubo4e` happens to compute.
     #[test]
     fn malo_matches_the_bdew_reference_vector() {
@@ -358,7 +358,7 @@ mod tests {
         let bdew = mp_id_from_base("990035700000", "bdew").unwrap();
         let gln = mp_id_from_base("990035700000", "gln").unwrap();
         assert_eq!(bdew, "9900357000003");
-        assert_ne!(bdew, gln, "§8.1 and EAN-13 must not be the same digit");
+        assert_ne!(bdew, gln, "Kap. 8.1 and EAN-13 must not be the same digit");
         assert!(mp_id_check_digit_schemes(&bdew).contains(&"bdew".to_owned()));
         assert!(mp_id_check_digit_schemes(&gln).contains(&"gln".to_owned()));
         assert_eq!(mp_id_unb_qualifier(&bdew).unwrap(), "500");

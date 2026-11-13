@@ -129,6 +129,10 @@ pub mod dtm {
     pub const BILANZIERUNGSBEGINN: &str = "158";
     /// `DTM+159` — Bilanzierungsende (Nr. 00026).
     pub const BILANZIERUNGSENDE: &str = "159";
+    /// `DTM+206` — Geräteausbaudatum (Nr. 00032), Muss on the 55007/55008
+    /// with `STS+7++Z33` Auszug wegen Stilllegung (UTILMD AHB Strom 2.2 Kap.
+    /// 8.10, S. 189, Bedingung `[79]`).
+    pub const GERAETEAUSBAUDATUM: &str = "206";
     /// `DTM+154` — ÜT der Lieferanmeldung des LFN (Nr. 00027).
     ///
     /// The Übertragungstag the `E_0624` Prüfschritt 5 Frist runs from.
@@ -171,7 +175,7 @@ pub const STS_TRANSAKTIONSGRUND: &str = "7";
 /// „wenn `STS+E01++A57` vorhanden" (`[84]`) — the two codes that mean „der LFA
 /// hat der Anfrage zur Beendigung der Zuordnung widersprochen".
 ///
-/// This is how GPKE Teil 2 § 2.1.2 Nr. 6's „der NB gibt zusätzlich den Grund der
+/// This is how GPKE Teil 2 Kap. 2.1.2 Nr. 6's „der NB gibt zusätzlich den Grund der
 /// Ablehnung des LFA an" reaches the wire. Without it the LFN learns that its
 /// Anmeldung was refused and not why the incumbent refused to release the
 /// Marktlokation, which is the only fact it can act on.
@@ -376,7 +380,7 @@ pub mod ergaenzung {
 /// `SG4 STS+7` DE 9013 (element 3) on the **Ankündigung Zuordnung LF**.
 ///
 /// 55607 / 55608 / 55609 use their own code space in the same element:
-/// `ZW8`–`ZX1` name Fall 1 to Fall 4 of GPKE Teil 2 § 2.4, and UTILMD AHB Strom
+/// `ZW8`–`ZX1` name Fall 1 to Fall 4 of GPKE Teil 2 Kap. 2.4, and UTILMD AHB Strom
 /// 2.2 Bedingungen `[161]`–`[164]` map them one-to-one onto the answering EBD
 /// `E_0603`–`E_0606` in `SG4 STS+E01` DE 1131. They are **not** [`ergaenzung`]
 /// values, and reading a 55607 through that module yields nothing.

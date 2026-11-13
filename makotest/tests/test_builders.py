@@ -240,7 +240,7 @@ class TestAntwortDritter:
 
     Muss on an Ablehnung whose Antwortcode is `A50` or `A57` (UTILMD AHB Strom
     Bedingungen `[356]` / `[84]`): both say the LFA refused to release the
-    Marktlokation, and GPKE Teil 2 § 2.1.2 Nr. 6 makes the NB state that
+    Marktlokation, and GPKE Teil 2 Kap. 2.1.2 Nr. 6 makes the NB state that
     refusal's ground beside its own.
     """
 

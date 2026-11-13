@@ -128,11 +128,10 @@ pub struct Nad {
     pub party_id: Option<String>,
     /// DE 3055 — code list responsible agency, component 2 of C082.
     ///
-    /// Common values in EDI@Energy:
+    /// The MIGs' code list on a NAD:
     /// - `"293"` — BDEW (the standard for German `MaKo` market participants)
     /// - `"9"` — GS1/EAN (global GLN scheme, rare in German `MaKo`)
-    /// - `"305"` — ECOD/ENTSO-E (EIC codes for TSOs and Regelzonen)
-    /// - `"332"` — DVGW (legacy gas-sector codes)
+    /// - `"332"` — DVGW (Gas market participants)
     ///
     /// Use [`crate::AgencyCode`] to parse or format this value.
     #[edifact(element = "3055")]
@@ -257,7 +256,7 @@ pub struct Erc {
 /// | 2       | 1082 | Line item number          | EBD-Nummer (e.g. `E_0256`)|
 ///
 /// It is **Muss** on every ORDRSP that answers an ESA order (ORDRSP AHB 1.1b
-/// §4.15, PIDs 19011–19014) and on the REMADV rejection PIDs, and it is the
+/// Kap. 4.15, PIDs 19011–19014) and on the REMADV rejection PIDs, and it is the
 /// *only* structured statement of why an answer says what it says — those
 /// ORDRSP use cases publish no free-text `FTX` at all. Conditions `[17]`/`[18]`
 /// require the code to sit in the named tree's Zustimmungs- resp.

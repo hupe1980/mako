@@ -149,7 +149,7 @@ prefix = "makod"
 [deployment]
 rollen = ["nb-strom"]
 
-# One entry per Marktpartner-ID. Allgemeine Festlegungen §2.13 requires a
+# One entry per Marktpartner-ID. Allgemeine Festlegungen Kap. 2.13 requires a
 # separate code per Energieart and Marktrolle.
 [[party]]
 mp_id   = "9900357000004"
@@ -211,6 +211,8 @@ webhook_secret_file = "/etc/makod/erp-webhook.secret"
 [maloid]
 # partners              = ["9900000000001=https://partner-a.example/maloid"]
 # verzeichnisdienst_url = "https://verzeichnisdienst.example/api"
+# verzeichnisdienst_signing_certs = ["9900000000001=/etc/makod/partners/9900000000001.api-sig.pem"]
+# verzeichnisdienst_trust_anchor_pem_file = "/etc/makod/sm-pki-root.pem"   # required with them
 ```
 
 ### Secrets
@@ -296,10 +298,10 @@ At least one entry; one per Marktpartner-ID.
 
 | TOML key | Required | Description |
 |---|---|---|
-| `mp_id` | yes | 13-digit BDEW- (`99…`) or DVGW-Codenummer (`98…`), GS1 GLN, or 16-char EIC. A Gas role under a `99…` code, or a Strom role under a `98…` code, is refused (BDEW-AWH Identifikatoren V1.2 Kap. 2.2, S. 5: Stelle 1+2 „99 = BDEW/Strom", „98 = DVGW/Gas") |
+| `mp_id` | yes | 13-digit BDEW- (`99…`) or DVGW-Codenummer (`98…`) or GS1 GLN. An EIC is refused: it is not an MP-ID (BDEW-AWH Identifikatoren V1.2 Kap. 2.1, S. 4). A Gas role under a `99…` code, or a Strom role under a `98…` code, is refused (BDEW-AWH Identifikatoren V1.2 Kap. 2.2, S. 5: Stelle 1+2 „99 = BDEW/Strom", „98 = DVGW/Gas") |
 | `roles` | yes | Case-insensitive. Strom: `NB`, `ANB`, `VNB` (`nb-strom`), `LF` (`lf-strom`), `MSB`, `NMSB`, `AMSB` (`msb-strom`), `ESA` (`esa-strom`). Gas: `GNB` (`nb-gas`), `LFG` (`lf-gas`), `GMSB` (`msb-gas`). Each must belong to a declared `rollen` token; `BKV`, `UNB`, `BIKO`, `DP`, `EIV`, `MGV`, `FNB`, `KN` and `RB` have no module and are refused |
 | `primary` | no | Storage partition key (derives the `TenantId`) and default sender MP-ID; the first entry when none is marked |
-| `agency` | no | NAD DE 3055 override; derived from the prefix otherwise (`99…` → `293`, `98…` → `332`, EIC → `ZEW`, else `9`) |
+| `agency` | no | NAD DE 3055 override, one of `9`, `293`, `332` — the MIGs' NAD code list (UTILMD MIG Strom S2.2 S. 32–33, UTILMD MIG Gas G1.2 S. 17–18); anything else is refused. Derived from the MP-ID otherwise, by the same rule that renders the NAD: `99…` → `293`, `98…` → `332`, other 13 digits → `9` |
 
 ### `[http]` / `[authz]` — REST API
 
@@ -353,7 +355,7 @@ consolidated by BK6-23-241).
 
 Every build links every domain crate; the declaration selects registrations,
 and `--marktrollen` additionally refuses commands at runtime. Declaring every
-role registers the full **76 workflows over 494 Prüfidentifikatoren**, and the
+role registers the full **77 workflows over 498 Prüfidentifikatoren**, and the
 startup log records the counts a declaration registers. Which principal may
 read which role's processes is the Cedar policy's decision
 ([Authorization](#authorization)).
@@ -408,7 +410,7 @@ Actions
 | `UseMcp` | `/mcp` (transport only — see [MCP authorization](#mcp-authorization)) |
 | `ReadRechnung` | `GET /api/v1/invoic/{process_id}/rechnung` |
 | `AdminMigrations` | `POST /admin/migrations` — grant to a break-glass principal for the FV cutover only; `conservative.cedar` grants it to nobody |
-| `AdminEinrichtung` | `GET /admin/einrichtung`, `GET /admin/einrichtung/deployment`, `GET /api/v1/policy`, MCP `get_policy` and `einrichtung_checkliste` — read-only; `conservative.cedar` grants it to `erp-operator` and `admin-readonly` |
+| `AdminEinrichtung` | `GET /admin/einrichtung`, `GET /admin/einrichtung/deployment`, `POST /admin/einrichtung/vorschlag`, `GET /api/v1/policy`, MCP `get_policy`, `einrichtung_checkliste` and `einrichtung_vorschlag` — read-only; `conservative.cedar` grants it to `erp-operator` and `admin-readonly` |
 | `UseWebdienste` | every `:8090` route |
 | `ReadProcess` | MCP `get_process`, `get_process_history`, `list_overdue_deadlines`, `list_dead_letters`; carries the workflow name, so an NB principal can be kept off LF process state |
 
@@ -484,7 +486,7 @@ its own AS4 client**: a combined Strom+Gas deployment holds two `[party.as4]`.
 | `[as4] message_id_domain` | The `id-right` of every `eb:MessageId`: `<outbox id>@<domain>` (RFC 2822 §3.6.4) |
 | `[as4] trust_anchor_pem_file` | SM-PKI root certificate |
 | `[as4] crl_signer_pem_file` | SM-PKI CCRL-S(Root) certificate |
-| `[as4] zertifikat_warnfenster_tage` | Days before expiry a `[party.as4]` or `[[as4.partner]]` certificate is reported as a warning, with its date; an expired one blocks. Default `30` |
+| `[as4] zertifikat_warnfenster_tage` | Days before expiry a `[party.as4]` or `[[as4.partner]]` certificate is reported as a warning, with its date; an expired one blocks. Default `30`. Re-read every six hours and on each request, so `GET /admin/einrichtung` and `makod_certificate_expiry_days` show the files as they stand. Key rotation without a restart: [Certificate expiry and rotation](@/docs/reference/as4-bdew.md#certificate-expiry-and-rotation) |
 | `[as4] allow_no_signing` (`MAKOD_ALLOW_NO_AS4_SIGNING`, `--allow-no-as4-signing`) | **Dev/test:** start without AS4 key material and without an outbox webhook; outbound EDIFACT is logged |
 | `[party.as4] signing_cert_pem_file` · `signing_key_pem_file` | The MP-ID's EMT.MAK signing certificate (leaf first, then intermediates) and key |
 | `[party.as4] encryption_cert_pem_file` · `encryption_key_pem_file` | Its encryption certificate and decryption key |
@@ -494,6 +496,7 @@ its own AS4 client**: a combined Strom+Gas deployment holds two `[party.as4]`.
 | `[[as4.partner]] encryption_cert_pem_file` | Required with `endpoint` |
 | `[[as4.partner]] signing_cert_pem_files` | Pinned signing certificates; without any, the SM-PKI chain and the OU decide |
 | `[[as4.partner]] quirks` | `["receipt-without-non-repudiation"]` accepts that partner's **signed** receipt without NonRepudiationInformation |
+| `[[as4.partner]] de0004_ausnahme` | MP-IDs the partner may name in `UNB` DE0004 while authenticating as itself (a Dienstleister); without it DE0004 must be the partner's own MP-ID, and each entry is a startup warning |
 
 Partner endpoints are seeded into the durable `PartnerStore`; runtime changes via
 `PUT /admin/partners/{mp_id}` or inbound PARTIN survive restarts.
@@ -578,7 +581,7 @@ is receipted and logged; the `confirmSwitch` answer is the operator's.
 **Outbound wire format.** A complete Übertragungsdatei `UNB … UNZ`. UNB
 sender/receiver equal `NAD+MS`/`NAD+MR` (Allgemeine Festlegungen 6.1d Kap. 2);
 DE 0007 follows the MP-ID (`500` BDEW, `502` DVGW, `14` GS1); the DE 0020
-Datenaustauschreferenz — also in UNZ and the §2.12 filename — derives from the
+Datenaustauschreferenz — also in UNZ and the Kap. 2.12 filename — derives from the
 outbox id, so retries reuse it.
 
 **Tracing.** An inbound `traceparent` is captured into every outbox message the
@@ -635,6 +638,20 @@ API-Webdienste.
   `transactionId` / `initialTransactionId` headers before any handler runs. An
   unsigned request, a mismatch and a partial or repeated header set are `401`.
   The proxy, not makod, validates the SM-PKI chain.
+- **Directory records are verified.** A Verzeichnisdienst record is the
+  provider's statement, verifiable against its EMT.API signature certificate
+  (Regelungen zum Verzeichnisdienst 1.1, Kap. 2.2, S. 6), and the directory
+  distributes no certificates (Kap. 1.6, S. 4). makod uses a record only when
+  its JWS verifies against a certificate in `[maloid]
+  verzeichnisdienst_signing_certs` (`--verzeichnisdienst-signing-cert
+  MP-ID=PATH`, repeatable for a rollover) and it names the entry requested; a
+  redirect is followed and its record held to the same check. A partner with no
+  certificate configured has every record refused and keeps its stored
+  endpoint. Each certificate file holds the leaf, then its Sub-CA; it must chain
+  to `verzeichnisdienst_trust_anchor_pem_file` (`--verzeichnisdienst-trust-anchor`,
+  the SM-PKI root), be inside its validity and carry the MP-ID as OU (Kap. 3.2,
+  S. 7) — otherwise, or without the anchor, the boot is refused. The CRL is not
+  checked.
 - **mTLS is the proxy's job.** makod does not terminate TLS; front `:8090` with a
   proxy (Nginx, Envoy, ALB) enforcing mTLS against the BDEW PKI CA. By default
   every `:8090` route also requires bearer/OIDC and Cedar `UseWebdienste`.
@@ -673,11 +690,13 @@ optional `details`. Each command records an `erfasst` entry in marktd's
 `netzzugang_antraege` and enqueues a `NetzzugangAntrag` outbox message, which is
 delivered:
 
-1. to `--netzzugang-endpoint-url` (`MAKOD_NETZZUGANG_ENDPOINT_URL`) when set —
-   the entry becomes `uebermittelt`, with a `platform_ref` if returned;
-2. else to the ERP webhook as `de.mako.netzzugang.uebermittlungsbedarf`, for
+1. to the ERP webhook as `de.mako.netzzugang.uebermittlungsbedarf`, for
    submission via the NB's Webportal (signed when `--erp-webhook-secret` is set);
-3. else, or on an undeserialisable payload, marked `fehlgeschlagen` and acked.
+2. else, or on an undeserialisable payload, marked `fehlgeschlagen` and acked.
+
+No platform interface is published — § 20b Abs. 3 EnWG leaves it to a BNetzA
+Festlegung — so `--netzzugang-endpoint-url` (`MAKOD_NETZZUGANG_ENDPOINT_URL`,
+`[erp] netzzugang_endpoint_url`) is refused at startup.
 
 The answer is recorded via marktd
 `PATCH /api/v1/netzzugang/antraege/{id}/status`, which emits
@@ -696,7 +715,7 @@ Cedar `UseMcp` action; unauthenticated requests are `401`.
 
 ### Tools
 
-`makod` ships **16 MCP tools**:
+`makod` ships **17 MCP tools**:
 
 | Tool | Annotations | Description |
 |---|---|---|
@@ -709,6 +728,7 @@ Cedar `UseMcp` action; unauthenticated requests are `401`.
 | `get_health` | `read_only` | Version, tenant, Marktrollen, MaLo cache stats |
 | `get_policy` | `read_only` | Same as `GET /api/v1/policy` — the `[policy]` settings with origin and source, `deployment.rollen` and every `allow_*` posture |
 | `einrichtung_checkliste` | `read_only` | Same as `GET /admin/einrichtung/deployment` — the readiness checklist across `[[einrichtung.dienst]]` (`outputSchema` declared) |
+| `einrichtung_vorschlag` | `read_only` | Same as `POST /admin/einrichtung/vorschlag` — the configuration the setup interview's answers propose, per daemon, against what is loaded (`outputSchema` declared) |
 | `get_process` | `read_only` | Business key (`malo_id`/`melo_id`/`vorgang`) or process id → every process indexed under it, each with its pending deadlines (`outputSchema` declared) |
 | `get_process_history` | `read_only` | A process's events, oldest first; a market message carries `richtung`, `pid` and `message_ref` as its workflow states them (`EventPayload::verlauf`), never parsed from the event type; an answer adds `antwortcode`, `codeliste` (`EventPayload::antwort`) and the BDEW's `bedeutung`, resolved through `mako_pruefung::codes::lies` in that list only (`outputSchema` declared) |
 | `list_overdue_deadlines` | `read_only` | Deadlines past due and not yet fired — the deadline worker's backlog, not missed Fristen (those are processd `list_overdue_processes`) |
@@ -731,7 +751,7 @@ the action its REST twin enforces:
 | `get_malo` | `AdminMaloRead` |
 | `list_partners`, `get_partner` | `AdminPartnerRead` |
 | `get_process`, `get_process_history`, `list_overdue_deadlines` | `ReadProcess`, per workflow (`get_process` leaves out each process the caller may not read, and answers `not_found` when none remains; `get_process_history` answers a refused process `not_found`) |
-| `get_policy`, `einrichtung_checkliste` | `AdminEinrichtung` |
+| `get_policy`, `einrichtung_checkliste`, `einrichtung_vorschlag` | `AdminEinrichtung` |
 | `list_dead_letters` | `ReadProcess` across workflows — a workflow-scoped principal is denied outright |
 | `list_commands`, `get_health`, `get_format_version_coverage`, `list_active_processes`, `get_outbox_status` | none — no tenant data |
 
@@ -800,6 +820,7 @@ document fixes the rule, the document.
 | `makod --check-config [--json]` | The findings; exit non-zero on a blocking one. Opens no store |
 | `GET /admin/einrichtung` | The same JSON: `dienst`, `version`, `bereit`, `befunde`, `policy`, `parteien` |
 | `GET /admin/einrichtung/deployment` | The checklist across makod and every `[[einrichtung.dienst]]`: one item per area — green, amber, red, or unknown when a daemon cannot be reached — and a finding when two daemons name different MP-IDs for one Rolle and Sparte |
+| `POST /admin/einrichtung/vorschlag` | The setup interview's answers in, a proposed `makod.toml` and `processd.toml` out — see [Einrichtung](@/docs/guide/einrichtung.md#the-proposal). Writes nothing |
 
 ```toml
 [[einrichtung.dienst]]
@@ -869,7 +890,7 @@ resubmit it.
 | `unknown_pid` | PID found, no workflow — dead-lettered | accepted |
 | `no_pid` | CONTRL, which carries none by design | accepted |
 | `missing_pid` | A PID-bearing type without one — dead-lettered | **rejected** |
-| `missing_party` | `NAD+MS` or `NAD+MR` absent — dead-lettered (Allgemeine Festlegungen V6.1d §2.13) | **rejected** |
+| `missing_party` | `NAD+MS` or `NAD+MR` absent — dead-lettered (Allgemeine Festlegungen V6.1d Kap. 2.13) | **rejected** |
 | `parse_error` | Not parseable | **rejected** |
 | `dispatch_failed` | Routed, but the workflow command failed; dead-lettered, `error` names it | **rejected** |
 
@@ -903,7 +924,7 @@ or `ORDRSP`, so the BDEW parser would accept them as the wrong type.
 | `process_not_found` | A NOMRES with no nomination to answer — only NOMINT initiates |
 
 The CONTRL Empfangsbestätigung is owed for a DVGW interchange too (CONTRL AHB
-1.0 §2.3.1); the AS4 `eb:Receipt` does not discharge it.
+1.0 Kap. 2.3.1); the AS4 `eb:Receipt` does not discharge it.
 
 ### Ingest durability
 
@@ -1087,7 +1108,8 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `gpke.lieferende.anmelden` | `LF` | GPKE | 55004 | Old supplier registers supply end (Abmeldung/Lieferende LF → NB) |
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55016 | LFN terminates the old supply contract (Kündigung LFN → LFA; 55017 is the Bestätigung) |
-| `gpke.beendigung-zuordnung.anfragen` | `NB` | GPKE | 55010 | Asks the LFA to release the Marktlokation (SD Lieferbeginn Nr. 3). The LFA answers 55011/55012 by **09:00 Uhr des 1. WT**; silence counts as Zustimmung |
+| `gpke.beendigung-zuordnung.anfragen` | `NB` | GPKE | 55010 | Asks the LFA to release the Marktlokation (SD Lieferbeginn Nr. 3). The LFA answers 55011/55012 by **09:00 Uhr des 1. WT** nach dem ÜT der Anmeldung (`anmeldung_eingang`); silence counts as Zustimmung. The Anfrage also carries the windows of the Meldepflichten 55036 (07:00) and 55037 (12:00), which `gpke.zuordnung.informieren` / `.beenden` discharge |
+| `gpke.nb-lieferende.ankuendigen` | `NB` | GPKE | 55007 | Announces the end of an LF's Zuordnung (SD Lieferende von NB an LF Nr. 1, `Z33`/`ZQ7`/`ZT0`). The LF's 55008/55009 resume the process; on silence it sends the Beendigung aufgrund fehlender Antwort (55007 `BGM+Z90`) between **05:00 and 06:00 Uhr des 1. WT** (Nr. 3). A Stilllegung (`Z33`) takes `geraeteausbaudatum` and `msb_mp_id` (optionally `msbz`/`lfz`) and its ending sends 55611 and 55038 with their 07:00 Meldepflicht windows |
 | `gpke.zuordnung.informieren` | `NB` | GPKE | 55036 | Tells the LFN **die Identität des LFA** (SD Lieferbeginn Nr. 2, 07:00 Uhr des 1. WT nach dem ÜT) |
 | `gpke.zuordnung.beenden` | `NB` | GPKE | 55037 | Ends the LFA's Zuordnung, naming Grund and Zuordnungsende (Nr. 10, 12:00 Uhr des 1. WT) |
 | `gpke.zuordnung.aufheben` | `NB` | GPKE | 55038 | Cancels a future LFZ Zuordnung (Nr. 13, 12:00 Uhr des 1. WT) |
@@ -1107,8 +1129,10 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `gpke.anfrage-sperrung.beantworten` | `MSB` | GPKE | 19118/19119 | MSB answers the NB's Anfrage Sperrung 17116 out of `E_0488`; the code's Cluster picks the PID, `A02`/`A03` name the problem in `FTX+AAP` |
 | `geli.anfrage-sperrung.beantworten` | `MSB` | GeLi Gas | 19118/19119 | gMSB answers the GNB's Anfrage Sperrung 17116 out of `E_1001` |
 | `gpke.datenabruf.anfordern` | `LF` · `NB` · `MSB` | GPKE | 17004 | Anforderung von Werten to the MSB, keyed on its `BGM` DE 1004; the MSB's ORDRSP 19007 resumes it by `RFF+ON` |
+| `wim.technik-aenderung.bestellen` | `NB` · `LF` | WiM | 17011 | Bestellung Änderung der Technik (`BGM+Z12`) to the MSB, keyed on its `BGM` DE 1004; the MSB's ORDRSP 19005/19006 resumes it by `RFF+ON` |
 | `gpke.datenabruf.ablehnen` | `MSB` | GPKE | 19102/19007/19114 | MSB refuses an Anfrage / Anforderung / Reklamation von Werten out of a tree its PID admits (`E_0442`, `E_0219`–`E_0225`, `E_0226`–`E_0230`) |
-| `gpke.konfiguration.beantworten` | `MSB` | GPKE | 19132/19120/19127/19131 | MSB answers a received 17130 / 17121 / 17118 / 17129 out of `E_0526`, `E_0527` or `E_0539` |
+| `gpke.datenabruf.werte-senden` | `MSB` | GPKE | 13017/13018/13025 | MSB answers an Anfrage von Werten 17102 — the Lastgang on 13018 (`IMD++Z11`) or 13025 (`BGM+Z48`), the Zählerstände on 13017 (`IMD++Z12`); an Energiemenge Anfrage is refused |
+| `gpke.konfiguration.beantworten` | `MSB` · `NB` | GPKE | 19132/19120/19127/19131/19130/19121/19124 | Answers a received 17130 / 17121 / 17118 / 17129 / 17128 / 17120 / 17123 out of the tree its ORDRSP column names for the party answered; 19123 is refused by name |
 | `gpke.abrechnung.annehmen` | `LF` | GPKE | 31001/31002 | The LF settles an inbound Netznutzungsabrechnung → REMADV 33001 |
 | `gpke.abrechnung.ablehnen` | `LF` | GPKE | 31001/31002 | The LF disputes it → REMADV 33003/33004, `AJT` code from `E_0406` |
 | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas | 44001 | Gas supplier registers supply start |
@@ -1118,27 +1142,27 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas | 44005/44006 | Gas DSO accepts/rejects supply end |
 | `wim.geraetewechsel.beauftragen` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Commission a meter-device change |
 | `wim.geraetewechsel.bestaetigen` | `NB` or `MSB` | WiM | 55040/55043/55052/55169 | Business Bestätigung — UTILMD with `SG4 STS+E01` from the process's EBD |
-| `wim.rechnungsabwicklung.beenden` | `LF` or `MSB` | WiM | 17006 | End the Rechnungsabwicklung MSB über LF (either side may) |
+| `wim.rechnungsabwicklung.beenden` | `LF` or `MSB` | WiM | 17006 | End the Rechnungsabwicklung MSB über LF (either side may); `BGM+Z29`, `DTM+203`, `IMD++Z02`, and from the MSB the `SG29` Grund — passes the pre-send gate before the spawn |
 | `wim.rechnungsabwicklung.zustimmen` | `LF` or `MSB` | WiM | 19009 | Confirm a received Beendigung (ORDRSP) |
 | `wim.rechnungsabwicklung.ablehnen` | `LF` or `MSB` | WiM | 19010 | Reject a received Beendigung (ORDRSP) |
 | `wim.steuerungsauftrag.bestaetigen` | `MSB` | WiM | — | MSB sends final positive control-measure response |
 | `wim.steuerungsauftrag.ablehnen` | `MSB` | WiM | — | MSB sends final negative control-measure response |
 | `mabis.abrechnung.einleiten` | `BKV` | MaBiS | 13003 · 13020 · 13023 | Record a version of a Summenzeitreihe; opens the settlement on the first one. Requires `zeitreihe` (`SG10 CAV` code) and `version` (Erstellungszeitpunkt) |
-| `mabis.abrechnung.daten-einreichen` | `BKV` | MaBiS | 21000 · 21001 · 21005 | Send a Prüfmitteilung for one version. Requires `antwortcode` from the Entscheidungsbaum of this Summenzeitreihe, plus `grund` except for its Zustimmung. **No Frist** — bounded by the § 3.10 clearing window |
-| `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MaBiS | — | Close a clearing window ahead of its deadline (`lauf`: `bka`, the default, or `kbka`). Sets no Datenstatus: that is the BIKO's (§ 3.8.3), via IFTSTA 21003/21004 |
+| `mabis.abrechnung.daten-einreichen` | `BKV` | MaBiS | 21000 · 21001 · 21005 | Send a Prüfmitteilung for one version. Requires `antwortcode` from the Entscheidungsbaum of this Summenzeitreihe, plus `grund` except for its Zustimmung. **No Frist** — bounded by the Kap. 3.10 clearing window |
+| `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MaBiS | — | Close a clearing window ahead of its deadline (`lauf`: `bka`, the default, or `kbka`). Sets no Datenstatus: that is the BIKO's (Kap. 3.8.3), via IFTSTA 21003/21004 |
 | `mabis.liste.korrigieren` | `LFN`/`NB`/`ÜNB` | MaBiS | 55066 · 55196 · 55202 · 55224 | Answer a Clearingliste with a Korrekturliste, `{ malo, grund }` per disputed MaLo; an empty list is still sent. `sender_rolle` selects the Entscheidungsbaum (`E_0047` NB / `E_0004` ÜNB) |
 | `mabis.liste.ablehnen` | `LFN`/`NB`/`ÜNB` | MaBiS | 55066 · 55196 · 55202 · 55224 | Refuse a Clearingliste entire. Whole-list facts (`abonnement_bestellt`, `zeitraum_plausibel`, `mabis_zp_passt`, `version_zugelassen`, `innerhalb_clearingphase`) are tri-state; absent escalates. A list whose whole-list checks all pass is owed a Korrekturliste instead |
 | `mabis.liste.senden` | `NB` | MaBiS | 55065 · 55201 | NB sends the Lieferantenclearingliste or the LF-AACL, members in `SG1 RFF+AAV`; the LF's Korrekturliste 55066 / 55202 resumes it by Listennummer |
 | `mabis.summenzeitreihe.uebermitteln` | `NB` or `ÜNB` | MaBiS | 13003 | File a Summenzeitreihe for one Bilanzierungsgebiet with the BIKO |
 | `gpke.vollzugsmeldung.empfangen` | `NB`/`LFN`/`LFA` | GPKE | 21024–21033 | Vollzugsmeldung received via REST (manual replay) |
 | `wim.iftsta.empfangen` | `NB`/`MSB` | WiM | 21009–21018 | WiM IFTSTA status received via REST (manual replay) |
-| `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB`/`BIKO` | MaBiS | 21002 | Abweisung einer Prüfmitteilung (BIKO → NB/ÜNB); requires `abweisungsgrund`. A rejected Prüfmitteilung is never forwarded (§ 9.8.2 Nr. 2) |
+| `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB`/`BIKO` | MaBiS | 21002 | Abweisung einer Prüfmitteilung (BIKO → NB/ÜNB); requires `abweisungsgrund`. A rejected Prüfmitteilung is never forwarded (Kap. 9.8.2 Nr. 2) |
 | `mabis.datenstatus.empfangen` | `BKV`/`NB`/`BIKO` | MaBiS | 21003 · 21004 | Datenstatus received via REST — 21003 to the NB/ÜNB, 21004 to the BKV. Accepts `STS+Z04` codes `A01`/`A02`/`A03`/`A04`/`A06` or their snake_case names |
 | `gpke.lieferbeginn.ablehnen` | `NB` | GPKE | 55003 | DSO rejects supply start (`E_0622`/`E_0623` code) |
 | `gpke.neuanlage.anmelden` | `LF` | GPKE | 55600/55601 | LF registers a new Marktlokation with the NB the body names; the answer 55602–55605 resumes it by its `RFF+TN` |
 | `gpke.neuanlage.bestaetigen` | `NB` | GPKE | 55602/55603 | NB confirms a Neuanlage (`E_0608`; cluster picks the PID) |
 | `gpke.neuanlage.ablehnen` | `NB` | GPKE | 55604/55605 | NB refuses a Neuanlage — admissible only after the 60-WT Prüflauf |
-| `gpke.abrechnungsdaten.bearbeitungsstand` | `NB` | GPKE | 21047 | Bearbeitungsstand on 55156/55220/55673 (`E_0595`, IFTSTA) |
+| `gpke.abrechnungsdaten.bearbeitungsstand` | `NB` | GPKE | 21047 | Bearbeitungsstand on 55156/55220/55673 (`E_0595`) and the ÜNB's 55614/55675 (`codeliste` `E_0618` / `E_0613`), IFTSTA |
 | `gpke.lieferbeginn.aktivieren` | `LF` | GPKE | — | LF marks its own Anmeldung active once the NB confirmed |
 | `gpke.lieferende.ablehnen` | `NB` | GPKE | 55006 | DSO rejects supply end (`E_0607`) |
 | `gpke.kuendigung.bestaetigen` | `LF` | GPKE | 55017 | LFA confirms the Kündigung (`E_0614`) |
@@ -1175,13 +1199,14 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `geli.geschaeftsdatenanfrage.ablehnen` | `NB` | GeLi Gas | 19101 | GNB refuses the Anfrage (ORDRSP; `G_0049` to a LF, `E_3004` to a MSB) |
 | `geli.datenabruf.anfragen` | `LFG` | GeLi Gas | 17103 | LF requests Abrechnungsbrennwert and Zustandszahl (ORDERS); `melo_id`, `zeitspanne_von` and `zeitspanne_bis` required, the Zeitspanne past and ended at most 12 months ago — answer due 10 WT after the Anfrage, not before the 10. WT of the following month (GeLi Gas 3.0 Kap. 4.2) |
 | `wim.geraetewechsel.ablehnen` | `NB` or `MSB` | WiM | 55041/55044/55053/55170 | Business Ablehnung — requires an `antwortcode` from the process's EBD |
-| `wim.geraetewechsel.aperak` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Technical APERAK (45 min, APERAK AHB 1.1 §2.4.1) — not the business answer |
+| `wim.geraetewechsel.aperak` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Technical APERAK (45 min, APERAK AHB 1.1 Kap. 2.4.1) — not the business answer |
 | `wim.gesamtvorgang.melden` | `MSB` or `nMSB` | WiM | 21010/21009 | MSBN reports the Gesamtvorgang outcome; its date becomes the Zuordnungsbeginn |
 | `wim.zuordnung.bestaetigen` | `NB` | WiM | 21012 | NB makes the Zuordnung from the reported date, 00:00 Uhr |
 | `wim.zuordnung.ablehnen` | `NB` | WiM | 21011 | NB records the MSB-Scheitermeldung; the MSBA stays assigned |
 | `wim.preisanfrage.angebot-senden` | `MSB` | WiM | 15001/15002/15004/15005 | MSB answers a Preisanfrage with the QUOTES Angebot the REQOTE's PID pairs with, back to its sender |
 | `wim.preisanfrage.anfragen` | `NMSB`, `MSB`, `LF` or `NB` | WiM | 35001/35002/35004/35005 | Requester sends the REQOTE; the MSB's QUOTES resumes the process by the location. Answer window per PID: 35001 4 WT, 35002 5 WT, 35005 10 WT, 35004 none |
 | `wim.ersteinbau.vorabinformation-senden` | `MSB` | WiM | 21029 | gMSB announces the Ersteinbau eines iMS to the wMSB; refused later than 3 Monate und 3 WT before the Umstellungszeitpunkt (WiM Teil 1 Kap. 3.5.2 Nr. 1). Opens the wMSB's 3-WT answer window |
+| `wim.ersteinbau.scheitern-melden` | `MSB` | WiM | 21027/21025 | wMSB reports the Scheitern of its `A02` Eigenausbau (`Z74`/`Z75`) to every role of the Use-Case: 21027 to the gMSB and the NB, 21025 to the LF; marktd names NB and LF, an unresolved one is escalated by name |
 | `wim.ersteinbau.beantworten` | `MSB` | WiM | 21030/21031 | wMSB answers the Vorabinformation; the `E_0233` code picks the PID — `A03` 21030, `A01`/`A02`/`A04` 21031 |
 | `wim.weiterverpflichtung.beantworten` | `MSB` | WiM | 19003/19004 | MSBA answers the Weiterverpflichtungsauftrag; `Z13`/`Z14`/`Z22` against the 3-Monats- resp. 1-Monats-Kappung |
 | `wim.technik-aenderung.beantworten` | `MSB` | WiM | 19005/19006 | MSB answers a received ORDERS 17011 out of `E_0249`/`E_0250` (`Z12`) or `E_0279`/`E_0283` (`Z93`), picked by the Besteller and the Auftrag's `BGM` |
@@ -1199,6 +1224,7 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `invoic.sonstige-leistung.ablehnen` | `LF`, `LFG`, `LFN`, `LFA` | Sparte-neutral | 31011 | LF disputes the invoice (REMADV) |
 | `gabi.rechnung.annehmen` | `MGV` | GaBi Gas | 31007 | Settles the aggregated MMM-Rechnung 31007/31008. The Kapazitätsrechnung 31010 runs NB → KN, a role no deployment holds |
 | `gabi.rechnung.ablehnen` | `MGV` | GaBi Gas | 31007 | Disputes one |
+| `gabi.allokationsliste.ablehnen` | `NB` | GaBi Gas | 19110 | GNB refuses a received Start Abo 17110 out of `E_0803` (`G_0001`) |
 | `gabi.nominierung.senden` | `BKV` | GaBi Gas (DVGW) | 70030 | Nominates a gas day: `positionen` state point, direction and `kwh_pro_h` per period |
 | `gabi.nominierung.beantworten` | `NB` · `MGV` | GaBi Gas (DVGW) | 70036 | Answers a nomination — `entscheidung` `bestaetigt` / `teilweise` / `abgelehnt`, with `bestaetigte_positionen` when curtailed |
 | `gabi.mehrmindermengen.melden` | `NB` | GaBi Gas (DVGW) | 70095 | Reports a Netzkonto's Mehr-/Mindermenge (SSQNOT); `verfahren` `slp` or `rlm` |
@@ -1286,8 +1312,12 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `gpke.sperrung.fehlgeschlagen` | `malo_id`, **`reason`** (or `note`) |
 | `gpke.anfrage-sperrung.beantworten` · `geli.anfrage-sperrung.beantworten` | `malo_id`, `antwortcode` (`E_0488` resp. `E_1001`), `freitext` (with `A02`/`A03`) — no other key |
 | `gpke.datenabruf.anfordern` | `msb_mp_id`, `lokation_id`, `grund` (`Z46`/`Z47`/`Z49`), `wertzeitpunkt` (`YYYY-MM-DD`), `dokumentennummer` (optional, an..35) |
+| `wim.rechnungsabwicklung.beenden` | `malo_id`, `counterparty_mp_id`, `ausfuehrungsdatum` (`DTM+203`), `grund` (`Z61`/`Z62`/`Z63`, Muss from the MSB, none from the LF), `rolle` (`LF`/`MSB`, where the deployment plays both) |
+| `wim.technik-aenderung.bestellen` | `besteller` (`NB`/`LF`), `msb_mp_id`, `melo_id`, `ausfuehrungsdatum` (`YYYY-MM-DD`), `produkte` (Codeliste der Konfigurationen Kap. 7, Ebene Messlokation; an LF only Einbau iMS / kME), `marktlokation` and `msb_marktlokation` (with „weitere Energieflussrichtung"), `dokumentennummer` (optional, an..35) |
 | `gpke.datenabruf.ablehnen` | `anfragender_mp_id`, `dokumentennummer`, `codeliste` (the tree), `antwortcode`, `ansprechpartner` (on a 19114) |
-| `gpke.konfiguration.beantworten` | `absender_mp_id`, `dokumentennummer`, `codeliste` (`E_0526`/`E_0527`/`E_0539`), `antwortcode`, `freitext` (with `A99`) |
+| `gpke.datenabruf.werte-senden` | `anfragender_mp_id`, `dokumentennummer`, and either `werte` (each `quantity_kwh`, `dtm_from`, `dtm_to`, `obis_code`, optional `ersatzwert`) or `zaehlerstaende` (each `obis_code`, `quantity`, `gueltig`, optional `ablesedatum`; on an `ersatzwert` its `ersatzwert_verfahren` and `ersatzwert_grund`) with exactly one of `geraetenummer` (`RFF+MG`) or `konfigurations_id` (`RFF+AGK`, iMS) |
+| `gpke.konfiguration.beantworten` | `absender_mp_id`, `dokumentennummer`, `codeliste` (a tree of the ORDRSP column), `antwortcode`, `freitext` (where the code names the problem) |
+| `gabi.allokationsliste.ablehnen` | `lf_mp_id`, `dokumentennummer` (the 17110's `BGM`), `antwortcode` |
 | `gpke.abrechnung.annehmen` | `rechnung` (BO4E `RECHNUNG`) |
 | `gpke.abrechnung.ablehnen` | `rechnung`, `ablehnungsgrund` |
 | `geli.lieferbeginn.anmelden` | `malo_id`, `process_date` (YYYYMMDD), `transaktionsgrund`, `bilanzkreis`, `abrechnungsintervall_monate` (1, 3, 6 or 12), `haushaltskunde`, `netznutzungsvertrag` (`LIEFERANT_NB`/`KUNDE_NB`), `netznutzung_zahler` (`LIEFERANT`/`KUNDE`), `gemeinderabatt_prozent`, `kunde`, `ablesekarte` — no other key⁷ |
@@ -1309,6 +1339,7 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `gpke.geschaeftsdatenanfrage.ablehnen` | `anfragender_mp_id`, `anfrage_nummer`, `anfragender` (`LF`/`MSB`), `antwortcode` |
 | `wim.ersteinbau.vorabinformation-senden` | `melo_id`, `wmsb_mp_id`, `umstellungszeitpunkt` (YYYY-MM-DD) |
 | `wim.ersteinbau.beantworten` | `melo_id`, `antwortcode` (`E_0233`) |
+| `wim.ersteinbau.scheitern-melden` | `melo_id`, `grund` (`Z74`/`Z75`), `reason` (optional, audit trail) |
 | `wim.technik-aenderung.beantworten` | `absender_mp_id`, `dokumentennummer` (the 17011's `BGM` DE 1004), `besteller` (`NB`/`LF`), `antwortcode`, `ansprechpartner` (`name`, `kommunikation`), `freitext` (with `A99`) — no other key; `A04`/`A05` on a `Z93` Bestellung are refused |
 | `wim.geraetewechselabsicht.anzeigen` | `msba_mp_id`, `melo_id`, `geraetewechseltermin`, `umfang` (`Z58`/`Z59`), `geraete` (`geraeteart`, `geraetenummern`), `sparte`, `dokumentennummer` (optional) |
 | `wim.geraeteuebernahme.bestellen` | `msba_mp_id`, `angebotsnummer` (the QUOTES' `BGM` DE 1004), `ausfuehrungsdatum`, `ansprechpartner`, `positionen` (the QUOTES' `LIN` numbers), `sparte`, `dokumentennummer` (optional) |
@@ -1557,9 +1588,9 @@ Between the two Strom claimants of 29001, conversation-ID correlation decides.
 
 ### ESA messages
 
-REQOTE **35003** „Anfrage von Werten" is ESA → MSB (REQOTE AHB 1.2 §4.3) and
+REQOTE **35003** „Anfrage von Werten" is ESA → MSB (REQOTE AHB 1.2 Kap. 4.3) and
 routes to `wim-wertebestellung` on the PID alone. **35002** is a different
-process (LF → MSB, WiM Teil 1, §4.2).
+process (LF → MSB, WiM Teil 1; REQOTE AHB 1.2 Kap. 4.2).
 
 The `ESA` party role (`esa-strom`) registers the ESA side's inbound answers (QUOTES 15003,
 ORDRSP 19011–19014). An MSB serving an ESA registers ORDERS 17007 under `MSB`.
@@ -1596,7 +1627,7 @@ sequenceDiagram
 |---|---|
 | **Messprodukt** | From *Codeliste der Konfigurationen* 1.4 Kap. 4.6 (`SG27 PIA+5 … :Z11`); validated before rendering. A code outside Kap. 4.6, one for another Lokationsebene, or a Kap. 4.6.2 (SM-PKI) product without target address and certificates is `422` |
 | **Lokationsebene** | Decided by the Messprodukt, not the ID (`[950]` serves MaLo and Tranche) — `mako_wim::esa::ebene_fuer_messprodukt` |
-| **Angebot** | QUOTES AHB 1.1a §4.3: `SG4 CUX`, 1–3 `PIA+Z02` Artikel-IDs each with `PRI+CAL` (`Z01` Einrichtung, `Z02` Transaktion, `Z03` Betrieb), 1–23 `PIA+5 … :SRW` OBIS, `DTM+469`, `DTM+273`. Prices tell an Angebot from an Ablehnung |
+| **Angebot** | QUOTES AHB 1.1a Kap. 4.3: `SG4 CUX`, 1–3 `PIA+Z02` Artikel-IDs each with `PRI+CAL` (`Z01` Einrichtung, `Z02` Transaktion, `Z03` Betrieb), 1–23 `PIA+5 … :SRW` OBIS, `DTM+469`, `DTM+273`. Prices tell an Angebot from an Ablehnung |
 | **Ausführungsdatum** | ORDERS `DTM+203` = `max(Wunschtermin, DTM+469)` |
 | **Subscription** | The (Meldepunkt, Messprodukt) pair; a second product at one location is a new subscription. Follow-up commands take `messprodukt`, optional while only one exists |
 | **Answers** | `SG2 AJT` is Muss on all four ORDRSP PIDs; the code is resolved against `mako_pruefung`'s catalogue into `mako_wim::esa::Antwort`, and a code whose Cluster contradicts its PID is resolved by the PID |
@@ -1704,7 +1735,7 @@ never a billing path.
 | `wim.wertebestellung.abbestellung-beantworten` | ORDRSP 19011 / 19012 | `E_0254` |
 
 The three ORDRSP commands take an `antwort_code`: its Zustimmungs- or
-Ablehnungs-Cluster selects the PID (ORDRSP AHB 1.1b §4.15). Resolve it with
+Ablehnungs-Cluster selects the PID (ORDRSP AHB 1.1b Kap. 4.15). Resolve it with
 `mako_pruefung::esa::wertebestellung`; an unpublished code is `422`. `E_0257`
 refuses a Stornierung after delivery with `A02` (running Abo) or `A03`
 (one-shot already sent); `E_0254` publishes four refusals, and a refused
@@ -1881,11 +1912,28 @@ flowchart LR
     d --> as4
 ```
 
-The UTILMD renderer reads the typed `UtilmdPayload`, which refuses a key it
-does not declare: a payload that spells one (`pruefung` instead of
-`antwort_code`) is a render error naming it, not a message with the segment
-missing. Where the payload leaves a value open and the Prüfidentifikator's
-column fixes exactly one, the column's value is written — `BGM` DE 1001, the
+Every renderer reads its message type's typed payload from
+`mako_engine::payload`, and the workflow that queues the entry builds the same
+struct:
+
+| Message type | Payload |
+|---|---|
+| UTILMD | `UtilmdPayload` |
+| APERAK | `AperakPayload` |
+| ORDERS · ORDCHG · ORDRSP | `OrdersPayload` · `OrdchgPayload` · `OrdrspPayload` |
+| REQOTE · QUOTES | `ReqotePayload` · `QuotesPayload` |
+| IFTSTA · INSRPT | `IftstaPayload` · `InsrptPayload` |
+| INVOIC · REMADV | `InvoicPayload` · `RemadvPayload` |
+| MSCONS | `MsconsPayload` |
+
+Each refuses a key it does not declare: a payload that spells one (`pruefung`
+instead of `antwort_code`) is a render error naming it, not a message with the
+segment missing, and a debug build panics where the entry is queued.
+`cargo xtask check-event-payloads` refuses a workflow crate that queues one of
+these types by hand rather than through `PendingOutbox::typed`.
+
+Where the payload leaves a value open and the Prüfidentifikator's column fixes
+exactly one, the column's value is written — `BGM` DE 1001, the
 `STS+E01` Codeliste, and the `STS+7` Transaktionsgrund where that segment is
 unconditionally Muss (`ZE7` on a GeLi Gas 44115). `SG4 DTM+92` and the process
 date ride only where the column lists their place: every GeLi Gas Änderung
@@ -1995,7 +2043,7 @@ against the release profile.
 exempt.
 
 **Sparte of an interchange** comes from the **recipient MP-ID** (UNB DE 0010):
-every `[[party]]` is one Sparte (§2.13), so `MpIdRegistry::sparte_of` decides.
+every `[[party]]` is one Sparte (Kap. 2.13), so `MpIdRegistry::sparte_of` decides.
 Release codes and NAD agency codes cannot — only UTILMD releases carry a Sparte
 prefix. For a recipient that is not an own MP-ID, a PID counts as Gas only when
 every row of the PID overview 4.0 for it is Gas. Five look Gas-only and are not,
@@ -2003,7 +2051,7 @@ so they resolve by recipient:
 
 | PID | | Also |
 |---|---|---|
-| INVOIC **31004** | Stornorechnung | Sparte-neutral Storno of any INVOIC (INVOIC AHB §3.1.2) |
+| INVOIC **31004** | Stornorechnung | Sparte-neutral Storno of any INVOIC (INVOIC AHB Kap. 3.1.2) |
 | INVOIC **31003** | WiM-Rechnung | WiM Strom Teil 1, MSBA → MSBN |
 | INVOIC **31011** | Rechnung sonstige Leistung | GPKE Teil 2, NB → LF |
 | INSRPT **23005** / **23009** | Informationsmeldung | WiM Strom Teil 2 |
@@ -2019,25 +2067,25 @@ Informationsmeldung inside a Strom range.
 
 | Ausprägung | `UCI` DE 0083 | Sparte | When |
 |---|---|---|---|
-| Empfangsbestätigung | `7` | **Gas only** | Every inbound Gas Übertragungsdatei and every Gas APERAK (§2.3.1) |
+| Empfangsbestätigung | `7` | **Gas only** | Every inbound Gas Übertragungsdatei and every Gas APERAK (Kap. 2.3.1) |
 | Syntaxfehlermeldung in der Übertragungsdatei | `4` + DE 0085 | **Both** | The fault cannot be placed on a message; the file „wird nicht weiterbearbeitet" (§2.3.2 / §2.4.2) |
 | Syntaxfehlermeldung in der Nachricht | `4`, no DE 0085 | **Both** | One `SG1 UCM` per broken message, with `SG2 UCS` / `UCD` naming segment and element — or `UCM` DE 0085 + DE 0013 for a `UNH`/`UNT` fault (Kap. 3; CONTRL MIG 2.0b) |
 
 One CONTRL answers one Übertragungsdatei and „entweder … bestätigt oder die
 gesamte Übertragungsdatei zurückgewiesen" (Kap. 1.3), so a broken message
 rejects the readable ones beside it. In Strom the CONTRL is used „ausschließlich
-als Syntaxfehlermeldung" (§2.4): the Sparte decides whether a clean interchange
+als Syntaxfehlermeldung" (Kap. 2.4): the Sparte decides whether a clean interchange
 is acknowledged, never whether a broken one is reported.
 
 | What arrived | Window | Fundstelle |
 |---|---|---|
-| A Strom UTILMD or ORDERS | **15 minutes**; 6 hours when it arrived on a Saturday | §2.4.1 |
+| A Strom UTILMD or ORDERS | **15 minutes**; 6 hours when it arrived on a Saturday | Kap. 2.4.1 |
 | A GABi-Gas ALOCAT | **45 minutes**, either Ausprägung | §2.3.1 |
-| Anything else, either Sparte | **6 hours** | §2.3.1, §2.4.1 |
+| Anything else, either Sparte | **6 hours** | Kap. 2.3.1, Kap. 2.4.1 |
 
 Saturday is a Berlin Saturday (`mako_fristen::contrl_due_at`). A CONTRL falling
 due inside a Formatumstellung window — 31.3. 18:00 to 2.4. 00:00 or 30.9. 18:00
-to 2.10. 00:00 gesetzlicher deutscher Zeit — is due at its end (§2.3.1, §2.4.1).
+to 2.10. 00:00 gesetzlicher deutscher Zeit — is due at its end (Kap. 2.3.1, Kap. 2.4.1).
 A Formatumstellung the BNetzA dates elsewhere is not modelled.
 
 | Case | Answer |
@@ -2045,8 +2093,8 @@ A Formatumstellung the BNetzA dates elsewhere is not modelled.
 | Every message failed to parse | Syntaxfehlermeldung in der Übertragungsdatei; DE 0085 from the parser error (`12` „Ungültiger Wert" by default) |
 | Some parsed, some did not | None is processed; every message is dead-lettered; Syntaxfehlermeldung in der Nachricht naming each broken message (or in der Übertragungsdatei when a fault cannot be located) |
 | `UNB` DE 0035 = `1` on the production endpoint | Syntaxfehlermeldung, DE 0085 **`25`** „Test-Kennzeichen nicht unterstützt" |
-| `UNB` unreadable | **No CONTRL** (§2.2.2.1) — dead-lettered |
-| The interchange is a CONTRL | **No CONTRL** (§2.2.2.2) |
+| `UNB` unreadable | **No CONTRL** (Kap. 2.2.2.1) — dead-lettered |
+| The interchange is a CONTRL | **No CONTRL** (Kap. 2.2.2.2) |
 
 DE 0085 codes come from `edifact_rs::contrl::SyntaxError` (ISO 9735-4 Annex A)
 and are tested against CONTRL AHB 1.0 Kap. 3. The CONTRL and its escalation
@@ -2162,7 +2210,7 @@ boot consumes the same preflight output.
 | Phase | What it proves |
 |---|---|
 | Config file | Schema parses; no unknown key; no secret both inline and by file |
-| `[[party]]` | MP-ID format, one code per Marktrolle, no mixed Strom+Gas entry (§2.13) |
+| `[[party]]` | MP-ID format, one code per Marktrolle, no mixed Strom+Gas entry (Kap. 2.13) |
 | `[deployment] rollen` | Declared; each role has exactly one `[[party]]` MP-ID and no MP-ID names an undeclared role |
 | `[marktd]` | `webhook_url` set with `url`, and the HTTP port open for it |
 | Profiles | Every module has an active `edi-energy` profile for each of its message types |
@@ -2250,7 +2298,7 @@ outcomes.
 | An owned label whose window is open | The Festlegung's outcome for the silence, or `FristAbgelaufen` where it gives none | `WARN Frist lapsed with its window still open`; the workflow's `de.mako.antwortfrist.abgelaufen` where it carries one |
 
 The ingest dispatcher opens every inbound message's APERAK window itself, on a
-spawn and on a resume (APERAK AHB 1.1 §2.4.1, §2.3.1):
+spawn and on a resume (APERAK AHB 1.1 Kap. 2.4.1, Kap. 2.3.1):
 
 | Message | Window | Label |
 |---|---|---|
@@ -2336,9 +2384,9 @@ output.
 | `makod_validation_failed_total` | `message_type`, `release` | A counterparty sends non-conformant messages |
 | `makod_inbound_findings_total` | `class` (`MIG`, `AHB`, `FMT`), `message_type` | Explain every non-zero count before its class is refused |
 | `makod_formatbedingung_findings_total` | `message_type`, `bedingung` (`950`) | The `FMT` count, by Formatbedingung |
-| **`makod_delivery_window_missed_total`** | `label` | **> 0** — an undelivered APERAK (APERAK AHB 1.1 §2.4.1 Strom / §2.3.1 Gas) or CONTRL (CONTRL AHB 1.0 §2.3.1); `label` names the window |
+| **`makod_delivery_window_missed_total`** | `label` | **> 0** — an undelivered APERAK (APERAK AHB 1.1 Kap. 2.4.1 Strom / Kap. 2.3.1 Gas) or CONTRL (CONTRL AHB 1.0 Kap. 2.3.1); `label` names the window |
 
-| Gauge (unlabelled) | Reads | Alert condition |
+| Gauge | Reads | Alert condition |
 |---|---|---|
 | `makod_outbox_pending_total` | Undelivered outbound messages | A level that stops falling |
 | `makod_deadline_pending_total` | Registered, not fired | Baseline |
@@ -2347,6 +2395,7 @@ output.
 | `makod_dead_letter_recent_total` | DLQ records in the last 1000 scanned | Non-zero (§ 147 AO) |
 | `makod_volatile_mode_active` | `1` when storage is in memory | **`1`** in production |
 | `makod_build_info` | `1`, labelled `version` | Rollout verification |
+| `makod_certificate_expiry_days` | Whole days left per `[party.as4]` / `[[as4.partner]]` certificate, labelled `pfad`; re-read on every scrape | **< 30** — renew (Regelungen AS4 2.6 Kap. 5.3: the successor is due 10 WT before expiry); **< 0** expired |
 
 - `family` is `gpke`, `wim`, `esa`, `geli-gas`, `gabi-gas`, `mabis`, `emob`,
   `redispatch`, `netzzugang` or `other`, all from `orchestrator::process_family`.

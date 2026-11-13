@@ -30,11 +30,11 @@ pub enum PidSource {
 /// Default receive tolerance, in calendar days, for a format that has expired.
 ///
 /// **Zero, because EDIFACT has no transition window.** Allgemeine Festlegungen
-/// 6.1 §2.5 gives the EDIFACT formats a single *Anwendungszeitpunkt* — the 1st
+/// 6.1 Kap. 2.5 gives the EDIFACT formats a single *Anwendungszeitpunkt* — the 1st
 /// of April or October — and no overlap around it: before that instant the old
 /// format applies, from it the new one does.
 ///
-/// The 15-*Werktage* Übergangszeitraum in §8.5 is the **XML** rule and does not
+/// The 15-*Werktage* Übergangszeitraum in Kap. 8.5 is the **XML** rule and does not
 /// transfer: it begins *at* the Anwendungszeitpunkt, counts Werktage rather than
 /// calendar days, and selects the version by the *Erfüllungsdatum* stated in the
 /// message rather than by when it was sent.
@@ -438,7 +438,7 @@ impl ReleaseRegistry {
     /// `valid_from` is still in the future is included. A sender picking the
     /// version to stamp on an outbound message wants
     /// [`Self::format_versions_in_force_on`] instead: EDIFACT has no
-    /// Übergangsfrist (Allgemeine Festlegungen 6.1d § 2.5), so a message
+    /// Übergangsfrist (Allgemeine Festlegungen 6.1d Kap. 2.5), so a message
     /// stamped with a version that has not taken effect is refused.
     ///
     /// # Example
@@ -468,7 +468,7 @@ impl ReleaseRegistry {
     /// [`Self::format_versions`] filtered to `valid_from <= date`. This is the
     /// set a **sender** may choose from: a Formatversion applies from its
     /// Anwendungszeitpunkt, six months after the document's Publikationsdatum
-    /// (Allgemeine Festlegungen 6.1d § 2.5), and EDIFACT publishes no
+    /// (Allgemeine Festlegungen 6.1d Kap. 2.5), and EDIFACT publishes no
     /// Übergangsfrist — so the version after the next Stichtag is a refusal at
     /// the counterparty, not a newer dialect it tolerates.
     ///
@@ -552,7 +552,7 @@ impl ReleaseRegistry {
     /// Returns `true` when a profile for `(message_type, release)` exists and
     /// `date` falls in `[valid_from, valid_until + receive_tolerance_days]`.
     ///
-    /// The leading edge is hard — Allgemeine Festlegungen 6.1 §2.5 puts the
+    /// The leading edge is hard — Allgemeine Festlegungen 6.1 Kap. 2.5 puts the
     /// EDIFACT change at a single Anwendungszeitpunkt — so a format is never
     /// acceptable before it takes effect, whatever the tolerance is set to.
     #[must_use]
@@ -601,7 +601,7 @@ impl ReleaseRegistry {
     ///
     /// With the default zero tolerance step 2 never matches, so this reports
     /// `Stable` on every date a profile is in force — which is what Allgemeine
-    /// Festlegungen §2.5 describes.
+    /// Festlegungen Kap. 2.5 describes.
     #[must_use]
     pub fn transition_state(
         &self,
@@ -697,6 +697,7 @@ impl ReleaseRegistry {
 pub struct ProcessContext {
     date: time::Date,
     registry: std::sync::Arc<ReleaseRegistry>,
+    rollen: crate::profile::Parteirollen,
 }
 
 impl ProcessContext {
@@ -710,6 +711,7 @@ impl ProcessContext {
         Self {
             date,
             registry: std::sync::Arc::clone(ReleaseRegistry::global_arc()),
+            rollen: crate::profile::Parteirollen::unbekannt(),
         }
     }
 
@@ -723,13 +725,31 @@ impl ProcessContext {
         date: time::Date,
         registry: std::sync::Arc<ReleaseRegistry>,
     ) -> Self {
-        Self { date, registry }
+        Self {
+            date,
+            registry,
+            rollen: crate::profile::Parteirollen::unbekannt(),
+        }
+    }
+
+    /// The same context, with the Marktrollen of sender and receiver the AHB's
+    /// role Bedingungen are decided from.
+    #[must_use]
+    pub fn with_rollen(mut self, rollen: crate::profile::Parteirollen) -> Self {
+        self.rollen = rollen;
+        self
     }
 
     /// The date this context is anchored to.
     #[must_use]
     pub fn date(&self) -> time::Date {
         self.date
+    }
+
+    /// The Marktrollen of sender and receiver, as far as the caller stated them.
+    #[must_use]
+    pub fn rollen(&self) -> &crate::profile::Parteirollen {
+        &self.rollen
     }
 
     /// Return the release that is normatively active for `message_type` on

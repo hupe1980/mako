@@ -99,7 +99,7 @@ use crate::zeitreihen::Zeitreihe;
 pub const WORKFLOW_NAME: &str = "mabis-billing";
 
 /// MSCONS PID carrying a Summenzeitreihe („Summenzeitreihen und
-/// Ausfallarbeitssummen", MSCONS AHB 3.1g §5).
+/// Ausfallarbeitssummen", MSCONS AHB 3.1g Kap. 5).
 ///
 /// Covers every BG-/BK-/LF-SZR, the DZÜ, the NZR and the
 /// Abrechnungssummenzeitreihe.

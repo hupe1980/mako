@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | Kapazitätsrechnung (capacity billing) | 31010 | INVOIC |
 //! | Aggreg. MMM-Rechnung Gas (NB → MGV) | 31007, 31008 | INVOIC |
-//! | Allokationsliste Gas (MSCONS data delivery) | 13013 | MSCONS |
+//! | Allokationsliste Gas (Abonnement, Ablehnung, list) | 17110, 19110, 13013 | ORDERS / ORDRSP / MSCONS |
 //! | Allokation (NB/MGV/BKV, receive-and-record) | 70001–70023 | ALOCAT (DVGW) |
 //! | Nominierung (Transportkunde ↔ NB/MGV, both ends) | 70030–70039 | NOMINT / NOMRES (DVGW) |
 //! | Mehr-/Mindermengenmeldung (NB → MGV, both ends) | 70095, 70096 | SSQNOT (DVGW) |
@@ -131,7 +131,8 @@ pub use mehr_mindermengen::{
     WORKFLOW_NAME as MEHR_MINDERMENGEN_WORKFLOW_NAME,
 };
 pub use mmma::{
-    MMMA_MSCONS_PIDS, ORDERS_ANFRAGE_PID as MMMA_ORDERS_ANFRAGE_PID,
+    GaBiGasMmmaWorkflow, MMMA_MSCONS_PIDS, MmmaCommand, MmmaEvent, MmmaState,
+    ORDERS_ANFRAGE_PID as MMMA_ORDERS_ANFRAGE_PID,
     ORDRSP_ABLEHNUNG_PID as MMMA_ORDRSP_ABLEHNUNG_PID, WORKFLOW_NAME as MMMA_WORKFLOW_NAME,
 };
 pub use nomination::{
@@ -156,7 +157,8 @@ pub use nomination::{
 /// - PID 33001 → `"gabi-gas-invoic"` (REMADV Zahlungsavis, invoicer role)
 /// - PID 29001 → `"gabi-gas-invoic"` (COMDIS Ablehnung REMADV, payer role)
 ///
-/// **MMM Allokationsliste Gas (MSCONS):**
+/// **MMM Allokationsliste Gas:**
+/// - PID 17110 → `"gabi-gas-mmma"` (Anforderung Allokationsliste, LF → NB; the GNB's receiver)
 /// - PID 13013 → `"gabi-gas-mmma"` (Marktlokationsscharfe Allokationsliste Gas, NB → LF; Gas-only)
 ///
 /// **DVGW gas transport (Prüfidentifikatoren from `SG1 RFF+Z13`):**
@@ -186,7 +188,7 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
             WorkflowDriver::of::<invoic::GaBiGasInvoicWorkflow>(invoic::WORKFLOW_NAME),
             WorkflowDriver::of::<nomination::GaBiGasNominationWorkflow>(nomination::WORKFLOW_NAME),
             WorkflowDriver::of::<allocation::GaBiGasAllocationWorkflow>(allocation::WORKFLOW_NAME),
-            WorkflowDriver::routing_only(mmma::WORKFLOW_NAME),
+            WorkflowDriver::of::<mmma::GaBiGasMmmaWorkflow>(mmma::WORKFLOW_NAME),
             WorkflowDriver::of::<mehr_mindermengen::GaBiGasMehrMindermengenWorkflow>(
                 mehr_mindermengen::WORKFLOW_NAME,
             ),
@@ -269,10 +271,13 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         //
         // MGV (Marktgebietsverantwortlicher) and the Gas MMM process are
         // Gas-domain only, so 13013 belongs here and not to `mako-gpke`.
-        // PIDs 17110/19110 (ORDERS/ORDRSP) are informational; see `mmma` module doc.
         for &pid in mmma::MMMA_MSCONS_PIDS {
             router.register(pid, "gabi-gas-mmma");
         }
+        // ORDERS 17110 — the LF's Anforderung reaches the GNB (ORDERS AHB 1.1b
+        // Kap. 4.2, „LF an NB"). The LF's own copy of the answer, ORDRSP 19110,
+        // resumes its `gpke-allokationsliste` request.
+        router.register(mmma::ORDERS_ANFRAGE_PID.as_u32(), mmma::WORKFLOW_NAME);
     }
 }
 
@@ -297,6 +302,10 @@ mod role_tests {
         assert_eq!(routed(&DeploymentRoles::lf()), vec![13_013]);
         let nb = routed(&DeploymentRoles::nb());
         assert!(nb.contains(&13_013) && nb.contains(&31_010), "{nb:?}");
+        assert!(
+            nb.contains(&17_110),
+            "the GNB receives the Anforderung: {nb:?}"
+        );
         assert!(routed(&DeploymentRoles::msb()).is_empty());
     }
 }

@@ -409,7 +409,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // PID is also registered Sparte-qualified (Gas): the Sparte-agnostic
         // table is last-wins, and the recipient MP-ID names the Sparte.
         // Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0).
-        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
+        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.1 Kap. 2.3.1).
         let sperrung_pid = |router: &mut mako_engine::pid_router::PidRouter, pid, wf: &str| {
             router.register(pid, wf);
             router.register_with_sparte(pid, mako_engine::types::Sparte::Gas, wf.to_owned());
@@ -426,7 +426,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // PIDs 17115/17116/17117 are shared with GPKE Sperrung Strom (NB-role) and
         // resolve by the recipient's Sparte (registered Gas-qualified above).
         // Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas).
-        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
+        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.1 Kap. 2.3.1).
         // 17116 is the GNB's own outbound Anfrage to the gMSB; the gMSB
         // receives it on `geli-gas-sperrung-msb` (`register_pids_with_roles`).
         for &pid in sperrung_nb::SPERRUNG_PIDS

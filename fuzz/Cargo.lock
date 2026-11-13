@@ -577,7 +577,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "edi-energy"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "edifact-rs",
  "rubo4e",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "billing",
  "grid-billing",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "billing",
  "rust_decimal",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -1312,11 +1312,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.32.0"
+version = "0.33.0"
 
 [[package]]
 name = "mako-fristen"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "time",
  "time-tz",

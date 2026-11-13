@@ -5,8 +5,17 @@
 use reqwest::{Client, StatusCode};
 use url::Url;
 
-use crate::error::Error;
-use crate::models::directory::{ApiRecord, ServiceInfo};
+use crate::error::{Error, RecordRefusal};
+use crate::models::directory::{ApiRecord, ApiRecordRef, ServiceInfo};
+use crate::transport::jws::RecordVerifyingKey;
+
+/// How many `307` redirects [`DirectoryServiceClient::get_record`] follows.
+///
+/// Regelungen zum Verzeichnisdienst 1.1, Kap. 2.2 (S. 6) obliges the provider
+/// to keep its redirects acyclic but sets no length; a provider moving
+/// directories (Kap. 5.1) needs one hop, so a handful bounds a misconfigured
+/// cycle without refusing any chain the document describes.
+pub const MAX_REDIRECTS: usize = 5;
 
 /// HTTP REST client for the [Directory Service v1 API][spec].
 ///
@@ -74,36 +83,86 @@ impl DirectoryServiceClient {
     // ── Records ───────────────────────────────────────────────────────────────
 
     /// `GET /record/{providerId}/{apiId}/{majorVersion}/v1` — Look up a
-    /// directory entry.
+    /// directory entry and return it only once its signature verifies.
     ///
-    /// On success returns `(record, signing_cert, signature)` where:
-    /// - `signing_cert` is the RFC 9440-encoded `X-BDEW-CERT` header value.
-    /// - `signature` is the base64url-encoded `X-BDEW-SIGNATURE` header value.
+    /// The record is the provider's statement, not the directory's:
+    /// Regelungen zum Verzeichnisdienst 1.1, Kap. 2.2 (S. 6) requires that „die
+    /// aktuelle Signatur eines Eintrags MUSS jederzeit anhand eines gültigen
+    /// Signaturzertifikats der Klasse EMT.API des entsprechenden Marktpartners
+    /// überprüft werden können", and Kap. 5.2 (S. 13) rests the security of a
+    /// followed redirect on „die TLS-Zertifikate des Clients und des Servers
+    /// sowie die Signatur des Verzeichniseintrags". The directory distributes no
+    /// certificates — „Zertifikate können ausschließlich über die
+    /// LDAP-Verzeichnisdienste der ausstellenden CA abgerufen werden" (Kap. 1.6,
+    /// S. 4) — so `signers` are the provider's EMT.API signature keys, obtained
+    /// by the caller from the issuing Sub-CA, several during a certificate
+    /// rollover. The `X-BDEW-CERT` the response carries is not trusted: a key
+    /// the response names itself proves nothing about who signed.
     ///
-    /// Use `crate::transport::jws` to verify the signature.
+    /// The JWS is the scheme of [`crate::transport::jws`] — the Regelungen
+    /// leave its algorithm and encoding to the „Verzeichnisdienst API"
+    /// specification (Kap. 7 \[3\], S. 14) — computed over the record as it
+    /// arrived. A record naming another entry than the one requested is
+    /// refused as well: a provider's genuine signature over its record for a
+    /// different API would otherwise answer for this one.
+    ///
+    /// A `307` is followed (Kap. 5.2: „Ein Client MUSS dem Redirect eines
+    /// Verzeichnisdienst-Servers folgen"), up to [`MAX_REDIRECTS`] times, and
+    /// the record it leads to is held to the same check.
     ///
     /// # Errors
+    /// - [`Error::UnverifiedRecord`] if `signers` is empty, the signature is
+    ///   missing or verifies against none of them, the record names another
+    ///   entry, or the redirect chain is longer than [`MAX_REDIRECTS`].
     /// - [`Error::NotFound`] if the entry does not exist (404).
-    /// - [`Error::Redirect`] if a redirect is configured for this entry (307).
-    ///   The embedded URL is the redirect target — re-issue the GET there.
     pub async fn get_record(
         &self,
         provider_id: &str,
         api_id: &str,
         major_version: i32,
-    ) -> Result<(ApiRecord, String, String), Error> {
-        let url = self.record_url(provider_id, api_id, major_version)?;
-        let resp = self.inner.get(url).send().await?;
+        signers: &[RecordVerifyingKey],
+    ) -> Result<ApiRecord, Error> {
+        if signers.is_empty() {
+            return Err(Error::UnverifiedRecord(RecordRefusal::NoTrustedKey {
+                provider_id: provider_id.to_owned(),
+            }));
+        }
+        let mut url = self.record_url(provider_id, api_id, major_version)?;
+        let mut redirects = 0;
+        let resp = loop {
+            let resp = self.inner.get(url.clone()).send().await?;
+            if resp.status() != StatusCode::TEMPORARY_REDIRECT {
+                break resp;
+            }
+            let location = header_value(&resp, "Location");
+            let next = url.join(&location).map_err(Error::Url)?;
+            redirects += 1;
+            if redirects > MAX_REDIRECTS {
+                return Err(Error::UnverifiedRecord(RecordRefusal::TooManyRedirects {
+                    max: MAX_REDIRECTS,
+                    url: next.to_string(),
+                }));
+            }
+            url = next;
+        };
         match resp.status() {
             StatusCode::OK => {
-                let cert = header_value(&resp, "X-BDEW-CERT");
-                let sig = header_value(&resp, "X-BDEW-SIGNATURE");
-                let record: ApiRecord = resp.json().await?;
-                Ok((record, cert, sig))
-            }
-            StatusCode::TEMPORARY_REDIRECT => {
-                let location = header_value(&resp, "Location");
-                Err(Error::Redirect { url: location })
+                let mut signatures = resp.headers().get_all("X-BDEW-SIGNATURE").iter();
+                let signature = match (signatures.next().map(|v| v.to_str()), signatures.next()) {
+                    (Some(Ok(sig)), None) if !sig.trim().is_empty() => sig.trim().to_owned(),
+                    _ => return Err(Error::UnverifiedRecord(RecordRefusal::MissingSignature)),
+                };
+                let raw: serde_json::Value = resp.json().await?;
+                super::verify_record(
+                    raw,
+                    &signature,
+                    signers,
+                    &ApiRecordRef {
+                        provider_id: provider_id.to_owned(),
+                        api_id: api_id.to_owned(),
+                        major_version,
+                    },
+                )
             }
             StatusCode::NOT_FOUND => Err(Error::NotFound),
             s => Err(Error::Http {
@@ -292,4 +351,216 @@ fn header_value(resp: &reqwest::Response, name: &str) -> String {
 /// Percent-encode a string for use as a URL path segment.
 fn encode_path_segment(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::jws;
+    use p256::SecretKey;
+    use p256::ecdsa::SigningKey;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    const PROVIDER: &str = "9900357000004";
+
+    fn signing_key() -> SigningKey {
+        SigningKey::from(&SecretKey::from_slice(&[0x11; 32]).expect("a valid P-256 scalar"))
+    }
+
+    fn record(url: &str) -> serde_json::Value {
+        serde_json::json!({
+            "providerId": PROVIDER,
+            "apiId": "maloIdV1",
+            "majorVersion": 1,
+            "url": url,
+            "lastUpdated": "2026-10-01T00:00:00Z",
+            "revision": 2,
+            "status": "Online",
+        })
+    }
+
+    /// The provider's JWS over `value` exactly as it is sent.
+    fn signature_over(value: &serde_json::Value) -> String {
+        use base64ct::{Base64UrlUnpadded, Encoding as _};
+        use p256::ecdsa::signature::Signer as _;
+        let payload = serde_jcs::to_string(value).expect("JCS");
+        let input = format!(
+            "{}.{}",
+            jws::JWS_PROTECTED_HEADER,
+            Base64UrlUnpadded::encode_string(payload.as_bytes())
+        );
+        let sig: p256::ecdsa::Signature = signing_key().sign(input.as_bytes());
+        Base64UrlUnpadded::encode_string(&sig.to_bytes())
+    }
+
+    /// A directory answering every request with `response` (a raw HTTP/1.1
+    /// response).
+    async fn directory(response: String) -> Url {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let response = response.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let _ = sock.write_all(response.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        Url::parse(&format!("http://{addr}/")).expect("url")
+    }
+
+    fn ok_response(body: &serde_json::Value, signature: &str) -> String {
+        let body = body.to_string();
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
+             x-bdew-signature: {signature}\r\nx-bdew-cert: :AAAA:\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn verifying_key() -> RecordVerifyingKey {
+        RecordVerifyingKey::from(&signing_key())
+    }
+
+    async fn lookup(base: Url, signers: &[RecordVerifyingKey]) -> Result<ApiRecord, Error> {
+        DirectoryServiceClient::new_insecure(base)
+            .expect("client")
+            .get_record(PROVIDER, "maloIdV1", 1, signers)
+            .await
+    }
+
+    /// A record whose endpoint was changed after the provider signed it is
+    /// refused: the signature is what binds the endpoint to the provider.
+    #[tokio::test]
+    async fn a_tampered_record_is_refused() {
+        let signed = record("https://lf.example/maloId/");
+        let signature = signature_over(&signed);
+        let tampered = record("https://attacker.example/maloId/");
+        let base = directory(ok_response(&tampered, &signature)).await;
+        let got = lookup(base, &[verifying_key()]).await;
+        assert!(
+            matches!(
+                got,
+                Err(Error::UnverifiedRecord(RecordRefusal::BadSignature { .. }))
+            ),
+            "a tampered record was accepted: {got:?}"
+        );
+    }
+
+    /// The acceptance twin: the record the provider signed is returned. Its
+    /// timestamp carries fractional seconds and it has a member this crate
+    /// does not model, so a check over a re-serialised [`ApiRecord`] — which
+    /// spells both differently — would refuse it.
+    #[tokio::test]
+    async fn a_correctly_signed_record_is_returned() {
+        let mut signed = record("https://lf.example/maloId/");
+        signed["lastUpdated"] = "2026-10-01T00:00:00.000Z".into();
+        signed["comment"] = "not modelled".into();
+        let base = directory(ok_response(&signed, &signature_over(&signed))).await;
+        let got = lookup(base, &[verifying_key()])
+            .await
+            .expect("a signed record");
+        assert_eq!(got.url.as_str(), "https://lf.example/maloId/");
+    }
+
+    /// A key the response names itself proves nothing: a record signed by
+    /// anybody but the provider's trusted keys is refused, and with no trusted
+    /// key at all nothing is accepted.
+    #[tokio::test]
+    async fn a_record_signed_by_an_untrusted_key_or_with_no_trusted_key_is_refused() {
+        let signed = record("https://lf.example/maloId/");
+        let base = directory(ok_response(&signed, &signature_over(&signed))).await;
+        let other = RecordVerifyingKey::from(&SigningKey::from(
+            &SecretKey::from_slice(&[0x22; 32]).expect("a valid P-256 scalar"),
+        ));
+        let got = lookup(base.clone(), &[other]).await;
+        assert!(
+            matches!(
+                got,
+                Err(Error::UnverifiedRecord(RecordRefusal::BadSignature { .. }))
+            ),
+            "{got:?}"
+        );
+        let got = lookup(base, &[]).await;
+        assert!(
+            matches!(
+                got,
+                Err(Error::UnverifiedRecord(RecordRefusal::NoTrustedKey { .. }))
+            ),
+            "{got:?}"
+        );
+    }
+
+    /// The provider's genuine signature over its record for another API does
+    /// not answer for the one requested.
+    #[tokio::test]
+    async fn a_signed_record_for_another_entry_is_refused() {
+        let mut other = record("https://lf.example/controlMeasures/");
+        other["apiId"] = "controlMeasuresV1".into();
+        let base = directory(ok_response(&other, &signature_over(&other))).await;
+        let got = lookup(base, &[verifying_key()]).await;
+        assert!(
+            matches!(
+                got,
+                Err(Error::UnverifiedRecord(RecordRefusal::WrongEntry { .. }))
+            ),
+            "{got:?}"
+        );
+    }
+
+    /// A directory redirecting every request to `location`.
+    async fn redirecting_to(location: &str) -> Url {
+        directory(format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nlocation: {location}\r\n\
+             content-length: 0\r\nconnection: close\r\n\r\n"
+        ))
+        .await
+    }
+
+    /// A redirect is followed, and the record it leads to is verified like any
+    /// other — a redirect is not a way around the signature.
+    #[tokio::test]
+    async fn a_redirect_is_followed_and_its_record_verified() {
+        let signed = record("https://lf.example/maloId/");
+        let signature = signature_over(&signed);
+        let path = format!("record/{PROVIDER}/maloIdV1/1/v1");
+
+        let target = directory(ok_response(&signed, &signature)).await;
+        let base = redirecting_to(target.join(&path).expect("location").as_str()).await;
+        let got = lookup(base, &[verifying_key()]).await.expect("followed");
+        assert_eq!(got.url.as_str(), "https://lf.example/maloId/");
+
+        let tampered = record("https://attacker.example/maloId/");
+        let target = directory(ok_response(&tampered, &signature)).await;
+        let base = redirecting_to(target.join(&path).expect("location").as_str()).await;
+        let got = lookup(base, &[verifying_key()]).await;
+        assert!(
+            matches!(
+                got,
+                Err(Error::UnverifiedRecord(RecordRefusal::BadSignature { .. }))
+            ),
+            "a tampered record behind a redirect was accepted: {got:?}"
+        );
+    }
+
+    /// A redirect cycle ends in a refusal rather than a hang.
+    #[tokio::test]
+    async fn a_redirect_cycle_is_refused() {
+        let base = redirecting_to("/again").await;
+        let got = lookup(base, &[verifying_key()]).await;
+        assert!(
+            matches!(
+                got,
+                Err(Error::UnverifiedRecord(
+                    RecordRefusal::TooManyRedirects { .. }
+                ))
+            ),
+            "{got:?}"
+        );
+    }
 }

@@ -164,6 +164,7 @@ encryption_cert_pem_file = "/etc/makod/partners/9800000000002.enc.pem"
 | `signing_cert_pem_files` | Pins: the partner's messages must be signed by one of these (list both for a rollover, Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.3). Without pins the SM-PKI chain and the OU decide |
 | `agency` | NAD DE3055 agency of the MP-ID; derived from its prefix when omitted |
 | `quirks` | See [Receipt quirks](#receipt-quirks) |
+| `de0004_ausnahme` | MP-IDs this partner may name in `UNB` DE0004; see [The interchange envelope](#the-interchange-envelope) |
 
 The party type in `eb:PartyId/@type` follows the agency — `…iso6523:0088` (GLN),
 `…unregistered:BDEW`, `…unregistered:DVGW`, `…unregistered:BAHN` (§2.3.1.1) — the
@@ -185,6 +186,29 @@ sender that is **not** a `[[as4.partner]]`:
 |---|---|---|
 | `nur_konfigurierte` (default) | Refused before dispatch, answered `EBMS:0202` (retryable — once configured, the sender's next retry is served) | BDEW AS4-Profil 1.2 §2.3.7 (S. 19): certificates „KÖNNEN … auf der Grundlage der MP-ID im OU-Feld abgelehnt werden (Whitelist)" |
 | `bdew_ou_zulassen` | Served | BDEW AS4-Profil 1.2 §2.3.2 (S. 16): any `eb:From` is accepted „sofern sie mit den entsprechenden Betreff-Feldern im vorgelegten Zertifikat übereinstimmen" |
+
+### The interchange envelope
+
+Inside a verified message, the EDIFACT `UNB` is bound to the AS4 layer before
+anything is dispatched. Each refusal is dead-lettered, then answered `EBMS:0004`:
+
+| Check | Refused when | Source |
+|---|---|---|
+| Recipient | DE0010 is none of this deployment's MP-IDs (a combined-role instance passes under each of them) | Allgemeine Festlegungen 6.1d Kap. 2.13 (S. 17) |
+| Sender | DE0004 is not the authenticated `eb:From` | Kap. 2.13 (S. 17): „Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten MP-ID sind identisch."; BDEW AS4-Profil 1.2 §2.3.4.4 (S. 17): the MP-ID in the certificate matches the PartyId |
+
+A payload whose `UNB` does not parse reaches neither check; it is dead-lettered
+as unparseable and refused the same way.
+
+A Dienstleister that authenticates as itself and sends for another market
+participant is admitted only by name, per partner, and every entry is a
+startup warning (`as4.partner[i].de0004_ausnahme`):
+
+```toml
+[[as4.partner]]
+mp_id           = "9900000000001"
+de0004_ausnahme = ["9900000000002"]
+```
 
 ### Receipt quirks
 
@@ -229,7 +253,7 @@ sequenceDiagram
         ASX-->>P: 503
     else first seen
         ASX->>H: Verified UserMessage
-        Note over H: sender policy, evidence, EDIFACT or Redispatch XML dispatch
+        Note over H: sender policy, evidence, UNB DE0010/DE0004, EDIFACT or Redispatch XML dispatch
         alt Ok
             ASX->>D: accept
             ASX-->>P: signed receipt (NRR)
@@ -288,7 +312,7 @@ partner's NRR covers, and a receiver already holding the message answers it as a
 duplicate. The retry window is 72 hours (`mako_as4::constants::MAX_RETRY_DURATION_SECS`);
 a configuration refusal is permanent.
 
-The payload part is named after Allgemeine Festlegungen V6.1d §2.12
+The payload part is named after Allgemeine Festlegungen V6.1d Kap. 2.12
 (`Nachrichtentyp_Anwendungsreferenz_von_an_yyyymmdd_DAR.txt`). The send runs in
 a span parented on the outbox entry's trace context; no `traceparent` header goes
 to the partner.
@@ -347,6 +371,27 @@ async fn a_push_is_receipted() {
 
 `services/makod/tests/it/as4_security.rs` drives makod's own clients, sender and
 inbox this way.
+
+### Certificate expiry and rotation
+
+makod re-reads every `[party.as4]` and `[[as4.partner]]` certificate while it
+runs. `GET /admin/einrichtung` reports one that expires inside
+`as4.zertifikat_warnfenster_tage` (default 30) and `/metrics` exports
+`makod_certificate_expiry_days{pfad}`. The successor is due at least 10
+Werktage before a certificate becomes invalid (Regelungen zum Übertragungsweg
+für AS4 2.6 Kap. 5.3, S. 6).
+
+Replace the files in place to rotate. Every five minutes makod rebuilds the AS4
+clients and inboxes from changed key material, with no restart:
+
+| Key pair | From the swap |
+|---|---|
+| Signing | The new key signs at once; its certificate travels in every message (Kap. 5.3) |
+| Encryption | The new key decrypts, and the replaced one keeps decrypting until its certificate expires, because partners may encrypt to either inside the overlap |
+| TLS | The new identity opens the next connection |
+| Partner pins | Several `signing_cert_pem_files` admit a partner's rollover |
+
+Material that does not build is logged and the running clients stay.
 
 ### Certificate requests with OpenSSL
 
@@ -450,7 +495,7 @@ Static `--maloid-partner GLN=URL` entries always take priority.
 | Test | Verifies |
 |---|---|
 | `slatedb_dedup_conforms` | `asx::testkit::dedup::conformance` over `SlateDbDedup` — atomic claim, token-fenced settlement |
-| `an_outbound_message_is_delivered_with_its_receipt_evidence` | Service MP, `<outbox id>@<domain>`, §2.12 file name, receipt evidence kept |
+| `an_outbound_message_is_delivered_with_its_receipt_evidence` | Service MP, `<outbox id>@<domain>`, Kap. 2.12 file name, receipt evidence kept |
 | `a_retry_resends_the_first_attempts_message_id_and_timestamp` | Same `eb:MessageId`, `eb:Timestamp` and digests on the retry |
 | `a_partner_refusal_is_retried_and_a_receipt_failure_is_not_acknowledged` | An unverifiable receipt is no delivery |
 | `an_interchange_from_a_configured_partner_is_routed` | Verified, dispatched, receipted; the retransmission is a duplicate |

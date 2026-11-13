@@ -1677,7 +1677,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             }
         }
 
-        // ── §7 KWKG 2023 — KWK-Zuschlag ──────────────────────────────────────
+        // ── §7 KWKG — KWK-Zuschlag ──────────────────────────────────────
         SettlementScheme::KwkSurcharge {
             verguetungssatz_ct,
             kwh_paid_gesamt,
@@ -1725,17 +1725,12 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
 
             let desc = if limit_reached {
                 format!(
-                    "KWK-Zuschlag \u{00a7}7 KWKG 2023 (F\u{00f6}rderdauer-Endabrechnung: {eligible} von {kwh} kWh)"
+                    "KWK-Zuschlag \u{00a7}7 KWKG (F\u{00f6}rderdauer-Endabrechnung: {eligible} von {kwh} kWh)"
                 )
             } else {
-                "KWK-Zuschlag \u{00a7}7 KWKG 2023".to_owned()
+                "KWK-Zuschlag \u{00a7}7 KWKG".to_owned()
             };
-            let positions = vec![pos(
-                desc,
-                "\u{00a7}7 KWKG 2023",
-                eligible,
-                *verguetungssatz_ct,
-            )];
+            let positions = vec![pos(desc, "\u{00a7}7 KWKG", eligible, *verguetungssatz_ct)];
             let status = if limit_reached {
                 SettlementStatus::FoerderungBeendet
             } else {

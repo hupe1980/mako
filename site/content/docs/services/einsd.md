@@ -113,7 +113,7 @@ compares the migration row for row.
 | `KLAERGAS` / `GRUBENGAS` / `DEPONIEGAS` | Sewage / mine / landfill gas | § 41 Abs. 2 / 3 / 1 EEG 2023 |
 | `WASSERKRAFT` / `GEZEITEN` | Hydro, tidal (§ 3 Nr. 21 lit. a) | § 40 EEG 2023 |
 | `GEOTHERMIE` | Geothermal | § 45 EEG 2023 |
-| `KWKG` | Combined heat & power | § 7 KWKG 2023 |
+| `KWKG` | Combined heat & power | § 7 KWKG |
 
 There is no generic `SOLAR`: the § 48 rate depends on the Bauform. Every plant
 also carries a `verguetungsform` (`UEBERSCHUSS` · `VOLLEINSPEISUNG` ·
@@ -136,7 +136,7 @@ schema `CHECK` and `einsd::models::ALL` are pinned equal by
 | `SONSTIGE_DIREKTVERMARKTUNG` | § 21a | EUR 0 | — |
 | `POST_EEG_SPOT` | after the Förderdauer | `kwh × Marktwert_ct / 100` (configurable floor) | `de.eeg.verguetung.berechnet` |
 | `EIGENVERBRAUCH` | no grid feed-in | EUR 0 | — |
-| `KWKG_ZUSCHLAG` | § 7 KWKG 2023 | `eligible_kwh × rate / 100`, hour-capped | `de.eeg.verguetung.berechnet` |
+| `KWKG_ZUSCHLAG` | § 7 KWKG | `eligible_kwh × rate / 100`, hour-capped | `de.eeg.verguetung.berechnet` |
 | `FLEXIBILITAET` | § 50b | `kwh × (verguetung + flex_praemie) / 100` | `de.eeg.verguetung.berechnet` |
 | `FLEXIBILITAET_ZUSCHLAG` | § 50a | `kw × rate_eur_per_kw / 12` | `de.eeg.verguetung.berechnet` |
 
@@ -401,7 +401,15 @@ This clears the § 52 Abs. 1 Nr. 11 clock and emits
 | `leistung_kwp ≤ 0` | It drives the § 9 band, the § 52 charge, the § 44b quota and the § 51 size test |
 | `MIETERSTROM` without `mieter_zuschlag_ct` | It would settle as plain Einspeisevergütung |
 | `KWKG_ZUSCHLAG` with neither `kwk_foerderdauer_h` nor `kwk_anlagenart` (a `MODERNISIERT`/`NACHGERUESTET` plant also needs `kwk_kostenanteil`) | The Zuschlag would never end |
+| Both `kwk_bimschg_genehmigung` and `kwk_verbindliche_bestellung` | § 6 Abs. 1 Satz 1 Nr. 1 lit. c bb KWKG applies only where no BImSchG-Genehmigung is required |
 | Technology and statute disagreeing | A KWK plant with `eeg_gesetz ≠ 0`, an EEG plant with `0`, solar on the KWKG model, a `verguetungsform` of the other statute |
+
+A KWKG plant is settled only on a § 6 Abs. 1 Satz 1 Nr. 1 KWKG claim:
+Dauerbetrieb (`inbetriebnahme`) by 31.12.2026 (lit. a); later, a KWKAusV award
+in `ausschreibungs_zuschlag_id` (lit. b), or a `kwk_bimschg_genehmigung` /
+`kwk_verbindliche_bestellung` dated by 31.12.2026 with Dauerbetrieb by the end
+of the fourth year after it (lit. c). Anything else is refused by name until a
+Novelle of the KWKG is promulgated.
 
 A tender plant may carry its AW in either column; `zuschlagswert_ct` wins. The
 engine independently treats a Marktprämie without an AW as `PriceMissing`.

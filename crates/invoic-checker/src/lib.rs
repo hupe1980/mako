@@ -74,6 +74,7 @@
 //!     "9900357000004",
 //!     &rechnung,
 //!     &preisblatt_store,
+//!     time::macros::date!(2026 - 04 - 01), // Eingangsdatum
 //!     &CheckConfig::default(),
 //! );
 //! assert_eq!(report.outcome, CheckOutcome::Dispute);
@@ -84,12 +85,14 @@ pub mod amount;
 pub mod check;
 pub mod rechnung;
 pub mod tariff;
+pub mod ustg;
 
 // ── Convenient re-exports ─────────────────────────────────────────────────────
 
 pub use amount::EuroAmount;
 pub use check::{
-    CheckConfig, CheckOutcome, CheckReport, Finding, FindingKind, InvoicCheckEngine, is_stornierung,
+    CheckConfig, CheckOutcome, CheckReport, EmpfaengerSparte, Finding, FindingKind,
+    InvoicCheckEngine, is_stornierung,
 };
 pub use rechnung::{
     EmpfaengerFakten, StornoEmpfaengerFakten, antwort_auf_erneute_rechnung, antwort_auf_rechnung,

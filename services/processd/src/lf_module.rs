@@ -23,7 +23,7 @@
 //! only `eog_auto_respond` lets the answer leave unattended.
 //!
 //! **55607 is the one where silence is not a lapsed Frist.** Prozessschritt 3
-//! of GPKE Teil 2 § 2.4 has the NB assign the supplier to the erzeugende
+//! of GPKE Teil 2 Kap. 2.4 has the NB assign the supplier to the erzeugende
 //! Marktlokation „aufgrund fehlender Antwort" anyway, using whichever
 //! Bilanzkreis the supplier last communicated. Not answering does not stop it;
 //! it only stops the supplier from choosing the Bilanzkreis.
@@ -34,7 +34,7 @@
 //!
 //! | Clock | Window | Owner |
 //! |-------|--------|-------|
-//! | Technical acknowledgement (APERAK) | **45 min**, Sunday 12:00 Berlin for a Saturday arrival (APERAK AHB 1.1 § 2.4.1) | **`makod`**, automatically |
+//! | Technical acknowledgement (APERAK) | **45 min**, Sunday 12:00 Berlin for a Saturday arrival (APERAK AHB 1.1 Kap. 2.4.1) | **`makod`**, automatically |
 //! | Business answer | the per-PID Frist above | this module / the operator |
 //!
 //! The queue is bounded by the **business** window, from [`mako_fristen::antwort`].
@@ -62,7 +62,7 @@
 //!
 //! - **BK6-24-174 GPKE Teil 2**, **BK7-24-01-009 GeLi Gas 3.0** — the processes
 //! - **EBD 4.3** — the Prüfschritte and Codelisten, in [`mako_pruefung`]
-//! - **APERAK AHB 1.1 § 2.4.1** — the separate 45-minute technical window
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — the separate 45-minute technical window
 
 use crate::config::BilanzkreisEintrag;
 use mako_gpke::LfVorgangsdaten;
@@ -615,6 +615,7 @@ impl LfAnfragePayload {
             kunde_name: str_field("kunde_name"),
             kunde_namensformat: str_field("kunde_namensformat"),
             lfn_mp_id: str_field("lfn_mp_id"),
+            geraeteausbaudatum: str_field("geraeteausbaudatum"),
         };
 
         // `STS+7` DE 9013 element 3 — the Transaktionsgrundergänzung, which is

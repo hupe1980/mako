@@ -672,7 +672,7 @@ impl SlateDbStore {
     /// For protocol-level obligations that have no domain event stream — the
     /// Gas CONTRL Empfangsbestätigung is the canonical case: the message is a
     /// synthetic interchange-level acknowledgement, but its 6-hour delivery
-    /// window (CONTRL AHB 1.0 §2.3.1) is as regulatory as any workflow
+    /// window (CONTRL AHB 1.0 Kap. 2.3.1) is as regulatory as any workflow
     /// deadline. Writing the message and its deadline in two separate commits
     /// leaves a crash window in which the CONTRL is queued with no escalation
     /// deadline; this method removes that window.

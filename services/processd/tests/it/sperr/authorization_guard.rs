@@ -155,7 +155,7 @@ fn the_mcp_surface_stays_read_only() {
 
 /// No invented citation may appear.
 ///
-/// The execution window is **6 Werktage** — BK6-24-174 GPKE Teil 2 § 3.5.1.2
+/// The execution window is **6 Werktage** — BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2
 /// Nr. 1: „Die Sperrung der Marktlokation ist durch den NB spätestens innerhalb
 /// von 6 WT nach dem frühestmöglichen Sperrtermin durchzuführen." This guard
 /// forbids the three claims that contradict it: a „2 Werktage" window,
@@ -199,7 +199,7 @@ fn no_fabricated_regulatory_citations_remain() {
         for phrase in ["2 Werktage", "2-Werktage"] {
             assert!(
                 !src.contains(phrase),
-                "{path} names a {phrase:?} execution window; GPKE Teil 2 § 3.5.1.2 \
+                "{path} names a {phrase:?} execution window; GPKE Teil 2 Kap. 3.5.1.2 \
                  Nr. 1 fixes 6 Werktage"
             );
         }
@@ -210,7 +210,7 @@ fn no_fabricated_regulatory_citations_remain() {
         ] {
             assert!(
                 !src.contains(phrase),
-                "{path} claims GPKE fixes no execution window; § 3.5.1.2 Nr. 1 fixes \
+                "{path} claims GPKE fixes no execution window; Kap. 3.5.1.2 Nr. 1 fixes \
                  6 Werktage after the frühestmöglicher Sperrtermin"
             );
         }

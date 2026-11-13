@@ -189,7 +189,10 @@ async fn nb(marktd: Option<mako_markt::marktd_client::MarktdClient>) -> Nb {
             makod::cedar_authz::CedarAuthorizer::unauthenticated().expect("infallible"),
         ),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new((*store).clone())),
+        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
+            (*store).clone(),
+            tenant_id,
+        )),
         maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((*store).clone()),
         store: Arc::clone(&store),
         marktd_client: marktd.map(Arc::new),

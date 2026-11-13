@@ -117,6 +117,16 @@ pub async fn handle_webhook(
         );
         return StatusCode::NO_CONTENT.into_response();
     }
+    if pid == mako_invoic::COMDIS_ABLEHNUNG_PID.as_u32() {
+        let Some(process_id) = event["subject"]
+            .as_str()
+            .and_then(|s| s.parse::<Uuid>().ok())
+        else {
+            warn!("invoicd: COMDIS 29001 has no parseable UUID subject — cannot correlate");
+            return StatusCode::NO_CONTENT.into_response();
+        };
+        return zweite_runde(&state, process_id, data).await.into_response();
+    }
     let disposition = disposition_for(pid);
     if disposition == Disposition::NotInvoic {
         debug!(pid, "invoicd: PID not answered by this service");
@@ -167,6 +177,10 @@ struct Incoming {
     /// Kap. 4.5 stated on the wire; `MSB` is the Messstellenbetrieb billed
     /// toward NB or LF. One PID, three Use-Cases.
     rechnungstyp: Option<String>,
+    /// The day the invoice was received — what every „n WT nach Empfang der
+    /// Rechnung" counts from: the 10-Werktage Zahlungsziel floor and
+    /// `E_0264` Prüfschritte 20 and 70.
+    eingangsdatum: time::Date,
 }
 
 /// `IMD+7081` = `KON` „Abrechnung von Konfigurationen (Universalbestellprozess)"
@@ -234,15 +248,13 @@ async fn process_invoic(
     // A walk that reached a Prüfschritt no record answers has decided
     // nothing: the invoice is held for a person, whatever the plausibility
     // check says — neither a Zahlungsavis nor a refusal is sent on it.
-    let verdict = if walk_offen(markt_antwort.as_ref(), storno_antwort.as_ref()) {
-        Verdict::OFFEN
-    } else {
-        Verdict::of(
-            &report,
-            state.auto_dispute_threshold_raw,
-            &incoming.rechnung,
-        )
-    };
+    let verdict = Verdict::aus(
+        &report,
+        state.auto_dispute_threshold_raw,
+        &incoming.rechnung,
+        markt_antwort.as_ref(),
+        storno_antwort.as_ref(),
+    );
     info!(
         %process_id, pid,
         outcome = verdict.label,
@@ -275,6 +287,13 @@ async fn process_invoic(
         checked_at,
         dispatched_at: None,
         tenant: state.tenant.clone(),
+        bestellung_ref: incoming.bestellung_ref.clone(),
+        rechnungstyp: incoming.rechnungstyp.clone(),
+        offen: serde_json::to_value(offene_schritte(
+            markt_antwort.as_ref(),
+            storno_antwort.as_ref(),
+        ))
+        .unwrap_or_else(|_| serde_json::json!([])),
     };
     if let Err(err) = pg::upsert_receipt(&state.pool, &row).await {
         warn!(
@@ -430,6 +449,82 @@ async fn process_invoic(
     .await
 }
 
+/// The MSB answered our refusal with a COMDIS 29001 — „Die Rechnung wird als
+/// korrekt angesehen" (`E_0265` Prüfschritt 10, EBD 4.3 Kap. 8.27.2, S. 632) —
+/// and the invoice is checked a second time under `E_0266` (Kap. 8.27.3,
+/// S. 634). Its Prüfschritt 1 asks whether the COMDIS rebutted every
+/// objection: a judgement, so the walk holds there until a person records it
+/// (`POST /api/v1/receipts/{id}/feststellungen`, `einwaende_entkraeftet`).
+async fn zweite_runde(
+    state: &HandlerState,
+    process_id: Uuid,
+    data: &serde_json::Value,
+) -> StatusCode {
+    let pid = mako_invoic::COMDIS_ABLEHNUNG_PID.as_u32();
+    let Some(comdis_ref) = data["comdis_ref"].as_str().filter(|s| !s.is_empty()) else {
+        dead_letter(
+            state,
+            process_id,
+            pid,
+            data,
+            "COMDIS 29001 without its message reference",
+        )
+        .await;
+        return StatusCode::NO_CONTENT;
+    };
+    match pg::feststellungen::zweite_runde_eroeffnen(
+        &state.pool,
+        &state.tenant,
+        process_id,
+        comdis_ref,
+    )
+    .await
+    {
+        Ok(pg::feststellungen::ZweiteRunde::Offen(gehalten)) => {
+            match erneut_pruefen(state, &gehalten).await {
+                Ok(outcome) => {
+                    info!(%process_id, comdis_ref, outcome, "invoicd: second round (E_0266) walked");
+                    StatusCode::NO_CONTENT
+                }
+                Err(reason) => {
+                    warn!(%process_id, %reason, "invoicd: second round not walked — asking for redelivery");
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            }
+        }
+        Ok(pg::feststellungen::ZweiteRunde::Beantwortet) => StatusCode::NO_CONTENT,
+        Ok(pg::feststellungen::ZweiteRunde::KeinBeleg) => {
+            dead_letter(
+                state,
+                process_id,
+                pid,
+                data,
+                "COMDIS 29001 for a process with no receipt — no invoice of ours to check again",
+            )
+            .await;
+            StatusCode::NO_CONTENT
+        }
+        Ok(pg::feststellungen::ZweiteRunde::KeineAbweisung(outcome)) => {
+            dead_letter(
+                state,
+                process_id,
+                pid,
+                data,
+                &format!(
+                    "COMDIS 29001 answers a refusal, and this invoice's answer was not one that \
+                     went out (outcome {outcome})"
+                ),
+            )
+            .await;
+            StatusCode::NO_CONTENT
+        }
+        Err(err) => {
+            warn!(%err, %process_id, "invoicd: second round not opened — asking for redelivery");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    }
+}
+
 /// Read the event payload into [`Incoming`], or say why it cannot be processed.
 async fn extract(
     state: &HandlerState,
@@ -505,6 +600,7 @@ async fn extract(
         malo_id,
         rechnung,
         rechnung_json,
+        eingangsdatum: mako_fristen::heute(),
     })
 }
 
@@ -581,6 +677,30 @@ impl std::fmt::Display for ReferenceDataUnavailable {
     }
 }
 
+/// The check configuration for one invoice: the operator's readings, plus the
+/// recipient's Sparte the INVOIC AHB conditions rows on (`[492]`/`[493]`).
+fn check_config_for(state: &HandlerState, inc: &Incoming) -> CheckConfig {
+    CheckConfig {
+        empfaenger_sparte: empfaenger_sparte(&inc.receiver_gln),
+        ..(*state.check_config).clone()
+    }
+}
+
+/// The Sparte of the recipient's MP-ID (`NAD+MR`): a DVGW-Codenummer (`98…`)
+/// is Gas, a BDEW-Codenummer (`99…`) Strom (BDEW-AWH Identifikatoren V1.2, Kap. 2.2, S. 5).
+/// A GS1 GLN names no Sparte, so `None` — and the checker then applies no
+/// row the AHB states for one Sparte only.
+fn empfaenger_sparte(mp_id: &str) -> Option<invoic_checker::EmpfaengerSparte> {
+    let id = rubo4e::identifiers::MarktpartnerId::new(mp_id).ok()?;
+    if id.is_dvgw() {
+        Some(invoic_checker::EmpfaengerSparte::Gas)
+    } else if id.is_bdew() {
+        Some(invoic_checker::EmpfaengerSparte::Strom)
+    } else {
+        None
+    }
+}
+
 async fn run_check(
     state: &HandlerState,
     route: &PidRoute,
@@ -598,7 +718,12 @@ async fn run_check(
         && let Some(fakten) = esa_storno_fakten(state, inc).await?
     {
         return Ok(Checked {
-            report: InvoicCheckEngine::check_storno(route.pid, &inc.rechnung, &state.check_config),
+            report: InvoicCheckEngine::check_storno(
+                route.pid,
+                &inc.rechnung,
+                inc.eingangsdatum,
+                &check_config_for(state, inc),
+            ),
             markt_antwort: None,
             // A Storno belongs to whichever Use-Case issued the invoice it
             // cancels, so the family is the same lookup — and `E_0267` /
@@ -632,7 +757,7 @@ async fn run_check(
             // The ÜT — the day the Übertragungsdatei was received — is what
             // every WiM Frist is measured from, and `E_0264` Prüfschritte 20
             // and 70 compare against it.
-            let mut fakten = invoic_checker::EmpfaengerFakten::neu(mako_fristen::heute());
+            let mut fakten = invoic_checker::EmpfaengerFakten::neu(inc.eingangsdatum);
             // Prüfschritt 50 — `A05`. Answerable from this service's own
             // receipt store for every family, so it is answered here rather
             // than left defaulted.
@@ -666,21 +791,26 @@ async fn run_check(
                     .is_some(),
                 None => false,
             };
+            feststellungen_einlesen(state, inc, process_id, &mut fakten).await;
             return Ok(Checked {
                 report: InvoicCheckEngine::check_esa_rechnung(
                     &inc.sender_mp_id,
                     &inc.rechnung,
                     &agreed,
-                    &state.check_config,
+                    inc.eingangsdatum,
+                    &check_config_for(state, inc),
                 ),
-                markt_antwort: Some(invoic_checker::antwort_auf_rechnung(
-                    mako_pruefung::rechnung::ESA,
-                    &inc.rechnung,
-                    &agreed,
-                    &fakten,
-                    &state.check_config,
-                    mako_pruefung::HolidayCalendar::BdewMaKo,
-                )),
+                markt_antwort: Some(
+                    rechnungspruefung(
+                        state,
+                        process_id,
+                        mako_pruefung::rechnung::ESA,
+                        inc,
+                        &agreed,
+                        &fakten,
+                    )
+                    .await,
+                ),
                 storno_antwort: None,
             });
         }
@@ -697,17 +827,13 @@ async fn run_check(
             familie_fuer(route.pid, state.marktrolle, inc.rechnungstyp.as_deref())
             && familie != mako_pruefung::rechnung::ESA
         {
-            let fakten = preisblatt_b_fakten(state, inc, process_id).await;
+            let mut fakten = preisblatt_b_fakten(state, inc, process_id).await;
+            feststellungen_einlesen(state, inc, process_id, &mut fakten).await;
             return Ok(Checked {
                 report: run_report(state, route, inc).await?,
-                markt_antwort: Some(invoic_checker::antwort_auf_rechnung(
-                    familie,
-                    &inc.rechnung,
-                    &agreed,
-                    &fakten,
-                    &state.check_config,
-                    mako_pruefung::HolidayCalendar::BdewMaKo,
-                )),
+                markt_antwort: Some(
+                    rechnungspruefung(state, process_id, familie, inc, &agreed, &fakten).await,
+                ),
                 storno_antwort: None,
             });
         }
@@ -717,6 +843,43 @@ async fn run_check(
         markt_antwort: None,
         storno_antwort: None,
     })
+}
+
+/// Walk the family's Rechnungsprüfung in the round the receipt is in: the
+/// first (`E_0264`/`E_0270`/`E_0273`), or — once the MSB answered our refusal
+/// with a COMDIS 29001 — the second (`E_0266`/`E_0276`/`E_0277`), whose
+/// Prüfschritt 1 reads [`invoic_checker::EmpfaengerFakten::einwaende_entkraeftet`].
+///
+/// A round that cannot be read is the first: the second needs a COMDIS on
+/// record, and walking the first refuses nothing the second would accept
+/// without a judgement it does not have.
+async fn rechnungspruefung(
+    state: &HandlerState,
+    process_id: Uuid,
+    familie: mako_pruefung::rechnung::RechnungsFamilie,
+    inc: &Incoming,
+    agreed: &[(String, invoic_checker::amount::EuroAmount)],
+    fakten: &invoic_checker::EmpfaengerFakten,
+) -> mako_pruefung::esa::RechnungsAntwort {
+    let runde = pg::feststellungen::runde_of(&state.pool, &state.tenant, process_id)
+        .await
+        .unwrap_or_else(|err| {
+            warn!(%err, %process_id, "invoicd: round unreadable — walking the first");
+            1
+        });
+    let walk = if runde == 2 {
+        invoic_checker::antwort_auf_erneute_rechnung
+    } else {
+        invoic_checker::antwort_auf_rechnung
+    };
+    walk(
+        familie,
+        &inc.rechnung,
+        agreed,
+        fakten,
+        &check_config_for(state, inc),
+        mako_pruefung::HolidayCalendar::BdewMaKo,
+    )
 }
 
 /// What the recipient's own records contribute to a **Preisblatt-B** invoice.
@@ -738,7 +901,7 @@ async fn preisblatt_b_fakten(
     inc: &Incoming,
     process_id: Uuid,
 ) -> invoic_checker::EmpfaengerFakten {
-    let mut fakten = invoic_checker::EmpfaengerFakten::neu(mako_fristen::heute());
+    let mut fakten = invoic_checker::EmpfaengerFakten::neu(inc.eingangsdatum);
     // Prüfschritt 40 — „Basiert die Rechnung auf einer Bestellung des
     // Rechnungsempfängers?" A Preisblatt-B Leistung is always billed against a
     // confirmed ORDERS 17011, and INVOIC AHB 1.0b makes `SG1 RFF+ACE` Muss, so
@@ -747,6 +910,115 @@ async fn preisblatt_b_fakten(
     fakten.rechnungsnummer_bereits_verwendet =
         rechnungsnummer_bereits_verwendet(state, inc, process_id).await;
     fakten
+}
+
+/// Read what a person recorded for the Prüfschritte no INVOIC answers into
+/// `fakten`: the Leistungsnachweise of the invoice's order (310), and the
+/// statements made on this held invoice (310, 320, 330, 80).
+///
+/// A store that does not answer leaves the steps as they were — open, which
+/// is the outcome an unanswered step already has; it never passes one.
+async fn feststellungen_einlesen(
+    state: &HandlerState,
+    inc: &Incoming,
+    process_id: Uuid,
+    fakten: &mut invoic_checker::EmpfaengerFakten,
+) {
+    let mut nachweise = std::collections::HashMap::new();
+    if let Some(bestellung) = inc.bestellung_ref.as_deref() {
+        let kopf = inc
+            .rechnung
+            .billing_period()
+            .map(|p| (*p.start(), *p.end()));
+        for pos in inc.rechnung.rechnungspositionen.iter().flatten() {
+            let (Some(nr), Some(artikel)) = (
+                pos.positionsnummer.and_then(|n| u16::try_from(n).ok()),
+                pos.artikel_id.as_deref(),
+            ) else {
+                continue;
+            };
+            let zeitraum = match (pos.lieferung_von_date(), pos.lieferung_bis_date()) {
+                (Some(von), Some(bis)) => Some((von, bis)),
+                (Some(tag), None) | (None, Some(tag)) => Some((tag, tag)),
+                (None, None) => kopf,
+            };
+            let Some((von, bis)) = zeitraum else { continue };
+            match pg::feststellungen::leistung_erbracht(
+                &state.pool,
+                &state.tenant,
+                &inc.sender_mp_id,
+                bestellung,
+                artikel,
+                von,
+                bis,
+            )
+            .await
+            {
+                Ok(Some(erbracht)) => {
+                    nachweise.insert(nr, erbracht);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    warn!(%err, %process_id, "invoicd: Leistungsnachweise unreadable — Prüfschritt 310 stays open");
+                }
+            }
+        }
+    }
+    let festgestellt = pg::feststellungen::feststellungen_of(&state.pool, &state.tenant, process_id)
+        .await
+        .unwrap_or_else(|err| {
+            warn!(%err, %process_id, "invoicd: Feststellungen unreadable — their Prüfschritte stay open");
+            pg::feststellungen::Feststellungen::default()
+        });
+    ergaenze_fakten(fakten, &nachweise, &festgestellt);
+}
+
+/// Merge the recorded answers into `fakten`. A statement on the invoice itself
+/// wins over the order's Leistungsnachweis for the same position: it is the
+/// later and the narrower one.
+fn ergaenze_fakten(
+    fakten: &mut invoic_checker::EmpfaengerFakten,
+    nachweise: &std::collections::HashMap<u16, bool>,
+    f: &pg::feststellungen::Feststellungen,
+) {
+    fakten.leistung_erbracht.extend(nachweise);
+    fakten.leistung_erbracht.extend(&f.leistung_erbracht);
+    fakten.preis_wie_angebot.extend(&f.preis_wie_angebot);
+    fakten.steuersatz_korrekt.extend(&f.steuersatz_korrekt);
+    if f.preisblatt_version_gueltig.is_some() {
+        fakten.preisblatt_version_gueltig = f.preisblatt_version_gueltig;
+    }
+    if f.einwaende_entkraeftet.is_some() {
+        fakten.einwaende_entkraeftet = f.einwaende_entkraeftet;
+    }
+}
+
+/// Walk a held invoice again, from its receipt and what has been recorded
+/// since. Returns the outcome it reached — still `Offen` when a step remains
+/// unanswered. A decided invoice is answered and announced as any other.
+///
+/// # Errors
+///
+/// The reference data the walk reads was unavailable; nothing was recorded or
+/// sent.
+pub async fn erneut_pruefen(
+    state: &HandlerState,
+    gehalten: &pg::feststellungen::GehalteneRechnung,
+) -> Result<String, String> {
+    let Some(route) = crate::routing::route_for(u32::try_from(gehalten.pid).unwrap_or(0)) else {
+        return Err(format!(
+            "PID {} is not answered by this service",
+            gehalten.pid
+        ));
+    };
+    let status = process_invoic(state, route, gehalten.process_id, &gehalten.data).await;
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        return Err("the reference data the invoice is checked against is unavailable".to_owned());
+    }
+    pg::feststellungen::outcome_of(&state.pool, &state.tenant, gehalten.process_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "the receipt is gone".to_owned())
 }
 
 /// **Prüfschritt 50** — `A05`, „Rechnungsnummer wurde bereits verwendet".
@@ -888,7 +1160,8 @@ async fn run_report(
         return Ok(InvoicCheckEngine::check_storno(
             pid,
             rechnung,
-            &state.check_config,
+            inc.eingangsdatum,
+            &check_config_for(state, inc),
         ));
     }
 
@@ -943,7 +1216,8 @@ async fn run_report(
             rechnung,
             sheet.as_ref(),
             &contracted,
-            &state.check_config,
+            inc.eingangsdatum,
+            &check_config_for(state, inc),
         ));
     }
 
@@ -971,7 +1245,8 @@ async fn run_report(
         &inc.sender_mp_id,
         rechnung,
         &store,
-        &state.check_config,
+        inc.eingangsdatum,
+        &check_config_for(state, inc),
     );
 
     // ── Stage 6: Mehr-/Mindermengen settlement prices ────────────────────────
@@ -1014,8 +1289,12 @@ async fn run_report(
         return Ok(report);
     };
 
-    let findings =
-        InvoicCheckEngine::check_mmm_settlement(rechnung, mehr, minder, &state.check_config);
+    let findings = InvoicCheckEngine::check_mmm_settlement(
+        rechnung,
+        mehr,
+        minder,
+        &check_config_for(state, inc),
+    );
     if !findings.is_empty() {
         let escalation = findings
             .iter()
@@ -1054,6 +1333,19 @@ fn walk_offen(
 }
 
 /// The Prüfschritte a walk left open, by number.
+/// Every open Prüfschritt with its Ebene, Positionsnummer and the missing fact —
+/// what the receipt records for a person to state.
+fn offene_schritte(
+    markt_antwort: Option<&mako_pruefung::esa::RechnungsAntwort>,
+    storno_antwort: Option<&mako_pruefung::esa::StornoAntwort>,
+) -> Vec<mako_pruefung::esa::OffenerPruefschritt> {
+    let mut offen: Vec<_> = markt_antwort.map(|a| a.offen.clone()).unwrap_or_default();
+    if let Some(mako_pruefung::esa::StornoAntwort::Offen(o)) = storno_antwort {
+        offen.push(o.clone());
+    }
+    offen
+}
+
 fn offene_pruefschritte(
     markt_antwort: Option<&mako_pruefung::esa::RechnungsAntwort>,
     storno_antwort: Option<&mako_pruefung::esa::StornoAntwort>,
@@ -1073,6 +1365,38 @@ impl Verdict {
         dispute: false,
         label: "Offen",
     };
+
+    /// A walked Entscheidungsbaum refused the invoice.
+    const ABGEWIESEN: Self = Self {
+        dispute: true,
+        label: "Dispute",
+    };
+
+    /// The verdict on a checked invoice. The walked tree decides first: open
+    /// holds it, a refusal disputes it whatever the plausibility report says —
+    /// the market answer carries the tree's codes, and a Zahlungsavis on an
+    /// invoice the tree refused would avisieren a payment the tree ruled out.
+    /// Only a tree that accepted, or none walked, leaves it to the report.
+    fn aus(
+        report: &CheckReport,
+        threshold_raw: i64,
+        rechnung: &Rechnung,
+        markt_antwort: Option<&mako_pruefung::esa::RechnungsAntwort>,
+        storno_antwort: Option<&mako_pruefung::esa::StornoAntwort>,
+    ) -> Self {
+        if walk_offen(markt_antwort, storno_antwort) {
+            return Self::OFFEN;
+        }
+        let abgewiesen = markt_antwort.is_some_and(|a| !a.befunde.is_empty())
+            || matches!(
+                storno_antwort,
+                Some(mako_pruefung::esa::StornoAntwort::Ablehnen { .. })
+            );
+        if abgewiesen {
+            return Self::ABGEWIESEN;
+        }
+        Self::of(report, threshold_raw, rechnung)
+    }
 
     fn of(report: &CheckReport, threshold_raw: i64, rechnung: &Rechnung) -> Self {
         let dispute = match report.outcome {
@@ -1135,7 +1459,17 @@ async fn dispatch(
         warn!(%err, %process_id, "invoicd: answer not recorded — not sent; the receipt stays undispatched");
         return None;
     }
-    let key = Uuid::new_v5(&process_id, route.salt).to_string();
+    // One key per round: the second answer is a second command for the same
+    // process, not a replay of the first.
+    let runde = pg::feststellungen::runde_of(&state.pool, &state.tenant, process_id)
+        .await
+        .unwrap_or(1);
+    let key = if runde == 2 {
+        Uuid::new_v5(&process_id, &[route.salt, b"/E_0266"].concat())
+    } else {
+        Uuid::new_v5(&process_id, route.salt)
+    }
+    .to_string();
     let cmd = ForwardCommand {
         marktrolle: None,
         command: command.to_owned(),
@@ -1357,7 +1691,7 @@ fn rechnungsgegenstand(rechnungstyp: Option<&str>) -> mako_pruefung::codes::MsbR
 /// all of them named the Netznutzungsabrechnung tree on an ESA's answer, whose
 /// codes mean something else entirely — `A70` is the `E_0406`
 /// Summenprüfung and is undefined in `E_0264`, whose own total check is `A24`.
-/// `E_0406` is not even admissible on REMADV 33002 (REMADV AHB 1.0a § 3.1.1
+/// `E_0406` is not even admissible on REMADV 33002 (REMADV AHB 1.0a Kap. 3.1.1
 /// lists the trees DE 1082 accepts, and it is not among them).
 ///
 /// Returns `None` when this service walks no tree for the Use-Case: the answer
@@ -1372,7 +1706,7 @@ fn abweichungsgrund(
     findings: &[invoic_checker::Finding],
 ) -> Option<mako_invoic::RemadvAntwort> {
     // `E_0267` answers with **one** code and rides the plain Abweisung 33002 —
-    // the one tree of the ESA family REMADV AHB 1.0a § 3.1.1 admits in DE 1082.
+    // the one tree of the ESA family REMADV AHB 1.0a Kap. 3.1.1 admits in DE 1082.
     // Its `KeineAntwort` outcome never reaches here: the caller returns before
     // building an answer at all.
     if let Some(mako_pruefung::esa::StornoAntwort::Ablehnen {
@@ -1462,9 +1796,15 @@ fn abweichungsgrund(
 
 /// The `E_0406` Antwortcode a Netznutzungsabrechnung Abweisung carries.
 ///
-/// Only one finding maps to a code with an exact counterpart in the tree:
+/// Three findings map to a code with an exact counterpart in the tree:
+/// [`FindingKind::ZahlungszielUnterschritten`] is Prüfschritt 31 („Ist die
+/// Frist der Fälligkeit unterschritten?", Kopfebene), which is `A10`;
+/// [`FindingKind::ZahlungszielUeberschritten`] is Prüfschritt 34 („Ist die
+/// Frist der Fälligkeit überschritten?", Kopfebene, the Rückerstattung branch
+/// of Prüfschritt 28), which is `A11`; and
 /// [`FindingKind::TotalMismatch`] is Prüfschritt 900 („Entspricht der
 /// Rechnungsbetrag der Summe aller Rechnungspositionen?"), which is `A70`.
+/// The Kopfebene comes first: a refusal there ends the walk.
 /// Everything else lands on the catch-alls, which the BDEW requires to carry a
 /// written Erläuterung — supplied here from the finding text.
 ///
@@ -1475,6 +1815,21 @@ fn abweichungsgrund(
 /// walked, in `invoic_checker::rechnung`.
 fn netznutzung_antwortcode(findings: &[invoic_checker::Finding]) -> &'static str {
     use invoic_checker::FindingKind;
+    if findings
+        .iter()
+        .any(|f| f.is_dispute && f.kind == FindingKind::ZahlungszielUnterschritten)
+    {
+        // Prüfschritt 31, Cluster: Ablehnung auf Kopfebene.
+        return "A10";
+    }
+    if findings
+        .iter()
+        .any(|f| f.is_dispute && f.kind == FindingKind::ZahlungszielUeberschritten)
+    {
+        // Prüfschritt 34, reached from Prüfschritt 28 for a Rückerstattung —
+        // the branch opposite 31. Cluster: Ablehnung auf Kopfebene.
+        return "A11";
+    }
     let disputes = findings.iter().filter(|f| f.is_dispute);
     for f in disputes {
         if matches!(f.kind, FindingKind::TotalMismatch) {
@@ -1574,6 +1929,33 @@ mod tests {
 
     use super::*;
 
+    /// A statement on the invoice wins over the order's Leistungsnachweis for
+    /// the same position, and every stated step reaches the walk's facts.
+    #[test]
+    fn statements_and_nachweise_reach_the_walk() {
+        let mut fakten = invoic_checker::EmpfaengerFakten::neu(time::macros::date!(2026 - 04 - 01));
+        let nachweise = std::collections::HashMap::from([(1, false), (2, true)]);
+        let mut f = pg::feststellungen::Feststellungen::default();
+        f.leistung_erbracht.insert(1, true);
+        f.preis_wie_angebot.insert(2, true);
+        f.steuersatz_korrekt.insert(2, false);
+        f.preisblatt_version_gueltig = Some(true);
+        ergaenze_fakten(&mut fakten, &nachweise, &f);
+        assert_eq!(
+            fakten.leistung_erbracht.get(&1),
+            Some(&true),
+            "the statement wins"
+        );
+        assert_eq!(
+            fakten.leistung_erbracht.get(&2),
+            Some(&true),
+            "the Nachweis answers"
+        );
+        assert_eq!(fakten.preis_wie_angebot.get(&2), Some(&true));
+        assert_eq!(fakten.steuersatz_korrekt.get(&2), Some(&false));
+        assert_eq!(fakten.preisblatt_version_gueltig, Some(true));
+    }
+
     /// One finding of a kind, at a severity.
     fn finding(kind: FindingKind, is_dispute: bool) -> invoic_checker::Finding {
         invoic_checker::Finding {
@@ -1663,6 +2045,7 @@ mod tests {
             rechnung_json: serde_json::json!({}),
             bestellung_ref: None,
             rechnungstyp: None,
+            eingangsdatum: time::macros::date!(2026 - 04 - 01),
         }
     }
 
@@ -1965,8 +2348,10 @@ mod tests {
 
     /// The Antwortcode is the machine-readable half of the same obligation.
     ///
-    /// `TotalMismatch` is `E_0406` Prüfschritt 900 exactly; the rest land on a
-    /// catch-all, chosen by whether a line or the sum was at fault.
+    /// `ZahlungszielUnterschritten` is `E_0406` Prüfschritt 31,
+    /// `ZahlungszielUeberschritten` Prüfschritt 34 and `TotalMismatch`
+    /// Prüfschritt 900 exactly; the rest land on a catch-all,
+    /// chosen by whether a line or the sum was at fault.
     #[test]
     fn a_dispute_states_a_machine_readable_code() {
         let total = Finding {
@@ -1978,7 +2363,31 @@ mod tests {
             actual: None,
             deviation_pct: None,
         };
-        assert_eq!(netznutzung_antwortcode(&[total]), "A70");
+        assert_eq!(netznutzung_antwortcode(std::slice::from_ref(&total)), "A70");
+
+        // Prüfschritt 31 is on the Kopfebene, which the walk finishes first.
+        let zu_kurz = Finding {
+            kind: FindingKind::ZahlungszielUnterschritten,
+            is_dispute: true,
+            message: "Zahlungsziel unterschritten".into(),
+            line_number: None,
+            expected: None,
+            actual: None,
+            deviation_pct: None,
+        };
+        assert_eq!(netznutzung_antwortcode(&[total.clone(), zu_kurz]), "A10");
+
+        // Prüfschritt 34 — a Rückerstattung due too late — is Kopfebene too.
+        let zu_lang = Finding {
+            kind: FindingKind::ZahlungszielUeberschritten,
+            is_dispute: true,
+            message: "Zahlungsziel der Rückerstattung überschritten".into(),
+            line_number: None,
+            expected: None,
+            actual: None,
+            deviation_pct: None,
+        };
+        assert_eq!(netznutzung_antwortcode(&[total, zu_lang]), "A11");
 
         let line = Finding {
             kind: FindingKind::ArithmeticError,
@@ -2002,10 +2411,23 @@ mod tests {
         );
     }
 
+    /// INVOIC AHB `[493]` „Wenn MP-ID in NAD+MR (Nachrichtenempfänger) aus
+    /// Sparte Gas": a DVGW-Codenummer (`98…`) is a Gas recipient, a
+    /// BDEW-Codenummer (`99…`) a Strom one, and a GS1 GLN names no Sparte —
+    /// so the Gas-only rows of the Zahlungsziel bounds are not applied to it.
+    #[test]
+    fn the_recipient_sparte_is_read_off_its_mp_id() {
+        use invoic_checker::EmpfaengerSparte as S;
+        assert_eq!(empfaenger_sparte("9870000000006"), Some(S::Gas));
+        assert_eq!(empfaenger_sparte("9900357000004"), Some(S::Strom));
+        assert_eq!(empfaenger_sparte("4000000000000"), None);
+        assert_eq!(empfaenger_sparte(""), None);
+    }
+
     /// Every code this handler can emit must be one `E_0406` publishes.
     #[test]
     fn every_emitted_code_is_published_by_its_ebd() {
-        for code in ["A70", "A99", "A96"] {
+        for code in ["A10", "A11", "A70", "A99", "A96"] {
             assert!(
                 mako_pruefung::codes::lookup(mako_pruefung::codes::EBD_NETZNUTZUNGSRECHNUNG, code)
                     .is_some(),
@@ -2016,7 +2438,7 @@ mod tests {
 
     /// **The tree is not a constant.** PID 31009 toward an ESA is `E_0264`;
     /// stamping `E_0406` on it named the Netznutzungsabrechnung tree, whose
-    /// `A70` is undefined there — and which REMADV AHB 1.0a § 3.1.1 does not
+    /// `A70` is undefined there — and which REMADV AHB 1.0a Kap. 3.1.1 does not
     /// even admit in DE 1082 of the plain Abweisung.
     #[test]
     fn the_answer_names_the_tree_the_use_case_publishes() {
@@ -2077,7 +2499,7 @@ mod tests {
         let walk = esa::pruefe_rechnung(
             &esa::RechnungsFakten {
                 einwaende_entkraeftet: None,
-                ustg_konform: Some(true),
+                ustg_maengel: Some(Vec::new()),
                 rechnungsdatum: time::macros::date!(2026 - 04 - 01),
                 eingangsdatum: time::macros::date!(2026 - 04 - 01),
                 leistungszeitraum: Some(maerz),
@@ -2127,6 +2549,72 @@ mod tests {
     /// A walk that stopped at an unanswered Prüfschritt is held: no
     /// Zahlungsavis, no Abweisung, and no `settled` event for the ERP to book
     /// a payment on — even beside a refusal the walk did reach.
+    /// A walked tree that refuses disputes the invoice even when the
+    /// plausibility report is clean — the REMADV carries the tree's codes, and
+    /// a Zahlungsavis would avisieren what the tree ruled out (e.g. `A10`,
+    /// `A25`). A tree that accepts leaves the verdict to the report.
+    #[test]
+    fn a_refusing_walk_disputes_whatever_the_report_says() {
+        use mako_pruefung::esa::RechnungsAntwort;
+        let refused = mako_pruefung::rechnung::pruefe_rechnung_erneut(
+            mako_pruefung::rechnung::ESA,
+            &{
+                let mut r = mako_pruefung::rechnung::RechnungsFakten {
+                    einwaende_entkraeftet: Some(false),
+                    ustg_maengel: Some(Vec::new()),
+                    rechnungsdatum: time::macros::date!(2026 - 04 - 01),
+                    eingangsdatum: time::macros::date!(2026 - 04 - 01),
+                    leistungszeitraum: None,
+                    bestellung_bekannt: true,
+                    rechnungsnummer_bereits_verwendet: false,
+                    faelliger_betrag_nicht_negativ: true,
+                    zahlungsziel: None,
+                    preisblatt_version_gueltig: None,
+                    zeitraum_bereits_abgerechnet_in: None,
+                    sonstiger_kopffehler: None,
+                    positionen: Vec::new(),
+                    fehlende_artikel_ids: Vec::new(),
+                    steuersaetze: Vec::new(),
+                    rechnungsbetrag_stimmt: true,
+                    sonstiger_summenfehler: None,
+                };
+                r.einwaende_entkraeftet = Some(false);
+                r
+            },
+            mako_pruefung::HolidayCalendar::BdewMaKo,
+        );
+        assert_eq!(refused.antwortcodes(), vec!["A25"]);
+        let v = Verdict::aus(
+            &report(CheckOutcome::Ok, "10"),
+            0,
+            &plain(),
+            Some(&refused),
+            None,
+        );
+        assert!(v.dispute, "the tree refused");
+        let accepted = RechnungsAntwort {
+            tree: "E_0264",
+            befunde: Vec::new(),
+            offen: Vec::new(),
+        };
+        let v = Verdict::aus(
+            &report(CheckOutcome::Ok, "10"),
+            0,
+            &plain(),
+            Some(&accepted),
+            None,
+        );
+        assert!(!v.dispute);
+        let v = Verdict::aus(
+            &report(CheckOutcome::Dispute, "10"),
+            0,
+            &plain(),
+            Some(&accepted),
+            None,
+        );
+        assert!(v.dispute, "the report still disputes on its own findings");
+    }
+
     #[test]
     fn an_open_walk_is_neither_paid_nor_refused() {
         use mako_fristen::vorlauf::RechnungEmpfaenger as R;
@@ -2192,7 +2680,7 @@ mod tests {
     /// **`E_0267`'s three outcomes, and the quiet one is the point.** A Storno
     /// of an invoice this ESA had itself refused — or had not answered yet —
     /// needs no answer at all (Prüfschritt 80). A refusal rides the plain
-    /// Abweisung 33002, the one Prüfidentifikator REMADV AHB 1.0a § 3.1.1
+    /// Abweisung 33002, the one Prüfidentifikator REMADV AHB 1.0a Kap. 3.1.1
     /// admits `E_0267` in.
     #[test]
     fn the_storno_answer_is_a_three_way_decision() {
@@ -2203,7 +2691,7 @@ mod tests {
         let facts = |ursprungsantwort| mako_pruefung::esa::StornoFakten {
             ursprungsrechnung_bekannt: true,
             rechnungsnummer_bereits_verwendet: false,
-            ustg_konform: Some(true),
+            ustg_maengel: Some(Vec::new()),
             bereits_storniert: false,
             rechnungstyp_identisch: true,
             zeitraum_identisch: true,
@@ -2346,6 +2834,7 @@ mod tests {
             "9900357000004",
             &r,
             &store,
+            time::macros::date!(2020 - 01 - 01),
             &invoic_checker::CheckConfig::default(),
         );
         let reason = dispute_reason(&report.findings);

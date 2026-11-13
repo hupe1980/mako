@@ -7,9 +7,9 @@
 //!   S. 42) — „Entsprechend seiner Marktrolle verarbeitet der Empfänger
 //!   Geschäftsvorfälle mit dem angegebenen Prüfidentifikator nicht". Owed in
 //!   both Sparten: a Verarbeitbarkeitsfehler is the one result Gas reports
-//!   (§ 2.3, S. 21).
-//! * An AHB-Fehler (§ 2.1.1, S. 10): a missing Muss element `Z29`, a code
-//!   outside the permitted ones `Z39`, each with its Ortsangabe (§ 2.1.2.2,
+//!   (Kap. 2.3, S. 21).
+//! * An AHB-Fehler (Kap. 2.1.1, S. 10): a missing Muss element `Z29`, a code
+//!   outside the permitted ones `Z39`, each with its Ortsangabe (Kap. 2.1.2.2,
 //!   S. 12) — instead of the Anerkennungsmeldung.
 
 use std::sync::Arc;
@@ -158,7 +158,7 @@ async fn a_dead_lettered_message_yields_one_event() {
     assert_eq!(notice.payload["reason"], records[0].reason_label);
 }
 
-/// An APERAK is never answered with an APERAK (§ 2, S. 9), routed or not.
+/// An APERAK is never answered with an APERAK (Kap. 2, S. 9), routed or not.
 #[tokio::test]
 async fn an_unrouted_aperak_gets_no_aperak() {
     let (store, _) = post_unrouted(skeleton(edi_energy::MessageType::Aperak, 29002)).await;
@@ -204,7 +204,7 @@ async fn an_ahb_fehler_is_answered_z29() {
     );
 }
 
-/// In Gas a Verarbeitbarkeitsfehler is reported too (§ 2.3, S. 21), and its
+/// In Gas a Verarbeitbarkeitsfehler is reported too (Kap. 2.3, S. 21), and its
 /// window watches the Fehlermeldung's delivery.
 #[tokio::test]
 async fn a_gas_ahb_fehler_is_answered_and_watched() {
@@ -255,7 +255,7 @@ async fn a_gas_ahb_fehler_is_answered_and_watched() {
     );
 }
 
-/// Every AHB-Fehler of the Geschäftsvorfall is named (§ 2.1.1, S. 10), each in
+/// Every AHB-Fehler of the Geschäftsvorfall is named (Kap. 2.1.1, S. 10), each in
 /// its own `SG4 ERC` group with its own Ortsangabe — the MIG lets `SG4` repeat
 /// 99999 times.
 #[tokio::test]
@@ -313,7 +313,7 @@ async fn every_ahb_fehler_gets_its_own_erc_group() {
 /// A follow-up whose preceding Geschäftsvorfall is not here is answered `Z33`
 /// „Referenziertes Geschäftsvorfall-Tupel nicht vorhanden" (Kap. 4.3, S. 43)
 /// — the PID-Übersicht marks 55002's „Stelle der Zuordnungsprüfung" `V`, so
-/// the check belongs to the Verarbeitbarkeitsprüfung (§ 2.1.3, S. 14).
+/// the check belongs to the Verarbeitbarkeitsprüfung (Kap. 2.1.3, S. 14).
 #[tokio::test]
 async fn an_orphan_follow_up_is_answered_z33() {
     let wire = skeleton(edi_energy::MessageType::Utilmd, 55002);

@@ -101,7 +101,7 @@ permit(
 // `FTX+Z17` Zieladresse points at — so it carries the `ESA` role and would be
 // refused by a policy demanding `MSB`. And it must not gain what
 // `write-meter-reads` grants: a Typ-2 value is non-authoritative by regulation
-// (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 §4) and may never reach
+// (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 Kap. 4) and may never reach
 // `meter_reads`. A gateway that can write one store must not be able to write
 // the other.
 //

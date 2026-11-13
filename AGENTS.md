@@ -163,7 +163,7 @@ binding. `crates/edi-energy/profiles/sources.json` is the authority for every ro
 The `fv` date is the **Anwendungszeitpunkt**; `publikationsdatum` is when the
 release was published.
 
-- Allgemeine Festlegungen 6.1d §2.5 runs two Änderungsmanagement cycles — a
+- Allgemeine Festlegungen 6.1d Kap. 2.5 runs two Änderungsmanagement cycles — a
   release applying 01.10. publishes 01.04., one applying 01.04. publishes 01.10.
   That is the schedule `publikationsdatum` is **expected** to follow, not a
   definition of it.
@@ -341,10 +341,11 @@ reads clap flags with its TOML file as an overlay — none of which `run()` host
 | 31001–31002, 31005–31006 | `mako-gpke` (MMM-Rechnung / MMM-selbst ausgest. Rechnung Strom, NB → LF) | BK6-24-174 |
 | 31007–31008 | `mako-gabi-gas` (Aggreg. MMM-Rechnung Gas / selbst ausgest., NB → MGV; Gas-only; MGV is a Gas-domain role) | BK7-24-01-008 |
 | 13013 | `mako-gabi-gas` `gabi-gas-mmma` (Allokationsliste Gas, MMMA, Gas-only) | BK7-24-01-008 |
-| 17110, 19110 | `mako-gpke` `gpke-allokationsliste` (ORDERS/ORDRSP Anforderung bilanzierte Menge, Gas twins of 17114/19115). `mako-gabi-gas` names them informational and registers MSCONS 13013 only — the ORDERS/ORDRSP AHB puts their formal home in the Gas MMMA process | BK7-24-01-008 |
+| 17110 | `mako-gabi-gas` `gabi-gas-mmma` — the GNB receives the Anforderung der Allokationsliste and refuses a Start Abo on 19110 out of `E_0803` / `G_0001`; the LF sends it from `mako-gpke` `gpke-allokationsliste`, which does not route it | MMM AWH V2.1 Kap. 6.2 · ORDERS AHB 1.1b Kap. 4.2 |
+| 19110 | `mako-gpke` `gpke-allokationsliste` — the LF's copy of the Ablehnung (Gas twin of 19115) | ORDRSP AHB 1.1b Kap. 4.2 |
 | 31009 | `mako-wim` (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1 — routed via wim-invoic to avoid double-registration) | BK6-24-174 |
 | 31003 | `mako-wim` `wim-invoic` (WiM-Rechnung Gas) | AWH WiM Gas 2.0 Kap. 4.7 |
-| 31004 | `mako-wim` `wim-invoic` (Stornorechnung, Sparte-neutral) | INVOIC AHB §3.1.2 |
+| 31004 | `mako-wim` `wim-invoic` (Stornorechnung, Sparte-neutral) | INVOIC AHB Kap. 3.1.2 |
 | 31010 | `mako-gabi-gas` (Kapazitätsrechnung, Kapazitätsabrechnung Gas) | BK7 |
 | 31011 | `mako-geli-gas` (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF) | BK7-24-01-009 |
 | 17134–17135 | `mako-gpke` (ORDERS Konfiguration, GPKE Teil 3) | BK6-22-024 |
@@ -430,9 +431,10 @@ Source: BDEW-AWH Rollenmodell V2.2 (08.01.2026). Only roles with
 
 ### MP-ID formats and EDIFACT identification codes — never mix these up
 
-Source: BDEW-AWH Identifikatoren V1.2 (07.02.2025) §2.2;
-Allgemeine Festlegungen V6.1d (01.04.2026) §2.13, §3;
-UTILMD AHB Gas 1.2 NAD+MS/MR tables.
+Source: BDEW-AWH Identifikatoren V1.2 (07.02.2025) Kap. 2.1–2.2, S. 4–5 (MP-ID
+kinds and prefixes); the MIGs' NAD DE3055 code list (UTILMD MIG Strom S2.2
+S. 32–33, UTILMD MIG Gas G1.2 S. 17–18, APERAK MIG 2.2 S. 12–13, MSCONS MIG 2.5
+S. 15–16); Allgemeine Festlegungen V6.1d (01.04.2026) S. 50 (UNB DE0007), Kap. 2.13, Kap. 3.
 
 #### BDEW-Codenummer vs. DVGW-Codenummer vs. GLN
 
@@ -441,33 +443,41 @@ UTILMD AHB Gas 1.2 NAD+MS/MR tables.
 | BDEW-Codenummer (Strom) | `99` | 13 | **`293`** | **`500`** | bdew-codes.de |
 | DVGW-Codenummer (Gas) | `98` | 13 | **`332`** | **`502`** | codevergabe.dvgw-sc.de |
 | GLN (GS1) | varies | 13 | **`9`** | **`14`** | GS1 |
-| EIC | — | 16 | **`ZEW`** | — | ENTSO-E |
+| EIC | — | 16 | **none** — not an MP-ID; no MIG puts it on a NAD | — | ENTSO-E / BDEW as LIO |
 
 - NAD DE3055 and UNB DE0007 use **different code values** for the same organisation.
 - `332` (DVGW in NAD DE3055) ≠ `502` (DVGW in UNB DE0007).
 - `9` (GS1 in NAD DE3055) ≠ `14` (GS1 in UNB DE0007).
-- In `services/makod/src/core/party_registry.rs` the agency code is auto-derived from the GLN
-  prefix: `99…` → `"293"`, `98…` → `"332"`, other 13-digit → `"9"`, 16-char → `"ZEW"`.
-- Each Marktrolle must have **exactly one MP-ID** (`"einem Marktteilnehmer kann für jede
-  Marktrolle nur genau eine MP-ID zugeordnet sein"` — Identifikatoren AWH §2.1).
+- `9`, `293`, `332` are the **whole** NAD DE3055 code list of the MIGs, and
+  `edi_energy::AgencyCode` holds exactly those (its `party_agency_code` test reads
+  them from the imported MIG profiles). An EIC travels in `CCI` DE7037 or `LOC`
+  DE3225, which carry no DE3055.
+- `edi_energy::AgencyCode::for_mp_id` is the one derivation: `99…` → `"293"`,
+  `98…` → `"332"`, other 13-digit → `"9"`, anything else → `None` (and
+  `unb_qualifier` likewise), so a builder refuses such a party by name. makod's
+  `party_registry` delegates to it, refuses an EIC as `[[party]] mp_id` and an
+  `agency` override off the list.
+- Each Marktrolle must have **exactly one MP-ID** — Identifikatoren AWH V1.2 Kap. 2.1,
+  S. 4: „Für jede Sparte (Gas bzw. Strom) und jede Rolle hat ein Markteilnehmer genau
+  eine MP-ID."
 - UNB `NAD+MS` (sender) and `NAD+MR` (receiver) must use **identical** MP-IDs as the
-  corresponding UNB DE0004/DE0010 sender/receiver fields (§2.13).
+  corresponding UNB DE0004/DE0010 sender/receiver fields (Allgemeine Festlegungen Kap. 2.13).
 
-#### §2.12 Filename convention (Allgemeine Festlegungen V6.1d §2.12)
+#### Filename convention (Allgemeine Festlegungen V6.1d Kap. 2.12)
 
 `<MsgType>_<SenderMPID>_<ReceiverMPID>_<YYMMDD>_<HHMM>_<Ref>.txt`
 (`.txt.gz` when compressed)
 
-#### §2.14 Publication requirement
+#### Publication requirement (Allgemeine Festlegungen V6.1d Kap. 2.14)
 
 - Only published MP-IDs may be used in production messages.
 - Strom: https://bdew-codes.de/Codenumbers/BDEWCodes/CodeOverview
 - Gas: https://codevergabe.dvgw-sc.de/MarketParticipants
-- Operator must be reachable within **3 Werktage** after initial contact (§2.14).
+- Operator must be reachable within **3 Werktage** after initial contact (Kap. 2.14).
 
 ### EDIFACT time encoding — never mix UTC and local time
 
-Source: Allgemeine Festlegungen V6.1d §3.
+Source: Allgemeine Festlegungen V6.1d Kap. 3.
 
 - All **EDIFACT times are in UTC** (DTM qualifier 303: `CCYYMMDDHHMMZZZ`, ZZZ always `+00`).
 - Process **deadlines** use **gesetzliche deutsche Zeit** (CET = UTC+1, CEST = UTC+2).
@@ -488,13 +498,13 @@ Per **APERAK AHB 1.1** (FV2026-10-01; AHB 1.0 carries the same chapters for FV20
 
 | Sparte | Message type | Deadline | Source |
 |---|---|---|---|
-| **Strom** | UTILMD / ORDERS | **45 Minuten** | APERAK AHB 1.1 §2.4.1 |
-| **Strom** | UTILMD / ORDERS **an Samstagen** | **Sonntag 12 Uhr** | APERAK AHB 1.1 §2.4.1 |
-| **Strom** | all other | **nächster Werktag 12 Uhr** | APERAK AHB 1.1 §2.4.1 |
-| **Gas** | Folgeprozesse | **nächster Werktag 12 Uhr** | APERAK AHB 1.1 §2.3.1 |
-| **Gas** | Initialprozesse | **3 Werktage**, to the **end** of the third | APERAK AHB 1.1 §2.3.1 |
+| **Strom** | UTILMD / ORDERS | **45 Minuten** | APERAK AHB 1.1 Kap. 2.4.1 |
+| **Strom** | UTILMD / ORDERS **an Samstagen** | **Sonntag 12 Uhr** | APERAK AHB 1.1 Kap. 2.4.1 |
+| **Strom** | all other | **nächster Werktag 12 Uhr** | APERAK AHB 1.1 Kap. 2.4.1 |
+| **Gas** | Folgeprozesse | **nächster Werktag 12 Uhr** | APERAK AHB 1.1 Kap. 2.3.1 |
+| **Gas** | Initialprozesse | **3 Werktage**, to the **end** of the third | APERAK AHB 1.1 Kap. 2.3.1 |
 
-Two readings the document does not support: the 45 minutes carries **no Montag–Freitag qualifier** — §2.4.1 states it
+Two readings the document does not support: the 45 minutes carries **no Montag–Freitag qualifier** — Kap. 2.4.1 states it
 unconditionally and carves out **Samstag** alone, so Sunday is not a special
 case; and the Gas Initialprozess window names **no clock time**, so it runs to
 the end of the third Werktag and not to 12 Uhr on it. The „12 Uhr" belongs to
@@ -502,7 +512,7 @@ the Folgeprozess sentence in the paragraph above it.
 
 Gas APERAKs are always **Verarbeitbarkeitsfehlermeldungen** (BGM+313) only — no Anerkennungsmeldung.
 Strom APERAKs include **both** Anerkennungsmeldung (BGM+312, accepted) and Verarbeitbarkeitsfehlermeldung (BGM+313, rejected).
-Gas CONTRL rule: "Auf eine APERAK ist immer eine CONTRL zu senden." (APERAK AHB 1.1 §2.3, CONTRL AHB 1.0 §2.3.1)
+Gas CONTRL rule: "Auf eine APERAK ist immer eine CONTRL zu senden." (APERAK AHB 1.1 Kap. 2.3, CONTRL AHB 1.0 Kap. 2.3.1)
 
 #### Process *response* deadline (how long the business process can take overall)
 These are NOT APERAK deadlines. Never use these as the APERAK-sending window.
@@ -553,7 +563,7 @@ engine it silently becomes money.
 |---|---|
 | "§41 Abs. 3 EnWG = 6-week price-change notice" | §41 Abs. 3 is an advertising-information duty. Six weeks is **§5 Abs. 2 StromGVV/GasGVV** (Grundversorgung); Sonderverträge: **§41 Abs. 5 EnWG** — ≥1 month for Haushaltskunden, ≥2 weeks otherwise, plus Sonderkündigungsrecht |
 | "§38a EEG 2023 = Mieterstromzuschlag" | §38a is Zahlungsberechtigungen for first-segment solar tenders. Mieterstromzuschlag is **§21 Abs. 3 EEG 2023** (rate via §48a) |
-| "MaBiS vorläufig day 3 / endgültig day 8" | BK6-24-174 Anlage 3 §3.10 counts **Werktage**: Erstaufschlag ≤ 10 WT, BKA-Clearing ≤ 30 WT, then KBKA |
+| "MaBiS vorläufig day 3 / endgültig day 8" | BK6-24-174 Anlage 3 Kap. 3.10 counts **Werktage**: Erstaufschlag ≤ 10 WT, BKA-Clearing ≤ 30 WT, then KBKA |
 | "§29 MsbG mandatory iMSys 7–100 kW band" | Current §29 Abs. 1 Nr. 2b has only a **> 7 kW** lower bound; no 100 kW cap exists |
 | "§42c Energy Sharing reduces Netzentgelte" | No reduction exists in current law — full Netzentgelte apply (BK6 Mitteilung Nr. 73, BK6-06-009) |
 | "2022 heating-gas Energiesteuer = 0 (Energiesteuersenkungsgesetz)" | The 2022 cut (BGBl. I 2022 S. 810, Jun–Aug) hit **motor fuels** only; §2 Abs. 3 Nr. 4 heating gas stayed 0.55 ct/kWh. The real gas reliefs: EWSG Dezemberhilfe + **7 % USt 01.10.2022–31.03.2024** (§28 Abs. 5/6 UStG) |
@@ -571,8 +581,8 @@ engine it silently becomes money.
 | "§40c EnWG's three-week deadline follows from a short billing period" | The three weeks attach to **§40b Abs. 1 monthly billing** — the agreed cadence — not to the period's length. A Schlussrechnung always has six weeks, measured from the end of the **Lieferverhältnis**, however short the final period is |
 | "§14a EnWG Modul 2 = zeitvariable/HT-NT Netzentgelte; Modul 3 = Spotpreis or Steuerungsentschädigung" | Numbered by **BK8-22/010-A** (NSAVER, 23.11.2023), not BK6-22-300 (the companion Festlegung for the netzorientierte Steuerung). **Modul 1** pauschale Netzentgelt-Reduzierung (default, no extra metering); **Modul 2** prozentuale Arbeitspreis-Reduzierung on the device's *separately metered* energy; **Modul 3** zeitvariable Netzentgelte, **three** Tarifstufen HT/ST/NT, from 01.04.2025, iMSys required. **1 and 2 are the two forms the base module takes and the Anschlussnutzer holds one**, so they do not combine (`MODUL1_AND_MODUL2`); **2 and 3 are mutually exclusive** because both re-price the Arbeitspreis (`MODUL2_AND_MODUL3`); **Modul 1 + Modul 3 is the only pair**. All three are rate reductions — a Steuerungsentschädigung is not a module |
 | "the Modul-2 percentage is the Netzbetreiber's to publish" | **BK8-22/010-A Tenor 2. b) fixes it**: „Der reduzierte Arbeitspreis entspricht **40%** des Arbeitspreises für die Entnahme ohne Leistungsmessung des Netzbetreibers in der Niederspannung.“ Tenor 2. c) makes Modul 2 verpflichtend ab 01.01.2024 and Tenor 2. d) forbids a Grundpreis on such a Marktlokation. Only the *reference* Arbeitspreis is the operator's; the percentage is not |
-| "The ESA Werteanfrage shares REQOTE 35002 with the Preisanfrage, because no ESA-specific REQOTE PID exists" | It is **35003**. REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage von Werten für ESA"; §4.2 **35002** is "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über den LF", **LF → MSB**, WiM Teil 1. Corroboration: `PIA` is *mandatory* on 35003. REQOTE↔QUOTES pair 3500n → 1500n |
-| "WiM MSB-Wechsel responses are 5 Werktage" | **Per PID, four separate Use-Cases** (WiM Teil 1): Kündigung 55039 **3 WT** (Kap. 2.2.2 Nr. 2), Beginn 55042 **5 WT** (2.3.2 Nr. 2), Ende 55051 **7 WT** (2.4.2 Nr. 2), Verpflichtungsanfrage 55168 **1 WT** (2.4.2 Nr. 4, „Antwort auf Verpflichtungsanfrage“ inside SD Ende Messstellenbetrieb — not the separate Use-Case 2.5 „Verpflichtung gMSB“). A flat window escalates the Abmeldung two days early and hides a missed Verpflichtungsanfrage for four. Not the **APERAK** window either: that is 45 minutes for Strom UTILMD (§2.4.1), never Werktage |
+| "The ESA Werteanfrage shares REQOTE 35002 with the Preisanfrage, because no ESA-specific REQOTE PID exists" | It is **35003**. REQOTE AHB 1.1 Kap. 4.3 gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage von Werten für ESA"; Kap. 4.2 **35002** is "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über den LF", **LF → MSB**, WiM Teil 1. Corroboration: `PIA` is *mandatory* on 35003. REQOTE↔QUOTES pair 3500n → 1500n |
+| "WiM MSB-Wechsel responses are 5 Werktage" | **Per PID, four separate Use-Cases** (WiM Teil 1): Kündigung 55039 **3 WT** (Kap. 2.2.2 Nr. 2), Beginn 55042 **5 WT** (2.3.2 Nr. 2), Ende 55051 **7 WT** (2.4.2 Nr. 2), Verpflichtungsanfrage 55168 **1 WT** (2.4.2 Nr. 4, „Antwort auf Verpflichtungsanfrage“ inside SD Ende Messstellenbetrieb — not the separate Use-Case 2.5 „Verpflichtung gMSB“). A flat window escalates the Abmeldung two days early and hides a missed Verpflichtungsanfrage for four. Not the **APERAK** window either: that is 45 minutes for Strom UTILMD (APERAK AHB 1.1 Kap. 2.4.1), never Werktage |
 | "INVOIC 31009 (MSB-Rechnung) is NB → MSB" | It is **MSB → NB / LF / ESA** — the MSB is the invoicer in all **seven** Anwendungsfälle of the PID overview 4.0 (GPKE Teil 3 ×2, WiM Teil 1 ×2, WiM Teil 2 ×1, AWH Änderung Technik ×2), Strom only. Modelling it inverted names the party owed money as the one billing for it. The recipient's role varies, so it cannot be a bare `nb_mp_id` |
 | "A MIG defines where a data element sits in a segment" | A MIG lists which elements a profile **uses**; the **position** is fixed by the UN/EDIFACT directory and is what the counterparty writes. Generating positions from the MIG's list order shifts everything after an omitted element — it puts REQOTE's `FTX.C108` at 2 instead of 4 and **rejects valid inbound** `FTX+ACB+++text`. A missing element is a different defect: fix the profile against the MIG PDF, not the builder |
 | "Blindmehrarbeit rests on StromNEV §18" | §18 StromNEV is the **Entgelt für dezentrale Erzeugung** (the crate's own `sect18.rs` says so). Reactive-energy excess is charged from the Netzbetreiber's **Preisblatt**, formed under StromNEV §17. §19 is Sonderformen der Netznutzung. The free share (cos φ 0,9 → tan φ ≈ 0,4843, often rounded to 50 %) is a price-sheet term and must be an input, not a constant |
@@ -582,18 +592,19 @@ engine it silently becomes money.
 | "§13a Abs. 2 EnWG compensation uses one Ausfallarbeit basis" | The counterfactual differs by redispatch case: **Duldungsfall** derives it from the measured Lastgang (the NB steered, so nothing was transmitted), **Aufforderungsfall** from the schedule transmitted to the EIV (that schedule *is* the counterfactual). Resolving both from the Lastgang settles an Aufforderungsfall against what happened rather than what was instructed — a money error nothing downstream detects. `AusfallarbeitBasis` is a required input, carried into the result and trace |
 | "Gas NNE Grundpreis / Arbeitspreis rests on §14 GasNEV" | **§14 GasNEV is *Teilnetze*** — cost allocation when a Betreiber has formed Teilnetze under §6 Abs. 5 GasNZV. Netzentgelte are **§15 GasNEV** (*Ermittlung der Netzentgelte*), and the Verrechnungspreis specifically **§15 Abs. 7**: „Für leistungsgemessene Ausspeisepunkte sind … ein Entgelt für den Messstellenbetrieb, ein Entgelt … für die Messung und ein Entgelt für die Abrechnung festzulegen." A wrong § here lands in the audit trace of every gas NNE invoice |
 | "Gemeinschaftliche Gebäudeversorgung is §42b **EEG 2023**" | There is no §42b EEG 2023. GGV is **§42b EnWG**. §42a EnWG is Mieterstrom, §42c Energy Sharing; the Mieterstromzuschlag is §21 Abs. 3 EEG 2023 |
-| "The Strom UTILMD/ORDERS APERAK window is 45 Minuten *on weekdays (Mo–Fr)*" | APERAK AHB 1.1 §2.4.1 states the 45 minutes **unqualified** and carves out **Samstag** alone („Wird an Samstagen eine UTILMD oder ORDERS übertragen … bis zum Sonntag, 12 Uhr"). There is no Montag–Freitag restriction in the document, so Sunday is not a special case. Never attribute words to an AHB without grepping the PDF |
-| "The Gas APERAK Initialprozess window is 3 Werktage **at 12 Uhr**" | §2.3.1 says „spätestens **3 Werktage nach Eingang**" and names no clock time; the „12 Uhr" belongs to the Folgeprozess sentence above it. Truncating to noon removes twelve hours in the tightening direction — a breach the counterparty is not in |
+| "The Strom UTILMD/ORDERS APERAK window is 45 Minuten *on weekdays (Mo–Fr)*" | APERAK AHB 1.1 Kap. 2.4.1 states the 45 minutes **unqualified** and carves out **Samstag** alone („Wird an Samstagen eine UTILMD oder ORDERS übertragen … bis zum Sonntag, 12 Uhr"). There is no Montag–Freitag restriction in the document, so Sunday is not a special case. Never attribute words to an AHB without grepping the PDF |
+| "The Gas APERAK Initialprozess window is 3 Werktage **at 12 Uhr**" | Kap. 2.3.1 says „spätestens **3 Werktage nach Eingang**" and names no clock time; the „12 Uhr" belongs to the Folgeprozess sentence above it. Truncating to noon removes twelve hours in the tightening direction — a breach the counterparty is not in |
 | "A Werktage-Antwortfrist expires at a 17:00 Europe/Berlin ‚MaKo cut-off'" | No BDEW or BNetzA document in this domain states one. „**Ablauf des** n. WT" (WiM, GeLi Gas) and „spätester **ÜT** ist der n. WT" (GPKE) are **one** Frist shape, not two, and both name a **day** — so it runs to the end of that day. A 17:00 cut-off expires every such Frist seven hours early and escalates counterparties still inside it |
-| "MaBiS § 10.2.1 grants the Zuordnungsermächtigung" | MaBiS (BK6-24-174 Anlage 3) is numbered in **Kapitel**, not §§: the Zuordnungsermächtigung „erfolgt je ZRT, BG, BK und LF" in **Kap. 10.2.1** „UC: Aktivierung einer Zuordnungsermächtigung des BKV beim NB". A „MaBiS §" reads as a statute that does not exist |
+| "MaBiS § 10.2.1 grants the Zuordnungsermächtigung" (or any § on a chapter: "GPKE Teil 2 § 2.1.2", "Allgemeine Festlegungen § 2.13", "APERAK AHB 1.1 § 2.4.1") | BK6-24-174's Anlagen, GPKE Teil 4 (BK6-22-024 Anlage 1d), the Allgemeine Festlegungen, every AHB, MIG and EBD and the BDEW Anwendungshilfen are numbered in **Kapitel**. The Zuordnungsermächtigung „erfolgt je ZRT, BG, BK und LF" in MaBiS **Kap. 10.2.1**. A § on a chapter reads as a statute paragraph that does not exist; a statute § beside it (§14a EnWG) is unaffected |
 | "13025 is not a real PID" | **13025 is published** (Lastgang Marktlokation/Tranche, MSB → LF, GPKE Teil 4) and is registered by `mako-gpke` `gpke-messwerte`. **13024** is the one absent from the PID overview. Likewise 13020 and 13023 are MaBiS Summenzeitreihen routed to `mabis-billing` — only 13021/13022 are `mako-redispatch` |
 | "§12 Abs. 3 UStG 0 % applies to PV electricity / feed-in ≤ 30 kWp" | §12 Abs. 3 zero-rates the **supply of the PV system** (modules/storage/installation), NOT electricity or feed-in remuneration. A retail **consumption** supply is always standard-rated even for a prosumer. A small operator's **feed-in Gutschrift** is 0 % only via the **Kleinunternehmerregelung §19 UStG** — an election (`kleinunternehmer_19_ustg`), not a function of plant size |
 | "GPKE Teil 1 Kap. 1.7 defines the Werktag" | GPKE Teil 1 (BK6-24-174 Anlage 1a) defines „WT" in **Kap. 2** (Abkürzungen und Definitionen) and applies it in **Kap. 7 „Fristenberechnung"** (S. 27). Kap. 1.7 is **WiM Teil 1**'s „Fristenberechnung", which says only „Siehe entsprechendes Kapitel in … GPKE Teil 1" |
 | "§20 Abs. 2 + Anlage 1 EEG 2023 = the Jahresmarktwert" | § 20 EEG 2023 (Marktprämie) has **Sätze, no Absätze**. Anlage 1 **Nr. 2** decides when the Jahresmarktwert applies (Inbetriebnahme or Zuschlag from 01.01.2023, or a § 19 Abs. 3b/3c option) and **Nr. 4** computes it, Nr. 4.3.1 the energieträgerspezifischen categories |
-| "§6b EnWG = an integrated NB+LF deployment" | § 6b EnWG is **Rechnungslegung und Buchführung** — the accounts a vertikal integriertes Unternehmen keeps. It does not make a deployment integrated, and an integrated utility still identifies each role by its own MP-ID: „Für jede Sparte (Gas bzw. Strom) und jede Rolle hat ein Marktteilnehmer genau eine MP-ID" (Identifikatoren AWH V1.2 §2.1) |
+| "§6b EnWG = an integrated NB+LF deployment" | § 6b EnWG is **Rechnungslegung und Buchführung** — the accounts a vertikal integriertes Unternehmen keeps. It does not make a deployment integrated, and an integrated utility still identifies each role by its own MP-ID: „Für jede Sparte (Gas bzw. Strom) und jede Rolle hat ein Marktteilnehmer genau eine MP-ID" (Identifikatoren AWH V1.2 Kap. 2.1) |
 | "APERAK AHB 1.0 states the current APERAK rule" | `profiles/sources.json`: **APERAK AHB 1.1** binds from FV2026-10-01; AHB 1.0 is the FV2025-10-01 edition. Chapters 2.1–2.5 carry the same numbers in both. Cite 1.0 only for what that edition itself states about a message processed under it |
 | "API-Webdienste 2.0.0 applies from 01.10.2027 and retires UTILTS" (or „Nr. 57 proposes …" as the plan for FV 2027-04) | **BNetzA Mitteilung Nr. 58** (01.10.2026) is what was published: no EDIFACT and no API-Webdienste document for 01.04.2027 — only ActivationDocument AWT 1.1g and the Regelungen zum Übertragungsweg 1.11 bind then — and UTILTS stays. Nr. 57 was a proposal |
 | "§ 20 EnWG requires a Diskriminierungsbericht" (or „the § 20 EnWG report") | **§ 20 EnWG is Netzzugang** — non-discriminatory access, and no report. The annual report is the **Gleichbehandlungsbericht of § 7a Abs. 5 Satz 3 EnWG**: the Gleichbehandlungsbeauftragte submits it to the Regulierungsbehörde by 31 March and publishes it. § 20 Abs. 1 is still the right anchor for comparing affiliated and other suppliers; holding an affiliate's Anmeldung for a person is mako's control for that comparison, not a statutory rule |
+| "An EIC party's NAD DE3055 is ZEW (or 305, ETSO)" | Every MIG's NAD lists **`9` GS1, `293` BDEW, `332` DVGW** and nothing else (UTILMD MIG Strom S2.2 S. 32–33, UTILMD MIG Gas G1.2 S. 17–18). An EIC is not an MP-ID (Identifikatoren AWH V1.2 Kap. 2.1, S. 4) and travels in `CCI` DE7037 / `LOC` DE3225, which carry no DE3055. Derive from `edi_energy::AgencyCode::for_mp_id` |
 | "An Antwortcode has one meaning" („A02 = MaLo not in the NB's grid") | A code is defined only by the **Entscheidungsbaum or Codeliste that publishes it**: `A02` is four unrelated refusals across `E_0607`, `E_0622`, `E_0249` and `E_0250`, and in `E_0622` it is „Marktlokation … nimmt nicht an der Marktkommunikation teil (Prüfschritt 30)". A prompt or description that glosses a bare code hands a model a confident wrong reason. Read the wording with `mako_pruefung::codes::lookup(tree, code)` — processd returns it as `bedeutung` |
 | "Compile-time role features enforce § 6a EnWG" (or „a role build contains no other role's code, in support of § 6a") | A role feature buys one thing: a `processd` or `mako-pruefung` build **cannot answer as a role it was not built for**, so a misconfiguration fails closed. No unbundling duty is discharged by a build flag, and makod has no role features — it registers the modules of its `[deployment] rollen` and every build links every domain crate. The § 6a Abs. 1 EnWG duty — „die Vertraulichkeit wirtschaftlich sensibler Informationen … gewahrt wird" — is an access-control duty, met by Cedar (`ReadProcess` carries the workflow name) |
 

@@ -1,7 +1,7 @@
 //! GPKE Neuanlage — new Marktlokation registration process.
 //!
 //! Covers the GPKE Neuanlage process per BNetzA BK6-24-174 Anlage 1b (GPKE
-//! Teil 2 §2.2): registration of a **new** Marktlokation not previously in the
+//! Teil 2 Kap. 2.2): registration of a **new** Marktlokation not previously in the
 //! grid topology. This is distinct from Lieferbeginn (PID 55001) which assumes
 //! the location already exists.
 //!
@@ -34,7 +34,7 @@
 //!
 //! - **BNetzA BK6-24-174 Anlage 1b** — GPKE Teil 2 Kap. 2.2 Neuanlage
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK AHB 1.1 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — technical acknowledgement, **45 Minuten** on a
 //!   weekday for a UTILMD. A separate clock from the business answer window,
 //!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
 //!   dem ÜT.
@@ -76,7 +76,7 @@ pub const NEUANLAGE_ERZEUGEND_PID: u32 = 55601;
 /// newly commissioned Marktlokation a daily re-check for up to 60 Werktage.
 ///
 /// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.1
-/// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
+/// Kap. 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
 ///
 /// Register immediately after `ValidationPassed`:
 /// ```rust,ignore
@@ -720,8 +720,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     events.push(NeuanlageEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 §2.4.
-                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
+                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 Kap. 2.4.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 Kap. 2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_anerkennung(
                             receiver_gln.as_str(),
@@ -736,8 +736,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     events.push(NeuanlageEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
-                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 Kap. 2.1.1.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 Kap. 2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -839,29 +839,30 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     && (response_pid.map(Pruefidentifikator::as_u32) != Some(55_605)
                         || matches!(antwort.antwort_code.as_str(), "A12" | "A13"));
                 if let Some(rpid) = response_pid {
-                    let mut payload = serde_json::json!({
-                        "pid":          rpid.as_u32(),
-                        "sender":       data.receiver.as_str(),
-                        "receiver":     data.sender.as_str(),
-                        "malo":         nennt_marktlokation.then(|| data.location_id.as_str()),
-                        "process_date": data.process_date,
+                    let mut payload = mako_engine::payload::UtilmdPayload {
+                        pid: rpid.as_u32(),
+                        sender: data.receiver.as_str().to_owned(),
+                        receiver: Some(data.sender.as_str().to_owned()),
+                        malo: nennt_marktlokation.then(|| data.location_id.as_str().to_owned()),
+                        process_date: Some(data.process_date.clone()),
                         // `SG4 STS+E01++<code>:E_0608` — Muss on every
                         // Antwortnachricht.
-                        "antwort_code": antwort.antwort_code,
-                        "antwort_codeliste":  antwort.ebd,
-                        "bemerkung":    antwort.bemerkung,
+                        antwort_code: Some(antwort.antwort_code.clone()),
+                        antwort_codeliste: antwort.ebd.clone(),
+                        bemerkung: antwort.bemerkung.clone(),
                         // `SG4 STS+7` and `SG6 RFF+TN` — the Anmeldung's
                         // Grund and Vorgangsnummer, Muss on every answer.
-                        "transaktionsgrund":       data.transaktionsgrund,
-                        "referenz_vorgangsnummer": data.vorgangsnummer,
-                    });
+                        transaktionsgrund: data.transaktionsgrund.clone(),
+                        referenz_vorgangsnummer: data.vorgangsnummer.clone(),
+                        ..Default::default()
+                    };
                     if accepted {
                         bestaetigung_lokationsdaten(&mut payload, &data, &antwort);
                     }
                     if let Some(t) = &tranche {
-                        payload["stammdaten"] = serde_json::json!(t.stammdaten());
+                        payload.stammdaten = t.stammdaten();
                     }
-                    outbox.push(PendingOutbox::new("UTILMD", data.sender.as_str(), payload));
+                    outbox.push(PendingOutbox::typed(data.sender.as_str(), &payload));
                 }
                 Ok(WorkflowOutput::with_outbox(events, outbox))
             }
@@ -901,7 +902,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
 ///   Messstellenbetreiber, carried as the NB states them; the pre-send check
 ///   says where the column makes them Muss.
 fn bestaetigung_lokationsdaten(
-    payload: &mut serde_json::Value,
+    payload: &mut mako_engine::payload::UtilmdPayload,
     data: &NeuanlageData,
     antwort: &crate::LfAntwort,
 ) {
@@ -914,19 +915,19 @@ fn bestaetigung_lokationsdaten(
         }
     });
     if let Some(erg) = ergaenzung {
-        payload["transaktionsgrund_ergaenzung"] = serde_json::json!(erg);
+        payload.transaktionsgrund_ergaenzung = Some(erg);
     }
-    payload["geplantes_produktpaket"] = serde_json::json!(
-        antwort
-            .geplantes_produktpaket
-            .clone()
-            .or_else(|| data.produktpaket_id.clone())
-    );
-    if !antwort.messlokationen.is_empty() {
-        payload["messlokationen"] = serde_json::json!(antwort.messlokationen);
-    }
+    payload.geplantes_produktpaket = antwort
+        .geplantes_produktpaket
+        .clone()
+        .or_else(|| data.produktpaket_id.clone());
+    payload.messlokationen = antwort
+        .messlokationen
+        .iter()
+        .map(crate::AntwortMesslokation::to_payload)
+        .collect();
     if let Some(msb) = &antwort.malo_msb {
-        payload["malo_msb"] = serde_json::json!(msb);
+        payload.malo_msb = Some(msb.to_payload());
     }
 }
 
@@ -1069,7 +1070,7 @@ mod tests {
         } = &out.events[0]
         {
             assert!(accepted);
-            assert_eq!(response_pid.map(|p| p.as_u32()), Some(55602));
+            assert_eq!(response_pid.map(Pruefidentifikator::as_u32), Some(55602));
         } else {
             panic!("expected AntwortGesendet");
         }
@@ -1105,7 +1106,7 @@ mod tests {
         } = &out.events[0]
         {
             assert!(!accepted);
-            assert_eq!(response_pid.map(|p| p.as_u32()), Some(55605));
+            assert_eq!(response_pid.map(Pruefidentifikator::as_u32), Some(55605));
         } else {
             panic!("expected AntwortGesendet");
         }

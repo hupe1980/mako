@@ -35,7 +35,7 @@
 //!
 //! - **BDEW GPKE Teil 2 Kap. 2.5** — NB-seitiges Lieferende
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK AHB 1.1 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — technical acknowledgement, **45 Minuten** on a
 //!   weekday for a UTILMD. A separate clock from the business answer window,
 //!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
 //!   dem ÜT.
@@ -67,8 +67,21 @@ pub const LF_ABMELDUNG_PIDS: &[u32] = &[55007];
 /// dem ÜT (GPKE Teil 2 Kap. 2.5.2.2), resolved by `mako_fristen::antwort`.
 ///
 /// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.1
-/// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
+/// Kap. 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
 pub const LF_ABMELDUNG_ANTWORT_WINDOW_LABEL: &str = "gpke-lf-abmeldung-antwortfrist";
+
+/// `BGM` DE 1001 of the NB's Beendigung der Zuordnung aufgrund fehlender
+/// Antwort — the 55007 of Nr. 3 (UTILMD AHB Strom 2.2 Kap. 8.10, Bedingung
+/// `[713]`). Nr. 1 carries `E02`.
+pub const BGM_BEENDIGUNG: &str = "Z90";
+
+/// Correlation key under which the NB's Nr. 3 finds this process: its `SG6
+/// RFF+TN` names the `SG4 IDE+24` of the Ankündigung that opened it
+/// (Bedingung `[60]`).
+#[must_use]
+pub fn vorgang_key(vorgangsnummer: &str) -> String {
+    format!("lf-abmeldung-vorgang:{vorgangsnummer}")
+}
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -94,11 +107,50 @@ pub enum LfAbmeldungEvent {
         pruefidentifikator: Pruefidentifikator,
         /// `SG4 IDE+24` DE 7402 — carried into the answer's `SG4 RFF+TN`.
         vorgangsnummer: Option<String>,
+        /// `SG4 STS+7` Transaktionsgrund — restated on the answer.
+        #[serde(default)]
+        transaktionsgrund: Option<String>,
+        /// `SG4 STS+7` DE 9013 element 3 — restated on the answer.
+        #[serde(default)]
+        transaktionsgrund_ergaenzung: Option<String>,
+        /// `SG4 DTM+206` of a Stilllegung — restated on a 55008.
+        #[serde(default)]
+        geraeteausbaudatum: Option<String>,
     },
     /// EDIFACT message passed profile validation.
     ValidationPassed {
         /// Reference of the validated message.
         message_ref: MessageRef,
+    },
+    /// The NB ended the Zuordnung for want of an answer — its 55007
+    /// `BGM+Z90` (GPKE Teil 2 Kap. 2.5.2.2 Nr. 3).
+    BeendigungErhalten {
+        /// Marktlokation or the MaLo-ID of the Tranche.
+        location_id: MaLo,
+        /// The NB.
+        sender: MarktpartnerCode,
+        /// This LF.
+        receiver: MarktpartnerCode,
+        /// EDIFACT document date (`YYYYMMDD`).
+        document_date: String,
+        /// The Zuordnungsende (`YYYYMMDD`).
+        process_date: String,
+        /// EDIFACT message reference.
+        message_ref: MessageRef,
+        /// `SG6 RFF+TN` — the Ankündigung's Vorgangsnummer.
+        referenz_vorgangsnummer: String,
+        /// `SG4 STS+7` Transaktionsgrund.
+        transaktionsgrund: Option<String>,
+        /// `SG4 STS+7` Ergänzung.
+        transaktionsgrund_ergaenzung: Option<String>,
+    },
+    /// The NB's Beendigung failed its profile and was answered with an APERAK
+    /// 313; the process stays where it was.
+    BeendigungAbgewiesen {
+        /// EDIFACT message reference.
+        message_ref: MessageRef,
+        /// The validation errors.
+        reason: String,
     },
     /// Outbound response (55008 or 55009) dispatched to the NB.
     AntwortGesendet {
@@ -131,6 +183,8 @@ impl EventPayload for LfAbmeldungEvent {
         match self {
             Self::AnkuendigungErhalten { .. } => "LfAbmeldungAnkuendigungErhalten",
             Self::ValidationPassed { .. } => "LfAbmeldungValidationPassed",
+            Self::BeendigungErhalten { .. } => "LfAbmeldungBeendigungErhalten",
+            Self::BeendigungAbgewiesen { .. } => "LfAbmeldungBeendigungAbgewiesen",
             Self::AntwortGesendet { .. } => "LfAbmeldungAntwortGesendet",
             Self::Beendet => "LfAbmeldungBeendet",
             Self::Rejected { .. } => "LfAbmeldungRejected",
@@ -154,7 +208,18 @@ impl EventPayload for LfAbmeldungEvent {
                 pid: Some(response_pid.as_u32()),
                 message_ref: None,
             }),
+            Self::BeendigungErhalten { message_ref, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_007),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
             Self::Beendet | Self::DeadlineExpired { .. } => None,
+            // Beside the APERAK 313 it is recorded with.
+            Self::BeendigungAbgewiesen { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
             // `ValidationPassed` is emitted only beside the APERAK 312
             // Anerkennungsmeldung `handle` queues for it, `Rejected` only beside
             // the APERAK 313 Verarbeitbarkeitsfehlermeldung; an APERAK carries
@@ -198,6 +263,17 @@ pub struct LfAbmeldungData {
     /// („Referenz Vorgangsnummer (aus Anfragenachricht)", Muss on every
     /// Antwortnachricht). It is never reused as the answer's own `IDE+24`.
     pub vorgangsnummer: Option<String>,
+    /// `SG4 STS+7` Transaktionsgrund of the 55007 — Muss on both answer
+    /// columns (UTILMD AHB Strom 2.2 Kap. 8.10).
+    #[serde(default)]
+    pub transaktionsgrund: Option<String>,
+    /// `SG4 STS+7` Ergänzung of the 55007, restated beside it.
+    #[serde(default)]
+    pub transaktionsgrund_ergaenzung: Option<String>,
+    /// `SG4 DTM+206` of a Stilllegung 55007 — Muss on the 55008 under `Z33`
+    /// (Bedingung `[79]`).
+    #[serde(default)]
+    pub geraeteausbaudatum: Option<String>,
 }
 
 /// State of a GPKE LF Abmeldung process.
@@ -333,10 +409,36 @@ pub enum LfAbmeldungCommand {
         /// Validation error strings.
         validation_errors: Vec<String>,
     },
+    /// The NB's Beendigung der Zuordnung aufgrund fehlender Antwort — a 55007
+    /// `BGM+Z90` found by its `SG6 RFF+TN` (GPKE Teil 2 Kap. 2.5.2.2 Nr. 3).
+    /// „In der Nachricht teilt der NB dem LF insbesondere die bereits in
+    /// Prozessschritt 1 genannten Daten mit", so it carries its own facts.
+    ReceiveBeendigung {
+        /// GLN of the NB.
+        sender: MarktpartnerCode,
+        /// GLN of the LF.
+        receiver: MarktpartnerCode,
+        /// Marktlokation or the MaLo-ID of the Tranche.
+        location_id: MaLo,
+        /// EDIFACT document date (`YYYYMMDD`).
+        document_date: String,
+        /// The Zuordnungsende (`YYYYMMDD`).
+        process_date: String,
+        /// EDIFACT message reference.
+        message_ref: MessageRef,
+        /// `SG6 RFF+TN` and the `SG4 STS+7` facts.
+        vorgang: Box<crate::lf_antwort::LfVorgangsdaten>,
+        /// `SG6 RFF+TN` — the Ankündigung's Vorgangsnummer.
+        referenz_vorgangsnummer: String,
+        /// `true` if validation returned no errors.
+        validation_passed: bool,
+        /// Validation error strings.
+        validation_errors: Vec<String>,
+    },
     /// Send the outbound UTILMD response (55008 = Bestätigung, 55009 = Ablehnung).
     ///
     /// The LF answers by **05:00 Uhr des 1. WT nach dem ÜT** — GPKE Teil 2
-    /// § 2.5.2.2 SD Lieferende von NB an LF Prozessschritt 2, resolved by
+    /// Kap. 2.5.2.2 SD Lieferende von NB an LF Prozessschritt 2, resolved by
     /// `mako_fristen::antwort` (trigger PID 55007).
     SendAntwort {
         /// The resolved answer: Antwortcode, its EBD, and the Cluster that
@@ -412,6 +514,9 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 process_date,
                 pruefidentifikator,
                 vorgangsnummer,
+                transaktionsgrund,
+                transaktionsgrund_ergaenzung,
+                geraeteausbaudatum,
                 ..
             } => LfAbmeldungState::Eingegangen(LfAbmeldungData {
                 location_id: location_id.clone(),
@@ -421,11 +526,38 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 process_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 vorgangsnummer: vorgangsnummer.clone(),
+                transaktionsgrund: transaktionsgrund.clone(),
+                transaktionsgrund_ergaenzung: transaktionsgrund_ergaenzung.clone(),
+                geraeteausbaudatum: geraeteausbaudatum.clone(),
             }),
             LfAbmeldungEvent::ValidationPassed { .. } => match state {
                 LfAbmeldungState::Eingegangen(data) => LfAbmeldungState::ValidationPassed(data),
                 other => other,
             },
+            LfAbmeldungEvent::BeendigungErhalten {
+                location_id,
+                sender,
+                receiver,
+                document_date,
+                process_date,
+                referenz_vorgangsnummer,
+                transaktionsgrund,
+                transaktionsgrund_ergaenzung,
+                ..
+            } => LfAbmeldungState::Beendet(LfAbmeldungData {
+                location_id: location_id.clone(),
+                sender: sender.clone(),
+                receiver: receiver.clone(),
+                document_date: document_date.clone(),
+                process_date: process_date.clone(),
+                pruefidentifikator: Pruefidentifikator::new(55_007)
+                    .unwrap_or_else(|_| unreachable!("55007 is a valid Prüfidentifikator")),
+                vorgangsnummer: Some(referenz_vorgangsnummer.clone()),
+                transaktionsgrund: transaktionsgrund.clone(),
+                transaktionsgrund_ergaenzung: transaktionsgrund_ergaenzung.clone(),
+                geraeteausbaudatum: None,
+            }),
+            LfAbmeldungEvent::BeendigungAbgewiesen { .. } => state,
             LfAbmeldungEvent::AntwortGesendet {
                 accepted,
                 response_pid,
@@ -510,13 +642,16 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
                     vorgangsnummer: vorgang.vorgangsnummer.clone(),
+                    transaktionsgrund: vorgang.transaktionsgrund.clone(),
+                    transaktionsgrund_ergaenzung: vorgang.transaktionsgrund_ergaenzung.clone(),
+                    geraeteausbaudatum: vorgang.geraeteausbaudatum.clone(),
                 }];
                 if validation_passed {
                     events.push(LfAbmeldungEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 §2.4.
-                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
+                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 Kap. 2.4.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 Kap. 2.4.1).
                     let outbox = vec![
                         // The business notification. `processd`'s LF module
                         // decides this process, and it only ever sees a message
@@ -545,8 +680,8 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     events.push(LfAbmeldungEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
-                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 Kap. 2.1.1.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 Kap. 2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -559,6 +694,85 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     ];
                     Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
+            }
+
+            LfAbmeldungCommand::ReceiveBeendigung {
+                sender,
+                receiver,
+                location_id,
+                document_date,
+                process_date,
+                message_ref,
+                vorgang,
+                referenz_vorgangsnummer,
+                validation_passed,
+                validation_errors,
+            } => {
+                // Nr. 3 ends what Nr. 1 announced however the LF stood: still
+                // owing the answer, answered too late, or refused too late —
+                // „Antwortet der LF in Prozessschritt 2 nicht fristgerecht,
+                // beendet der NB die Zuordnung". Only an ended or never-opened
+                // Vorgang has nothing left to end.
+                if matches!(state, LfAbmeldungState::New | LfAbmeldungState::Beendet(_)) {
+                    return Err(WorkflowError::invalid_state(
+                        "Eingegangen | ValidationPassed | AntwortGesendet | Rejected",
+                        state.label(),
+                    ));
+                }
+                if !validation_passed {
+                    let reason = validation_errors.join("; ");
+                    let outbox = vec![
+                        PendingOutbox::aperak_fehler(
+                            receiver.as_str(),
+                            sender.as_str(),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason.clone(),
+                        )
+                        .caused_by(0),
+                    ];
+                    return Ok(WorkflowOutput::with_outbox(
+                        vec![LfAbmeldungEvent::BeendigungAbgewiesen {
+                            message_ref,
+                            reason,
+                        }],
+                        outbox,
+                    ));
+                }
+                // The supply ends zum Zuordnungsende on this side too: the same
+                // completion the NB's own process leaves.
+                let completed = serde_json::json!({
+                    "pid":          55_007,
+                    "malo_id":      location_id.as_str(),
+                    "process_date": process_date,
+                    "accepted":     true,
+                    "outcome":      "accepted",
+                    "ohne_antwort": true,
+                    "old_supplier": receiver.as_str(),
+                });
+                let outbox = vec![
+                    PendingOutbox::aperak_anerkennung(
+                        receiver.as_str(),
+                        sender.as_str(),
+                        message_ref.as_str(),
+                    )
+                    .caused_by(0),
+                    PendingOutbox::new("ProcessCompleted", "", completed).caused_by(0),
+                ];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![LfAbmeldungEvent::BeendigungErhalten {
+                        location_id,
+                        sender,
+                        receiver,
+                        document_date,
+                        process_date,
+                        message_ref,
+                        referenz_vorgangsnummer,
+                        transaktionsgrund: vorgang.transaktionsgrund,
+                        transaktionsgrund_ergaenzung: vorgang.transaktionsgrund_ergaenzung,
+                    }],
+                    outbox,
+                ))
             }
 
             LfAbmeldungCommand::SendAntwort { antwort } => {
@@ -597,17 +811,39 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     "outcome":      if accepted { "accepted" } else { "rejected" },
                     "old_supplier": data.receiver.as_str(),
                 });
+                let mut answer = crate::lf_antwort::antwort_outbox(
+                    response_code,
+                    &antwort,
+                    &data.location_id,
+                    &data.sender,
+                    &data.receiver,
+                    &data.process_date,
+                    data.vorgangsnummer.as_deref(),
+                );
+                // Neither answer column lists an `SG5` (UTILMD AHB Strom 2.2
+                // Kap. 8.10): `SG6 RFF+TN` ties the answer to the 55007. Both
+                // make `SG4 STS+7` with the 55007's Transaktionsgrund Muss.
+                if let Some(p) = answer.payload.as_object_mut() {
+                    p.remove("malo");
+                }
+                for (key, value) in [
+                    ("transaktionsgrund", &data.transaktionsgrund),
+                    (
+                        "transaktionsgrund_ergaenzung",
+                        &data.transaktionsgrund_ergaenzung,
+                    ),
+                ] {
+                    if let Some(v) = value {
+                        answer.payload[key] = serde_json::Value::String(v.clone());
+                    }
+                }
+                // `SG4 DTM+206` — Muss on the 55008 under `Z33` (`[79]`); the
+                // 55009 column lists no date at all.
+                if accepted && let Some(datum) = &data.geraeteausbaudatum {
+                    answer.payload["geraeteausbaudatum"] = serde_json::Value::String(datum.clone());
+                }
                 let outbox = vec![
-                    crate::lf_antwort::antwort_outbox(
-                        response_code,
-                        &antwort,
-                        &data.location_id,
-                        &data.sender,
-                        &data.receiver,
-                        &data.process_date,
-                        data.vorgangsnummer.as_deref(),
-                    )
-                    .caused_by(0),
+                    answer.caused_by(0),
                     PendingOutbox::new("ProcessCompleted", "", completed).caused_by(0),
                 ];
                 Ok(WorkflowOutput::with_outbox(
@@ -821,6 +1057,197 @@ mod tests {
         assert!(matches!(state, LfAbmeldungState::Beendet(_)));
     }
 
+    fn beendigung_cmd(ok: bool) -> LfAbmeldungCommand {
+        LfAbmeldungCommand::ReceiveBeendigung {
+            sender: mcod("9900357000004"),
+            receiver: mcod("4012345000023"),
+            location_id: malo("51238696781"),
+            document_date: "20251002".to_owned(),
+            process_date: "20260101".to_owned(),
+            message_ref: mref("BEENDIG-003"),
+            vorgang: Box::new(crate::LfVorgangsdaten {
+                transaktionsgrund: Some("ZQ7".to_owned()),
+                ..Default::default()
+            }),
+            referenz_vorgangsnummer: "NNV1234".to_owned(),
+            validation_passed: ok,
+            validation_errors: if ok { vec![] } else { vec!["x".to_owned()] },
+        }
+    }
+
+    /// GPKE Teil 2 Kap. 2.5.2.2 Nr. 3 (S. 62): the NB's Beendigung ends the
+    /// Zuordnung on the LF's side too — from a lapsed window, and from a late
+    /// answer the NB did not act on.
+    #[test]
+    fn the_nbs_beendigung_ends_the_lfs_process() {
+        let out = GpkeLfAbmeldungWorkflow::handle(&LfAbmeldungState::New, ankuendigung_cmd(true))
+            .unwrap();
+        let waiting = apply_all(LfAbmeldungState::New, &out.events);
+        let lapsed = LfAbmeldungState::FristAbgelaufen {
+            label: LF_ABMELDUNG_ANTWORT_WINDOW_LABEL.to_owned(),
+            offen: Box::new(waiting.clone()),
+        };
+        let late = apply_all(
+            waiting.clone(),
+            &GpkeLfAbmeldungWorkflow::handle(
+                &waiting,
+                LfAbmeldungCommand::SendAntwort {
+                    antwort: crate::lf_antwort::LfAntwort::ablehnung("A02", "E_0609"),
+                },
+            )
+            .unwrap()
+            .events,
+        );
+        for state in [waiting, lapsed, late] {
+            let out = GpkeLfAbmeldungWorkflow::handle(&state, beendigung_cmd(true)).unwrap();
+            let ended = apply_all(state, &out.events);
+            assert!(matches!(ended, LfAbmeldungState::Beendet(_)), "{ended:?}");
+            let completed = out
+                .outbox
+                .iter()
+                .find(|o| &*o.message_type == "ProcessCompleted")
+                .expect("the supply ends");
+            assert_eq!(completed.payload["pid"], 55_007);
+            assert_eq!(completed.payload["ohne_antwort"], true);
+            assert_eq!(completed.payload["old_supplier"], "4012345000023");
+            assert_eq!(completed.payload["process_date"], "20260101");
+            assert!(out.outbox.iter().any(|o| &*o.message_type == "APERAK"));
+            // An ended Vorgang has nothing left to end.
+            assert!(GpkeLfAbmeldungWorkflow::handle(&ended, beendigung_cmd(true)).is_err());
+        }
+        assert!(
+            GpkeLfAbmeldungWorkflow::handle(&LfAbmeldungState::New, beendigung_cmd(true)).is_err(),
+            "a Beendigung never opens a process"
+        );
+    }
+
+    #[test]
+    fn an_invalid_beendigung_is_refused_and_ends_nothing() {
+        let out = GpkeLfAbmeldungWorkflow::handle(&LfAbmeldungState::New, ankuendigung_cmd(true))
+            .unwrap();
+        let waiting = apply_all(LfAbmeldungState::New, &out.events);
+        let out = GpkeLfAbmeldungWorkflow::handle(&waiting, beendigung_cmd(false)).unwrap();
+        assert!(matches!(
+            apply_all(waiting, &out.events),
+            LfAbmeldungState::ValidationPassed(_)
+        ));
+        assert!(
+            out.outbox
+                .iter()
+                .all(|o| &*o.message_type != "ProcessCompleted")
+        );
+    }
+
+    /// Neither answer column lists an `SG5`, and both make `SG4 STS+7` with
+    /// the 55007's Transaktionsgrund Muss (UTILMD AHB Strom 2.2 Kap. 8.10).
+    #[test]
+    fn the_answer_restates_the_transaktionsgrund_and_names_no_lokation() {
+        let LfAbmeldungCommand::ReceiveAnkuendigung {
+            pid,
+            sender,
+            receiver,
+            location_id,
+            document_date,
+            process_date,
+            message_ref,
+            validation_passed,
+            validation_errors,
+            ..
+        } = ankuendigung_cmd(true)
+        else {
+            unreachable!("ankuendigung_cmd builds a ReceiveAnkuendigung")
+        };
+        let cmd = LfAbmeldungCommand::ReceiveAnkuendigung {
+            pid,
+            sender,
+            receiver,
+            location_id,
+            document_date,
+            process_date,
+            message_ref,
+            vorgang: Box::new(crate::LfVorgangsdaten {
+                transaktionsgrund: Some("ZQ7".to_owned()),
+                transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
+                vorgangsnummer: Some("NNV1234".to_owned()),
+                ..Default::default()
+            }),
+            validation_passed,
+            validation_errors,
+        };
+        let out = GpkeLfAbmeldungWorkflow::handle(&LfAbmeldungState::New, cmd).unwrap();
+        let state = apply_all(LfAbmeldungState::New, &out.events);
+        for antwort in [
+            crate::lf_antwort::LfAntwort::zustimmung("A10", "E_0609"),
+            crate::lf_antwort::LfAntwort::ablehnung("A02", "E_0609"),
+        ] {
+            let out = GpkeLfAbmeldungWorkflow::handle(
+                &state,
+                LfAbmeldungCommand::SendAntwort { antwort },
+            )
+            .unwrap();
+            let answer = out
+                .outbox
+                .iter()
+                .find(|o| &*o.message_type == "UTILMD")
+                .expect("the answer");
+            assert_eq!(answer.payload["transaktionsgrund"], "ZQ7");
+            assert_eq!(answer.payload["transaktionsgrund_ergaenzung"], "ZW4");
+            assert_eq!(answer.payload["referenz_vorgangsnummer"], "NNV1234");
+            assert!(answer.payload.get("malo").is_none(), "{}", answer.payload);
+        }
+    }
+
+    /// Under `Z33` the 55008 restates the Geräteausbauzeitpunkt (`SG4
+    /// DTM+206`, Bedingung `[79]`); the 55009 column lists no date.
+    #[test]
+    fn a_zustimmung_to_a_stilllegung_restates_the_geraeteausbaudatum() {
+        let LfAbmeldungCommand::ReceiveAnkuendigung {
+            pid,
+            sender,
+            receiver,
+            location_id,
+            document_date,
+            process_date,
+            message_ref,
+            ..
+        } = ankuendigung_cmd(true)
+        else {
+            unreachable!("ankuendigung_cmd builds a ReceiveAnkuendigung")
+        };
+        let cmd = LfAbmeldungCommand::ReceiveAnkuendigung {
+            pid,
+            sender,
+            receiver,
+            location_id,
+            document_date,
+            process_date,
+            message_ref,
+            vorgang: Box::new(crate::LfVorgangsdaten {
+                transaktionsgrund: Some("Z33".to_owned()),
+                transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
+                geraeteausbaudatum: Some("20251215".to_owned()),
+                ..Default::default()
+            }),
+            validation_passed: true,
+            validation_errors: vec![],
+        };
+        let out = GpkeLfAbmeldungWorkflow::handle(&LfAbmeldungState::New, cmd).unwrap();
+        let state = apply_all(LfAbmeldungState::New, &out.events);
+        let answer = |antwort| {
+            GpkeLfAbmeldungWorkflow::handle(&state, LfAbmeldungCommand::SendAntwort { antwort })
+                .unwrap()
+                .outbox
+                .into_iter()
+                .find(|o| &*o.message_type == "UTILMD")
+                .expect("the answer")
+                .payload
+        };
+        let zustimmung = answer(crate::lf_antwort::LfAntwort::zustimmung("A10", "E_0609"));
+        assert_eq!(zustimmung["geraeteausbaudatum"], "20251215");
+        let ablehnung = answer(crate::lf_antwort::LfAntwort::ablehnung("A02", "E_0609"));
+        assert!(ablehnung.get("geraeteausbaudatum").is_none());
+    }
+
     #[test]
     fn lf_abmeldung_ablehnung() {
         let out = GpkeLfAbmeldungWorkflow::handle(&LfAbmeldungState::New, ankuendigung_cmd(true))
@@ -879,6 +1306,9 @@ mod tests {
             process_date: "20260101".to_owned(),
             pruefidentifikator: pid(55007),
             vorgangsnummer: Some("NNV1234".to_owned()),
+            transaktionsgrund: None,
+            transaktionsgrund_ergaenzung: None,
+            geraeteausbaudatum: None,
         };
         let state = LfAbmeldungState::Beendet(data);
         let dl_id = DeadlineId::new();
@@ -925,6 +1355,9 @@ mod tests {
             process_date: "20260101".to_owned(),
             pruefidentifikator: pid(55007),
             vorgangsnummer: None,
+            transaktionsgrund: None,
+            transaktionsgrund_ergaenzung: None,
+            geraeteausbaudatum: None,
         };
         for (state, occupied) in [
             (LfAbmeldungState::Eingegangen(data.clone()), true),

@@ -160,7 +160,7 @@ impl AnyMessage {
     /// `None` for CONTRL, which is a syntax acknowledgement carried at the
     /// interchange level and has no NAD, and for `Unknown`.
     ///
-    /// Per BDEW Allgemeine Festlegungen §2.13 this **must** equal the
+    /// Per BDEW Allgemeine Festlegungen Kap. 2.13 this **must** equal the
     /// interchange sender in `UNB` DE 0004; [`crate::parse`] rejects a message
     /// where they disagree.
     #[must_use]
@@ -517,12 +517,16 @@ impl EdiEnergyMessage for AnyMessage {
         unused_variables,
         reason = "read only in some feature or target combinations"
     )]
-    fn validate_on_date(&self, reference_date: time::Date) -> Result<EdiEnergyReport, Error> {
+    fn validate_on_date_with_rollen(
+        &self,
+        reference_date: time::Date,
+        rollen: &crate::profile::Parteirollen,
+    ) -> Result<EdiEnergyReport, Error> {
         match self {
             AnyMessage::Unknown {
                 message_type_code, ..
             } => Ok(unknown_type_report(message_type_code)),
-            _ => delegate_any!(self, m => m.validate_on_date(reference_date)),
+            _ => delegate_any!(self, m => m.validate_on_date_with_rollen(reference_date, rollen)),
         }
     }
 }

@@ -16,6 +16,7 @@ import { Kbd } from "../design/Kbd";
 import { EmptyState, Notice, Panel } from "../design/Panel";
 import { SourceChip } from "../design/SourceChip";
 import { eintrag, katalog, useT } from "../i18n";
+import { Befragung, FRAGE_ZUM_BEREICH, zurFrage } from "./Befragung";
 import { QuickLook } from "./QuickLook";
 
 /**
@@ -31,6 +32,7 @@ export function EinrichtungView() {
         <p className="m-0 mt-1 text-callout text-text-2">{t.einrichtung.untertitel}</p>
       </header>
       <Bereitschaft />
+      <Befragung />
       <Probelauf />
     </div>
   );
@@ -253,6 +255,7 @@ export function BefundZeile({ befund }: { befund: DienstBefund }) {
   const blockiert = befund.schwere === "blockiert";
   const { handbuch } = useLaufzeit();
   const link = befund.referenz ? handbuchLink(befund.referenz, handbuch) : null;
+  const frage = FRAGE_ZUM_BEREICH[befund.bereich];
   const chip =
     "inline-flex min-h-5 max-w-full items-center gap-1 rounded-[10px] border border-separator px-2 py-px text-caption text-text-2";
   return (
@@ -288,6 +291,15 @@ export function BefundZeile({ befund }: { befund: DienstBefund }) {
               <span className={chip}>{befund.referenz}</span>
             ))}
           {befund.quelle && <SourceChip quelle={{ dokument: befund.quelle }} />}
+          {frage && (
+            <Link
+              onPress={() => zurFrage(frage)}
+              className={`focus-ring ${chip} cursor-default border-accent/40 font-medium text-accent no-underline data-[hovered]:bg-fill`}
+            >
+              <Icon name="tune" size={12} className="shrink-0" />
+              {t.einrichtung.befragung.ergebnis.imVorschlag}
+            </Link>
+          )}
         </div>
       </div>
     </li>

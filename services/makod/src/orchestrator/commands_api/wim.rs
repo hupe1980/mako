@@ -1221,7 +1221,7 @@ pub(super) fn cmd_wim_rechnungsabwicklung_ablehnen<'a>(
 /// Spawn an outbound Beendigung Rechnungsabwicklung (ORDERS 17006).
 ///
 /// Either side of the arrangement may end it (AWH Aktivitätsdiagramme WiM V1.3
-/// §§2.9/2.11), so the sending role is whatever this deployment is; the
+/// Kap. 2.9/2.11), so the sending role is whatever this deployment is; the
 /// counterparty MP-ID comes from the ERP, which knows whom the arrangement is
 /// with. The counterparty answers with ORDRSP 19009/19010, which resumes this
 /// process by MaLo.
@@ -1229,6 +1229,7 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
+    use mako_wim::rechnungsabwicklung::BeendigungDurch;
     use mako_wim::{RechnungsabwicklungCommand, WimRechnungsabwicklungWorkflow};
 
     let malo_id = extract_malo_id(payload)?;
@@ -1245,11 +1246,69 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
         })?
         .to_owned();
 
+    // This party ends the arrangement: an LF-only deployment as LF, an
+    // MSB-only one as MSB, one playing both names its role.
+    let rollen = &state.configured_marktrollen;
+    let ist = |r: &str| rollen.iter().any(|x| x.eq_ignore_ascii_case(r));
+    let beendet_durch = match payload.get("rolle").and_then(|v| v.as_str()) {
+        Some(r) if r.eq_ignore_ascii_case("lf") => BeendigungDurch::Lf,
+        Some(r) if r.eq_ignore_ascii_case("msb") => BeendigungDurch::Msb,
+        Some(other) => {
+            return Err(DispatchError::InvalidPayload(format!(
+                "\"rolle\" must be LF or MSB, not {other:?}"
+            )));
+        }
+        None if ist("LF") && !ist("MSB") => BeendigungDurch::Lf,
+        None if ist("MSB") && !ist("LF") => BeendigungDurch::Msb,
+        None => {
+            return Err(DispatchError::InvalidPayload(
+                "state \"rolle\" (LF or MSB) — the side that ends the Rechnungsabwicklung \
+                 decides whether the 17006 carries its Grund der Anforderung"
+                    .to_owned(),
+            ));
+        }
+    };
+    // `DTM+203` is Muss (ORDERS AHB 1.1b Kap. 4.14.2, S. 93).
+    let ausfuehrungsdatum = payload
+        .get("ausfuehrungsdatum")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(normalise_process_date)
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"ausfuehrungsdatum\" — the day the \
+                 Rechnungsabwicklung ends (DTM+203)"
+                    .to_owned(),
+            )
+        })?;
+    let grund = payload
+        .get("grund")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
     let domain_cmd = RechnungsabwicklungCommand::SendBeendigung {
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
         counterparty: MarktpartnerCode::new(counterparty),
         location_id: malo_id.to_string(),
-        message_ref: MessageRef::new(format!("WIM-RA-{}", uuid::Uuid::new_v4())),
+        message_ref: MessageRef::new(crate::edifact_renderer::msg_ref_from_uuid(&format!(
+            "WIMRA{}",
+            uuid::Uuid::new_v4()
+        ))),
+        beendet_durch,
+        ausfuehrungsdatum,
+        grund,
     };
+    // The workflow decides the column; the pre-send gate holds the ORDERS to
+    // it before anything is written.
+    {
+        use mako_engine::workflow::Workflow as _;
+        let out = WimRechnungsabwicklungWorkflow::handle(&Default::default(), domain_cmd.clone())
+            .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(
+            state,
+            &latest_format_version(),
+            &out.outbox,
+        )?;
+    }
 
     // Duplicate guard — one Beendigung in flight per MaLo. A settled process
     // (Bestellt/Beendet/Rejected) does not block; see `find_occupying_process`.
@@ -1302,15 +1361,55 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_antwort(
     payload: &serde_json::Value,
     zustimmung: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
+    use mako_wim::rechnungsabwicklung::BeendigungDurch;
     use mako_wim::{RechnungsabwicklungCommand, WimRechnungsabwicklungWorkflow};
 
     let malo_id = extract_malo_id(payload)?;
+    // `SG2 AJT` is Muss: the code comes from `E_0206` (the MSB ended it, this
+    // party is the LF) or `E_0209` (the LF ended it, this party is the MSB) —
+    // ORDRSP AHB 1.1b Kap. 4.14, S. 58. The workflow checks it against the
+    // tree and the cluster.
+    let antwort_code = payload
+        .get("antwort_code")
+        .and_then(|v| v.as_str())
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"antwort_code\" — E_0206 (as LF) or E_0209 (as MSB)"
+                    .to_owned(),
+            )
+        })?
+        .to_owned();
+    // The answering role decides the tree. A deployment that plays only one
+    // of the two needs no statement; one that plays both names it.
+    let rollen = &state.configured_marktrollen;
+    let ist = |r: &str| rollen.iter().any(|x| x.eq_ignore_ascii_case(r));
+    let beendet_durch = match payload.get("rolle").and_then(|v| v.as_str()) {
+        Some(r) if r.eq_ignore_ascii_case("lf") => BeendigungDurch::Msb,
+        Some(r) if r.eq_ignore_ascii_case("msb") => BeendigungDurch::Lf,
+        Some(other) => {
+            return Err(DispatchError::InvalidPayload(format!(
+                "\"rolle\" must be LF or MSB, not {other:?}"
+            )));
+        }
+        None if ist("LF") && !ist("MSB") => BeendigungDurch::Msb,
+        None if ist("MSB") && !ist("LF") => BeendigungDurch::Lf,
+        None => {
+            return Err(DispatchError::InvalidPayload(
+                "this deployment plays both LF and MSB: state \"rolle\" (LF or MSB) — it \
+                 picks E_0206 or E_0209"
+                    .to_owned(),
+            ));
+        }
+    };
     dispatch_to_process::<WimRechnungsabwicklungWorkflow, _>(
         state,
         malo_id.as_str(),
         mako_wim::RECHNUNGSABWICKLUNG_WORKFLOW_NAME,
         move || RechnungsabwicklungCommand::SendAntwort {
             zustimmung,
+            antwort_code: antwort_code.clone(),
+            beendet_durch,
             message_ref: MessageRef::new(format!("WIM-RA-RSP-{}", uuid::Uuid::new_v4())),
         },
     )

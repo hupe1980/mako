@@ -244,9 +244,10 @@ pub(super) fn filed_message_ref(command: &str, process_id: ProcessId) -> Option<
 /// | Field | Required | Description |
 /// |-------|----------|-------------|
 /// | `mabis_zp_id` | Yes | MaBiS-Zählpunkt — SG6 `LOC+172` Meldepunkt (33-char Zählpunktbezeichnung) |
-/// | `bilanzierungsgebiet_id` | Yes | Bilanzierungsgebiet EIC — SG6 `LOC+107` |
+/// | `bilanzierungsgebiet_id` | Yes | Bilanzierungsgebiet EIC — the filing's key; the 13003 column carries no `LOC+107` |
+/// | `obis_code` | Yes | `SG9 PIA+5+<OBIS>:SRW` — the Summenzeitreihe's OBIS-Kennzahl (MSCONS AHB 3.2 Kap. 8.3.1, Muss) |
 /// | `balancing_period` | Yes | Bilanzierungsmonat, `CCYYMM` |
-/// | `version` | Yes | Versionsangabe, `CCYYMMDDHHMMSSZZZ`, ascending per §3.8.2 |
+/// | `version` | Yes | Versionsangabe, `CCYYMMDDHHMMSSZZZ`, ascending per Kap. 3.8.2 |
 /// | `receiver_mp_id` | Yes | BIKO code |
 /// | `sender_mp_id` | No | defaults to this operator's MP-ID |
 /// | `pruefidentifikator` | No | when stated, must be `13003` |
@@ -275,9 +276,9 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
             .ok_or_else(|| DispatchError::InvalidPayload(format!("\"{field}\" is required")))
     };
 
-    // Two distinct SG6 LOC qualifiers, not one: `172` is the MaBiS-Zählpunkt
-    // and `107` the Bilanzierungsgebiet. Both are required so neither can
-    // silently stand in for the other on the wire.
+    // The MaBiS-Zählpunkt is the `SG6 LOC+172` Meldepunkt; the
+    // Bilanzierungsgebiet keys the filing. Both are required so neither can
+    // silently stand in for the other.
     let mabis_zp_id = require("mabis_zp_id")?;
     let bilanzierungsgebiet_id = require("bilanzierungsgebiet_id")?;
     if mabis_zp_id == bilanzierungsgebiet_id {
@@ -290,13 +291,19 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
     let balancing_period = require("balancing_period")?;
     let version = require("version")?;
     let receiver_mp_id = require("receiver_mp_id")?;
+    // `SG9 PIA+5+<OBIS>:SRW` is Muss (MSCONS AHB 3.2 Kap. 8.3.1, S. 96): the
+    // OBIS-Kennzahl names the series, and nothing here can derive it.
+    let obis_code = require("obis_code")?;
 
     // An empty Summenzeitreihe would settle a Bilanzierungsgebiet at zero. The
     // BIKO cannot distinguish that from a territory that genuinely drew nothing.
-    let intervals = payload
+    let intervals: Vec<mako_engine::payload::MsconsInterval> = payload
         .get("intervals")
-        .and_then(|v| v.as_array())
-        .filter(|a| !a.is_empty())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| DispatchError::InvalidPayload(format!("\"intervals\": {e}")))?
+        .filter(|a: &Vec<_>| !a.is_empty())
         .ok_or_else(|| {
             DispatchError::InvalidPayload(
                 "\"intervals\" must contain at least one settlement slot".into(),
@@ -309,13 +316,13 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
         .unwrap_or(state.sender_party_id.as_str())
         .to_owned();
 
-    const SUMMENZEITREIHE_PID: u64 = 13_003;
+    const SUMMENZEITREIHE_PID: u32 = 13_003;
     if let Some(stated) = payload.get("pruefidentifikator").and_then(|v| v.as_u64())
-        && stated != SUMMENZEITREIHE_PID
+        && stated != u64::from(SUMMENZEITREIHE_PID)
     {
         return Err(DispatchError::InvalidPayload(format!(
             "\"pruefidentifikator\" is {stated}, but this command renders MSCONS \
-             {SUMMENZEITREIHE_PID} (Übertragung Summenzeitreihe, MSCONS AHB 3.2 §8.3.1)"
+             {SUMMENZEITREIHE_PID} (Übertragung Summenzeitreihe, MSCONS AHB 3.2 Kap. 8.3.1)"
         )));
     }
 
@@ -333,19 +340,21 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
         causation_event_id: causation,
         message_type: "MSCONS".into(),
         recipient: receiver_mp_id.as_str().into(),
-        payload: serde_json::json!({
-            "pid": SUMMENZEITREIHE_PID,
-            "sender_mp_id": sender_mp_id,
-            "receiver_mp_id": receiver_mp_id,
-            "mabis_zp_id": mabis_zp_id,
-            "bilanzierungsgebiet_id": bilanzierungsgebiet_id,
-            "balancing_period": balancing_period,
-            "version": version,
-            "intervals": intervals,
+        payload: serde_json::to_value(mako_engine::payload::MsconsPayload {
+            pid: Some(SUMMENZEITREIHE_PID),
+            sender_mp_id: Some(sender_mp_id),
+            receiver_mp_id: Some(receiver_mp_id.clone()),
+            mabis_zp_id: Some(mabis_zp_id),
+            balancing_period: Some(balancing_period),
+            version: Some(version),
+            obis_code: Some(obis_code),
+            intervals,
             // Fixed here rather than left to the renderer, so the 202 can name
             // what is filed — see `filed_message_ref`.
-            "message_ref": summenzeitreihe_message_ref(process_id),
-        }),
+            message_ref: Some(summenzeitreihe_message_ref(process_id)),
+            ..Default::default()
+        })
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?,
         payload_schema: None,
         created_at: time::OffsetDateTime::now_utc(),
         occurred_at: None,
@@ -860,7 +869,10 @@ mod summenzeitreihe_reference_tests {
             snapshot_interval: 100,
             cedar: Arc::new(CedarAuthorizer::unauthenticated().expect("infallible")),
             snapshot_store: store.as_snapshot_store(),
-            malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+            malo_cache: Arc::new(SlateDbMaloCache::new(
+                store.clone(),
+                TenantId::from_party_id(NB_MP_ID),
+            )),
             maloid_result_cache: MaloIdentResultCache::new(store.clone()),
             store: Arc::new(store),
             marktd_client: None,
@@ -881,6 +893,7 @@ mod summenzeitreihe_reference_tests {
             "balancing_period": "202601",
             "version": "20260205120000+00",
             "receiver_mp_id": "9900000000002",
+            "obis_code": "1-1:1.29.0",
             "pruefidentifikator": 13003,
             "intervals": [{ "from": "202512312300+00", "to": "202512312315+00", "quantity_kwh": "1.5" }],
         });

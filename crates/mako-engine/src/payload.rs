@@ -81,13 +81,13 @@ pub struct AperakPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ortsangabe: Option<String>,
     /// The decision recorded for a Gas message that was processable: Gas has
-    /// no Anerkennungsmeldung (APERAK AHB 1.1 §2.3), so the entry reaches the
+    /// no Anerkennungsmeldung (APERAK AHB 1.1 Kap. 2.3), so the entry reaches the
     /// ERP and never the wire.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub suppress_wire: bool,
     /// Every further Verarbeitbarkeitsfehler of the Geschäftsvorfall beyond the
     /// first (`error_code`), each its own `SG4 ERC` group — APERAK AHB 1.1
-    /// § 2.1.1 (S. 10): „Es sind alle AHB-Fehler anzugeben"; the APERAK MIG
+    /// Kap. 2.1.1 (S. 10): „Es sind alle AHB-Fehler anzugeben"; the APERAK MIG
     /// lets `SG4` repeat 99999 times.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub weitere_fehler: Vec<AperakFehler>,
@@ -175,7 +175,7 @@ impl AperakPayload {
     }
 
     /// Keep this entry off the wire — a positive Gas decision, which APERAK
-    /// AHB 1.1 §2.3 answers with silence.
+    /// AHB 1.1 Kap. 2.3 answers with silence.
     #[must_use]
     pub fn off_the_wire(mut self) -> Self {
         self.suppress_wire = true;
@@ -240,6 +240,11 @@ pub struct UtilmdPayload {
     /// Second `SG4 DTM+159`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bilanzierungsende: Option<String>,
+    /// `SG4 DTM+206` Geräteausbaudatum — the 55007/55008 with `STS+7++Z33`
+    /// Auszug wegen Stilllegung (UTILMD AHB Strom 2.2 Kap. 8.10, S. 189,
+    /// Bedingung `[79]`), a German calendar day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geraeteausbaudatum: Option<String>,
     /// Second `SG4 DTM+92` „Datum Vertragsbeginn", beside a `157` process
     /// date — a GeLi Gas Antwort auf Anfrage restates both dates of the
     /// Anfrage (UTILMD AHB Gas 1.2 Kap. 5.12.1, Bedingung `[528]`).
@@ -554,6 +559,807 @@ impl OutboundPayload for MaloIdentifiedPayload {
     const MESSAGE_TYPE: &'static str = "MaloIdentified";
 }
 
+// ── Shared parts of the ORDERS family ─────────────────────────────────────────
+
+/// An Ansprechpartner — `CTA` with one `COM` per channel.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ansprechpartner {
+    /// `CTA` DE 3412 — the name.
+    pub name: String,
+    /// The `COM` channels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kommunikation: Vec<Kommunikationsweg>,
+}
+
+/// One `COM` channel of an [`Ansprechpartner`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Kommunikationsweg {
+    /// `email`, `telefon`, `telefax`, `weiteres_telefon` or `handy` — DE 3155
+    /// `EM`/`TE`/`FX`/`AJ`/`AL`.
+    pub art: String,
+    /// DE 3148 — the address or number.
+    pub adresse: String,
+}
+
+// ── ORDERS ────────────────────────────────────────────────────────────────────
+
+/// The payload of an `ORDERS` outbox entry — every field the ORDERS renderer
+/// reads. Which a column needs is the renderer's question; a Muss field the
+/// payload lacks is refused there, by name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrdersPayload {
+    /// Prüfidentifikator → `SG1 RFF+Z13`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Sender MP-ID; absent means the deployment's MP-ID for the PID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    /// The Sparte — picks the sender between two roles that share a PID, and
+    /// the day boundary of a process date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparte: Option<crate::types::Sparte>,
+    /// `UNH` DE 0062 source; absent means derived from the causing event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<String>,
+    /// `BGM` DE 1001 where the column fixes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_code: Option<String>,
+    /// `BGM` DE 1004 — the Belegnummer the answer echoes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+    /// `SG2 LOC+172` Meldepunkt, opened by `NAD+DP`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// The reference an ESA order correlates by (`RFF+AAG` / `RFF+ACW`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub korrelation_ref: Option<String>,
+    /// `DTM+203` Ausführungsdatum, a German calendar day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ausfuehrungsdatum: Option<String>,
+    /// `IMD` DE 7081 — the Leistung or Abonnement the order names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abonnement: Option<String>,
+    /// First day of the 17103 Zeitspanne, `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zeitspanne_von: Option<String>,
+    /// Last day of the 17103 Zeitspanne, `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zeitspanne_bis: Option<String>,
+    /// 17001 `SG1 RFF+AAG` — the Angebotsnummer ordered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angebotsnummer: Option<String>,
+    /// 17001 `SG5 CTA`/`COM`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ansprechpartner: Option<Ansprechpartner>,
+    /// 17001 — one `SG29 LIN` with `SG34 RFF+Z03` per Angebotsposition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positionen: Vec<String>,
+    /// 17009 `IMD` — `Z58`/`Z59`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub umfang: Option<String>,
+    /// 17009 — one `SG29 LIN` per Gerät.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub geraete: Vec<OrdersGeraet>,
+    /// 17004 `SG29 IMD` — the Grund.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grund: Option<String>,
+    /// 17004 `SG29 DTM+7` — the Wertzeitpunkt, a German calendar day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wertzeitpunkt: Option<String>,
+    /// 17011 — one `SG29 LIN+Z19` with `PIA+5+<code>:Z11` per Produkt of
+    /// Codeliste der Konfigurationen Kap. 7.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub produkte: Vec<String>,
+    /// 17011 `SG3 RFF+Z18` — the Marktlokation of a weitere
+    /// Energieflussrichtung.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marktlokation: Option<String>,
+    /// 17011 `SG2 NAD+DEB` — the MSB der Marktlokation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msb_marktlokation: Option<String>,
+    /// MaBiS `DTM+273` Betrachtungszeitintervall, `CCYYMM`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zeitintervall: Option<String>,
+    /// MaBiS `SG34 RFF+AUU` — the Version of the Summenzeitreihe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// MaBiS `SG38 LOC+172` — the Zählpunkt of the list asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meldepunkt: Option<String>,
+    /// MaBiS `SG38 LOC+237` — the Bilanzkreis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bilanzkreis: Option<String>,
+    /// MaBiS `SG2 LOC+107` — the Bilanzierungsgebiet, beside the receiver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bilanzierungsgebiet: Option<String>,
+    /// 17201 `SG30 CCI` — the Profilgruppe (`Z02`–`Z05`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profilgruppe: Option<String>,
+    /// 17211 `FTX+AFH` — the `E_0100` Prüfschritt code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reklamation_code: Option<String>,
+    /// 17211 `SG1 RFF+ACW` — the reclaimed MSCONS' `BGM` DE 1004.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referenz_nachricht: Option<String>,
+}
+
+impl OutboundPayload for OrdersPayload {
+    const MESSAGE_TYPE: &'static str = "ORDERS";
+}
+
+/// One Gerät of a 17009 Gerätewechselabsicht.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrdersGeraet {
+    /// `SG30 CCI` — the Geräteart.
+    pub geraeteart: String,
+    /// `SG34 RFF+Z09` — every Gerätenummer.
+    #[serde(default)]
+    pub geraetenummern: Vec<String>,
+}
+
+// ── REQOTE ────────────────────────────────────────────────────────────────────
+
+/// The payload of a `REQOTE` outbox entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReqotePayload {
+    /// Prüfidentifikator → `SG1 RFF+Z13`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    /// Receiver MP-ID; absent means the outbox entry's recipient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    /// `UNH` DE 0062 source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<String>,
+    /// `LOC+172` Meldepunkt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// 35003 `DTM+76` Wunschtermin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wunschtermin: Option<String>,
+    /// 35003 `CTA` name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact: Option<String>,
+    /// 35003 `COM` address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_comm: Option<String>,
+    /// `FTX+ACB`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bemerkung: Option<String>,
+    /// 35003 `SG27 PIA+5` — a Messprodukt of Codeliste der Konfigurationen
+    /// Kap. 4.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messprodukt: Option<String>,
+    /// Kap. 4.6.2 delivery target and Schwellwerte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smgw: Option<SmgwZiel>,
+}
+
+impl OutboundPayload for ReqotePayload {
+    const MESSAGE_TYPE: &'static str = "REQOTE";
+}
+
+/// The SM-PKI delivery target of a Kap. 4.6.2 Messprodukt.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmgwZiel {
+    /// `FTX+Z17` — IPv4 URI.
+    pub uri_ipv4: String,
+    /// `FTX+Z17` — IPv6 URI.
+    pub uri_ipv6: String,
+    /// `FTX+Z24` — Zertifikatsaussteller.
+    pub zertifikat_aussteller: String,
+    /// `FTX+Z23` — Zertifikatsnutzer.
+    pub zertifikat_nutzer: String,
+    /// `SG28 CCI+Z60` thresholds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schwellwerte: Vec<Schwellwert>,
+}
+
+/// One `SG28 CCI+Z60` Schwellwert.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Schwellwert {
+    /// The position code.
+    pub position_code: String,
+    /// Upper bound.
+    pub oberer: String,
+    /// Lower bound.
+    pub unterer: String,
+}
+
+// ── ORDCHG ────────────────────────────────────────────────────────────────────
+
+/// The payload of an `ORDCHG` outbox entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrdchgPayload {
+    /// Prüfidentifikator → `SG1 RFF+Z13`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    /// `UNH` DE 0062 source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<String>,
+    /// The ESA reference, under the PID's own qualifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub korrelation_ref: Option<String>,
+    /// `SG1 RFF+ON` — the ORDERS changed or cancelled. Muss.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_reference: Option<String>,
+}
+
+impl OutboundPayload for OrdchgPayload {
+    const MESSAGE_TYPE: &'static str = "ORDCHG";
+}
+
+// ── ORDRSP ────────────────────────────────────────────────────────────────────
+
+/// The payload of an `ORDRSP` outbox entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrdrspPayload {
+    /// Prüfidentifikator → `SG1 RFF+Z13`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    /// Receiver MP-ID; absent means the outbox entry's recipient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    /// `UNH` DE 0062 source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<String>,
+    /// `BGM` DE 1001 where the column fixes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_code: Option<String>,
+    /// `BGM` DE 1004.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+    /// `DTM+137`; absent means the instant of dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_date: Option<String>,
+    /// `SG1 RFF+ON` — the answered ORDERS' `BGM` DE 1004.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_reference: Option<String>,
+    /// The ESA reference, under the PID's own qualifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub korrelation_ref: Option<String>,
+    /// `SG2 AJT` DE 4465 — the Antwortcode, Muss on every answering PID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort_code: Option<String>,
+    /// `SG2 AJT` DE 1082 — the Codeliste the code comes from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort_codeliste: Option<String>,
+    /// `SG2 FTX+AAP` — the problem the tree requires named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort_freitext: Option<String>,
+    /// `IMD` DE 7081 — the Leistung the answer echoes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leistung: Option<String>,
+    /// 19011/19012 `IMD` — the Abonnement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abonnement: Option<String>,
+    /// `DTM+203` Ausführungsdatum, a German calendar day of `sparte`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ausfuehrungsdatum: Option<String>,
+    /// 19003/19004 `DTM+Z02` verschobener Abmeldetermin — the day up to which
+    /// the MSBA is obliged to continue, a German calendar day of `sparte`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abmeldetermin: Option<String>,
+    /// 19130 with `A06`: `DTM+292` the geplanter Behebungszeitpunkt, a UTC
+    /// instant `CCYYMMDDHHMM` (ORDRSP AHB 1.1b Kap. 4.7, S. 37, `[46]`–`[48]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behebungszeitpunkt: Option<String>,
+    /// `SG1 RFF+TN` — the reclaimed Vorgang's `IDE` DE 7402, beside
+    /// `korrelation_ref` (`RFF+ACW`) on the 19123 (Kap. 4.5, S. 33–35).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referenz_vorgangsnummer: Option<String>,
+    /// The Sparte whose day `ausfuehrungsdatum` / `abmeldetermin` begins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparte: Option<crate::types::Sparte>,
+    /// `SG6 CTA`/`COM`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ansprechpartner: Option<Ansprechpartner>,
+    /// `SG3 NAD+VY` — the Eigentümer's MP-ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eigentuemer: Option<String>,
+    /// `SG3 NAD+Z22` — the Lieferadresse für Altgeräte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lieferadresse: Option<Lieferadresse>,
+}
+
+impl OutboundPayload for OrdrspPayload {
+    const MESSAGE_TYPE: &'static str = "ORDRSP";
+}
+
+/// `SG3 NAD+Z22` — a Lieferadresse.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lieferadresse {
+    /// Name.
+    pub name: String,
+    /// Street and house number.
+    pub strasse: String,
+    /// Town.
+    pub ort: String,
+    /// Postal code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postleitzahl: Option<String>,
+    /// Country code.
+    pub land: String,
+}
+
+// ── QUOTES ────────────────────────────────────────────────────────────────────
+
+/// The payload of a `QUOTES` outbox entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotesPayload {
+    /// Prüfidentifikator → `SG1 RFF+Z13`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    /// Receiver MP-ID; absent means the outbox entry's recipient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    /// `UNH` DE 0062 source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<String>,
+    /// `BGM` DE 1004 — the Angebotsnummer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+    /// `DTM+137`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_date: Option<String>,
+    /// `LOC+172`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// `SG1 RFF+AAV` — the REQOTE this answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub korrelation_ref: Option<String>,
+    /// `DTM+273` Bindungsfrist, in Tagen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bindungsfrist_tage: Option<u32>,
+    /// Ablehnungsgrund — present exactly on an Ablehnung der Anfrage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// `SG4 CUX`; absent means `EUR`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// `DTM+469` frühester Start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fruehester_start: Option<String>,
+    /// `CTA` name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact: Option<String>,
+    /// `COM` address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_comm: Option<String>,
+    /// `SG27 PIA+5` — the offered Messprodukt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messprodukt: Option<String>,
+    /// `PIA+Z02` per Artikel-ID.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artikel_ids: Vec<String>,
+    /// OBIS-Kennzahlen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub obis: Vec<String>,
+    /// `SG31 PRI+CAL` per price.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preise: Vec<QuotesPreis>,
+}
+
+impl OutboundPayload for QuotesPayload {
+    const MESSAGE_TYPE: &'static str = "QUOTES";
+}
+
+/// One `SG31 PRI+CAL`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotesPreis {
+    /// The amount, as a decimal string.
+    pub betrag: String,
+    /// `Z01` Einrichtungs-, `Z02` Transaktions-, `Z03` Betriebspreis; absent
+    /// means `Z01`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub art: Option<String>,
+    /// Base unit; absent means `DAY` on `Z03`, `H87` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub einheit: Option<String>,
+}
+
+// ── IFTSTA ────────────────────────────────────────────────────────────────────
+
+/// The payload of an `IFTSTA` outbox entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IftstaPayload {
+    /// Prüfidentifikator → `SG15 RFF+Z13`; one with no renderer arm is
+    /// refused.
+    pub pid: u32,
+    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    /// Receiver MP-ID; absent means the outbox entry's recipient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    /// `UNH` DE 0062 source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<String>,
+    /// `BGM` DE 1004.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+    /// `DTM+137`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_date: Option<String>,
+    /// `SG15 STS` DE 4405 where the Anwendungsfall admits more than one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sts_code: Option<String>,
+    /// `SG15 STS` DE 9013 — the Prüfschritt code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort_code: Option<String>,
+    /// `SG15 STS` DE 1131 — the Codeliste or EBD the code comes from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort_codeliste: Option<String>,
+    /// `SG15 RFF+ACW` — the message answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referenz_nachricht: Option<String>,
+    /// `SG15 RFF+ADY` — the Vorgang answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referenz_vorgang: Option<String>,
+    /// `SG15 DTM+293` — the takeover day, begun in `sparte`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zuordnungsbeginn: Option<String>,
+    /// The Sparte whose day `zuordnungsbeginn` begins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparte: Option<crate::types::Sparte>,
+    /// `SG14 LOC+172` — the Messlokation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub melo: Option<String>,
+    /// `SG15 RFF+AVE` — the Marktlokation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malo: Option<String>,
+    /// `SG15 DTM+76` — the geplanter Umstellungszeitpunkt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub umstellungszeitpunkt: Option<String>,
+    /// `SG15 RFF+AGI` — the Bestellung's Belegnummer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub korrelation_ref: Option<String>,
+    /// `SG15 DTM+93` — the Vertragsende.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beendigung_zum: Option<String>,
+    /// `SG25 FTX+ACB` — the free text an Anwendungsfall requires beside a
+    /// code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bemerkung: Option<String>,
+}
+
+impl OutboundPayload for IftstaPayload {
+    const MESSAGE_TYPE: &'static str = "IFTSTA";
+}
+
+// ── INSRPT ────────────────────────────────────────────────────────────────────
+
+/// The payload of an `INSRPT` outbox entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InsrptPayload {
+    /// Prüfidentifikator → `BGM` DE 1004 and `RFF+Z13`.
+    pub pid: u32,
+    /// `SG8 LOC+172` — the Messlokation.
+    pub melo: String,
+    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    /// Receiver MP-ID; absent means the outbox entry's recipient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    /// `UNH` DE 0062 source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<String>,
+    /// `DTM+137`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_date: Option<String>,
+    /// `SG7 LIN` Positionsnummer; absent means `1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    /// `SG7 STS+Z06` Gerätestatus; absent means `Z11` gestört.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<String>,
+    /// `SG5 CTA` name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact: Option<String>,
+    /// `SG5 COM` address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_comm: Option<String>,
+    /// `SG3 DOC` reference; absent means the PID under `21`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_reference: Option<String>,
+}
+
+impl OutboundPayload for InsrptPayload {
+    const MESSAGE_TYPE: &'static str = "INSRPT";
+}
+
+// ── INVOIC ────────────────────────────────────────────────────────────────────
+
+/// The payload of an `INVOIC` outbox entry: the message itself, built and
+/// checked against its Prüfschablone before the issuing command recorded it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvoicPayload {
+    /// The INVOIC, `UNH` … `UNT`, as EDIFACT text.
+    pub nachricht: String,
+    /// Sender MP-ID — `NAD+MS`, `UNB` DE 0004.
+    pub sender: String,
+    /// Receiver MP-ID — `NAD+MR`, `UNB` DE 0010.
+    pub receiver: String,
+}
+
+impl OutboundPayload for InvoicPayload {
+    const MESSAGE_TYPE: &'static str = "INVOIC";
+}
+
+// ── REMADV ────────────────────────────────────────────────────────────────────
+
+/// The payload of a `REMADV` outbox entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemadvPayload {
+    /// Prüfidentifikator → `RFF+Z13`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    /// Receiver MP-ID; absent means the outbox entry's recipient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    /// `UNH` DE 0062 source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<String>,
+    /// `BGM` DE 1004 — the Avisnummer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+    /// `BGM` DE 1001.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_code: Option<String>,
+    /// `DTM+137`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_date: Option<String>,
+    /// `SG4 CUX` DE 6345; absent means `EUR`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waehrung: Option<String>,
+    /// `SG5` — the answered invoice and its amounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rechnungsbezug: Option<Rechnungsbezug>,
+    /// `SG7 AJT` DE 4465 — the Antwortcode of an Abweisung.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort_code: Option<String>,
+    /// `AJT` DE 1082 — the EBD the codes come from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort_codeliste: Option<String>,
+    /// `SG7 FTX+ABO` beside the Kopf-`AJT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ablehnungsgrund: Option<String>,
+    /// Every Befund of the walk; those naming a Positionsnummer ride `SG10`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antwort_befunde: Vec<RemadvBefund>,
+}
+
+impl OutboundPayload for RemadvPayload {
+    const MESSAGE_TYPE: &'static str = "REMADV";
+}
+
+/// `SG5` of a REMADV — the invoice answered.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rechnungsbezug {
+    /// `DOC` DE 1001.
+    pub dokumentenart: String,
+    /// `DOC` DE 1004.
+    pub rechnungsnummer: String,
+    /// `MOA+9`.
+    pub faelliger_betrag: String,
+    /// `MOA+12`.
+    pub ueberweisungsbetrag: String,
+    /// `DTM+137` — the invoice's document date.
+    pub rechnungsdatum: String,
+}
+
+/// One Befund of a REMADV Prüfung.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemadvBefund {
+    /// `AJT` DE 4465.
+    pub code: String,
+    /// The Ebene the Befund was found on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ebene: Option<String>,
+    /// The Positionsnummer of a position-level Befund — `SG10 DLI`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positionsnummer: Option<u16>,
+    /// `SG12 FTX` explanation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+// ── MSCONS ────────────────────────────────────────────────────────────────────
+
+/// The payload of an `MSCONS` outbox entry. The Prüfidentifikator selects the
+/// shape: a Summenzeitreihe (13003/13023), Arbeit and Leistungsmaxima
+/// (13015/13016/13019), or Werte nach Typ 2 (13027).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsconsPayload {
+    /// Prüfidentifikator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_mp_id: Option<String>,
+    /// Receiver MP-ID; absent means the outbox entry's recipient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_mp_id: Option<String>,
+    /// `UNH` DE 0062 source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<String>,
+    /// `SG1 RFF+AGI` — the Bestellung answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub korrelation_ref: Option<String>,
+    /// Summenzeitreihe: `SG6 LOC+172` — the MaBiS-Zählpunkt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mabis_zp_id: Option<String>,
+    /// Summenzeitreihe: the Bilanzierungsmonat, `CCYYMM`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balancing_period: Option<String>,
+    /// Summenzeitreihe: the Version, `CCYYMMDDHHMMSSZZZ`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Summenzeitreihe: `SG9 PIA+5` OBIS-Kennzahl.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obis_code: Option<String>,
+    /// Summenzeitreihe: one entry per settlement slot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub intervals: Vec<MsconsInterval>,
+    /// 13015/13016/13019/13027: `SG6 LOC+172` — the Marktlokation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malo_id: Option<String>,
+    /// 13015/13016/13019: the Energiemenge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arbeit: Option<MsconsWert>,
+    /// 13016/13015: up to two Leistungsmaxima.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub leistungsmaxima: Vec<MsconsWert>,
+    /// 13019: `SG10 STS+10` Messklassifizierung.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messklassifizierung: Option<String>,
+    /// 13027: the Werte nach Typ 2.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reads: Vec<MsconsRead>,
+    /// 13017: `SG7 RFF+MG` — the Zähler the Stände were read from, beside
+    /// the Messlokation in `SG6 LOC+172`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geraetenummer: Option<String>,
+    /// 13017: `SG7 RFF+AGK` — the Konfigurations-ID of values from an iMS,
+    /// which then name no Lokation in `SG6 LOC+172` (MSCONS AHB 3.2 Kap.
+    /// 6.3.1, S. 23–25, `[131]`/`[132]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub konfigurations_id: Option<String>,
+    /// 13017: the Zählerstände, one `SG9 LIN` each.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zaehlerstaende: Vec<MsconsZaehlerstand>,
+}
+
+/// One Zählerstand of an MSCONS 13017 (MSCONS AHB 3.2 Kap. 6.3.1, S. 25–29).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsconsZaehlerstand {
+    /// `SG9 PIA+5` — the OBIS-Kennzahl.
+    pub obis_code: String,
+    /// `SG10 QTY` DE 6060, as a decimal string.
+    pub quantity: String,
+    /// `SG10 DTM+7` Gültigkeitsdatum — the German calendar day whose
+    /// beginning the Stand holds for (`[UB1]`).
+    pub gueltig: String,
+    /// `SG10 DTM+9` Ablesedatum, a German calendar day — on a wahrer Wert of
+    /// a Messlokation only (`[93]`, `[131]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ablesedatum: Option<String>,
+    /// A substitute value — `QTY` DE 6063 `67`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ersatzwert: bool,
+    /// `STS+Z32` Ersatzwertbildungsverfahren, Muss on an Ersatzwert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ersatzwert_verfahren: Option<String>,
+    /// `STS+Z40` Grund der Ersatzwertbildung, Muss on an Ersatzwert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ersatzwert_grund: Option<String>,
+}
+
+impl OutboundPayload for MsconsPayload {
+    const MESSAGE_TYPE: &'static str = "MSCONS";
+}
+
+/// One settlement slot of a Summenzeitreihe.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsconsInterval {
+    /// Slot start.
+    pub from: String,
+    /// Slot end.
+    pub to: String,
+    /// The quantity, kWh, as a decimal string.
+    pub quantity_kwh: String,
+}
+
+/// An Energiemenge or a Leistungsmaximum.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsconsWert {
+    /// The value, as a decimal string.
+    pub quantity: String,
+    /// Energiemenge: period start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Energiemenge: period end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Leistungsmaximum: the period it fell in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period: Option<String>,
+    /// `610` (`CCYYMM`, the default) or `102` (`CCYYMMDD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period_format: Option<String>,
+    /// `QTY` DE 6411, where stated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// OBIS-Kennzahl; absent means Wirkarbeit resp. Leistungsmaximum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obis: Option<String>,
+    /// A substitute value — `QTY` DE 6063 `67`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ersatzwert: bool,
+    /// `STS+Z32` Ersatzwertbildungsverfahren.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ersatzwert_verfahren: Option<String>,
+    /// `STS+Z40` Grund der Ersatzwertbildung.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ersatzwert_grund: Option<String>,
+}
+
+/// One interval value of a Werte-nach-Typ-2 delivery.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsconsRead {
+    /// The quantity, kWh, as a decimal string.
+    pub quantity_kwh: String,
+    /// Interval start.
+    pub dtm_from: String,
+    /// Interval end.
+    pub dtm_to: String,
+    /// OBIS-Kennzahl — groups the values into line items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obis_code: Option<String>,
+    /// A substitute value.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ersatzwert: bool,
+}
+
 /// The serde error naming a key `payload` carries that the typed payload of
 /// `message_type` does not declare — `None` when every key is declared, or
 /// when `message_type` has no typed payload here.
@@ -567,14 +1373,21 @@ pub fn undeclared_key(message_type: &str, payload: &serde_json::Value) -> Option
         let text = P::from_payload(payload).err()?.to_string();
         text.contains("unknown field").then_some(text)
     }
-    if message_type == UtilmdPayload::MESSAGE_TYPE {
-        refusal::<UtilmdPayload>(payload)
-    } else if message_type == AperakPayload::MESSAGE_TYPE {
-        refusal::<AperakPayload>(payload)
-    } else if message_type == MaloIdentifiedPayload::MESSAGE_TYPE {
-        refusal::<MaloIdentifiedPayload>(payload)
-    } else {
-        None
+    match message_type {
+        UtilmdPayload::MESSAGE_TYPE => refusal::<UtilmdPayload>(payload),
+        AperakPayload::MESSAGE_TYPE => refusal::<AperakPayload>(payload),
+        MaloIdentifiedPayload::MESSAGE_TYPE => refusal::<MaloIdentifiedPayload>(payload),
+        OrdersPayload::MESSAGE_TYPE => refusal::<OrdersPayload>(payload),
+        ReqotePayload::MESSAGE_TYPE => refusal::<ReqotePayload>(payload),
+        OrdchgPayload::MESSAGE_TYPE => refusal::<OrdchgPayload>(payload),
+        OrdrspPayload::MESSAGE_TYPE => refusal::<OrdrspPayload>(payload),
+        QuotesPayload::MESSAGE_TYPE => refusal::<QuotesPayload>(payload),
+        IftstaPayload::MESSAGE_TYPE => refusal::<IftstaPayload>(payload),
+        InsrptPayload::MESSAGE_TYPE => refusal::<InsrptPayload>(payload),
+        InvoicPayload::MESSAGE_TYPE => refusal::<InvoicPayload>(payload),
+        RemadvPayload::MESSAGE_TYPE => refusal::<RemadvPayload>(payload),
+        MsconsPayload::MESSAGE_TYPE => refusal::<MsconsPayload>(payload),
+        _ => None,
     }
 }
 
@@ -645,5 +1458,71 @@ mod tests {
         );
         assert_eq!(undeclared_key("UTILMD", &serde_json::json!({})), None);
         assert_eq!(undeclared_key("ProcessCompleted", &utilmd), None);
+    }
+
+    /// Every rendered message type refuses a key its renderer does not read —
+    /// the WiM ORDRSP answers carried `antwort_tree`, `orig_message_ref` and
+    /// `abmeldetermin`, which no renderer read and none reached the wire.
+    #[test]
+    fn every_rendered_message_type_refuses_an_unread_key() {
+        for (message_type, declared) in [
+            (
+                "ORDERS",
+                serde_json::json!({ "pid": 17_009, "location": "x" }),
+            ),
+            (
+                "REQOTE",
+                serde_json::json!({ "pid": 35_003, "location": "x" }),
+            ),
+            (
+                "ORDCHG",
+                serde_json::json!({ "pid": 39_000, "order_reference": "x" }),
+            ),
+            (
+                "ORDRSP",
+                serde_json::json!({ "pid": 19_003, "antwort_code": "A01" }),
+            ),
+            (
+                "QUOTES",
+                serde_json::json!({ "pid": 15_003, "reason": "x" }),
+            ),
+            (
+                "IFTSTA",
+                serde_json::json!({ "pid": 21_047, "sts_code": "Z48" }),
+            ),
+            ("INSRPT", serde_json::json!({ "pid": 23_001, "melo": "x" })),
+            (
+                "INVOIC",
+                serde_json::json!({ "nachricht": "UNH", "sender": "a", "receiver": "b" }),
+            ),
+            (
+                "REMADV",
+                serde_json::json!({ "pid": 33_001, "waehrung": "EUR" }),
+            ),
+            (
+                "MSCONS",
+                serde_json::json!({ "pid": 13_003, "mabis_zp_id": "x" }),
+            ),
+        ] {
+            assert_eq!(
+                undeclared_key(message_type, &declared),
+                None,
+                "{message_type}"
+            );
+            let mut unread = declared.clone();
+            unread["antwort_tree"] = "E_0203".into();
+            let refused = undeclared_key(message_type, &unread)
+                .unwrap_or_else(|| panic!("{message_type} admitted an unread key"));
+            assert!(
+                refused.contains("antwort_tree"),
+                "{message_type}: {refused}"
+            );
+        }
+        // Nested parts refuse in the same way.
+        let mscons = serde_json::json!({
+            "pid": 13_003,
+            "intervals": [{ "from": "a", "to": "b", "quantity_kwh": "1", "herkunft": "x" }],
+        });
+        assert!(undeclared_key("MSCONS", &mscons).is_some());
     }
 }

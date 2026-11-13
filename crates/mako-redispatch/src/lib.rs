@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn iftsta_pids_are_correct() {
-        // Confirmed from IFTSTA AHB 2.1 §8 and PID 4.0 (2026-04-01).
+        // Confirmed from IFTSTA AHB 2.1 Kap. 8 and PID 4.0 (2026-04-01).
         // Only PIDs 21037 (Ansicht NB/VNB) and 21038 (Ansicht BTR) belong to
         // Redispatch 2.0. PIDs 21035 (GPKE Rückmeldung Lieferstelle → gpke-supplier-change),
         // 21036 (WiM Strom Teil 1, unassigned), and 21040 (AWH Sperrprozesse Gas, unassigned)

@@ -25,8 +25,8 @@
 //!
 //! | Clock | Window | Fundstelle |
 //! |---|---|---|
-//! | CONTRL | 6 Stunden | CONTRL AHB 1.0 § 1.2 |
-//! | APERAK (Gas) | nächster Werktag 12:00 (Folgeprozess) / **3 Werktage** (Initialprozess) | APERAK AHB 1.1 § 2.3.1 |
+//! | CONTRL | 6 Stunden | CONTRL AHB 1.0 Kap. 1.2 |
+//! | APERAK (Gas) | nächster Werktag 12:00 (Folgeprozess) / **3 Werktage** (Initialprozess) | APERAK AHB 1.1 Kap. 2.3.1 |
 //! | Business answer | **4 / 3 / 2 Werktage**, per Prüfidentifikator | GeLi Gas 3.0 Kap. 3.1–3.3 |
 //!
 //! The familiar **10 Werktage** is none of these: it is the *supplier's*
@@ -43,7 +43,7 @@
 //! - **BDEW/VKU/GEODE/FNB Gas AWH GeLi Gas V1.2** (26.03.2026, gültig ab
 //!   01.04.2026) — the Sequenzdiagramme that refine the Festlegung's windows
 //! - **UTILMD G AHB 1.1 / 1.2** — EDI@Energy UTILMD Gas profiles
-//! - **APERAK AHB 1.1 § 2.3.1** — the Gas APERAK windows above
+//! - **APERAK AHB 1.1 Kap. 2.3.1** — the Gas APERAK windows above
 
 use std::collections::HashMap;
 
@@ -716,7 +716,7 @@ pub enum GasSupplierChangeCommand {
         validation_errors: Vec<String>,
         /// UTC wall-clock time when the inbound UTILMD G was received.
         ///
-        /// Used to compute the APERAK Gas *sending* deadline (APERAK AHB 1.1 §2.3.1)
+        /// Used to compute the APERAK Gas *sending* deadline (APERAK AHB 1.1 Kap. 2.3.1)
         /// and the per-PID business answer deadline that are
         /// registered atomically with the `Initiated` event.
         received_at: OffsetDateTime,
@@ -733,7 +733,7 @@ pub enum GasSupplierChangeCommand {
         /// 55007 / 55010 / 55016 with. A Gas-only payload shape left every Gas
         /// walk escalating at Prüfschritt 10 for want of the
         /// Transaktionsgrundergänzung.
-        vorgang: LfVorgangsdaten,
+        vorgang: Box<LfVorgangsdaten>,
         /// Gas GaBi RLM Fallgruppe from UTILMD G `TM+Z10` segment.
         /// Only set for Gas RLM MaLos. Propagated to `ProcessInitiated` outbox
         /// so `marktd` can update `malo.fallgruppe`.
@@ -1103,7 +1103,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     process_date,
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
-                    vorgang: Box::new(vorgang.clone()),
+                    vorgang: vorgang.clone(),
                 }];
                 if validation_passed {
                     events.push(GasSupplierChangeEvent::ValidationPassed {
@@ -1111,7 +1111,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     });
                     // No APERAK window: in der Sparte Gas the APERAK is a
                     // Verarbeitbarkeitsfehlermeldung only (APERAK AHB 1.1
-                    // §2.3), so a processable Anmeldung sends none, and a
+                    // Kap. 2.3), so a processable Anmeldung sends none, and a
                     // delivery window for a message that never goes out could
                     // only fire.
                     //
@@ -1165,7 +1165,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         reason: reason.clone(),
                     });
                     // APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) — mandatory
-                    // per APERAK AHB 1.1 §2.1.1 when AHB validation fails. The
+                    // per APERAK AHB 1.1 Kap. 2.1.1 when AHB validation fails. The
                     // ingest door opens its delivery window beside it.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
@@ -1775,7 +1775,7 @@ mod tests {
             },
             received_at: RECEIVED_AT,
             bilanzierungsmethode: None,
-            vorgang: LfVorgangsdaten::default(),
+            vorgang: Box::default(),
             fallgruppe: None,
             gasqualitaet: None,
         }
@@ -2443,7 +2443,7 @@ mod tests {
         }
     }
 
-    /// A processable Gas Anmeldung sends no APERAK (APERAK AHB 1.1 §2.3); a
+    /// A processable Gas Anmeldung sends no APERAK (APERAK AHB 1.1 Kap. 2.3); a
     /// rejected one enqueues the Verarbeitbarkeitsfehlermeldung, which the
     /// ingest door's delivery window rides. The workflow arms no APERAK window
     /// itself in either case.

@@ -11,7 +11,7 @@ use super::{Set, Unset, bytes_to_segments};
 
 /// DE 2379 unit of a `DTM` that carries a **duration** rather than a date.
 ///
-/// QUOTES AHB 1.1a §4.3 states the Bindungsfrist (`DTM+273`) and the
+/// QUOTES AHB 1.1a Kap. 4.3 states the Bindungsfrist (`DTM+273`) and the
 /// Einrichtungszeitspanne (`DTM+279`) as a count plus one of these units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DauerEinheit {
@@ -263,7 +263,7 @@ impl<S, R> QuotesBuilder<S, R> {
     /// Set the Bindungsfrist (Gültigkeitsdauer des Angebots) — emits
     /// `DTM+273+<count>:<unit>`.
     ///
-    /// **This is a duration, not a date.** QUOTES AHB 1.1a §4.3 gives DE 2380
+    /// **This is a duration, not a date.** QUOTES AHB 1.1a Kap. 4.3 gives DE 2380
     /// as „Zeitraum“ with condition `[908]` („Mögliche Werte: 1 bis n“) and
     /// DE 2379 as `802` Monat / `803` Woche / `804` Tag. Rendering a
     /// A `CCYYMMDD` here is an eight-digit number where the AHB expects a
@@ -309,7 +309,7 @@ impl<S, R> QuotesBuilder<S, R> {
 
     /// Add an SG27 `PIA+Z02+<id>:Z09` Artikel-ID.
     ///
-    /// QUOTES AHB 1.1a §4.3 condition `[2042]`: at least one, at most three —
+    /// QUOTES AHB 1.1a Kap. 4.3 condition `[2042]`: at least one, at most three —
     /// and the last two digits of each ID select the matching
     /// [`price`](Self::price) kind (`01` Einrichtung, `02` Betrieb, `03`
     /// Transaktion).
@@ -473,7 +473,7 @@ impl<S, R> QuotesBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
         // `SG14 CTA`/`COM` — the Ansprechpartner of the sender, inside the
@@ -487,7 +487,7 @@ impl<S, R> QuotesBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
         // ── SG11: Liefer-/Bezugsort + Meldepunkt ─────────────────────────────

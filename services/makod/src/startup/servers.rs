@@ -153,6 +153,9 @@ pub(crate) struct HttpServerConfig<'a> {
     pub einrichtung: Arc<mako_service::einrichtung::Einrichtung>,
     /// `[[einrichtung.dienst]]`, asked by `GET /admin/einrichtung/deployment`.
     pub einrichtung_dienste: Vec<mako_service::einrichtung::Dienst>,
+    /// The AS4 certificates' expiry, re-read while running; `None` without
+    /// AS4.
+    pub zertifikate: Option<Arc<crate::zertifikat_monitor::ZertifikatMonitor>>,
 }
 
 /// Build and start the HTTP REST API server.
@@ -173,7 +176,7 @@ pub(crate) async fn serve_http(
     );
 
     let admin_state = Arc::new(malo_admin_api::MaloAdminState {
-        cache: malo_cache::SlateDbMaloCache::new(deps.store.clone()),
+        cache: (*cfg.malo_cache).clone(),
         cedar: Arc::clone(&deps.cedar),
         tenant_id: primary_mp_id.clone(),
     });
@@ -211,7 +214,8 @@ pub(crate) async fn serve_http(
             Arc::clone(&deps.cedar),
             primary_mp_id.clone(),
         )
-        .with_volatile_mode(cfg.volatile_mode),
+        .with_volatile_mode(cfg.volatile_mode)
+        .with_zertifikate(cfg.zertifikate.clone()),
     );
 
     let migration_state = Arc::new(migration_api::MigrationApiState {
@@ -226,6 +230,7 @@ pub(crate) async fn serve_http(
         http: mako_service::http::default_client(),
         cedar: Arc::clone(&deps.cedar),
         tenant: deps.mp_id_registry.primary_mp_id().to_owned(),
+        zertifikate: cfg.zertifikate,
     });
 
     let mcp_state = Arc::new(mcp_server::MakodMcpState {
@@ -340,8 +345,9 @@ pub(crate) async fn serve_as4(
 
     let inboxes: Vec<String> = cfg
         .clients
+        .mp_ids()
         .iter()
-        .map(|(mp_id, _)| as4_ingest::inbox_path(mp_id))
+        .map(|mp_id| as4_ingest::inbox_path(mp_id))
         .collect();
     info!(
         addr    = %cfg.addr,

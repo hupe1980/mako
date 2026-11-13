@@ -260,7 +260,8 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
     // A reversal says so in the fields `invoic-checker` stage 0 reads. A
     // Stornorechnung whose `ist_storno` is unset is not a Stornorechnung to any
     // receiver — and one that sets it without `original_rechnungsnummer` is
-    // disputed on arrival (BK6-24-174 §5; Allgemeine Festlegungen §8).
+    // disputed on arrival (INVOIC AHB 1.0b Kap. 3.1.2, S. 29: `SG1 RFF+OI` is Muss on
+    // a Stornorechnung 31004).
     if invoice.status == crate::types::SettlementStatus::Reversal {
         rechnung.ist_storno = Some(true);
     }

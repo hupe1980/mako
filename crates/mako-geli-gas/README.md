@@ -41,7 +41,7 @@ assert!(ctx.registered_workflows().contains(&mako_geli_gas::lieferbeginn::WORKFL
 | EDIFACT profile | UTILMD Strom S2.1 / S2.2 | UTILMD Gas G1.1 / G1.2 |
 | Grid operator | Netzbetreiber (NB) | Gasnetzbetreiber (GNB) |
 
-Gas APERAKs are Verarbeitbarkeitsfehlermeldungen only (APERAK AHB 1.1 § 2.3):
+Gas APERAKs are Verarbeitbarkeitsfehlermeldungen only (APERAK AHB 1.1 Kap. 2.3):
 next Werktag 12:00 for a Folgeprozess, 3 Werktage for an Initialprozess
 (`fristen::aperak_gas_*_due_at`). The „10 Werktage" is the LFN's Vorlauffrist,
 not the GNB's answer window (4 Werktage). The Gas Sperrprozesse are not part of

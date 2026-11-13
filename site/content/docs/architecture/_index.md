@@ -270,7 +270,7 @@ All **14** daemons share one operational model:
 
 Ports, market roles and per-daemon design live in the
 [Services section](@/docs/services/_index.md). `makod` is the protocol gateway
-the rest sits behind: EDIFACT ↔ BO4E, 76 workflows over 494 Prüfidentifikatoren,
+the rest sits behind: EDIFACT ↔ BO4E, 77 workflows over 498 Prüfidentifikatoren,
 AS4 ingest and the deadline scheduler.
 
 | Daemon | Port | Role in the mesh |
@@ -497,7 +497,7 @@ sequenceDiagram
     marktd->>erp: POST <webhook_url>  de.mako.process.completed  (ERP subscription)
 ```
 
-The APERAK goes out within 45 minutes (APERAK AHB 1.1 §2.4.1).
+The APERAK goes out within 45 minutes (APERAK AHB 1.1 Kap. 2.4.1).
 
 ---
 
@@ -586,7 +586,7 @@ Four crates, cut by legal regime and counterparty pair:
 | [`billing`](https://crates.io/crates/billing) (crates.io) | none — generic | any | `Amount<P>` fixed-point money, sign-symmetric `Rounding`, `Tariff`/`Tiers`, `rate_series`, exact largest-remainder `split` |
 | `energy-billing` | §§40–41b EnWG, StromStG, EnergieStG, BEHG | LF → end customer | retail invoices for 13 product categories |
 | `grid-billing` | StromNEV/GasNEV, KAV, MsbG, §§13a/14a EnWG | NB ↔ LF/MSB/ANB | network settlement (NNE/KA/MMM/MSB/AWH, §13a Redispatch-Vergütung) |
-| `eeg-billing` | EEG (2000–2024), KWKG 2023 | NB → Anlagenbetreiber | statutory subsidy settlement, 10 schemes |
+| `eeg-billing` | EEG (2000–2024), KWKG | NB → Anlagenbetreiber | statutory subsidy settlement, 10 schemes |
 
 The domain crates share no billing logic with each other; everything reusable
 lives in `billing`. **Water** has no market-communication regime, so it is a

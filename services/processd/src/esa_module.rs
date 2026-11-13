@@ -1075,7 +1075,7 @@ enum Vorschlag {
 ///
 /// The Werteanfrage is answered by two commands, and only the refusal can be
 /// dispatched from the queue: the Angebot needs prices and OBIS-Kennzahlen
-/// (QUOTES AHB 1.1a §4.3, Muss) the queue does not hold, so an operator sends
+/// (QUOTES AHB 1.1a Kap. 4.3, Muss) the queue does not hold, so an operator sends
 /// it through the command API, and the decision that leads there records
 /// without a market message.
 async fn enqueue(

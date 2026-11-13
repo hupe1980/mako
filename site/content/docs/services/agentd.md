@@ -1,6 +1,6 @@
 +++
 title = "agentd Operator Guide"
-description = "agentd operator guide: 29 specialist manifests on agentplane — typed results, durable triage, semantic trust labels and journal-backed runs."
+description = "agentd operator guide: 30 specialist manifests on agentplane — typed results, durable triage, semantic trust labels and journal-backed runs."
 weight = 38
 +++
 `agentd` is the **AI automation layer**. It connects language models to
@@ -190,16 +190,16 @@ completion.
 
 `agentd` builds role-scoped: `role-lf`, `role-nb`, `role-msb`, no flags meaning
 all roles. A role build **does not contain** the other arms' specialists, so it
-cannot answer as a role it was not built for. The five cross-cutting specialists
-(`mako-agent`, deadlines, compliance, process, regulatory reporting) carry no
-gate.
+cannot answer as a role it was not built for. The seven cross-cutting
+specialists (`mako-agent`, deadlines, compliance, process, regulatory
+reporting, desk and Einrichtung assistants) carry no gate.
 
 | Build | Specialists |
 |---|---|
-| default (no flags) | all 28 |
-| `role-lf` | 5 cross-cutting + 11 supply-side (billing, invoicing, contracts, tariffs, portal, VPP) |
-| `role-nb` | 5 cross-cutting + 8 grid-side (NNE billing, Sperrung, EEG ×2, grid anomaly, MaBiS, GaBi Gas, einsd batch) |
-| `role-msb` | 5 cross-cutting + 4 metering (MSB history, meter data, Ersatzwerte, SMGW diagnostics) |
+| default (no flags) | all 30 |
+| `role-lf` | 7 cross-cutting + 11 supply-side (billing, invoicing, contracts, tariffs, portal, VPP) |
+| `role-nb` | 7 cross-cutting + 8 grid-side (NNE billing, Sperrung, EEG ×2, grid anomaly, MaBiS, GaBi Gas, einsd batch) |
+| `role-msb` | 7 cross-cutting + 4 metering (MSB history, meter data, Ersatzwerte, SMGW diagnostics) |
 
 `just clippy-roles` lints each profile and runs the guard test asserting the
 exclusions. A worklist row may not cross arms either: desks are classified
@@ -410,7 +410,7 @@ identifier satisfies it, a counterparty-authored string does not.
 
 ### Two shapes, and what each buys
 
-| | `tool-calling` (26) | coded skill (2) |
+| | `tool-calling` (28) | coded skill (2) |
 |---|---|---|
 | Input | whole payload, per-field labels | whole payload, per-field labels |
 | Control flow | model chooses read-only evidence calls | Rust |
@@ -434,7 +434,7 @@ belongs in `skills/` when it is a total function of what the tools return.
 
 ### Every answer is a shape
 
-All 29 specialists declare `output.schema`, and every schema is **closed**
+All 30 specialists declare `output.schema`, and every schema is **closed**
 (`additionalProperties: false`, pinned by a test). Every model-backed schema
 also fits strict constrained decoding — each property listed in `required`, an
 optional one spelled nullable (`type: [string, "null"]`, with `null` in its
@@ -475,7 +475,7 @@ no other specialist declares one.
 
 ### Nobody delegates
 
-All 28 declare `topology: { mode: single, role: specialist }`: one agent, one
+All 30 declare `topology: { mode: single, role: specialist }`: one agent, one
 context, many tools. mako routes in Rust, so no agent hands off to another.
 
 ## Build-time guards
@@ -505,7 +505,7 @@ The `plane::` suite parses every manifest and refuses:
 outside the backticks, no negation, a tool-shaped backticked name — because a
 procedure naming an ungranted tool does not crash: agentplane reports the unknown
 tool to the model, which improvises. Run both ways, it holds the grants and the
-procedure to the **same set** — 161 grants across 29 manifests.
+procedure to the **same set** — 161 grants across 30 manifests.
 
 ---
 
@@ -517,13 +517,13 @@ graph TB
     ROUTER["Router<br/>event type → subscribing specialists<br/>(src/builtin — the only Rust routing)"]
 
     subgraph plane ["agentplane Runtime"]
-        MANIFEST["29 manifests (agents/*.yaml)<br/>procedure · model pair · tool grants<br/>ceilings · result schema"]
+        MANIFEST["30 manifests (agents/*.yaml)<br/>procedure · model pair · tool grants<br/>ceilings · result schema"]
         POLICY["Cedar policy set<br/>policy/agentd.cedar<br/>DenyAll baseline, no AllowAll"]
         JOURNAL[("Journal + case layer<br/>redb or Postgres<br/>tamper-evident, optionally sealed")]
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 11 services, 179 tools"]
+    subgraph tools ["MCP Tools — 11 services, 181 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · processd"]
         T3["einsd · netzbilanzd · ..."]
@@ -595,6 +595,7 @@ procedure by `cargo xtask check-prompt-tools`.
 | `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.mako.aperak.*` |
 | `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.obs.deadline.approaching` |
 | `desk-assistant` | `desk.assistant` | `tool-calling` | 5 on makod, processd, vertragd | none — started from the Desk by a person's question (`POST /api/v1/runs`); every sentence cites its call and is checked (`GET /api/v1/runs/{run}/antwort`); on a held decision it may propose one, which the Desk prefills and never sends |
+| `einrichtung-assistent` | `einrichtung.vorbelegen` | `tool-calling` | none — reads no service | none — started from the Desk's Einrichtung with one sentence (`POST /api/v1/runs`, input `satz`); its answer is the interview's answers in `angaben`, every MP-ID and Bilanzkreis kept only where the sentence contains it, each confirmed by the person |
 | `billing-agent` | `billing` | `tool-calling` | 9 on accountingd, billingd, invoicd, marktd | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
 | `netzbilanz-agent` | `netzbilanz` | `tool-calling` | 7 on marktd, netzbilanzd | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue`, `de.netzbilanz.invoic.disputed` |
 | `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | 6 on accountingd, billingd, invoicd | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
@@ -642,7 +643,7 @@ The key must match the `provider` a manifest's `spec.models` names.
 
 The table key is the name a manifest refers to; `backend` is the wire. So
 `[providers.anthropic]` backed by `chat-completions` against your own vLLM
-changes not one of the 29 manifests — and keeps customer data off a third-party endpoint
+changes not one of the 30 manifests — and keeps customer data off a third-party endpoint
 (Art. 28 / Art. 44 DSGVO). `agentd` refuses to start with no provider, an unknown
 `backend`, a hosted driver with no key, or `chat-completions` without
 `api_base`.

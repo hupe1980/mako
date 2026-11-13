@@ -39,8 +39,32 @@
 //! | 17004 | 19007 | `E_0219`–`E_0222`, `E_0225` (Kap. 8.18–8.20) | `S_0073` / `S_0074` / `S_0075` | `BGM+7`, `IMD++Z13` (Kap. 4.13, S. 56–57) |
 //! | 17113 | 19114 | `E_0226`–`E_0230` (Kap. 8.21–8.23) | `S_0076`–`S_0079` | `BGM+Z34`, `IMD++Z11`, `SG6 CTA`/`COM` (Kap. 4.8, S. 39–41) |
 //!
-//! Each echoes the ORDERS' `BGM` DE 1004 in `SG1 RFF+ON`. The values
-//! themselves — the positive answer, on MSCONS — are not sent from here.
+//! Each echoes the ORDERS' `BGM` DE 1004 in `SG1 RFF+ON`.
+//!
+//! # The values
+//!
+//! [`DatenabrufMsbCommand::SendWerte`] answers an Anfrage von Werten 17102 on
+//! the MSCONS the Anwendungsübersicht der Prüfidentifikatoren 4.0 files as its
+//! Antwort (lfd. Nr. 25670), chosen by what the Anfrage asked for (ORDERS AHB
+//! 1.1b Kap. 4.1.2.1, S. 14):
+//!
+//! | Anfrage | MSCONS | Meldepunkt |
+//! |---|---|---|
+//! | `BGM+7`, `IMD++Z11` Lastgangdaten | 13018 Lastgang Messlokation | the Messlokation |
+//! | `BGM+Z48` Lastgang Marktlokation, Tranche | 13025 | the Marktlokation or Tranche |
+//!
+//! Both carry `SG1 RFF+AGI` with the 17102's `BGM` DE 1004 (MSCONS AHB 3.2
+//! Kap. 7.2.2, S. 69–70, `[529]`). The Zählerstände (`IMD++Z12`) go out on
+//! MSCONS 13017 (lfd. Nr. 25700) through
+//! [`DatenabrufMsbCommand::SendZaehlerstaende`]: the Messlokation with its
+//! Zähler (`SG7 RFF+MG`), or for values from an iMS the Konfigurations-ID
+//! (`SG7 RFF+AGK`) and no Lokation, each Stand with its Gültigkeitsdatum
+//! (MSCONS AHB 3.2 Kap. 6.3.1, S. 23–29). The Energiemenge Einzelwert (`Z35`)
+//! and `BGM+Z28` are not sent from here, and a command for one is refused
+//! naming it. An
+//! Anforderung 17004 or a Reklamation 17113 is answered by the referenced
+//! Use-Case „Aufbereitung und Übermittlung von Werten" (WiM Strom Teil 2 Kap.
+//! 2.6.3 Nr. 3, S. 43; Kap. 2.7.3), not by a message of this process.
 
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
@@ -126,6 +150,41 @@ pub struct WerteAnfrage {
     pub message_ref: MessageRef,
 }
 
+/// MSCONS 13018 „Lastgang Messlokation, Netzkoppelpunkt, Netzlokation".
+pub const LASTGANG_MELO_PID: u32 = 13_018;
+/// MSCONS 13025 „Lastgang Marktlokation, Tranche".
+pub const LASTGANG_MALO_PID: u32 = 13_025;
+/// MSCONS 13017 „Zählerstand (Strom)" — the answer to `IMD++Z12`.
+pub const ZAEHLERSTAND_PID: u32 = 13_017;
+
+/// The MSCONS that carries the values a received Anfrage von Werten asks for
+/// (see the module table), or why none is sent from here.
+///
+/// # Errors
+///
+/// The refusal, naming what the Anfrage asked for, when this process sends no
+/// values for it.
+pub fn werte_pid(pid: u32, anfrage: &WerteAnfrage) -> Result<u32, String> {
+    if pid != ANFRAGE_WERTE_PID {
+        return Err(format!(
+            "ORDERS {pid} is answered by the Use-Case „Aufbereitung und Übermittlung von \
+             Werten\" (WiM Strom Teil 2 Kap. 2.6.3 Nr. 3), not by a message of this process"
+        ));
+    }
+    match (anfrage.bgm.as_str(), anfrage.leistung.as_deref()) {
+        ("7", Some("Z11")) => Ok(LASTGANG_MELO_PID),
+        ("Z48", _) => Ok(LASTGANG_MALO_PID),
+        ("7", Some("Z12")) => Err(format!(
+            "a Zählerstand Anfrage is answered on MSCONS {ZAEHLERSTAND_PID} with its \
+             zaehlerstaende, not with interval werte"
+        )),
+        (bgm, leistung) => Err(format!(
+            "the values of an Anfrage BGM+{bgm} IMD {leistung:?} are not sent from here — only \
+             Lastgangdaten (MSCONS 13018 / 13025)"
+        )),
+    }
+}
+
 /// ORDRSP 19102 „Ablehnung Anfrage Werte".
 pub const ABLEHNUNG_ANFRAGE_PID: u32 = 19_102;
 /// ORDRSP 19007 „Ablehnung Anforderung von Werten".
@@ -205,6 +264,13 @@ pub enum DatenabrufMsbEvent {
         /// The Ablehnung.
         ablehnung: WerteAblehnung,
     },
+    /// The MSB sent the values on their MSCONS.
+    WerteGesendet {
+        /// 13018 or 13025.
+        pid: Pruefidentifikator,
+        /// Reference of the outbound MSCONS.
+        message_ref: MessageRef,
+    },
 }
 
 impl EventPayload for DatenabrufMsbEvent {
@@ -214,6 +280,7 @@ impl EventPayload for DatenabrufMsbEvent {
             Self::AnfrageUngueltig { .. } => "DatenabrufMsbAnfrageUngueltig",
             Self::FristAbgelaufen { .. } => "DatenabrufMsbFristAbgelaufen",
             Self::AblehnungGesendet { .. } => "DatenabrufMsbAblehnungGesendet",
+            Self::WerteGesendet { .. } => "DatenabrufMsbWerteGesendet",
         }
     }
 
@@ -228,6 +295,11 @@ impl EventPayload for DatenabrufMsbEvent {
                 richtung: Richtung::Ausgang,
                 pid: Some(ablehnung.pid.as_u32()),
                 message_ref: Some(ablehnung.message_ref.as_str().to_owned()),
+            }),
+            Self::WerteGesendet { pid, message_ref } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
             }),
             Self::AnfrageUngueltig { .. } | Self::FristAbgelaufen { .. } => None,
         }
@@ -248,6 +320,7 @@ impl EventPayload for DatenabrufMsbEvent {
 ///
 /// ```text
 /// New → Offen → Abgelehnt         (ORDRSP 19102 / 19007 / 19114 sent)
+///            ↘ Beantwortet       (MSCONS 13018 / 13025 sent)
 ///            ↘ FristAbgelaufen   (the window passed; still owed)
 ///     ↘ Ungueltig                 (AHB check failed)
 /// ```
@@ -276,6 +349,15 @@ pub enum DatenabrufMsbState {
         /// The Ablehnung.
         ablehnung: WerteAblehnung,
     },
+    /// The MSB sent the values.
+    Beantwortet {
+        /// The Anfrage.
+        anfrage: WerteAnfrage,
+        /// The MSCONS Prüfidentifikator.
+        pid: Pruefidentifikator,
+        /// Reference of the outbound MSCONS.
+        message_ref: MessageRef,
+    },
     /// The window lapsed while the Anfrage was open. No Festlegung gives the
     /// lapse an outcome: it is a Frist breach for the operator to act on, and
     /// the answer is still owed.
@@ -299,13 +381,17 @@ impl DatenabrufMsbState {
             Self::Ungueltig { .. } => "Ungueltig",
             Self::FristAbgelaufen { .. } => "FristAbgelaufen",
             Self::Abgelehnt { .. } => "Abgelehnt",
+            Self::Beantwortet { .. } => "Beantwortet",
         }
     }
 
     /// Whether the process has ended.
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::Ungueltig { .. } | Self::Abgelehnt { .. })
+        matches!(
+            self,
+            Self::Ungueltig { .. } | Self::Abgelehnt { .. } | Self::Beantwortet { .. }
+        )
     }
 }
 
@@ -334,6 +420,26 @@ pub enum DatenabrufMsbCommand {
         /// Reference of the outbound ORDRSP.
         message_ref: MessageRef,
     },
+    /// The MSB sends the values an Anfrage von Werten asked for, on the MSCONS
+    /// [`werte_pid`] names.
+    SendWerte {
+        /// The interval values, each with its OBIS-Kennzahl.
+        werte: Vec<mako_engine::payload::MsconsRead>,
+        /// Reference of the outbound MSCONS.
+        message_ref: MessageRef,
+    },
+    /// The MSB sends the Zählerstände a Zählerstand Anfrage (`IMD++Z12`)
+    /// asked for, on MSCONS 13017.
+    SendZaehlerstaende {
+        /// `SG7 RFF+MG` — the Zähler, for a Messlokation with kME or mME.
+        geraetenummer: Option<String>,
+        /// `SG7 RFF+AGK` — the Konfigurations-ID, for values from an iMS.
+        konfigurations_id: Option<String>,
+        /// The Stände, one per OBIS-Kennzahl.
+        staende: Vec<mako_engine::payload::MsconsZaehlerstand>,
+        /// Reference of the outbound MSCONS.
+        message_ref: MessageRef,
+    },
     /// A registered deadline fired.
     TimeoutExpired {
         /// The deadline.
@@ -344,6 +450,142 @@ pub enum DatenabrufMsbCommand {
 }
 
 impl CommandPayload for DatenabrufMsbCommand {}
+
+/// The MSCONS carrying the values the Anfrage `pid` asked for.
+fn werte(
+    pid: Pruefidentifikator,
+    anfrage: &WerteAnfrage,
+    werte: Vec<mako_engine::payload::MsconsRead>,
+    message_ref: MessageRef,
+) -> Result<WorkflowOutput<DatenabrufMsbEvent>, WorkflowError> {
+    let mscons = werte_pid(pid.as_u32(), anfrage).map_err(WorkflowError::validation)?;
+    if werte.is_empty() {
+        return Err(WorkflowError::validation(
+            "an answer of values carries at least one value (SG10 QTY is Muss)",
+        ));
+    }
+    if let Some(w) = werte
+        .iter()
+        .find(|w| w.obis_code.as_deref().is_none_or(str::is_empty))
+    {
+        return Err(WorkflowError::validation(format!(
+            "the value from {} names no OBIS-Kennzahl (SG9 PIA+5 is Muss, MSCONS AHB 3.2 \
+             Kap. 7.2.2)",
+            w.dtm_from
+        )));
+    }
+    let payload = mako_engine::payload::MsconsPayload {
+        pid: Some(mscons),
+        sender_mp_id: Some(anfrage.empfaenger.as_str().to_owned()),
+        receiver_mp_id: Some(anfrage.anfragender.as_str().to_owned()),
+        message_ref: Some(message_ref.as_str().to_owned()),
+        // `SG1 RFF+AGI` — the 17102's `BGM` DE 1004 (`[529]`).
+        korrelation_ref: Some(anfrage.dokumentennummer.clone()),
+        malo_id: Some(anfrage.lokation_id.clone()),
+        reads: werte,
+        ..Default::default()
+    };
+    let pid = Pruefidentifikator::new(mscons)
+        .map_err(|e| WorkflowError::validation(format!("answer PID {mscons}: {e}")))?;
+    Ok(WorkflowOutput::with_outbox(
+        vec![DatenabrufMsbEvent::WerteGesendet { pid, message_ref }],
+        vec![
+            mako_engine::outbox::PendingOutbox::typed(anfrage.anfragender.as_str(), &payload)
+                .caused_by(0),
+        ],
+    ))
+}
+
+/// The MSCONS 13017 carrying the Zählerstände a Zählerstand Anfrage asked
+/// for (MSCONS AHB 3.2 Kap. 6.3.1, S. 23–29).
+fn zaehlerstaende(
+    pid: Pruefidentifikator,
+    anfrage: &WerteAnfrage,
+    geraetenummer: Option<String>,
+    konfigurations_id: Option<String>,
+    staende: Vec<mako_engine::payload::MsconsZaehlerstand>,
+    message_ref: MessageRef,
+) -> Result<WorkflowOutput<DatenabrufMsbEvent>, WorkflowError> {
+    if pid.as_u32() != ANFRAGE_WERTE_PID
+        || (anfrage.bgm.as_str(), anfrage.leistung.as_deref()) != ("7", Some("Z12"))
+    {
+        return Err(WorkflowError::validation(format!(
+            "only an Anfrage von Werten {ANFRAGE_WERTE_PID} with IMD++Z12 is answered with \
+             Zählerstände; this one is ORDERS {pid} BGM+{} IMD {:?}",
+            anfrage.bgm, anfrage.leistung
+        )));
+    }
+    let geraetenummer = geraetenummer.filter(|g| !g.is_empty());
+    let konfigurations_id = konfigurations_id.filter(|k| !k.is_empty());
+    // `SG6 LOC+172` DE 3225 and `SG7 RFF+MG` exactly when there is no `SG7
+    // RFF+AGK` (`[131]`, `[132]`): a Messlokation's Zähler or an iMS
+    // configuration, never both and never neither.
+    if geraetenummer.is_some() == konfigurations_id.is_some() {
+        return Err(WorkflowError::validation(
+            "a 13017 names either the Zähler (geraetenummer, SG7 RFF+MG) or the \
+             Konfigurations-ID of an iMS (konfigurations_id, SG7 RFF+AGK) — exactly one",
+        ));
+    }
+    if staende.is_empty() {
+        return Err(WorkflowError::validation(
+            "an answer of Zählerstände carries at least one Stand (SG10 QTY is Muss)",
+        ));
+    }
+    for st in &staende {
+        if st.obis_code.is_empty() || st.gueltig.is_empty() {
+            return Err(WorkflowError::validation(
+                "every Zählerstand names its OBIS-Kennzahl (SG9 PIA+5) and its \
+                 Gültigkeitsdatum (SG10 DTM+7), both Muss",
+            ));
+        }
+        if st.ersatzwert
+            && (st.ersatzwert_verfahren.as_deref().is_none_or(str::is_empty)
+                || st.ersatzwert_grund.as_deref().is_none_or(str::is_empty))
+        {
+            return Err(WorkflowError::validation(format!(
+                "the Ersatzwert {} names its Verfahren (STS+Z32) and Grund (STS+Z40), Muss \
+                 beside a QTY+67 ([92])",
+                st.obis_code
+            )));
+        }
+        // `SG10 DTM+9` Ablesedatum only on a wahrer Wert of a Messlokation
+        // (`[93]` ∧ `[131]`).
+        if st.ablesedatum.is_some() && (st.ersatzwert || konfigurations_id.is_some()) {
+            return Err(WorkflowError::validation(format!(
+                "the Stand {} carries an Ablesedatum, which DTM+9 admits only on a wahrer \
+                 Wert without a Konfigurations-ID ([93], [131])",
+                st.obis_code
+            )));
+        }
+    }
+    let payload = mako_engine::payload::MsconsPayload {
+        pid: Some(ZAEHLERSTAND_PID),
+        sender_mp_id: Some(anfrage.empfaenger.as_str().to_owned()),
+        receiver_mp_id: Some(anfrage.anfragender.as_str().to_owned()),
+        message_ref: Some(message_ref.as_str().to_owned()),
+        // `SG1 RFF+AGI` — the 17102's `BGM` DE 1004 (`[1]`, `[529]`).
+        korrelation_ref: Some(anfrage.dokumentennummer.clone()),
+        malo_id: konfigurations_id
+            .is_none()
+            .then(|| anfrage.lokation_id.clone()),
+        geraetenummer,
+        konfigurations_id,
+        zaehlerstaende: staende,
+        ..Default::default()
+    };
+    let answer = Pruefidentifikator::new(ZAEHLERSTAND_PID)
+        .map_err(|e| WorkflowError::validation(format!("answer PID: {e}")))?;
+    Ok(WorkflowOutput::with_outbox(
+        vec![DatenabrufMsbEvent::WerteGesendet {
+            pid: answer,
+            message_ref,
+        }],
+        vec![
+            mako_engine::outbox::PendingOutbox::typed(anfrage.anfragender.as_str(), &payload)
+                .caused_by(0),
+        ],
+    ))
+}
 
 /// The ORDRSP refusing the Anfrage `pid` (see the module table).
 fn ablehnung(
@@ -386,27 +628,28 @@ fn ablehnung(
             "SG6 CTA/COM is Muss on 19114 (ORDRSP AHB 1.1b Kap. 4.8): name the Ansprechpartner",
         ));
     }
-    let mut payload = serde_json::json!({
-        "pid": ordrsp,
-        "sender": anfrage.empfaenger.as_str(),
-        "receiver": anfrage.anfragender.as_str(),
-        "message_ref": message_ref.as_str(),
-        "document_code": bgm,
-        "document_id": message_ref.as_str(),
-        "order_reference": anfrage.dokumentennummer,
-        "antwort_code": antwortcode,
-        "antwort_codeliste": wire,
-    });
-    if let Some(l) = leistung {
-        payload["leistung"] = serde_json::json!(l);
-    }
-    if let Some(a) = ansprechpartner {
-        payload["ansprechpartner"] = a;
-    }
+    let ansprechpartner = ansprechpartner
+        .map(serde_json::from_value::<mako_engine::payload::Ansprechpartner>)
+        .transpose()
+        .map_err(|e| WorkflowError::validation(format!("ansprechpartner: {e}")))?;
+    let payload = mako_engine::payload::OrdrspPayload {
+        pid: Some(ordrsp),
+        sender: Some(anfrage.empfaenger.as_str().to_owned()),
+        receiver: Some(anfrage.anfragender.as_str().to_owned()),
+        message_ref: Some(message_ref.as_str().to_owned()),
+        document_code: Some(bgm),
+        document_id: Some(message_ref.as_str().to_owned()),
+        order_reference: Some(anfrage.dokumentennummer.clone()),
+        antwort_code: Some(antwortcode.clone()),
+        antwort_codeliste: Some(wire.clone()),
+        leistung,
+        ansprechpartner,
+        ..Default::default()
+    };
     let pid = Pruefidentifikator::new(ordrsp)
         .map_err(|e| WorkflowError::validation(format!("answer PID {ordrsp}: {e}")))?;
     let outbox = vec![
-        mako_engine::outbox::PendingOutbox::new("ORDRSP", anfrage.anfragender.as_str(), payload)
+        mako_engine::outbox::PendingOutbox::typed(anfrage.anfragender.as_str(), &payload)
             .caused_by(0),
     ];
     Ok(WorkflowOutput::with_outbox(
@@ -473,6 +716,17 @@ impl Workflow for GpkeDatenabrufMsbWorkflow {
                 }
                 other => other,
             },
+            DatenabrufMsbEvent::WerteGesendet { pid, message_ref } => match state {
+                DatenabrufMsbState::Offen { anfrage, .. }
+                | DatenabrufMsbState::FristAbgelaufen { anfrage, .. } => {
+                    DatenabrufMsbState::Beantwortet {
+                        anfrage,
+                        pid: *pid,
+                        message_ref: message_ref.clone(),
+                    }
+                }
+                other => other,
+            },
             DatenabrufMsbEvent::FristAbgelaufen { label, .. } => match state {
                 DatenabrufMsbState::Offen { pid, anfrage } => DatenabrufMsbState::FristAbgelaufen {
                     label: label.to_string(),
@@ -528,6 +782,37 @@ impl Workflow for GpkeDatenabrufMsbWorkflow {
                     &codeliste,
                     antwortcode,
                     ansprechpartner,
+                    message_ref,
+                )
+            }
+            DatenabrufMsbCommand::SendWerte {
+                werte: w,
+                message_ref,
+            } => {
+                let (DatenabrufMsbState::Offen { pid, anfrage }
+                | DatenabrufMsbState::FristAbgelaufen { pid, anfrage, .. }) = state
+                else {
+                    return Err(WorkflowError::invalid_state("Offen", state.label()));
+                };
+                werte(*pid, anfrage, w, message_ref)
+            }
+            DatenabrufMsbCommand::SendZaehlerstaende {
+                geraetenummer,
+                konfigurations_id,
+                staende,
+                message_ref,
+            } => {
+                let (DatenabrufMsbState::Offen { pid, anfrage }
+                | DatenabrufMsbState::FristAbgelaufen { pid, anfrage, .. }) = state
+                else {
+                    return Err(WorkflowError::invalid_state("Offen", state.label()));
+                };
+                zaehlerstaende(
+                    *pid,
+                    anfrage,
+                    geraetenummer,
+                    konfigurations_id,
+                    staende,
                     message_ref,
                 )
             }
@@ -737,6 +1022,137 @@ mod tests {
             .expect("refused");
         assert_eq!(out.outbox[0].payload["pid"], 19_114);
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "S_0076");
+    }
+
+    /// The values of an Anfrage von Werten go out on the MSCONS its Anfrage
+    /// asked for, naming the 17102 in `SG1 RFF+AGI`, and the process ends;
+    /// the values of a Zählerstand Anfrage or of a 17004 are refused here.
+    #[test]
+    fn an_anfrage_von_werten_is_answered_with_its_values() {
+        let wert = |obis: Option<&str>| mako_engine::payload::MsconsRead {
+            quantity_kwh: "1.250".to_owned(),
+            dtm_from: "202611012300+00".to_owned(),
+            dtm_to: "202611012315+00".to_owned(),
+            obis_code: obis.map(str::to_owned),
+            ersatzwert: false,
+        };
+        let senden = |werte| DatenabrufMsbCommand::SendWerte {
+            werte,
+            message_ref: MessageRef::new("MSC-1"),
+        };
+        for (bgm, leistung, mscons) in [
+            ("7", Some("Z11"), LASTGANG_MELO_PID),
+            ("Z48", None, LASTGANG_MALO_PID),
+        ] {
+            let state = offen(ANFRAGE_WERTE_PID, bgm, leistung);
+            let out =
+                GpkeDatenabrufMsbWorkflow::handle(&state, senden(vec![wert(Some("1-1:1.29.0"))]))
+                    .expect("answered");
+            let entry = &out.outbox[0];
+            let p = <mako_engine::payload::MsconsPayload as mako_engine::payload::OutboundPayload>::from_payload(&entry.payload)
+                .expect("reads back typed");
+            assert_eq!(p.pid, Some(mscons));
+            assert_eq!(p.korrelation_ref.as_deref(), Some("DOK-1"));
+            let ende = out
+                .events
+                .iter()
+                .fold(state, GpkeDatenabrufMsbWorkflow::apply);
+            assert!(
+                matches!(ende, DatenabrufMsbState::Beantwortet { .. }),
+                "{ende:?}"
+            );
+            assert!(ende.is_terminal());
+        }
+        assert!(
+            GpkeDatenabrufMsbWorkflow::handle(
+                &offen(ANFRAGE_WERTE_PID, "7", Some("Z11")),
+                senden(vec![wert(None)])
+            )
+            .is_err(),
+            "a value without its OBIS-Kennzahl"
+        );
+        for state in [
+            offen(ANFRAGE_WERTE_PID, "7", Some("Z12")),
+            offen(17_004, "7", Some("Z13")),
+        ] {
+            assert!(
+                GpkeDatenabrufMsbWorkflow::handle(&state, senden(vec![wert(Some("1-1:1.29.0"))]))
+                    .is_err()
+            );
+        }
+    }
+
+    /// A Zählerstand Anfrage (`IMD++Z12`) is answered on MSCONS 13017 with
+    /// the Zähler — or the Konfigurations-ID of an iMS — and every Stand's
+    /// Gültigkeitsdatum; a Zählerstand on a Lastgang Anfrage, a Stand with no
+    /// Zähler and no Konfiguration, both at once, and an Ablesedatum the
+    /// column does not admit are refused (MSCONS AHB 3.2 Kap. 6.3.1, S.
+    /// 23–29).
+    #[test]
+    fn a_zaehlerstand_anfrage_is_answered_on_13017() {
+        let stand = |ersatz: bool, ablesung: bool| mako_engine::payload::MsconsZaehlerstand {
+            obis_code: "1-1:1.8.0".to_owned(),
+            quantity: "12345.000".to_owned(),
+            gueltig: "2026-11-01".to_owned(),
+            ablesedatum: ablesung.then(|| "2026-11-01".to_owned()),
+            ersatzwert: ersatz,
+            ersatzwert_verfahren: ersatz.then(|| "Z88".to_owned()),
+            ersatzwert_grund: ersatz.then(|| "Z74".to_owned()),
+        };
+        let senden = |geraet: Option<&str>, konf: Option<&str>, staende| {
+            DatenabrufMsbCommand::SendZaehlerstaende {
+                geraetenummer: geraet.map(str::to_owned),
+                konfigurations_id: konf.map(str::to_owned),
+                staende,
+                message_ref: MessageRef::new("MSC-2"),
+            }
+        };
+        let state = offen(ANFRAGE_WERTE_PID, "7", Some("Z12"));
+        let out = GpkeDatenabrufMsbWorkflow::handle(
+            &state,
+            senden(Some("ZHR-1"), None, vec![stand(false, true)]),
+        )
+        .expect("answered");
+        let p = <mako_engine::payload::MsconsPayload as mako_engine::payload::OutboundPayload>::from_payload(&out.outbox[0].payload)
+            .expect("reads back typed");
+        assert_eq!(p.pid, Some(ZAEHLERSTAND_PID));
+        assert_eq!(p.geraetenummer.as_deref(), Some("ZHR-1"));
+        assert_eq!(p.korrelation_ref.as_deref(), Some("DOK-1"));
+        let ende = out
+            .events
+            .iter()
+            .fold(state.clone(), GpkeDatenabrufMsbWorkflow::apply);
+        assert!(ende.is_terminal(), "{ende:?}");
+
+        for (why, cmd) in [
+            ("no Zähler", senden(None, None, vec![stand(false, false)])),
+            (
+                "both",
+                senden(Some("Z"), Some("K"), vec![stand(false, false)]),
+            ),
+            ("no Stand", senden(Some("Z"), None, vec![])),
+            (
+                "Ablesedatum on an Ersatzwert",
+                senden(Some("Z"), None, vec![stand(true, true)]),
+            ),
+            (
+                "Ablesedatum beside a Konfigurations-ID",
+                senden(None, Some("K"), vec![stand(false, true)]),
+            ),
+        ] {
+            assert!(
+                GpkeDatenabrufMsbWorkflow::handle(&state, cmd).is_err(),
+                "{why}"
+            );
+        }
+        assert!(
+            GpkeDatenabrufMsbWorkflow::handle(
+                &offen(ANFRAGE_WERTE_PID, "7", Some("Z11")),
+                senden(Some("Z"), None, vec![stand(false, true)])
+            )
+            .is_err(),
+            "a Lastgang Anfrage is not answered with Zählerstände"
+        );
     }
 
     /// A tree the PID does not admit is refused.

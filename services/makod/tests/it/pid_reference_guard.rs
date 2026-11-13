@@ -260,8 +260,8 @@ fn the_reference_names_the_workflow_that_actually_routes_each_pid() {
 /// it is deleted from here. The guard below refuses a *new* bare `—` row, so
 /// the list can only shrink.
 const UNCLAIMED_WITHOUT_A_REASON: &[u32] = &[
-    55_008, 55_009, 55_074, 55_075, 55_076, 55_608, 55_609, 44_101, 44_102, 44_103, 44_104, 44_105,
-    44_183, 17_301, 21_040, 13_028, 29_002,
+    55_074, 55_075, 55_076, 55_608, 55_609, 44_101, 44_102, 44_103, 44_104, 44_105, 44_183, 17_301,
+    21_040, 13_028, 29_002,
 ];
 
 /// A row that names no workflow must say why — or be a known one that does not.

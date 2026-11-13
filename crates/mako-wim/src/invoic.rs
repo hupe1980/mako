@@ -51,7 +51,7 @@ use mako_invoic::{InvoicFamily, InvoicWorkflow};
 /// |---|---|---|---|---|
 /// | 31009 | MSB-Rechnung | NB · LF · ESA | Strom | GPKE Teil 3, WiM Strom Teil 1/2, AWH Änd. Technik |
 /// | 31003 | WiM-Rechnung (Abrechnung von Dienstleistungen im Messwesen) | NB · MSBN | **beide** | WiM Strom Teil 1 Kap. 3.7, AWH WiM Gas 2.0 Kap. 4.7 |
-/// | 31004 | Stornorechnung | wie die Ursprungsrechnung | **neutral** | INVOIC AHB §3.1.2 |
+/// | 31004 | Stornorechnung | wie die Ursprungsrechnung | **neutral** | INVOIC AHB Kap. 3.1.2 |
 ///
 /// **31003 is not the Gas twin of 31009.** They are different Abrechnungen:
 /// 31009 bills the *Messstellenbetrieb* to the NB, LF or ESA and exists only in

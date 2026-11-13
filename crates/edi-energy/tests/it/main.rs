@@ -5,6 +5,7 @@
 mod answer_pid_names;
 mod builder_writer_guard;
 mod charset;
+mod condition_anchoring;
 mod conformance;
 mod demo_fixtures;
 mod element_positions;
@@ -27,6 +28,7 @@ mod party_agency_code;
 ))]
 mod pid_detection;
 mod registry;
+mod role_conditions;
 mod roundtrip;
 mod segment_layout_guard;
 mod semantic;

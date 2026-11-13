@@ -117,7 +117,7 @@ date is covered. A finding names the place: `AHB-55001-SG6-00057-MISSING`,
 `MIG-00050-LOC-3225-FORMAT`.
 
 `parse` rejects a message whose `NAD+MS`/`NAD+MR` disagree with the `UNB`
-sender/receiver (Allgemeine Festlegungen V6.1d § 2.13). The module-level
+sender/receiver (Allgemeine Festlegungen V6.1d Kap. 2.13). The module-level
 `parse` uses a global registry; `Platform::with_all_profiles()` gives an isolated
 one for tests and multi-tenant gateways.
 

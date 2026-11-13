@@ -44,7 +44,7 @@
 //!   contains no Sperrprozess.**
 //! - **Frist**: the GNB answers the Auftrag on the Sparte-neutral row in
 //!   [`mako_fristen::antwort`] — 1 Werktag, sourced from BK6-24-174 GPKE Teil 2
-//!   § 3.5, the only text on hand that quantifies 17115 / 17117.
+//!   Kap. 3.5, the only text on hand that quantifies 17115 / 17117.
 //! - Saturdays, Sundays and gesetzliche Feiertage are not Werktage
 //!   (GeLi Gas 3.0 Kap. 2.6)
 
@@ -508,19 +508,20 @@ impl Workflow for GeliGasSperrungLfWorkflow {
                         "expected a Gas-Sperrung PID (17115 or 17117), got {pid}",
                     )));
                 }
-                let outbox = PendingOutbox::new(
-                    "ORDERS",
+                // See the Strom counterpart: 17115/17117 name the same
+                // Marktrolle in both Sparten, so the sender MP-ID can only be
+                // resolved with the Sparte stated here. `BGM` DE 1004 is the
+                // message reference, which the Stornierung's `RFF+ON` names.
+                let outbox = PendingOutbox::typed(
                     gnb_gln.as_str(),
-                    serde_json::json!({
-                        "type":        "GasSperrungAuftrag",
-                        // See the Strom counterpart: 17115/17117 name the same
-                        // Marktrolle in both Sparten, so the sender MP-ID can
-                        // only be resolved with the Sparte stated here.
-                        "sparte":      "Gas",
-                        "pid":         pid.as_u32(),
-                        "location_id": location_id.as_str(),
-                        "message_ref": message_ref.as_str(),
-                    }),
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(pid.as_u32()),
+                        sparte: Some(mako_engine::types::Sparte::Gas),
+                        location: Some(location_id.as_str().to_owned()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        document_id: Some(message_ref.as_str().to_owned()),
+                        ..Default::default()
+                    },
                 );
                 let event = GasSperrungLfEvent::AuftragInitiiert {
                     location_id,
@@ -571,15 +572,16 @@ impl Workflow for GeliGasSperrungLfWorkflow {
             GasSperrungLfCommand::SendStornierung { message_ref } => match state {
                 GasSperrungLfState::AuftragGesendet(data) => {
                     let pid = 39000_u32;
-                    let outbox = PendingOutbox::new(
-                        "ORDCHG",
+                    // `SG1 RFF+ON` — the ORDERS being cancelled, by its `BGM`
+                    // DE 1004. ORDCHG carries no `LOC`.
+                    let outbox = PendingOutbox::typed(
                         data.gnb_gln.as_str(),
-                        serde_json::json!({
-                            "type":        "GasSperrungStornierung",
-                            "pid":         pid,
-                            "location_id": data.location_id.as_str(),
-                            "message_ref": message_ref.as_str(),
-                        }),
+                        &mako_engine::payload::OrdchgPayload {
+                            pid: Some(pid),
+                            message_ref: Some(message_ref.as_str().to_owned()),
+                            order_reference: Some(data.message_ref.as_str().to_owned()),
+                            ..Default::default()
+                        },
                     );
                     let event = GasSperrungLfEvent::StornierungGesendet { pid, message_ref };
                     Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))
@@ -736,6 +738,42 @@ mod tests {
             Some(out.deadlines[0].due_at),
             mako_fristen::antwort::antwort_deadline(17_115, sent)
         );
+    }
+
+    /// The Gas Sperrauftrag and its Stornierung read back as their typed
+    /// payloads: the ORDERS names the Marktlokation in `location` (`SG2
+    /// LOC+172`) and the Sparte Gas, the ORDCHG the ORDERS it cancels by its
+    /// `BGM` DE 1004 (`SG1 RFF+ON`).
+    #[test]
+    fn the_sperrauftrag_and_its_stornierung_read_back_typed() {
+        use mako_engine::payload::{OrdchgPayload, OrdersPayload, OutboundPayload as _};
+        let out = GeliGasSperrungLfWorkflow::handle(
+            &GasSperrungLfState::default(),
+            GasSperrungLfCommand::InitiateSperrung {
+                pid: pid_sperrauftrag(),
+                gnb_gln: gnb(),
+                location_id: malo(),
+                message_ref: mref("MSG-T"),
+                gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
+            },
+        )
+        .unwrap();
+        let orders = OrdersPayload::from_payload(&out.outbox[0].payload).expect("typed ORDERS");
+        assert_eq!(orders.location.as_deref(), Some(malo().as_str()));
+        assert_eq!(orders.sparte, Some(mako_engine::types::Sparte::Gas));
+        let state = out.events.iter().fold(
+            GasSperrungLfState::default(),
+            GeliGasSperrungLfWorkflow::apply,
+        );
+        let out = GeliGasSperrungLfWorkflow::handle(
+            &state,
+            GasSperrungLfCommand::SendStornierung {
+                message_ref: mref("CHG-T"),
+            },
+        )
+        .unwrap();
+        let ordchg = OrdchgPayload::from_payload(&out.outbox[0].payload).expect("typed ORDCHG");
+        assert_eq!(ordchg.order_reference.as_deref(), Some("MSG-T"));
     }
 
     #[test]

@@ -33,8 +33,8 @@ pub struct Party {
     pub role: String,
     /// C082 DE 3039 party identifier (DVGW code, GLN or EIC).
     pub id: String,
-    /// C082 DE 3055 code-list responsible agency — `332` (DVGW), `9` (GS1),
-    /// `305` (ETSO/EIC).
+    /// C082 DE 3055 code-list responsible agency — `332` (DVGW) or `9` (GS1),
+    /// the two codes the DVGW formats list on a NAD (NOMINT 4.6 S. 15–17).
     pub agency: Option<String>,
 }
 

@@ -264,6 +264,10 @@ impl Daemon for Accountingd {
                 get(handlers::get_account).put(handlers::put_account),
             )
             .route(
+                "/api/v1/accounts/{malo_id}/verbraucher",
+                put(handlers::put_account_verbraucher),
+            )
+            .route(
                 "/api/v1/accounts/{malo_id}/balance",
                 get(handlers::get_balance),
             )

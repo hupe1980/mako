@@ -357,7 +357,7 @@ A BO4E object, or the notice's own fields where none applies (the APERAK, CONTRL
 | `de.mako.process.completed` | A process ended on an answer — Bestätigung **or** Ablehnung. Read the verdict, never the type: `data.accepted`, `data.outcome` (`"accepted"` / `"rejected"`) and the response PID in `makopid` (`check-process-verdict` refuses a consumer that reads none). `data.antwortcode` / `data.codeliste` carry the answer's code | `Marktlokation` + `Vertrag` |
 | `de.mako.process.failed` | A Marktnachricht of the process was given up — its delivery budget ran out or the failure is permanent — so the counterparty never received it | `{reason, undelivered_message_id, undelivered_message_type, recipient, pid?}`; `reason` is also `makofailreason` |
 | `de.mako.malo.identified` | MaLo-ID lookup resolved | `Marktlokation` |
-| `de.mako.abmeldeanfrage.beantwortet` | The LFA answered the NB's Anfrage zur Beendigung der Zuordnung (55010/55011/55012), or its 09:00 window lapsed — a Zustimmung per GPKE Teil 2 § 2.1.2 Nr. 4. `processd` resumes the Anmeldung decision on it | `{pid, malo_id, grid_operator, lfa_mp_id, anmeldung_process_id, zustimmung, fristablauf}` plus `antwortcode`, `grund` and `zuordnungsende` when the LFA named them |
+| `de.mako.abmeldeanfrage.beantwortet` | The LFA answered the NB's Anfrage zur Beendigung der Zuordnung (55010/55011/55012), or its 09:00 window lapsed — a Zustimmung per GPKE Teil 2 Kap. 2.1.2 Nr. 4. `processd` resumes the Anmeldung decision on it | `{pid, malo_id, grid_operator, lfa_mp_id, anmeldung_process_id, zustimmung, fristablauf}` plus `antwortcode`, `grund` and `zuordnungsende` when the LFA named them |
 | `de.mako.dead-letter.recorded` | A message went to the dead-letter queue — an inbound one the door could not route or process, or an outbound one whose delivery budget ran out. Written in the same transaction as the record, so each record yields one; a notice that itself exhausts its budget is recorded without another | `{dead_letter_id, reason, detail, rejected_at}` plus `pid`, `message_ref`, `message_type`, `sender`, `receiver` where the message named them |
 | `de.vpp.dispatch.confirmed` | MSB positively confirmed a WiM Steuerungsauftrag (PID 55168) of type `Konfiguration` — triggers VPP auto-billing in `billingd` | `{tx_id, location_id, location_type, max_power_kw, execution_time_from, execution_time_until, command_type, sender_mp_id, produkt_code}` |
 | `de.gabi.alocat.missing` | The § 47 Ziffer 1 KoV XV final-allocation window (M+14 Werktage) closed with no final ALOCAT on file; open a Clearingfall with the FNB/MGV | `{gas_day, deadline_label, sender_eic, receiver_eic, pruefidentifikator}` |
@@ -893,10 +893,10 @@ invoicd :8280
                                AS4 → NB
 ```
 
-**Settlement is „ganz oder gar nicht".** REMADV AHB 1.0a § 3 admits no
-Teilzahlung: only **33001** confirms; 33002 refuses with one code (§ 3.1.1),
+**Settlement is „ganz oder gar nicht".** REMADV AHB 1.0a Kap. 3 admits no
+Teilzahlung: only **33001** confirms; 33002 refuses with one code (Kap. 3.1.1),
 33003 („Abweisung Kopf und Summe") and 33004 („Abweisung Position") carry one
-code per disputed position (§ 3.1.2). `RemadvAntwort::remadv_pid` picks from the
+code per disputed position (Kap. 3.1.2). `RemadvAntwort::remadv_pid` picks from the
 shape of the decision tree's answer.
 
 COMDIS **29001** is the invoicer's refusal of a payer's REMADV (COMDIS AHB 1.0)
@@ -909,9 +909,9 @@ single PID, each appending to one `Vec<Finding>`:
 
 | # | Stage | What it verifies |
 |---|---|---|
-| 1 | Storno reference | `ist_storno = true` must name the original in `original_rechnungsnummer`. Source: BK6-24-174 §5; Allgemeine Festlegungen §8 |
+| 1 | Storno reference | `ist_storno = true` must name the original in `original_rechnungsnummer`. Source: INVOIC AHB 1.0b Kap. 3.1.2 (S. 29) — `SG1 RFF+OI` is Muss on the Stornorechnung 31004 |
 | 2 | Period validity | `rechnungsperiode.startdatum` ≤ `enddatum`; line-item periods via `lieferungszeitraum` |
-| 3 | Zahlungsziel | `faelligkeitsdatum` is not before `rechnungsdatum` (dispute) and does not exceed `max_zahlungsziel_days` — 30 days by default (warn). Source: §7 Allgemeine Festlegungen V6.1d |
+| 3 | Zahlungsziel | `faelligkeitsdatum` is not before `rechnungsdatum` (dispute); on PIDs 31001–31003 and 31009 with a fälliger Betrag ≥ 0 it lies at least 10 Werktage after the receipt (dispute, `E_0406` `A10`; GPKE Teil 2 Kap. 3.3.2 Nr. 1, S. 90; GeLi Gas 3.0 Kap. 4.5); the INVOIC AHB 1.0b bounds `[24]`/`[25]` as in [invoicd](@/docs/services/invoicd.md); `max_zahlungsziel_days` warns only when set |
 | 3a | WiM 31003 send window | A Dienstleistungsrechnung dated more than 20 Werktage after the period it bills. Source: WiM Teil 1 Kap. 3.7.2 Nr. 1. Only PID 31003, and a `Warn` that does not escalate on the invoice's value |
 | 4 | Currency agreement | Runs **before** the arithmetic, so a CHF `Betrag` is not compared as EUR |
 | 5 | Position arithmetic | `position.positions_menge × einzelpreis` ≈ `gesamtpreis` (within `arithmetic_tolerance`) |

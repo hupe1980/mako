@@ -501,7 +501,7 @@ async fn table_builder(
     // coded column — enforced by a DB `CHECK` like sparte/unit/quality, not just
     // by the application that writes it. `sender_mp_id` is a Marktpartner-ID and
     // is declared `ValueCheck::Bdew`: thirteen digits, checked in the write path
-    // and by the hot table's own `CHECK`. Deliberately no check digit — §2.3 of
+    // and by the hot table's own `CHECK`. Deliberately no check digit — Kap. 2.3 of
     // the Bildungsvorschrift exempts GS1-issued GLNs, which are legitimate
     // Marktpartner-IDs under a different procedure. `allocation_version` is a
     // free MaBiS label (INITIAL/CORRECTION/ESA-…) with no format to enforce, so
@@ -564,7 +564,7 @@ async fn table_builder(
                 true,
             ))
             // `SG1 RFF+AGI` on the delivering MSCONS 13027 — the Belegnummer of
-            // the ORDERS that ordered these values (MSCONS AHB 3.2 §11.2 hint
+            // the ORDERS that ordered these values (MSCONS AHB 3.2 Kap. 11.2 hint
             // [574]), and the first hop of the PID overview's `EZ-03` routing.
             //
             // It is the **only** thing on a value delivery that names the
@@ -2384,7 +2384,7 @@ impl Typ2Repository for MeterStoreTyp2Repository {
     ///
     /// **Multi-register, and it has to be.** The QUOTES 15003 Angebot names one
     /// to 23 `PIA+5 … :SRW` OBIS-Kennzahlen per subscription (QUOTES AHB 1.1a
-    /// §4.3, condition `[2073]`), and one Meldepunkt may carry several
+    /// Kap. 4.3, condition `[2073]`), and one Meldepunkt may carry several
     /// subscriptions — a subscription is the (Meldepunkt, Messprodukt) pair.
     ///
     /// meterstore declines a range spanning two channels, correctly: a

@@ -237,7 +237,7 @@ const AJT_ELEMENTS: &[ElementRef] = &[
 /// entry is needed. BDEW repurposes both: DE 4465 carries the **Code des
 /// Prüfschritts** of an Entscheidungsbaum and DE 1082 (nominally a Positions-
 /// nummer) the **EBD number** that code was published in — see e.g. ORDRSP
-/// AHB 1.1b §4.15 and REMADV AHB 1.1 §4.2.
+/// AHB 1.1b Kap. 4.15 and REMADV AHB 1.1 Kap. 4.2.
 pub const AJT: SegmentDefinition = SegmentDefinition::new(
     "AJT",
     "Einzelheiten zu einer Anpassung/Änderung",

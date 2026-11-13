@@ -34,13 +34,13 @@
 //! - **Frist**: 17115 / 17117 / 39000 and 17116 are Sparte-neutral ORDERS
 //!   Prüfidentifikatoren, so [`mako_fristen::antwort`] resolves them from one
 //!   row each — 1 Werktag for the Auftrag, 3 for the Anfrage Sperrung — sourced
-//!   from BK6-24-174 GPKE Teil 2 § 3.5, the only text on hand that quantifies
+//!   from BK6-24-174 GPKE Teil 2 Kap. 3.5, the only text on hand that quantifies
 //!   them. Should the Gas AWH publish different numbers, the row is split by
 //!   Sparte rather than this module inventing one.
 //!
 //! - **APERAK**: Gas knows only the Verarbeitbarkeitsfehlermeldung — nächster
 //!   Werktag 12:00 Uhr for a Folgeprozess, 3 Werktage for an Initialprozess
-//!   (APERAK AHB 1.1 § 2.3.1). A separate clock from the business answer.
+//!   (APERAK AHB 1.1 Kap. 2.3.1). A separate clock from the business answer.
 //! - Saturdays, Sundays and gesetzliche Feiertage are not Werktage
 //!   (GeLi Gas 3.0 Kap. 2.6); arithmetic runs in gesetzlicher deutscher Zeit.
 
@@ -545,8 +545,8 @@ impl Workflow for GeliGasSperrungNbWorkflow {
                     events.push(GasSperrungNbEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
-                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 Kap. 2.1.1.
+                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.1 Kap. 2.3.1).
                     // Note: the business answer window is per-PID, NOT the APERAK sending deadline.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(

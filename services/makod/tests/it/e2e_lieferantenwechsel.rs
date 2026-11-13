@@ -11,7 +11,7 @@
 //!
 //! 1. **LFN → NB**: Anfrage Lieferbeginn (PID 55001) — the NB must approve
 //!    or reject the supply start by **11:00 Uhr des 1. Werktags nach dem ÜT**
-//!    (BK6-24-174 GPKE Teil 2 § 2.1.2 Nr. 5/6).
+//!    (BK6-24-174 GPKE Teil 2 Kap. 2.1.2 Nr. 5/6).
 //! 2. **LFN → LFA**: Kündigung Lieferbeginn (PID 55016) — the old supplier
 //!    **must always accept** the cancellation per LFW24; there is no rejection
 //!    path for PID 55016 (LFA responds with 55017 Bestätigung).
@@ -32,7 +32,7 @@
 //!                                            receive_utilmd(wire)
 //!                                              → asserts UNH ref ≠ "1"
 //!                                            send_antwort(accepted=true)
-//!                                              → asserts UTILMD 55002 + MSCONS 13015
+//!                                              → asserts UTILMD 55002
 //!                        ◄── UTILMD 55002 ───
 //!
 //!   [lfa_leg] submit_kuendigung(55016)
@@ -72,7 +72,7 @@ use mako_engine::{
 };
 use mako_gpke::{
     GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow, LfAnmeldungCommand, LfAnmeldungState,
-    SupplierChangeCommand, SupplierChangeState, post_acceptance,
+    SupplierChangeCommand, SupplierChangeState,
 };
 use makod::{
     adapters::{gpke_lf_anmeldung_registry, gpke_registry},
@@ -406,18 +406,12 @@ impl MockNb {
     /// ERP action: send Bestätigung (`accepted = true`) or Ablehnung
     /// (`accepted = false`).
     ///
-    /// - `accepted = true`  → asserts UTILMD 55002 + MSCONS 13015 in outbox.
+    /// - `accepted = true`  → asserts UTILMD 55002  in outbox.
     /// - `accepted = false` → asserts UTILMD 55003 only (no MSCONS).
     ///
     /// Returns the rendered UTILMD wire bytes for transport to the LFN.
     async fn send_antwort(&self, accepted: bool, reason: Option<&str>) -> Vec<u8> {
-        let malo = mako_engine::types::MaLo::from(MALO_ID);
-        let new_supplier = mako_engine::types::MarktpartnerCode::from(LFN_ID);
-        let obligations = if accepted {
-            post_acceptance::lieferbeginn_obligations(55001, &malo, &new_supplier, None)
-        } else {
-            vec![]
-        };
+        let obligations = Vec::new();
         let (_, outbox) = self
             .process
             .run(
@@ -463,34 +457,13 @@ impl MockNb {
             Some(if accepted { "accepted" } else { "rejected" })
         );
 
-        if accepted {
-            let mscons = outbox
-                .iter()
-                .find(|e| e.message_type.as_ref() == "MSCONS")
-                .expect("accepted SendAntwort (55001) must include MSCONS 13015");
-            assert_eq!(
-                mscons.payload["pid"].as_u64().unwrap(),
-                13015_u64,
-                "MSCONS must be PID 13015 (Bewegungsdaten)"
-            );
-            assert_eq!(
-                mscons.payload["malo"].as_str().unwrap(),
-                MALO_ID,
-                "MSCONS must reference the same MaLo"
-            );
-            assert_eq!(
-                mscons.recipient.as_ref(),
-                LFN_ID,
-                "MSCONS 13015 must be addressed to the LFN"
-            );
-        } else {
-            assert_eq!(
-                outbox.len(),
-                2,
-                "rejection must enqueue only UTILMD {expected_pid} and its ProcessCompleted \
-                 (no MSCONS)"
-            );
-        }
+        // Both answers queue the UTILMD and its ProcessCompleted, nothing
+        // else: the MSCONS 13015 answers an Anforderung through its own door.
+        assert_eq!(
+            outbox.len(),
+            2,
+            "UTILMD {expected_pid} and its ProcessCompleted"
+        );
 
         render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB"))
             .expect("NB: render_to_wire_bytes")
@@ -655,7 +628,7 @@ impl MockLfa {
 /// Lieferantenwechsel Strom — happy path (55001→55002, 55016→55017).
 ///
 /// Both GPKE legs complete successfully:
-/// - NB accepts the Anmeldung             → UTILMD 55002 + MSCONS 13015
+/// - NB accepts the Anmeldung             → UTILMD 55002
 /// - LFA accepts the Kündigung (mandatory) → UTILMD 55017
 ///
 /// Final state:
@@ -681,7 +654,7 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
         "lfa_leg must be Pending after InitiateAnmeldung (55016)"
     );
 
-    // ── NB: receive UTILMD 55001, validate, send 55002 + MSCONS 13015 ─────────
+    // ── NB: receive UTILMD 55001, validate, send 55002  ─────────
     nb.receive_utilmd(&wire_55001).await;
     assert!(
         matches!(nb.state().await, SupplierChangeState::ValidationPassed(_)),

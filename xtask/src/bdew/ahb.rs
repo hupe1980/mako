@@ -603,7 +603,13 @@ pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
             last = Last::Row;
             continue;
         }
-        if let Some(c) = de_row.captures(line) {
+        // The tag of a data-element row sits in the EDIFACT-Struktur column,
+        // left of the Beschreibung. A description that wraps onto a line
+        // opening with three capitals and four digits (`EEG 2014 §38`) is not
+        // one.
+        if let Some(c) = de_row.captures(line)
+            && c.get(2).map_or(0, |m| line[..m.start()].chars().count()) + 4 < tb.desc_x
+        {
             let Some(nr) = cur_nr.clone() else { continue };
             let de = c[3].to_owned();
             let occ = *de_occ
@@ -2270,6 +2276,51 @@ mod tests {
         let mut one = vec!["X [914] ∧".to_owned()];
         append_status(&mut one, "[937]");
         assert_eq!(one, ["X [914] ∧ [937]"]);
+    }
+
+    /// A description that wraps onto a line opening with three capitals and
+    /// four digits — `EEG 2014 §38`, the text of `ZG6` (UTILMD AHB Strom 2.2
+    /// S. 195) — is the description, not a data-element row of a segment
+    /// `EEG`: the codes after it stay with DE 9013. Read as a DE row it moved
+    /// `ZG9`/`ZH0`/`ZH1` onto a codeless DE `2014` for 55038 and 55611.
+    #[test]
+    fn a_wrapped_description_is_not_a_data_element_row() {
+        const STS: &str = "\
+8.11 Zuordnungs-Meldungen
+ EDIFACT Struktur                 Beschreibung                      Beendigung Aufhebung  Beendigung Bedingung
+                                  Kommunikation von                   NB an LF   NB an LF   NB an MSB
+                                  Prüfidentifikator                    55037      55038      55611
+ SG4
+ SG4 STS               00033                                             Muss       Muss       Muss
+ SG4      STS 9013                ZG6     Beendigung der                X
+                                          Zuordnung aufgrund
+                                          EEG    2014      §38
+                                  ZH1     Aufhebung wegen                          X          X
+                                          Stilllegung
+";
+        let m = mig_with("00033", "STS", &[("9013", &["ZG6", "ZH1"])]);
+        let lines: Vec<Line> = STS.lines().map(Line::from).collect();
+        let doc = parse(&lines, &m).unwrap();
+        for af in &doc.anwendungsfaelle {
+            assert!(
+                af.elements.iter().all(|e| e.de == "9013"),
+                "{:?}: {:#?}",
+                af.pid,
+                af.elements
+            );
+        }
+        let codes = |pid: u32| -> Vec<Option<String>> {
+            doc.anwendungsfaelle
+                .iter()
+                .find(|a| a.pid == Some(pid))
+                .unwrap()
+                .elements
+                .iter()
+                .flat_map(|e| e.operands.iter().map(|o| o.code.clone()))
+                .collect()
+        };
+        assert_eq!(codes(55038), [Some("ZH1".to_owned())]);
+        assert_eq!(codes(55611), [Some("ZH1".to_owned())]);
     }
 
     #[test]

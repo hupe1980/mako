@@ -297,10 +297,10 @@ Each item is something a service holds open for this Rolle:
 
 | Rolle | What Heute lists |
 |---|---|
-| Netz | Freigaben, overdue processes, Korrekturbedarf after a negative Prüfmitteilung |
-| Lieferant | Anmeldungen waiting on the Netzbetreiber, Freigaben, overdue processes, disputed invoices, invoices held for review, bookings the ledger refused, Anmeldungen not yet sent |
+| Netz | Freigaben, overdue processes, received invoices held at an open Prüfschritt, Korrekturbedarf after a negative Prüfmitteilung |
+| Lieferant | Anmeldungen waiting on the Netzbetreiber, Freigaben, overdue processes, disputed invoices, received invoices held at an open Prüfschritt, invoices held for review, bookings the ledger refused, Anmeldungen not yet sent |
 | Messstelle | Freigaben, overdue processes, overdue reading orders |
-| Energieservice | Freigaben, overdue processes |
+| Energieservice | Freigaben, overdue processes, received invoices held at an open Prüfschritt |
 
 The list is read in bands — **Überfällig**, **Heute**, **Nächste 7 Tage**,
 **Später**, **Ohne Frist** — by the Frist each service returned; the Desk
@@ -320,6 +320,17 @@ five seconds behind „Rückgängig"; while the refusal (REMADV) has
 not gone out, **Ablehnung senden** sends it, held the same five seconds. The assistant
 proposes one of the two with the finding it rests on, „nicht belegt" when the
 findings it read do not name it.
+
+A received invoice whose Entscheidungsbaum stopped at a Prüfschritt no record
+answers is **gehalten**: no answer went out, and its row, due by the
+Zahlungsziel, names the Rechnungssteller and the first open step. The decision
+lists every open step; for Prüfschritt 310, 320 and 330 per Position and for
+80 it offers the two answers in words, with a required Begründung —
+**Feststellen** — and where a Leistung of the invoice's order is open,
+<kbd>R</kbd> chooses **Leistungsnachweis** for the order, its Artikel-ID and
+period. A step that wants a record rather than a judgement is named, never
+asked. Each is held for undo; the Rechnungseingang then checks the invoice
+again, and every invoice held on that order with it.
 
 An invoice the Abrechnung's risk check put aside is decided in place as well:
 a **held** one is released — which issues it — and one **under review** went
@@ -417,9 +428,33 @@ the service's.
 [![Einrichtung: the deployment checklist with a blocked identity, an unreachable service and an unreadable answer](einrichtung-light.png)](einrichtung-light.png)
 [![Einrichtung: the deployment checklist with a blocked identity, an unreachable service and an unreadable answer](einrichtung-dark.png)](einrichtung-dark.png)
 
+## Propose the configuration
+
+Below the checklist, **Vorschlag** asks what the configuration needs and
+nothing else: the Rollen the deployment plays and the MP-ID of each, the
+primary MP-ID where there are several, a Lieferant's Bilanzkreise per Sparte,
+the affiliated Lieferanten, the AS4 key material as file paths, and where the
+other services run. It starts from what the deployment already runs with.
+Beside it the Marktkommunikation proposes one file per service — `makod.toml`,
+`processd.toml` — every line marked **neu**, **unverändert** or **entfällt**
+against what is loaded, under the rule or document it satisfies; a fact nobody
+gave is a **Lücke** (`# FEHLT:`) whose **Zur Frage** moves to the question that
+fills it, and an answer that breaks a rule — a Gas Rolle under a `99…` code,
+key material instead of a path — is refused with its source. **Kopieren** and
+**Herunterladen** hand over the file; nothing is written to a server.
+
+**Aus einem Satz** reads one sentence — „Wir sind Lieferant Strom und Gas,
+Strom unter 9900357000004" — into proposed answers, each offered with
+**Übernehmen** or **Verwerfen**; an MP-ID the sentence does not contain is never
+offered. Without the assistant the interview works the same. A finding in the
+checklist whose fix is an answer offers **Im Vorschlag beheben**.
+
+[![Vorschlag: a sentence pre-filling the interview and the proposed makod.toml line by line](einrichtung-vorschlag-light.png)](einrichtung-vorschlag-light.png)
+[![Vorschlag: a sentence pre-filling the interview and the proposed makod.toml line by line](einrichtung-vorschlag-dark.png)](einrichtung-vorschlag-dark.png)
+
 ## Rehearse a message before go-live
 
-Below the checklist, the Probelauf: choose one of the messages a Lieferant
+Below the proposal, the Probelauf: choose one of the messages a Lieferant
 sends first — Anmeldung, Abmeldung or Kündigung, Strom (55001, 55004, 55016)
 or Gas (44001, 44004, 44016) — check the facts, which start as the profiles'
 sample values, and start it with <kbd>⌘↵</kbd>. The Marktkommunikation builds

@@ -13,9 +13,18 @@ import { neuBuchen, verwerfen } from "../data/buchung";
 import { type Entscheidung, entscheiden } from "../data/freigabe";
 import type { GeparkteBuchung } from "../data/gen/accountingd";
 import type { Pruefposten } from "../data/gen/billingd";
-import type { Disput } from "../data/gen/invoicd";
+import type { Disput, GehalteneRechnung } from "../data/gen/invoicd";
 import type { CodeAuswahl, Fakt, Freigabe } from "../data/gen/processd";
-import { ablehnungSenden, beilegen, freigeben, geprueft } from "../data/rechnung";
+import {
+  ablehnungSenden,
+  beilegen,
+  type Feststellungen,
+  feststellen,
+  freigeben,
+  geprueft,
+  leistungsnachweisErfassen,
+  offeneSchritte,
+} from "../data/rechnung";
 import type { Handlung } from "../data/verweigert";
 import type { BusinessDate, Instant } from "../format/brands";
 import { faktKoerper } from "../format/fakt";
@@ -31,7 +40,8 @@ export type Entscheidbar =
   | { art: "freigabe"; f: Freigabe }
   | { art: "disput"; d: Disput }
   | { art: "pruefposten"; r: Pruefposten }
-  | { art: "buchung"; b: GeparkteBuchung };
+  | { art: "buchung"; b: GeparkteBuchung }
+  | { art: "gehalten"; g: GehalteneRechnung };
 
 /** What each kind is called where it is listed, in the Sprache in force when read. */
 export const ART: Record<Entscheidbar["art"], string> = {
@@ -46,6 +56,9 @@ export const ART: Record<Entscheidbar["art"], string> = {
   },
   get buchung() {
     return katalog().aktionen.art.buchung;
+  },
+  get gehalten() {
+    return katalog().aktionen.art.gehalten;
   },
 };
 
@@ -295,6 +308,130 @@ function buchungAktionen(b: GeparkteBuchung): Aktion[] {
   ];
 }
 
+/** The Prüfschritte a statement answers, by the body map that carries each. */
+const FESTSTELLBAR: Record<number, keyof Feststellungen> = {
+  310: "leistung_erbracht",
+  320: "preis_wie_angebot",
+  330: "steuersatz_korrekt",
+  80: "preisblatt_version_gueltig",
+};
+
+/** A stated answer's mark in the form: yes and no, each named by its Prüfschritt's words. */
+const JA = "+";
+const NEIN = "-";
+
+/** A fact's key: the Prüfschritt and, on the Positionsebene, the Positionsnummer. */
+const faktFeld = (pruefschritt: number, position: number | null) =>
+  position === null ? `${pruefschritt}` : `${pruefschritt}:${position}`;
+
+/**
+ * A held invoice is decided by stating what its walk could not read — per open
+ * Prüfschritt 310/320/330 (by Positionsnummer) and 80, with a reason — or,
+ * where a Leistung of its order is open, by recording the Leistungsnachweis
+ * that answers 310 for every invoice held on that order. invoicd walks again
+ * either way; the Desk states nothing it did not ask.
+ */
+function gehaltenAktionen(g: GehalteneRechnung): Aktion[] {
+  const k = katalog().aktionen.gehalten;
+  const FESTSTELLEN: Handlung = { dienst: "invoicd", aktion: "feststellen" };
+  const nie = () => null;
+  const offen = offeneSchritte(g.offen).filter(
+    (s) => FESTSTELLBAR[s.pruefschritt] && (s.pruefschritt === 80 || s.position !== null),
+  );
+  const fakten: Fakt[] = offen.map((s) => ({
+    feld: faktFeld(s.pruefschritt, s.position),
+    bezeichnung: k.schritt(
+      `${s.pruefschritt}`,
+      s.position === null ? null : `${s.position}`,
+      s.detail,
+    ),
+    werte: [
+      { wert: JA, bedeutung: k.ja[`${s.pruefschritt}`] ?? "" },
+      { wert: NEIN, bedeutung: k.nein[`${s.pruefschritt}`] ?? "" },
+    ],
+  }));
+  const alle: Aktion[] = [];
+  if (fakten.length > 0)
+    alle.push({
+      id: "feststellen",
+      verb: k.feststellen,
+      taste: FREIGEBEN,
+      rang: "primaer",
+      destruktiv: false,
+      handlung: FESTSTELLEN,
+      codes: null,
+      feld: { label: k.begruendung, pflicht: true, datum: false, vorgabe: "" },
+      fakten,
+      was: k.feststellenWas,
+      gehalten: k.festgestellt,
+      bereit: (w) =>
+        w.text.trim().length > 0 &&
+        offen.some((s) => w.fakten?.[faktFeld(s.pruefschritt, s.position)]),
+      senden: (w, keepalive) => {
+        const f: Feststellungen = {};
+        for (const s of offen) {
+          const wert = w.fakten?.[faktFeld(s.pruefschritt, s.position)];
+          if (wert !== JA && wert !== NEIN) continue;
+          const map = FESTSTELLBAR[s.pruefschritt];
+          if (map === "preisblatt_version_gueltig") f.preisblatt_version_gueltig = wert === JA;
+          else if (map) f[map] = { ...f[map], [`${s.position}`]: wert === JA };
+        }
+        return feststellen(g.id, f, w.text, keepalive);
+      },
+      vorbelegen: nie,
+      stimmt: () => false,
+    });
+  const bestellung = g.bestellung_ref;
+  if (bestellung && offeneSchritte(g.offen).some((s) => s.pruefschritt === 310))
+    alle.push({
+      id: "leistungsnachweis",
+      verb: k.nachweis,
+      taste: ABLEHNEN,
+      rang: alle.length ? "sekundaer" : "primaer",
+      destruktiv: false,
+      handlung: FESTSTELLEN,
+      codes: null,
+      feld: { label: k.nachweisText, pflicht: true, datum: false, vorgabe: "" },
+      fakten: [
+        { feld: "artikel_id", bezeichnung: k.artikel, werte: [] },
+        { feld: "von", bezeichnung: k.von, werte: [] },
+        { feld: "bis", bezeichnung: k.bis, werte: [] },
+        {
+          feld: "erbracht",
+          bezeichnung: k.erbracht,
+          werte: [
+            { wert: JA, bedeutung: k.erbrachtJa },
+            { wert: NEIN, bedeutung: k.erbrachtNein },
+          ],
+        },
+      ],
+      was: k.nachweisWas(bestellung),
+      gehalten: k.nachgewiesen,
+      bereit: (w) =>
+        w.text.trim().length > 0 &&
+        Boolean(w.fakten?.artikel_id?.trim()) &&
+        ISO_DATUM.test(w.fakten?.von ?? "") &&
+        ISO_DATUM.test(w.fakten?.bis ?? "") &&
+        (w.fakten?.erbracht === JA || w.fakten?.erbracht === NEIN),
+      senden: (w, keepalive) =>
+        leistungsnachweisErfassen(
+          {
+            rechnungssteller_mp_id: g.sender_mp_id,
+            bestellung_ref: bestellung,
+            artikel_id: (w.fakten?.artikel_id ?? "").trim(),
+            von: w.fakten?.von ?? "",
+            bis: w.fakten?.bis ?? "",
+            erbracht: w.fakten?.erbracht === JA,
+            nachweis: w.text.trim(),
+          },
+          keepalive,
+        ),
+      vorbelegen: nie,
+      stimmt: () => false,
+    });
+  return alle;
+}
+
 /** Every action an entry offers, primary first. */
 export function aktionen(e: Entscheidbar): Aktion[] {
   switch (e.art) {
@@ -306,6 +443,8 @@ export function aktionen(e: Entscheidbar): Aktion[] {
       return pruefpostenAktionen(e.r);
     case "buchung":
       return buchungAktionen(e.b);
+    case "gehalten":
+      return gehaltenAktionen(e.g);
   }
 }
 
@@ -398,6 +537,8 @@ export function schluessel(e: Entscheidbar): string {
       return `pruefposten/${e.r.id}`;
     case "buchung":
       return `buchung/${e.b.key}`;
+    case "gehalten":
+      return `gehalten/${e.g.id}`;
   }
 }
 
@@ -412,6 +553,13 @@ export function kennungen(e: Entscheidbar): string[] {
       return [e.r.id, e.r.malo_id, e.r.rechnungsnummer];
     case "buchung":
       return [e.b.key, e.b.malo_id, ...(e.b.beleg ? [e.b.beleg] : [])];
+    case "gehalten":
+      return [
+        e.g.id,
+        e.g.process_id,
+        ...(e.g.rechnungsnummer ? [e.g.rechnungsnummer] : []),
+        ...(e.g.bestellung_ref ? [e.g.bestellung_ref] : []),
+      ];
   }
 }
 
@@ -421,6 +569,7 @@ export function entscheidbar(e: Eintrag): Entscheidbar | null {
   if (e.disput) return { art: "disput", d: e.disput };
   if (e.pruefposten) return { art: "pruefposten", r: e.pruefposten };
   if (e.geparkt) return { art: "buchung", b: e.geparkt };
+  if (e.gehalten) return { art: "gehalten", g: e.gehalten };
   return null;
 }
 
@@ -434,6 +583,7 @@ export function vorschlagIds(e: Entscheidbar): Partial<Record<keyof Wartend, str
     case "buchung":
       return { buchung: [e.b.key] };
     case "pruefposten":
+    case "gehalten":
       return {};
   }
 }
@@ -448,6 +598,7 @@ export function wartendAuf(e: Entscheidbar, w: Wartend): Answer | undefined {
     case "buchung":
       return w.buchung.get(e.b.key);
     case "pruefposten":
+    case "gehalten":
       return undefined;
   }
 }

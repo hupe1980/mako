@@ -1,6 +1,6 @@
 //! The NB Anmeldung decisions waiting on an LFA's answer to a 55010.
 //!
-//! GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 **Prüfschritt 4** makes the NB's
+//! GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 **Prüfschritt 4** makes the NB's
 //! answer two-phase whenever the Marktlokation is already assigned at the
 //! Zuordnungsbeginn: ask the incumbent LFA to release it (Nr. 3), then decide
 //! (Nr. 5/6) once the LFA answers or its 09:00 window lapses. `E_0623`

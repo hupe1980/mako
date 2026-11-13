@@ -13,7 +13,7 @@
 //!   → marktd: PUT /api/v1/preisblaetter/{nb_mp_id}  (persisted to PostgreSQL)
 //!   → invoicd: GET /api/v1/preisblaetter/{nb_mp_id}?date={billing_date}
 //!       → MdmdPreisblattClient (1h LRU cache, circuit breaker)
-//!   → InvoicCheckEngine::check(&rechnung, &preisblatt_store, &config)
+//!   → InvoicCheckEngine::check(pid, sender, &rechnung, &preisblatt_store, eingang, &config)
 //!       → PreisblattStore::get(nb_mp_id, billing_date) → Some(PreisblattNetznutzung)
 //!       → compare INVOIC einzelpreis against preisblatt.preispositionen[*].preisstaffeln[*].preis ± tolerance
 //! ```

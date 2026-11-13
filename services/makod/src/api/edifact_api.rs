@@ -118,7 +118,7 @@ pub struct EdifactApiState {
     /// process after classification.  When `None`, ingest stops at classification
     /// (Phase 1 only — useful in read-only / test contexts).
     pub dispatcher: Option<Arc<crate::ingest_dispatcher::EdifactIngestDispatcher>>,
-    /// Gas CONTRL Empfangsbestätigung emitter (CONTRL AHB 1.0 §1.2).
+    /// Gas CONTRL Empfangsbestätigung emitter (CONTRL AHB 1.0 Kap. 1.2).
     ///
     /// When `Some`, a CONTRL (UCI=7) is enqueued for every inbound Gas interchange
     /// that contains at least one non-CONTRL, non-APERAK message. Required for
@@ -143,7 +143,7 @@ impl EdifactApiState {
 /// when the interchange recipient's Sparte is known.
 ///
 /// The recipient MP-ID (UNB DE0010) is one of our own parties, and every
-/// `[[party]]` covers exactly one Sparte (BDEW §2.13) — the authoritative Sparte
+/// `[[party]]` covers exactly one Sparte (Allgemeine Festlegungen Kap. 2.13) — the authoritative Sparte
 /// signal (identical to [`ContrlAckService`](crate::contrl_ack::ContrlAckService)).
 /// PIDs split by commodity via [`PidRouter::register_with_sparte`] (INSRPT 23001,
 /// and the WiM Gas Gerätewechsel/Geräteübernahme processes that reuse the Strom
@@ -266,7 +266,7 @@ pub enum MessageStatus {
     NoPid,
     /// Parsed successfully, but `NAD+MS` or `NAD+MR` is absent.
     ///
-    /// Allgemeine Festlegungen V6.1d §2.13 identifies the *fachliche* sender
+    /// Allgemeine Festlegungen V6.1d Kap. 2.13 identifies the *fachliche* sender
     /// and receiver on message level in those two segments and applies that
     /// "für alle EDI@Energy EDIFACT Nachrichten und -dateien einheitlich".
     /// Both are load-bearing: the sender is the address of the answer and the
@@ -577,8 +577,8 @@ pub(crate) fn record_ahb_conformance(msg: &AnyMessage) -> bool {
 /// „Geschäftsvorfall wird vom Empfänger zurückgewiesen" — „Entsprechend seiner
 /// Marktrolle verarbeitet der Empfänger Geschäftsvorfälle mit dem angegebenen
 /// Prüfidentifikator nicht" (APERAK AHB 1.1 Kap. 4.3, S. 42), in both Sparten,
-/// since a Verarbeitbarkeitsfehler is the one result Gas reports too (§ 2.3,
-/// S. 21). A missing PID is a syntax fault the CONTRL answers (§ 2.1.2,
+/// since a Verarbeitbarkeitsfehler is the one result Gas reports too (Kap. 2.3,
+/// S. 21). A missing PID is a syntax fault the CONTRL answers (Kap. 2.1.2,
 /// footnote 3, S. 10–11), a missing party leaves nobody to answer, and an
 /// APERAK or a CONTRL is never answered with an APERAK (§ 2, S. 9).
 pub(crate) fn unroutable_rejection(
@@ -634,7 +634,7 @@ fn z31_answer(
 /// no process owns, like an interchange-level CONTRL.
 ///
 /// `None` for an APERAK or a CONTRL, which no APERAK answers (APERAK AHB 1.1
-/// § 2, S. 9), and for a message naming no `NAD+MS` / `NAD+MR` to answer.
+/// Kap. 2, S. 9), and for a message naming no `NAD+MS` / `NAD+MR` to answer.
 pub(crate) fn fehlermeldung_ohne_prozess(
     msg: &AnyMessage,
     code: &str,
@@ -969,7 +969,7 @@ async fn ingest_report(
                     .or_else(|| m.skipped.map(|r| format!("skipped: {r}"))),
             })
             .collect();
-        // The CONTRL Empfangsbestätigung is owed here too. CONTRL AHB 1.0 §2.3.1
+        // The CONTRL Empfangsbestätigung is owed here too. CONTRL AHB 1.0 Kap. 2.3.1
         // keys the obligation on Sparte, and the DVGW formats *are* the gas
         // transport layer, so it applies unconditionally — and this handler
         // returns before the BDEW path's own emission block below.
@@ -1009,7 +1009,7 @@ async fn ingest_report(
 
     let mut messages = Vec::new();
     // Collect successfully-parsed messages for CONTRL Empfangsbestätigung emission
-    // after the loop (CONTRL AHB 1.0 §1.2: one CONTRL per interchange, not per message).
+    // after the loop (CONTRL AHB 1.0 Kap. 1.2: one CONTRL per interchange, not per message).
     let mut parsed_msgs: Vec<AnyMessage> = Vec::new();
 
     // ── Parse interchange (single pass) ──────────────────────────────────────
@@ -1019,7 +1019,7 @@ async fn ingest_report(
     // contained messages.  A single parse is used for three reasons:
     //
     // 1. **Correctness**: `InterchangeHeader::test_indicator` must be checked
-    //    *before* dispatching any messages (§AF §3).  Doing this in a separate
+    //    *before* dispatching any messages (§AF Kap. 3).  Doing this in a separate
     //    pre-scan parse would double-charge CPU for every production request.
     //
     // 2. **Richer context**: each `MessageEnvelope` carries the interchange
@@ -1067,7 +1067,7 @@ async fn ingest_report(
         }
     };
 
-    // ── Test-indicator guard (§AF §3 / Allgemeine Festlegungen V6.1d §3) ──────
+    // ── Test-indicator guard (§AF Kap. 3 / Allgemeine Festlegungen V6.1d Kap. 3) ──────
     // DE0035 = "1" means test interchange — must never reach production workflows.
     if pi.header.test_indicator {
         let ctx = AuditContext::from_interchange(
@@ -1087,7 +1087,7 @@ async fn ingest_report(
             receiver = %pi.header.receiver_id,
             control_ref = %pi.header.control_ref,
             "EDIFACT REST ingest: test interchange (DE0035=1) rejected — \
-             must not process test messages on production endpoint (§AF §3)",
+             must not process test messages on production endpoint (§AF Kap. 3)",
         );
         // `UNB` DE 0035 is a value the production endpoint does not support —
         // `UCI` DE 0085 = 25 „Test-Kennzeichen nicht unterstützt".
@@ -1329,7 +1329,7 @@ async fn ingest_report(
         parsed_msgs.push(msg);
     }
 
-    // Emit CONTRL Empfangsbestätigung for Gas interchanges (CONTRL AHB 1.0 §1.2).
+    // Emit CONTRL Empfangsbestätigung for Gas interchanges (CONTRL AHB 1.0 Kap. 1.2).
     // One CONTRL per interchange (not per message) — emitted once after all messages
     // from the UNB…UNZ have been collected.
     if let Some(contrl_svc) = state.contrl_ack.as_deref() {
@@ -1369,7 +1369,7 @@ async fn ingest_report(
 
 /// Whether a DVGW interchange carried a GABi-Gas ALOCAT.
 ///
-/// CONTRL AHB 1.0 §2.3.1 shortens that interchange's CONTRL window to 45
+/// CONTRL AHB 1.0 Kap. 2.3.1 shortens that interchange's CONTRL window to 45
 /// minutes; every other DVGW format keeps the 6 hours.
 #[cfg(test)]
 mod classify_tests {

@@ -24,13 +24,13 @@
 //! - **31007 / 31008** (Aggreg. MMM-Rechnung Gas, NB → MGV) → `mako_gabi_gas`;
 //!   MGV is a Gas-only role.
 //! - **31004** (Stornorechnung) is a Sparte-neutral universal Storno
-//!   (INVOIC AHB § 3.1.2), checked Sparte-neutrally by `invoicd`.
+//!   (INVOIC AHB Kap. 3.1.2), checked Sparte-neutrally by `invoicd`.
 //!
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE** — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
 //! - **INVOIC AHB 2.8e / 1.0** — the invoice message format
-//! - **REMADV AHB 1.0a § 3**, **COMDIS AHB 1.0** — the payment answer and its
+//! - **REMADV AHB 1.0a Kap. 3**, **COMDIS AHB 1.0** — the payment answer and its
 //!   refusal; see [`mako_invoic`] for how the two are read.
 
 use mako_engine::types::Pruefidentifikator;

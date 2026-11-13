@@ -140,6 +140,7 @@ impl MessageCore {
             semantic_pack,
             ReleaseRegistry::global(),
             self.reference_date,
+            &crate::profile::Parteirollen::unbekannt(),
         )
     }
 
@@ -155,6 +156,7 @@ impl MessageCore {
             semantic_pack,
             registry,
             self.reference_date,
+            &crate::profile::Parteirollen::unbekannt(),
         )
     }
 
@@ -171,6 +173,7 @@ impl MessageCore {
         semantic_pack: Option<ProfileRulePack>,
         registry: &ReleaseRegistry,
         reference_date: Option<time::Date>,
+        rollen: &crate::profile::Parteirollen,
     ) -> Result<EdiEnergyReport, Error> {
         let date = reference_date
             .or(self.reference_date)
@@ -210,7 +213,7 @@ impl MessageCore {
                     .with_message_type(self.message_type.as_str())
                     .with_message_ref(&*self.message_ref)
                     .bail_on_first_critical(true);
-                for issue in profile.validate(&message_segments, pid) {
+                for issue in profile.validate_with_rollen(&message_segments, pid, rollen) {
                     ctx = ctx.with_static_issue(issue);
                 }
                 // The `303` value shape. Which code a qualifier takes is

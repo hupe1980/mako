@@ -30,8 +30,40 @@ use mako_service::http::Upstream;
 /// that takes `marktd` down.
 const MARKTD_CONCURRENCY: usize = 16;
 
-/// Prüfidentifikator for "Übertragung Summenzeitreihe" (MSCONS AHB 3.2 §8.3.1).
+/// Prüfidentifikator for "Übertragung Summenzeitreihe" (MSCONS AHB 3.2 Kap. 8.3.1).
 pub const MSCONS_SUMMENZEITREIHE_PID: Pruefidentifikator = Pruefidentifikator::const_new(13003);
+
+/// OBIS-Kennzahl of the Summenzeitreihe this filer builds — `SG9 PIA+5`,
+/// Muss in the 13003 column (MSCONS AHB 3.2 Kap. 8.3.1), restricted to the
+/// Kennzahlen the Codeliste der OBIS-Kennzahlen und Medien 2.5c marks for 13003
+/// (Kap. 3.2, „Mengenbilanzierung", S. 12): `1-1:1.29.0` and `1-1:2.29.0`. The
+/// series is summed from edmd's **Bezug** projection (`SyncEngine::fetch_lastgang`
+/// reads `direction=BEZUG`), so it is the Bezug Lastgang, `1-1:1.29.0`.
+pub const SUMMENZEITREIHE_OBIS_BEZUG: &str = "1-1:1.29.0";
+
+/// The `mabis.summenzeitreihe.uebermitteln` command that files `summenzeitreihe`
+/// with makod as MSCONS 13003.
+fn summenzeitreihe_command(summenzeitreihe: &Summenzeitreihe) -> serde_json::Value {
+    serde_json::json!({
+        "command": mako_markt::commands::MABIS_SUMMENZEITREIHE_UEBERMITTELN,
+        "marktrolle": "ÜNB",
+        "payload": {
+            "pruefidentifikator": MSCONS_SUMMENZEITREIHE_PID.as_u32(),
+            "mabis_zp_id": summenzeitreihe.mabis_zp_id,
+            "bilanzierungsgebiet_id": summenzeitreihe.bilanzierungsgebiet_id.as_ref(),
+            "obis_code": SUMMENZEITREIHE_OBIS_BEZUG,
+            "balancing_period": fmt_edifact_month(summenzeitreihe.period_from),
+            "version": fmt_edifact_version(summenzeitreihe.version),
+            "sender_mp_id": summenzeitreihe.sender_mp_id,
+            "receiver_mp_id": summenzeitreihe.receiver_mp_id,
+            "intervals": summenzeitreihe.intervals.iter().map(|iv| serde_json::json!({
+                "from": fmt_edifact_instant(iv.from),
+                "to": fmt_edifact_instant(iv.to),
+                "quantity_kwh": iv.quantity_kwh.to_string(),
+            })).collect::<Vec<_>>(),
+        }
+    })
+}
 
 /// Bilanzierungsmonat as EDIFACT format 610 (`CCYYMM`).
 fn fmt_edifact_month(d: OffsetDateTime) -> String {
@@ -116,7 +148,7 @@ fn fmt_edifact_instant(t: OffsetDateTime) -> String {
 /// Deadlines for a Bilanzierungsgebiets-Summenzeitreihe (BG-SZR, Kategorie B),
 /// counted in Werktagen after the end of the Bilanzierungsmonat.
 ///
-/// BK6-24-174 Anlage 3 §3.10, Tabelle 2.
+/// BK6-24-174 Anlage 3 Kap. 3.10, Tabelle 2.
 mod fristen {
     /// Last Werktag of the Erstaufschlag window for a BG-SZR.
     ///
@@ -244,7 +276,7 @@ impl SyncEngine {
         // — a UTC date is a day behind for the first hour of every local day.
         let (abrechnungslauf, phase) = phase_for(period_to, mako_fristen::heute());
 
-        // The version is ascending per §3.8.2 and truncated to whole seconds,
+        // The version is ascending per Kap. 3.8.2 and truncated to whole seconds,
         // because that is all the wire carries. A resubmission for the same
         // period is a new version rather than a replacement of the previous row.
         let version = truncate_to_seconds(OffsetDateTime::now_utc());
@@ -394,7 +426,7 @@ impl SyncEngine {
                         pg::mark_acked(&self.pool, run_id, message_ref, process_id)
                             .await
                             .context("failed to mark run as acked")?;
-                        // §9.8.1: the corrected BG-SZR is the answer to the
+                        // Kap. 9.8.1: the corrected BG-SZR is the answer to the
                         // negative Prüfmitteilung, so the obligation closes here
                         // — otherwise it stays open on /korrekturbedarf forever.
                         if let Some(corrected) = corrects_run_id {
@@ -1105,7 +1137,7 @@ impl SyncEngine {
         // Build the makod command payload.
         //
         // A Summenzeitreihe is an MSCONS message, Prüfidentifikator 13003
-        // ("Übertragung Summenzeitreihe", MSCONS AHB 3.2 §8.3.1). UTILTS carries
+        // ("Übertragung Summenzeitreihe", MSCONS AHB 3.2 Kap. 8.3.1). UTILTS carries
         // Berechnungsformel and Zählzeitdefinitionen and has no Summenzeitreihe
         // use case at all.
         //
@@ -1118,24 +1150,7 @@ impl SyncEngine {
         // `CCYYMM` (DTM+492, format 610), the Versionsangabe
         // `CCYYMMDDHHMMSSZZZ` (DTM+293, format 304), and each slot bound
         // `CCYYMMDDHHMMZZZ` (format 303).
-        let command = serde_json::json!({
-            "command": mako_markt::commands::MABIS_SUMMENZEITREIHE_UEBERMITTELN,
-            "marktrolle": "ÜNB",
-            "payload": {
-                "pruefidentifikator": MSCONS_SUMMENZEITREIHE_PID.as_u32(),
-                "mabis_zp_id": summenzeitreihe.mabis_zp_id,
-                "bilanzierungsgebiet_id": summenzeitreihe.bilanzierungsgebiet_id.as_ref(),
-                "balancing_period": fmt_edifact_month(summenzeitreihe.period_from),
-                "version": fmt_edifact_version(summenzeitreihe.version),
-                "sender_mp_id": summenzeitreihe.sender_mp_id,
-                "receiver_mp_id": summenzeitreihe.receiver_mp_id,
-                "intervals": summenzeitreihe.intervals.iter().map(|iv| serde_json::json!({
-                    "from": fmt_edifact_instant(iv.from),
-                    "to": fmt_edifact_instant(iv.to),
-                    "quantity_kwh": iv.quantity_kwh.to_string(),
-                })).collect::<Vec<_>>(),
-            }
-        });
+        let command = summenzeitreihe_command(summenzeitreihe);
 
         let idempotency_key = idempotency_key(
             run_id,
@@ -1374,12 +1389,79 @@ mod tests {
     }
 
     /// The filer states the Prüfidentifikator it is filing under, and it is the
-    /// one MSCONS AHB 3.2 §8.3.1 defines for a Summenzeitreihe.
+    /// one MSCONS AHB 3.2 Kap. 8.3.1 defines for a Summenzeitreihe.
     ///
     /// `makod`'s `mabis.summenzeitreihe.uebermitteln` refuses a payload that
     /// states any other, so this constant and that renderer are one fact rather
     /// than two — the seam where a filer wired to the wrong command would
     /// otherwise have its Zeitreihe rendered as a 13003 whatever it meant.
+    /// The body this filer posts passes makod's own door for
+    /// `mabis.summenzeitreihe.uebermitteln` — the `SG9 PIA` OBIS-Kennzahl
+    /// among what it requires, without which no 13003 renders.
+    #[tokio::test]
+    async fn the_filed_body_passes_makods_door() {
+        use std::sync::Arc;
+
+        use mako_engine::ids::TenantId;
+        use mako_engine::store_slatedb::SlateDbStore;
+        use makod::commands_api::{CommandsApiState, DispatchOutcome, dispatch_command};
+
+        const UENB: &str = "9900000000001";
+        let store = Arc::new(
+            SlateDbStore::open_in_memory()
+                .await
+                .expect("in-memory store"),
+        );
+        let state = CommandsApiState {
+            tenant_id: TenantId::from_party_id(UENB),
+            sender_party_id: UENB.to_owned(),
+            configured_marktrollen: vec!["ÜNB".to_owned()],
+            max_body_bytes: 1_048_576,
+            snapshot_interval: 100,
+            cedar: Arc::new(
+                makod::cedar_authz::CedarAuthorizer::unauthenticated().expect("infallible"),
+            ),
+            snapshot_store: store.as_snapshot_store(),
+            malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
+                (*store).clone(),
+                TenantId::from_party_id(UENB),
+            )),
+            maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((*store).clone()),
+            store: Arc::clone(&store),
+            marktd_client: None,
+        };
+        let from = time::macros::datetime!(2025-12-31 23:00 UTC);
+        let series = Summenzeitreihe {
+            bilanzierungsgebiet_id: BilanzierungsgebietId::new("11YR00000000000U")
+                .expect("a Y-type EIC"),
+            mabis_zp_id: mako_mabis::MabisZaehlpunktId::new("DE0001112223334445556667778889990")
+                .expect("a Zählpunktbezeichnung"),
+            period_from: from,
+            period_to: from + Duration::minutes(15),
+            version: time::macros::datetime!(2026-02-05 12:00 UTC),
+            intervals: vec![mako_mabis::SumInterval {
+                from,
+                to: from + Duration::minutes(15),
+                quantity_kwh: Decimal::new(15, 1),
+                malo_count: 1,
+                substituted_count: 0,
+            }],
+            sender_mp_id: UENB.to_owned(),
+            receiver_mp_id: "9900000000002".to_owned(),
+            slot_length_minutes: 15,
+        };
+        let command = summenzeitreihe_command(&series);
+        assert_eq!(command["payload"]["obis_code"], SUMMENZEITREIHE_OBIS_BEZUG);
+        let outcome = dispatch_command(
+            &state,
+            command["command"].as_str().expect("a command name"),
+            &command["payload"],
+        )
+        .await
+        .expect("makod accepts the filed body");
+        assert!(matches!(outcome, DispatchOutcome::Spawned { .. }));
+    }
+
     #[test]
     fn the_filed_pruefidentifikator_is_the_summenzeitreihe_one() {
         assert_eq!(MSCONS_SUMMENZEITREIHE_PID.as_u32(), 13_003);

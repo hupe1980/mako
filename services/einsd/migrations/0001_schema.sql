@@ -2,7 +2,7 @@
 --
 -- Regulatory frameworks:
 --   EEG 2000–2023 (§§20–22, §24, §21 Abs. 3, §42b, §44b, §48–54)
---   KWKG 2023 (§7 KWK-Zuschlag)
+--   KWKG (§7 KWK-Zuschlag)
 --   § 147 AO / GoBD (settlement receipts are Buchungsbelege: 8-year retention)
 --
 -- Tables:
@@ -149,7 +149,7 @@ CREATE TABLE eeg_anlagen (
         'GGV',                       -- §42b EnWG gemeinschaftliche Gebäudeversorgung
         'EIGENVERBRAUCH',            -- keine Netzeinspeisung, keine Zahlung
         'POST_EEG_SPOT',             -- nach Förderende: Marktwert
-        'KWKG_ZUSCHLAG',             -- §7 KWKG 2023 KWK-Zuschlag
+        'KWKG_ZUSCHLAG',             -- §7 KWKG KWK-Zuschlag
         'FLEXIBILITAET',             -- §50b Flexibilitätsprämie (Bestandsanlagen)
         'FLEXIBILITAET_ZUSCHLAG'     -- §50a Flexibilitätszuschlag (Neuanlagen)
     )),
@@ -204,6 +204,13 @@ CREATE TABLE eeg_anlagen (
     -- "soweit das Bundesministerium ... dies im Bundesanzeiger veroeffentlicht
     -- hat". FALSE until an operator records that it did.
     kwk_bmwk_feststellung      BOOLEAN     NOT NULL DEFAULT FALSE,
+    -- §6 Abs. 1 Satz 1 Nr. 1 lit. c KWKG: Dauerbetrieb after 31.12.2026 keeps the
+    -- claim when a BImSchG-Genehmigung (aa) or, where none is required, the
+    -- verbindliche Bestellung (bb) is dated by that day. One or the other.
+    kwk_bimschg_genehmigung    DATE,
+    kwk_verbindliche_bestellung DATE,
+    CONSTRAINT kwk_lit_c_eine_grundlage
+        CHECK (kwk_bimschg_genehmigung IS NULL OR kwk_verbindliche_bestellung IS NULL),
     kwk_foerderdauer_h         INTEGER,        -- §8 Abs. 1–3 Vollbenutzungsstunden
     kwk_strom_kwh_gesamt       NUMERIC(14, 3), -- lifetime kWh paid (§8 Abs. 1–3)
     kwk_kwh_jahr               NUMERIC(14, 3), -- kWh paid in kwk_kwh_jahr_year (§8 Abs. 4)

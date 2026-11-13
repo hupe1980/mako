@@ -194,9 +194,8 @@ pub struct MaloSync {
     /// Standard Webhooks secret `marktd` signs deliveries with. `None`
     /// accepts unsigned deliveries (development).
     webhook_secret: Option<SecretString>,
+    /// The cache, scoped by the engine tenant it was built for.
     cache: SlateDbMaloCache,
-    /// Cache partition — the primary MP-ID, as the admin API uses.
-    tenant: String,
     registry: Arc<MpIdRegistry>,
     /// The newest `version` the webhook applied per MaLo, so a backfill page
     /// read before a change does not overwrite it.
@@ -206,10 +205,6 @@ pub struct MaloSync {
 impl MaloSync {
     /// A sync against `marktd` at `base_url`.
     #[must_use]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one constructor, called once at startup"
-    )]
     pub fn new(
         http: reqwest::Client,
         base_url: impl Into<String>,
@@ -217,7 +212,6 @@ impl MaloSync {
         webhook_url: impl Into<String>,
         webhook_secret: Option<SecretString>,
         cache: SlateDbMaloCache,
-        tenant: impl Into<String>,
         registry: Arc<MpIdRegistry>,
     ) -> Self {
         Self {
@@ -227,7 +221,6 @@ impl MaloSync {
             webhook_url: webhook_url.into(),
             webhook_secret,
             cache,
-            tenant: tenant.into(),
             registry,
             applied: Mutex::new(HashMap::new()),
         }
@@ -246,7 +239,7 @@ impl MaloSync {
         match cache_record(rec, self.own_nb(&rec.sparte), mako_fristen::heute()) {
             Ok(result) => {
                 self.cache
-                    .upsert(&self.tenant, &result)
+                    .upsert(&result)
                     .await
                     .map_err(|e| SyncError::Cache(e.to_string()))?;
                 Ok(true)
@@ -278,7 +271,7 @@ impl MaloSync {
             .map_err(|e| SyncError::Marktd(e.to_string()))?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             self.cache
-                .remove(&self.tenant, malo_id)
+                .remove(malo_id)
                 .await
                 .map_err(|e| SyncError::Cache(e.to_string()))?;
             info!(

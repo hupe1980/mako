@@ -98,7 +98,7 @@ const DELIBERATE: &[(&str, &str)] = &[
     ),
     (
         "41373559242",
-        "`makotest` pins its MaLo binding to the BDEW §8.1 worked example \
+        "`makotest` pins its MaLo binding to the Identifikatoren Kap. 8.1 worked example \
          (`4137355924` → `41373559241`) and asserts the neighbouring digit is \
          refused. Without the negative, the test would pass against a binding \
          that accepted anything",
@@ -537,7 +537,7 @@ mod tests {
 
     /// The architecture page publishes this arithmetic for an integrator to
     /// implement from, and prose cannot be compiled. Both reference vectors
-    /// Identifikatoren V1.2 §8 prints must survive there, computed rather than
+    /// Identifikatoren V1.2 Kap. 8 prints must survive there, computed rather than
     /// transcribed — a page describing Luhn (doubling from the left, with the
     /// "subtract 9" reduction) yields a different digit for most bases and is
     /// the mistake this pins.
@@ -549,7 +549,7 @@ mod tests {
             panic!("{} is missing", doc.display());
         };
 
-        // §8.1 — computed here, so the page cannot state a digit the
+        // Kap. 8.1 — computed here, so the page cannot state a digit the
         // implementation does not produce.
         let malo = format!(
             "4137355924{}",
@@ -557,26 +557,26 @@ mod tests {
         );
         assert!(
             page.contains(&malo),
-            "domain-model.md must carry the §8.1 reference vector {malo}"
+            "domain-model.md must carry the Kap. 8.1 reference vector {malo}"
         );
 
-        // §8.2 — the same arithmetic over an alphanumeric base, through the
+        // Kap. 8.2 — the same arithmetic over an alphanumeric base, through the
         // validator the services use. The published base carries Codetyp `A`,
         // which is a Cluster-Ressource.
         assert!(
             rubo4e::identifiers::CrId::new("A1137355925").is_ok(),
-            "A1137355925 is the §8.2 reference vector"
+            "A1137355925 is the Kap. 8.2 reference vector"
         );
         assert!(
             page.contains("A1137355925"),
-            "domain-model.md must carry the §8.2 reference vector A1137355925"
+            "domain-model.md must carry the Kap. 8.2 reference vector A1137355925"
         );
 
         // The fingerprint of the Luhn description, which is the wrong
         // arithmetic here and the one a reader is likely to reach for.
         assert!(
             !page.contains("alternately multiply each digit by"),
-            "domain-model.md describes the Luhn variant; §8.1 doubles the even \
+            "domain-model.md describes the Luhn variant; Kap. 8.1 doubles the even \
              positions and has no digit-sum reduction"
         );
     }

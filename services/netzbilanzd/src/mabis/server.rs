@@ -39,7 +39,7 @@ use crate::handlers::authorize;
 ///
 /// `OffsetDateTime`'s derived `Serialize` is `[y, ordinal, h, m, s, ns, ±h, ±m,
 /// ±s]`, which is `time`'s internal layout and round-trips only through `time`
-/// itself. It matters doubly for `version`: §3.8.2 identifies a Summenzeitreihe
+/// itself. It matters doubly for `version`: Kap. 3.8.2 identifies a Summenzeitreihe
 /// by it, `POST /api/v1/mabis/pruefmitteilung` *parses* it as RFC 3339 — so a
 /// consumer fed the array by a read endpoint cannot echo it back to the write
 /// endpoint.
@@ -100,7 +100,7 @@ pub struct SyncRequest {
 /// `POST /api/v1/mabis/sync` — trigger a manual aggregation run.
 ///
 /// The version is assigned by the service, not the caller: BK6-24-174 Anlage 3
-/// §3.8.2 requires it to ascend, and the settlement phase follows from where
+/// Kap. 3.8.2 requires it to ascend, and the settlement phase follows from where
 /// the submission date falls in the Werktag calendar.
 ///
 /// Request body:
@@ -307,7 +307,7 @@ pub async fn retry_run(
 
     let period_from = run.period_from;
     let period_to = run.period_to;
-    // A retry of a correction is still a correction (§9.8.1): dropping
+    // A retry of a correction is still a correction (Kap. 9.8.1): dropping
     // `corrects_run_id` leaves the negative Prüfmitteilung open on
     // /korrekturbedarf after the corrected BG-SZR has gone out.
     let corrects_run_id = run.corrects_run_id;
@@ -378,7 +378,7 @@ pub struct PruefmitteilungRequest {
     /// The version's Erstellungszeitpunkt (RFC 3339), as filed.
     #[serde(with = "time::serde::rfc3339")]
     pub version: OffsetDateTime,
-    /// `false` signals Korrekturbedarf (§9.8.1).
+    /// `false` signals Korrekturbedarf (Kap. 9.8.1).
     pub positiv: bool,
     /// The MP-ID of the party that sent the Prüfmitteilung, as received.
     pub sender_mp_id: String,
@@ -394,7 +394,7 @@ pub struct PruefmitteilungRequest {
 /// via IFTSTA (SG7 STS+Z04, PID 21003 to NB/ÜNB or 21004 to BKV/NB).
 ///
 /// The Datenstatus is assigned exclusively by the BIKO (BK6-24-174 Anlage 3
-/// §3.8.3), so this route only records what arrived — it never derives one.
+/// Kap. 3.8.3), so this route only records what arrived — it never derives one.
 pub async fn post_datenstatus(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -448,7 +448,7 @@ pub async fn post_datenstatus(
 ///
 /// Record an inbound Prüfmitteilung (IFTSTA PID 21000/21001).
 ///
-/// A negative one signals Korrekturbedarf (§9.8.1) and is answered by a
+/// A negative one signals Korrekturbedarf (Kap. 9.8.1) and is answered by a
 /// corrected Summenzeitreihe under a higher version, which the operator
 /// triggers via `POST /api/v1/mabis/sync` with `corrects_run_id`.
 pub async fn post_pruefmitteilung(
@@ -531,7 +531,7 @@ pub async fn post_pruefmitteilung(
 /// `GET /api/v1/mabis/korrekturbedarf`
 ///
 /// Negative Prüfmitteilungen with no correcting submission yet — open
-/// obligations under §9.8.1, not history.
+/// obligations under Kap. 9.8.1, not history.
 pub async fn list_korrekturbedarf(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -558,7 +558,7 @@ pub async fn list_korrekturbedarf(
         "count": items.len(),
         "korrekturbedarf": items,
         "regulatory_note":
-            "BK6-24-174 Anlage 3 §9.8.1: a negative Prüfmitteilung is answered \
+            "BK6-24-174 Anlage 3 Kap. 9.8.1: a negative Prüfmitteilung is answered \
              with a corrected Summenzeitreihe under a higher version, via \
              POST /api/v1/mabis/sync with corrects_run_id.",
     })))

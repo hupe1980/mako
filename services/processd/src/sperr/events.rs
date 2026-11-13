@@ -47,7 +47,7 @@ pub fn auftrag_eingegangen(
 /// enqueued by [`crate::sperr::pg::report_outcome`] with the attempt.
 ///
 /// Not `FEHLGESCHLAGEN`: nothing has been reported to the Lieferant, because
-/// GPKE Teil 2 § 3.5.1.2 Nr. 5 still owes them a second visit.
+/// GPKE Teil 2 Kap. 3.5.1.2 Nr. 5 still owes them a second visit.
 #[must_use]
 pub fn versuch_gescheitert(
     tenant: &str,
@@ -70,7 +70,7 @@ pub fn versuch_gescheitert(
     )
 }
 
-/// A pending order ran past the § 3.5.1.2 Nr. 1 execution window.
+/// A pending order ran past the Kap. 3.5.1.2 Nr. 1 execution window.
 pub async fn ausfuehrung_ueberfaellig(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant: &str,
@@ -89,7 +89,7 @@ pub async fn ausfuehrung_ueberfaellig(
             "lf_mp_id":   lf_mp_id,
             "faellig_am": faellig_am.to_string(),
             "frist":      "6 WT nach dem frühestmöglichen Sperrtermin \
-                           (BK6-24-174 GPKE Teil 2 § 3.5.1.2 Nr. 1)",
+                           (BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 Nr. 1)",
         }),
     );
     mako_service::outbox::enqueue(&mut *tx, &ce)

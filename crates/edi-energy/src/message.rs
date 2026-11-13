@@ -149,7 +149,7 @@ pub trait EdiEnergyMessage: Send + Sync {
         // checked against a ProcessContext.  Fall through to validate_on_date,
         // which returns a warning report for Unknown variants.
         let Some(mt) = self.try_message_type() else {
-            return self.validate_on_date(ctx.date());
+            return self.validate_on_date_with_rollen(ctx.date(), ctx.rollen());
         };
         if !ctx.is_acceptable(mt, release) {
             return Err(Error::ProfileNotFound {
@@ -159,7 +159,7 @@ pub trait EdiEnergyMessage: Send + Sync {
         }
         // Use ctx.date() (not now_utc()) so profile lookup is deterministic for
         // date-sensitive tests and near-midnight race conditions are eliminated.
-        self.validate_on_date(ctx.date())
+        self.validate_on_date_with_rollen(ctx.date(), ctx.rollen())
     }
 
     /// Validate the message as of `reference_date` — the day it is judged on,
@@ -176,11 +176,35 @@ pub trait EdiEnergyMessage: Send + Sync {
     /// let report = message.validate_on_date(date)?;
     /// ```
     ///
+    /// A Bedingung on the Marktrolle of sender or receiver stays undecided
+    /// here; [`validate_on_date_with_rollen`](Self::validate_on_date_with_rollen)
+    /// decides it where the caller knows the role.
+    ///
     /// # Errors
     ///
     /// Same as [`validate`](Self::validate).
     #[must_use = "validation result must be checked for errors"]
-    fn validate_on_date(&self, reference_date: time::Date) -> Result<EdiEnergyReport, Error>;
+    fn validate_on_date(&self, reference_date: time::Date) -> Result<EdiEnergyReport, Error> {
+        self.validate_on_date_with_rollen(
+            reference_date,
+            &crate::profile::Parteirollen::unbekannt(),
+        )
+    }
+
+    /// [`validate_on_date`](Self::validate_on_date), deciding every AHB
+    /// Bedingung on the Marktrolle of sender or receiver („Wenn MP-ID in SG2
+    /// NAD+MS mit Rolle MSB nicht vorhanden") from `rollen`. A role `rollen`
+    /// does not name leaves its Bedingungen undecided, which never refuses.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`validate`](Self::validate).
+    #[must_use = "validation result must be checked for errors"]
+    fn validate_on_date_with_rollen(
+        &self,
+        reference_date: time::Date,
+        rollen: &crate::profile::Parteirollen,
+    ) -> Result<EdiEnergyReport, Error>;
 
     /// Serialize the message back to EDIFACT wire bytes.
     ///

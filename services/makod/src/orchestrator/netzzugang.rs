@@ -29,17 +29,13 @@
 //!   marktd registry (`netzzugang_antraege`, status `erfasst`) and enqueue a
 //!   [`NETZZUGANG_MESSAGE_TYPE`] outbox message — the same at-least-once
 //!   machinery every market message uses.
-//! - [`NetzzugangSender`] delivers the message: to the configured platform
-//!   endpoint (`--netzzugang-endpoint-url`) once one exists, or — while the
-//!   platform does not — to the ERP webhook as a
+//! - [`NetzzugangSender`] delivers the message to the ERP webhook as a
 //!   `de.mako.netzzugang.uebermittlungsbedarf` CloudEvent so the operator can
 //!   submit via the Netzbetreiber's Webportal (the statutory minimum channel).
+//!   There is no platform transport: no interface is published, and the
+//!   `--netzzugang-endpoint-url` setting is refused at startup.
 //! - After delivery the sender advances the marktd projection to
-//!   `uebermittelt` (or `fehlgeschlagen` when no channel is configured).
-//!
-//! When the BNetzA Festlegung publishes a real interface, only the endpoint
-//! transport inside [`NetzzugangSender`] changes; commands, registry and
-//! events stay stable.
+//!   `uebermittelt` (or `fehlgeschlagen` when no webhook is configured).
 
 use std::sync::Arc;
 
@@ -53,19 +49,15 @@ use secrecy::{ExposeSecret as _, SecretString};
 /// Outbox `message_type` for §20b requests.
 pub const NETZZUGANG_MESSAGE_TYPE: &str = "NetzzugangAntrag";
 
-/// CloudEvents type delivered to the ERP webhook while no platform endpoint
-/// is configured: the operator must submit the request via the NB Webportal.
+/// CloudEvents type delivered to the ERP webhook: no platform interface
+/// is published, so the operator submits the request via the NB Webportal.
 pub const CE_TYPE_UEBERMITTLUNGSBEDARF: &str = mako_events::mako::NETZZUGANG_UEBERMITTLUNGSBEDARF;
 
-/// Delivers [`NETZZUGANG_MESSAGE_TYPE`] outbox messages.
-///
-/// See the module docs for the transport decision tree.
+/// Delivers [`NETZZUGANG_MESSAGE_TYPE`] outbox messages to the ERP webhook.
 #[derive(Clone)]
 pub struct NetzzugangSender {
     http: Client,
-    /// Platform endpoint — absent until a §20b interface exists.
-    endpoint_url: Option<Arc<str>>,
-    /// ERP webhook for the operator-submits-manually fallback.
+    /// ERP webhook — the operator submits via the NB Webportal.
     webhook_url: Option<Arc<str>>,
     /// Shared secret for the ERP webhook — when set, the fallback CloudEvent
     /// body is signed with Standard Webhooks, matching
@@ -79,14 +71,12 @@ impl NetzzugangSender {
     #[must_use]
     pub fn new(
         http: Client,
-        endpoint_url: Option<String>,
         webhook_url: Option<String>,
         webhook_secret: Option<SecretString>,
         marktd: Option<Arc<MarktdClient>>,
     ) -> Self {
         Self {
             http,
-            endpoint_url: endpoint_url.map(Into::into),
             webhook_url: webhook_url.map(Into::into),
             webhook_secret: webhook_secret.map(Arc::new),
             marktd,
@@ -148,36 +138,7 @@ impl NetzzugangSender {
             }
         };
 
-        // ── Path 1: real platform endpoint ───────────────────────────────────
-        if let Some(endpoint) = &self.endpoint_url {
-            let resp = self
-                .http
-                .post(endpoint.as_ref())
-                .json(&antrag)
-                .send()
-                .await
-                .map_err(|e| EngineError::store(format!("netzzugang endpoint: {e}")))?;
-            if !resp.status().is_success() {
-                return Err(EngineError::store(format!(
-                    "netzzugang endpoint returned {}",
-                    resp.status()
-                )));
-            }
-            // The (future) platform may assign a reference.
-            let platform_ref = resp.json::<serde_json::Value>().await.ok().and_then(|v| {
-                v.get("platform_ref")
-                    .and_then(|r| r.as_str().map(String::from))
-            });
-            self.project_status(
-                antrag.id,
-                NetzzugangStatus::Uebermittelt,
-                platform_ref.as_deref(),
-            )
-            .await;
-            return Ok(());
-        }
-
-        // ── Path 2: ERP webhook — operator submits via the NB Webportal ──────
+        // ── ERP webhook — operator submits via the NB Webportal ──────────────
         if let Some(webhook) = &self.webhook_url {
             // The message id is the CloudEvent id, so an ERP deduplicating on
             // `webhook-id` deduplicates on what makod calls the message, and
@@ -211,8 +172,8 @@ impl NetzzugangSender {
         // ── No channel configured — acknowledge, don't poison-loop ───────────
         tracing::error!(
             antrag_id = %antrag.id,
-            "netzzugang: neither --netzzugang-endpoint-url nor an ERP webhook \
-             is configured — request marked fehlgeschlagen",
+            "netzzugang: no ERP webhook is configured — request marked \
+             fehlgeschlagen",
         );
         self.project_status(antrag.id, NetzzugangStatus::Fehlgeschlagen, None)
             .await;
@@ -261,7 +222,7 @@ mod tests {
     /// loop) — misconfiguration must not poison the outbox.
     #[tokio::test]
     async fn unconfigured_sender_acknowledges_instead_of_poison_looping() {
-        let sender = NetzzugangSender::new(Client::new(), None, None, None, None);
+        let sender = NetzzugangSender::new(Client::new(), None, None, None);
         let msg = outbox_msg(serde_json::to_value(antrag()).expect("serialize"));
         sender.send(&msg).await.expect("acknowledged");
     }
@@ -271,13 +232,13 @@ mod tests {
     /// and acknowledged so the outbox does not poison-loop.
     #[tokio::test]
     async fn malformed_payload_is_acknowledged_not_retried() {
-        let sender = NetzzugangSender::new(Client::new(), None, None, None, None);
+        let sender = NetzzugangSender::new(Client::new(), None, None, None);
         let msg = outbox_msg(serde_json::json!({ "not": "an antrag" }));
         sender.send(&msg).await.expect("acknowledged");
     }
 
     /// Spin up a local HTTP server that captures one request (signature
-    /// header + raw body) from the Path-2 webhook delivery.
+    /// header + raw body) from the webhook webhook delivery.
     async fn capture_one_webhook_request() -> (
         std::net::SocketAddr,
         Arc<std::sync::Mutex<Option<(axum::http::HeaderMap, Vec<u8>)>>>,
@@ -309,7 +270,7 @@ mod tests {
         (addr, captured)
     }
 
-    /// The Path-2 CloudEvent POST carries Standard Webhooks headers, exactly
+    /// The webhook CloudEvent POST carries Standard Webhooks headers, exactly
     /// like the general ERP webhook adapter — and is asserted through the shared
     /// **verifier**, not by rebuilding the signature here. Comparing an emitter
     /// against its own signer proves only that it is self-consistent.
@@ -319,7 +280,6 @@ mod tests {
 
         let sender = NetzzugangSender::new(
             Client::new(),
-            None,
             Some(format!("http://{addr}/hook")),
             Some("test-secret".into()),
             None,
@@ -354,7 +314,6 @@ mod tests {
 
         let sender = NetzzugangSender::new(
             Client::new(),
-            None,
             Some(format!("http://{addr}/hook")),
             None,
             None,

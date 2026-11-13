@@ -20,16 +20,23 @@
 //!    for mako (it does not require a CRL signer, and it compares certificates).
 //! 4. `transport/as4_ingest.rs` consults the sender policy
 //!    (`[policy.as4] unbekannte_absender`) before dispatch.
+//! 5. `transport/as4_ingest.rs` refuses an interchange whose `UNB` DE 0010 is
+//!    not an own MP-ID, and one whose DE 0004 is not the authenticated
+//!    `eb:From` (Allgemeine Festlegungen 6.1d Kap. 2.13).
 //!
 //! ## What it refuses
 //!
-//! 5. An in-memory dedup store (`MemoryDedup`) in the inbox wiring: it forgets
+//! 6. An in-memory dedup store (`MemoryDedup`) in the inbox wiring: it forgets
 //!    every accepted key on restart, so a retransmission inside the sender's
 //!    retry window is processed twice.
-//! 6. A permanent refusal (`Reject::permanent`) in the inbox handler that is
+//! 7. A permanent refusal (`Reject::permanent`) in the inbox handler that is
 //!    not preceded by an awaited dead-letter write. A permanent refusal
 //!    answers `EBMS:0004`, which the sender does not retry; without the dead
 //!    letter the message is gone and nobody holds a record of it.
+//! 8. An `asx-rs` pin in `fuzz/Cargo.toml` other than the workspace's. The
+//!    fuzz crate is excluded from the workspace, so nothing else compares the
+//!    two, and a fuzz run against another version is a green signal about an
+//!    inbound parser nobody deploys.
 //!
 //! ## Why the files are named
 //!
@@ -83,6 +90,20 @@ const REQUIRED: &[Required] = &[
         needle: "self.clients.admits_sender(",
         reason: "`[policy.as4] unbekannte_absender = nur_konfigurierte` is enforced by this \
                  call alone; without it every SM-PKI certificate holder is served",
+    },
+    Required {
+        file: "services/makod/src/transport/as4_ingest.rs",
+        needle: "is_own_mp_id(&header.receiver_id)",
+        reason: "the recipient guard: without it an interchange addressed to a third party \
+                 (UNB DE 0010) is applied to this deployment's processes and answered under \
+                 its MP-ID (Allgemeine Festlegungen 6.1d Kap. 2.13)",
+    },
+    Required {
+        file: "services/makod/src/transport/as4_ingest.rs",
+        needle: "binds_interchange_sender(from, &header.sender_id)",
+        reason: "the sender binding: without it an authenticated partner's interchange naming \
+                 another MP-ID in UNB DE 0004 is processed as that market participant's \
+                 (Allgemeine Festlegungen 6.1d Kap. 2.13)",
     },
 ];
 
@@ -157,7 +178,7 @@ pub fn run(workspace_root: &Path) -> bool {
         }
     }
 
-    // Rule 6 — the permanent refusals of the inbox handler.
+    // Rule 7 — the permanent refusals of the inbox handler.
     let ingest = "services/makod/src/transport/as4_ingest.rs";
     if let Some(src) = read(ingest, &mut findings) {
         checked += 1;
@@ -178,7 +199,24 @@ pub fn run(workspace_root: &Path) -> bool {
         }
     }
 
-    let sites = REQUIRED.len() + REFUSED.len() + 1;
+    // Rule 8 — the fuzz crate fuzzes the asx-rs that ships.
+    let manifests = ["Cargo.toml", "fuzz/Cargo.toml"];
+    let pins: Vec<Option<String>> = manifests
+        .iter()
+        .map(|m| read(m, &mut findings).map(|src| asx_pin(&src).unwrap_or_default()))
+        .collect();
+    if let [Some(workspace), Some(fuzz)] = pins.as_slice() {
+        checked += 1;
+        if workspace.is_empty() || workspace != fuzz {
+            findings.push(format!(
+                "fuzz/Cargo.toml pins asx-rs {fuzz:?}, the workspace (Cargo.toml) {workspace:?}.\n      \
+                 The fuzz run must exercise the AS4 inbound parser that ships: pin the same \
+                 version."
+            ));
+        }
+    }
+
+    let sites = REQUIRED.len() + REFUSED.len() + 2;
     if checked < sites {
         println!("check-as4-controls: FAIL — {checked} of {sites} named site(s) were readable");
         for f in &findings {
@@ -253,6 +291,17 @@ fn awaited_reject(window: &str) -> bool {
         .is_some_and(|at| flat[at..].contains(".await"))
 }
 
+/// The `version` of the `asx-rs` dependency line in a manifest.
+fn asx_pin(manifest: &str) -> Option<String> {
+    let line = manifest
+        .lines()
+        .find(|l| l.trim_start().starts_with("asx-rs") && l.contains("version"))?;
+    let after = &line[line.find("version")?..];
+    let start = after.find('"')? + 1;
+    let len = after[start..].find('"')?;
+    Some(after[start..start + len].to_owned())
+}
+
 /// How far back a dead letter may sit from the refusal it belongs to.
 const DEAD_LETTER_WINDOW: usize = 30;
 
@@ -267,6 +316,8 @@ mod tests {
 
     const HANDLER_OK: &str = "pub async fn handle(&self) -> Result<(), Reject> {\n\
         if !self.clients.admits_sender(&from) { return Err(Reject::new(\"x\")); }\n\
+        if !self.ingest.mp_id_registry.is_own_mp_id(&header.receiver_id) {}\n\
+        if !self.clients.binds_interchange_sender(from, &header.sender_id) {}\n\
         self.ingest.dl_sink.reject(&reason).await?;\n\
         return Err(Reject::permanent(\"recorded\"));\n}\n";
 
@@ -293,6 +344,14 @@ mod tests {
         );
         w("services/makod/src/transport/as4_ingest.rs", ingest);
         w("services/makod/src/startup/servers.rs", servers);
+        w(
+            "Cargo.toml",
+            "asx-rs           = { version = \"0.16.2\", default-features = false }\n",
+        );
+        w(
+            "fuzz/Cargo.toml",
+            "asx-rs = { version = \"0.16.2\", features = [\"test-util\"] }\n",
+        );
         dir
     }
 
@@ -367,6 +426,24 @@ mod tests {
         assert!(
             src.matches("Reject::permanent(").count() >= 6,
             "the handler's permanent refusals are what this guard is about"
+        );
+    }
+
+    /// A fuzz crate pinned to another asx-rs than the workspace is refused,
+    /// and the finding names both versions.
+    #[test]
+    fn a_fuzz_pin_off_the_workspace_pin_is_refused() {
+        let dir = tree("fuzz-pin", HANDLER_OK, "");
+        std::fs::write(
+            dir.join("fuzz/Cargo.toml"),
+            "asx-rs = { version = \"0.13\", features = [\"test-util\"] }\n",
+        )
+        .unwrap();
+        assert!(!run(&dir), "a differing fuzz pin must be refused");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            asx_pin("asx-rs = { version = \"0.13\" }\n").as_deref(),
+            Some("0.13")
         );
     }
 

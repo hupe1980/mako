@@ -771,7 +771,7 @@ fn emit_sg12<W: std::io::Write>(
             w,
             "NAD",
             [nad_q],
-            [nad_id, "", super::agency_for(None, nad_id)]
+            [nad_id, "", super::agency_for(None, nad_id)?]
         );
     }
     for (tag, elemente) in &tx.sg12_segmente {
@@ -880,7 +880,7 @@ impl<S, R> UtilmdBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
@@ -888,7 +888,7 @@ impl<S, R> UtilmdBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
         // On a Listennachricht the `IDE+Z01` head is the Geschäftsvorfall and
@@ -1303,7 +1303,7 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     ///
     /// **Muss on an Ablehnung whose Antwortcode is `A50` or `A57`** — UTILMD
     /// AHB Strom 2.1/2.2 Bedingungen `[356]` and `[84]`. Those two codes say the
-    /// LFA refused to release the Marktlokation, and GPKE Teil 2 § 2.1.2 Nr. 6
+    /// LFA refused to release the Marktlokation, and GPKE Teil 2 Kap. 2.1.2 Nr. 6
     /// requires the NB to state *that* refusal's ground alongside its own.
     pub fn antwort_dritter(mut self, dritter: crate::utilmd_codes::DritterAntwortStatus) -> Self {
         self.spec.antwort_dritter = Some(dritter);

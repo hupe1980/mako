@@ -54,10 +54,7 @@ const REGISTRY: &[(&str, &str)] = &[
         "H_GAS/L_GAS, for the §147 AO / GoBD audit trail",
     ),
     ("mako:guthabenerstattung", "credit-balance refund marker"),
-    (
-        "mako:kilowattstundenpreis_gesamt",
-        "§40a EnWG all-in ct/kWh",
-    ),
+    ("mako:kilowattstundenpreis_gesamt", "§40 EnWG all-in ct/kWh"),
     (
         "mako:kundenkategorie",
         "the operator's own customer classification",
@@ -128,6 +125,20 @@ const REGISTRY: &[(&str, &str)] = &[
     (
         "mako:umsatzsteuer_hinweis",
         "the §13b / §19 note printed on the invoice",
+    ),
+    // ── makod / invoic-checker: the inbound INVOIC ───────────────────────────
+    (
+        "mako:steuerkategorie",
+        "on a Steuerbetrag: the INVOIC's `TAX` DE 5305 Steuerkategorie — `S` \
+         Einheitssatz, `O` nicht steuerbar, `AE` Steuerschuldnerschaft des \
+         Leistungsempfängers (INVOIC AHB 1.0b) — which BO4E has no field for; makod's \
+         inbound adapter writes it, invoic-checker's § 14 UStG checks read it",
+    ),
+    (
+        "mako:steuernummer",
+        "on a Geschaeftspartner: the `SG3 RFF+FC` Steuernummer (§ 14 Abs. 4 Nr. 2 \
+         UStG; INVOIC AHB 1.0b) — BO4E models the Umsatzsteuer-ID (`RFF+VA`) and not \
+         the Steuernummer; makod's inbound adapter writes it, invoic-checker reads it",
     ),
     // ── productd: the price sheet ─────────────────────────────────────────────
     (

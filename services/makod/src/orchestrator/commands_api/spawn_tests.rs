@@ -34,7 +34,10 @@ async fn lf_state() -> CommandsApiState {
         snapshot_interval: 100,
         cedar: Arc::new(CedarAuthorizer::unauthenticated().expect("infallible")),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+        malo_cache: Arc::new(SlateDbMaloCache::new(
+            store.clone(),
+            TenantId::from_party_id(LF_MP_ID),
+        )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
         marktd_client: None,
@@ -72,7 +75,7 @@ async fn a_failed_key_write_fails_the_spawn_and_the_reissue_sends_one_utilmd() {
     let state = lf_state().await;
     state
         .malo_cache
-        .upsert(&state.tenant_id.to_string(), &malo_record())
+        .upsert(&malo_record())
         .await
         .expect("seed MaLo cache");
     let payload = anmeldung_55001();
@@ -115,7 +118,7 @@ async fn the_command_door_waits_for_the_business_key_lock() {
     let state = Arc::new(lf_state().await);
     state
         .malo_cache
-        .upsert(&state.tenant_id.to_string(), &malo_record())
+        .upsert(&malo_record())
         .await
         .expect("seed MaLo cache");
     let payload = anmeldung_55001();

@@ -949,3 +949,61 @@ async fn a_malo_update_refreshes_its_cached_bundesland() {
         "a refused Land is not kept"
     );
 }
+
+/// A reading order names the role that ordered it — the NB on the 55007 it
+/// sent when the LF did not answer (GPKE Teil 2 Kap. 2.5.2.2 Nr. 3, S. 62), the
+/// LF on its own Zustimmung 55008 (Nr. 2) — as marktd's `marktrole` states it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_reading_order_names_the_role_that_ordered_it() {
+    let Some((app, pool, _pg)) = app().await else {
+        return;
+    };
+    let as_role = |pid: u32, malo: &str, role: &str, ohne_antwort: bool| {
+        let body = serde_json::json!({
+            "specversion": "1.0",
+            "type": mako_events::mako::PROCESS_COMPLETED,
+            "source": "/makod/test",
+            "id": uuid::Uuid::new_v4().to_string(),
+            "subject": uuid::Uuid::new_v4().to_string(),
+            "makopid": pid,
+            "marktrole": role,
+            "data": {
+                "pid": pid, "malo_id": malo, "process_date": "20270131",
+                "accepted": true, "outcome": "accepted", "ohne_antwort": ohne_antwort,
+            },
+        })
+        .to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        let ts = time::OffsetDateTime::now_utc().unix_timestamp();
+        let mut request =
+            axum::http::Request::post("/webhook").header("content-type", "application/json");
+        for (name, value) in
+            mako_service::webhook::headers(WEBHOOK_SECRET.as_bytes(), &id, ts, body.as_bytes())
+        {
+            request = request.header(name, value);
+        }
+        request.body(axum::body::Body::from(body)).expect("request")
+    };
+    let rolle = |malo: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT auftraggeber_rolle FROM ablese_auftraege
+                 WHERE malo_id = $1 AND anlass = 'LIEFERENDE'",
+            )
+            .bind(malo)
+            .fetch_optional(&pool)
+            .await
+            .expect("read the order")
+        }
+    };
+
+    let (status, body) = call(app.clone(), as_role(55_007, "51238696012", "NB", true)).await;
+    assert!(status.is_success(), "{status}: {body}");
+    assert_eq!(rolle("51238696012").await.as_deref(), Some("NB"));
+
+    let (status, body) = call(app, as_role(55_008, "51238696781", "LF", false)).await;
+    assert!(status.is_success(), "{status}: {body}");
+    assert_eq!(rolle("51238696781").await.as_deref(), Some("LF"));
+}

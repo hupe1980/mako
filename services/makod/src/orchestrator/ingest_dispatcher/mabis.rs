@@ -63,8 +63,13 @@ impl EdifactIngestDispatcher {
             // the MaBiS-Zählpunkt it names.
             "mabis-zp-lifecycle" => {
                 if !mako_mabis::serien_fuer_pid(pid).is_empty() {
-                    let cmd = adapters::mabis_zp_lifecycle_registry().dispatch(raw, &fv)?;
+                    // A Deaktivierung 55063 carries no `SG8 SEQ+Z22` / `SG10`
+                    // (UTILMD AHB Strom 2.2 Kap. 13.1, S. 1100): the series is
+                    // the one the MaBiS-ZP was activated for.
                     let malo_id = extract_malo_from_msg(msg);
+                    let aktiviert = self.aktivierte_serie(malo_id.as_str()).await?;
+                    let cmd = adapters::mabis_zp_lifecycle_registry(aktiviert)
+                        .dispatch(msg as &dyn Any, &fv)?;
                     // No deadline is registered on the Anfrage this participant
                     // *receives*. The 1-Werktag window of SD Nr. 2 is the
                     // answering party's, and it is armed on the process the
@@ -228,9 +233,16 @@ impl EdifactIngestDispatcher {
                     // arrives in decides the Datenstatus the BIKO will assign
                     // (Kap. 3.8.3), so it is derived from the calendar here
                     // rather than taken from the message.
-                    let cmd = adapters::mabis_summenzeitreihe_registry(inbound.received_at)
-                        .dispatch(raw, &fv)?;
+                    // The 13003 column names no series (MSCONS AHB 3.2 Kap.
+                    // 8.3.3); the MaBiS-ZP's activation does.
                     let malo_id = extract_malo_from_msg(msg);
+                    let aktiviert = self
+                        .aktivierte_serie(malo_id.as_str())
+                        .await?
+                        .and_then(mako_mabis::ZpSerie::zeitreihe);
+                    let cmd =
+                        adapters::mabis_summenzeitreihe_registry(inbound.received_at, aktiviert)
+                            .dispatch(msg as &dyn Any, &fv)?;
                     return self
                         .spawn_or_resume_guarded::<MabisBillingWorkflow>(
                             inbound,
@@ -272,7 +284,32 @@ impl EdifactIngestDispatcher {
             }
             // ── MaBiS normierte Profile — MSCONS 13010–13012, ORDERS 17211 ────
             "mabis-profile" => {
-                if mako_mabis::profil_pids().contains(&pid) {
+                if pid == mako_mabis::REKLAMATION_PID {
+                    // ORDERS 17211 — the LF's Reklamation reaches the NB. The
+                    // ORDERS names no Lokation, so the NB's record is keyed on
+                    // its sender and `BGM` DE 1004. No window: the NB corrects
+                    // „unverzüglich" by a new version (BK6-24-174 Anlage 3 Kap.
+                    // 6.5.2 Nr. 2, S. 69), and nothing answers on the wire.
+                    let cmd = adapters::mabis_profil_reklamation_registry().dispatch(raw, &fv)?;
+                    let mako_mabis::ProfilCommand::ReceiveReklamation { reklamation, .. } = &cmd
+                    else {
+                        unreachable!("the adapter builds ReceiveReklamation");
+                    };
+                    let key = mako_mabis::reklamation_key(
+                        reklamation.lf.as_str(),
+                        &reklamation.dokumentennummer,
+                    );
+                    self.spawn_or_resume_guarded::<mako_mabis::MabisProfilWorkflow>(
+                        inbound,
+                        &key,
+                        "mabis-profile",
+                        cmd,
+                        &fv,
+                        &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                    )
+                    .await
+                } else if mako_mabis::profil_pids().contains(&pid) {
                     let cmd = adapters::mabis_profil_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.spawn_or_resume_guarded::<mako_mabis::MabisProfilWorkflow>(
@@ -294,5 +331,53 @@ impl EdifactIngestDispatcher {
             }
             wf_name => unknown_workflow_skip(wf_name, pid),
         }
+    }
+}
+
+impl EdifactIngestDispatcher {
+    /// The series the MaBiS-ZP `zp` is activated for, read off the
+    /// `mabis-zp-lifecycle` processes filed under it.
+    ///
+    /// A version is sent only for an activated MaBiS-ZP (BK6-24-174 Anlage 3
+    /// Kap. 7.4.1, S. 83), and the activation — 55062 with its `CAV` — is the
+    /// one message that names the series: neither the MSCONS version nor the
+    /// Deaktivierung 55063 does. `None` when no activation is on record. Two
+    /// activations naming different series are refused: one MaBiS-ZP is one
+    /// series.
+    async fn aktivierte_serie(&self, zp: &str) -> Result<Option<mako_mabis::ZpSerie>, EngineError> {
+        if zp.is_empty() {
+            return Ok(None);
+        }
+        let identities = self
+            .store
+            .as_process_registry()
+            .lookup_correlated(self.tenant_id, zp)
+            .await?;
+        let mut gefunden: Option<mako_mabis::ZpSerie> = None;
+        for identity in identities
+            .into_iter()
+            .filter(|id| id.workflow_id.name.as_ref() == "mabis-zp-lifecycle")
+        {
+            let process = Process::<MabisZpLifecycleWorkflow, Arc<SlateDbStore>>::from_identity(
+                Arc::clone(&self.store),
+                identity,
+            );
+            let state = process.state().await?;
+            let Some(data) = state.data() else { continue };
+            if data.vorgang != mako_mabis::ZpVorgang::Aktivierung {
+                continue;
+            }
+            match gefunden {
+                Some(bekannt) if bekannt != data.serie => {
+                    return Err(EngineError::Deserialization(format!(
+                        "MaBiS-ZP '{zp}' is activated for both {} and {}",
+                        bekannt.label(),
+                        data.serie.label()
+                    )));
+                }
+                _ => gefunden = Some(data.serie),
+            }
+        }
+        Ok(gefunden)
     }
 }

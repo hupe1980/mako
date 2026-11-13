@@ -28,7 +28,7 @@
 //!
 //! | Clock | Window | Meaning |
 //! |---|---|---|
-//! | **CONTRL** | 6 wall-clock hours; **15 min** for a Strom UTILMD/ORDERS Syntaxfehlermeldung (6 h on a Saturday), **45 min** for a GABi-Gas ALOCAT; deferred to the end of a Formatumstellung window (CONTRL AHB 1.0 §2.3.1, §2.4.1) | the syntax check of the Übertragungsdatei |
+//! | **CONTRL** | 6 wall-clock hours; **15 min** for a Strom UTILMD/ORDERS Syntaxfehlermeldung (6 h on a Saturday), **45 min** for a GABi-Gas ALOCAT; deferred to the end of a Formatumstellung window (CONTRL AHB 1.0 Kap. 2.3.1, Kap. 2.4.1) | the syntax check of the Übertragungsdatei |
 //! | **APERAK** | 45 min Strom on every day but Samstag (Samstag → Sonntag 12:00); Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
 //! | **Antwortfrist** | per PID — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | the *business* answer is owed |
 //!
@@ -100,14 +100,14 @@ use time_tz::{OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, timezones};
 /// The default wall-clock hours within which a CONTRL must be sent after
 /// receiving an EDIFACT interchange or APERAK.
 ///
-/// CONTRL AHB 1.0 §2.3.1 (Gas) and §2.4.1 (Strom) state it identically: „Der
+/// CONTRL AHB 1.0 Kap. 2.3.1 (Gas) and Kap. 2.4.1 (Strom) state it identically: „Der
 /// Empfänger der Übertragungsdatei oder APERAK teilt dem Absender
 /// **unverzüglich, jedoch spätestens 6 Stunden** nach Erhalt … das Ergebnis
 /// seiner syntaktischen Prüfung mittels der Nachricht CONTRL mit."
 pub const CONTRL_FRIST_HOURS: i64 = 6;
 
 /// Minutes within which a Strom Syntaxfehlermeldung on a UTILMD or ORDERS must
-/// go out on a day other than Saturday (CONTRL AHB 1.0 §2.4.1).
+/// go out on a day other than Saturday (CONTRL AHB 1.0 Kap. 2.4.1).
 ///
 /// „Wird eine UTILMD oder ORDERS übertragen, so ist der Empfänger … verpflichtet,
 /// dem Absender unverzüglich, jedoch **spätestens 15 Minuten** nach Eingang der
@@ -117,7 +117,7 @@ pub const CONTRL_FRIST_HOURS: i64 = 6;
 pub const CONTRL_STROM_SCHNELL_MINUTEN: i64 = 15;
 
 /// Minutes within which the CONTRL on a GABi-Gas ALOCAT must go out
-/// (CONTRL AHB 1.0 §2.3.1).
+/// (CONTRL AHB 1.0 Kap. 2.3.1).
 ///
 /// „Beim Prozess der ALOCAT-Übermittlung vom NB an den MGV nach GABi Gas muss
 /// binnen **45 Minuten** nach Erhalt einer ALOCAT-Nachricht die zugehörige
@@ -129,7 +129,7 @@ pub const CONTRL_ALOCAT_MINUTEN: i64 = 45;
 /// Register a `Deadline` with this label when enqueueing a CONTRL `PendingOutbox`
 /// entry. The outbox worker clears the deadline after successful CONTRL delivery.
 /// A deadline that fires before the CONTRL was delivered is a violated Frist
-/// (CONTRL AHB 1.0 §2.3.1 / §2.4.1).
+/// (CONTRL AHB 1.0 Kap. 2.3.1 / Kap. 2.4.1).
 ///
 /// The label does not name a window, because the window is not one number:
 /// [`contrl_due_at`] answers 6 hours, 45 minutes or 15 minutes depending on what
@@ -144,12 +144,12 @@ pub const CONTRL_FRIST_LABEL: &str = "contrl-delivery-window";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContrlAnlass {
     /// Any interchange or APERAK not named by a shorter window: 6 hours
-    /// (§2.3.1, §2.4.1).
+    /// (Kap. 2.3.1, Kap. 2.4.1).
     Regelfall,
     /// A Strom UTILMD or ORDERS: 15 minutes, or 6 hours when it arrived on a
-    /// Saturday (§2.4.1).
+    /// Saturday (Kap. 2.4.1).
     StromUtilmdOderOrders,
-    /// A GABi-Gas ALOCAT from the NB to the MGV: 45 minutes (§2.3.1).
+    /// A GABi-Gas ALOCAT from the NB to the MGV: 45 minutes (Kap. 2.3.1).
     GasAlocat,
 }
 
@@ -202,7 +202,7 @@ pub fn contrl_due_at(received: OffsetDateTime, anlass: ContrlAnlass) -> OffsetDa
 
 /// The end of the Formatumstellung window `at` falls in, if any.
 ///
-/// CONTRL AHB 1.0 §2.3.1 and §2.4.1 close identically: „Abweichungen von diesen
+/// CONTRL AHB 1.0 Kap. 2.3.1 and Kap. 2.4.1 close identically: „Abweichungen von diesen
 /// Fristen sind von den Marktpartnern zu akzeptieren im Zeitraum der
 /// Formatumstellung vom **31.3. 18.00 Uhr bis 2.4. 00:00 Uhr** gesetzlicher
 /// deutscher Zeit (bei einer Formatumstellung zum 01.04.) bzw. vom **30.9.
@@ -245,7 +245,7 @@ fn formatumstellung_toleranz_ende(at: OffsetDateTime) -> Option<OffsetDateTime> 
 
 /// Minutes within which a Strom APERAK for a UTILMD or an ORDERS must be sent.
 ///
-/// APERAK AHB 1.1 § 2.4.1 states the 45 minutes **unqualified** and carves out
+/// APERAK AHB 1.1 Kap. 2.4.1 states the 45 minutes **unqualified** and carves out
 /// **Samstag** alone, so this applies on every other day — Sunday included.
 /// There is no Montag–Freitag restriction in the document; a „weekday" reading
 /// silently grants an extra day on Sundays, on a window measured in minutes.
@@ -327,7 +327,7 @@ pub fn is_delivery_window(label: &str) -> bool {
 /// Register a `mako_engine::deadline::Deadline` with this label after
 /// enqueuing an outbound Strom APERAK.  If this deadline fires before the APERAK
 /// is delivered, the OutboxWorker has not completed delivery within the 45-minute
-/// window required by APERAK AHB 1.1 §2.4.1.
+/// window required by APERAK AHB 1.1 Kap. 2.4.1.
 pub const APERAK_STROM_WINDOW_LABEL: &str = "aperak-strom-45min-window";
 
 /// Compute the Strom APERAK sending deadline after receiving a Strom UTILMD or
@@ -340,7 +340,7 @@ pub const APERAK_STROM_WINDOW_LABEL: &str = "aperak-strom-45min-window";
 /// | Saturday | next Sunday 12:00 Berlin local time |
 /// | any other day | `received + 45 minutes` |
 ///
-/// **Regulatory basis:** APERAK AHB 1.1 §2.4.1, which states the 45 minutes
+/// **Regulatory basis:** APERAK AHB 1.1 Kap. 2.4.1, which states the 45 minutes
 /// **unqualified** and carves out Saturday alone:
 ///
 /// *"Wird eine UTILMD oder ORDERS übertragen, so ist der Empfänger der
@@ -386,7 +386,7 @@ pub fn aperak_strom_due_at(received: OffsetDateTime) -> OffsetDateTime {
     let berlin_dt = received.to_timezone(berlin);
 
     if berlin_dt.weekday() == Weekday::Saturday {
-        // APERAK AHB 1.1 §2.4.1: received on Saturday → by next Sunday 12:00 Berlin.
+        // APERAK AHB 1.1 Kap. 2.4.1: received on Saturday → by next Sunday 12:00 Berlin.
         let sunday = berlin_dt
             .date()
             .next_day()
@@ -411,7 +411,7 @@ pub fn aperak_strom_due_at(received: OffsetDateTime) -> OffsetDateTime {
 
 /// Deadline label for the general Strom APERAK sending obligation — every Strom
 /// message that is not a UTILMD or an ORDERS, owed by the next Werktag 12 Uhr
-/// ([`aperak_strom_allgemein_due_at`], APERAK AHB 1.1 § 2.4.1).
+/// ([`aperak_strom_allgemein_due_at`], APERAK AHB 1.1 Kap. 2.4.1).
 ///
 /// Carries [`APERAK_WINDOW_LABEL_PREFIX`], so the delivery of the APERAK
 /// discharges it ([`discharges_delivery_window`]).
@@ -427,7 +427,7 @@ pub const APERAK_STROM_ALLGEMEIN_LABEL: &str = "aperak-strom-naechster-wt-1200";
 /// Compute the Strom APERAK sending deadline for a message that is **not** a
 /// UTILMD or an ORDERS.
 ///
-/// APERAK AHB 1.1 §2.4.1 opens with the general Strom rule and only then carves
+/// APERAK AHB 1.1 Kap. 2.4.1 opens with the general Strom rule and only then carves
 /// out UTILMD/ORDERS:
 ///
 /// *"Das Ergebnis der Verarbeitbarkeitsprüfung aller in einer Übertragungsdatei
@@ -482,7 +482,7 @@ pub fn aperak_strom_allgemein_due_at(received: OffsetDateTime) -> OffsetDateTime
 
 /// Deadline label for Gas APERAK sending obligations on Folgeprozesse.
 ///
-/// Per APERAK AHB 1.1 §2.3.1 (Gas rules):
+/// Per APERAK AHB 1.1 Kap. 2.3.1 (Gas rules):
 /// „Bei Verarbeitbarkeitsfehlern in Geschäftsvorfällen von Folgeprozessen teilt
 /// der Empfänger … unverzüglich, jedoch spätestens bis zum nächsten Werktag
 /// 12 Uhr gesetzlicher deutscher Zeit nach Eingang des Geschäftsvorfalls, diesen
@@ -494,7 +494,7 @@ pub const APERAK_GAS_FOLGEPROZESS_LABEL: &str = "aperak-gas-folgeprozess-naechst
 
 /// Deadline label for Gas APERAK sending obligations on Initialprozesse.
 ///
-/// Per APERAK AHB 1.1 §2.3.1 (Gas rules):
+/// Per APERAK AHB 1.1 Kap. 2.3.1 (Gas rules):
 /// „Bei Verarbeitbarkeitsfehlern in Geschäftsvorfällen von Initialprozessen
 /// teilt der Empfänger … unverzüglich, jedoch spätestens 3 Werktage nach Eingang
 /// des Geschäftsvorfalls, diesen per APERAK mit." — no clock time, so the window
@@ -506,7 +506,7 @@ pub const APERAK_GAS_INITIALPROZESS_LABEL: &str = "aperak-gas-initialprozess-3-w
 
 /// Compute the Gas APERAK sending deadline for **Folgeprozesse**.
 ///
-/// Per APERAK AHB 1.1 §2.3.1: the receiver must dispatch the APERAK by the
+/// Per APERAK AHB 1.1 Kap. 2.3.1: the receiver must dispatch the APERAK by the
 /// **next Werktag at 12:00 Uhr Berliner Lokalzeit** after receiving the message.
 ///
 /// | `received` Berlin local date | Deadline |
@@ -515,7 +515,7 @@ pub const APERAK_GAS_INITIALPROZESS_LABEL: &str = "aperak-gas-initialprozess-3-w
 /// | Saturday | Monday 12:00 Berlin (or next Werktag if Monday is a holiday) |
 /// | Sunday | Monday 12:00 Berlin (or next Werktag if Monday is a holiday) |
 ///
-/// **Regulatory basis:** APERAK AHB 1.1 §2.3.1 — Gas Folgeprozesse.
+/// **Regulatory basis:** APERAK AHB 1.1 Kap. 2.3.1 — Gas Folgeprozesse.
 ///
 /// # Panics
 ///
@@ -555,7 +555,7 @@ pub fn aperak_gas_folgeprozess_due_at(received: OffsetDateTime) -> OffsetDateTim
 
 /// Compute the Gas APERAK sending deadline for **Initialprozesse**.
 ///
-/// Per APERAK AHB 1.1 §2.3.1: *"Bei Verarbeitbarkeitsfehlern in
+/// Per APERAK AHB 1.1 Kap. 2.3.1: *"Bei Verarbeitbarkeitsfehlern in
 /// Geschäftsvorfällen von Initialprozessen teilt der Empfänger der
 /// Übertragungsdatei dem Absender unverzüglich, jedoch spätestens **3 Werktage
 /// nach Eingang** des Geschäftsvorfalls, diesen per APERAK mit."*
@@ -566,7 +566,7 @@ pub fn aperak_gas_folgeprozess_due_at(received: OffsetDateTime) -> OffsetDateTim
 /// here removes twelve hours from every Gas Initialprozess window and raises a
 /// breach the counterparty is not in.
 ///
-/// **Regulatory basis:** APERAK AHB 1.1 §2.3.1 — Gas Initialprozesse.
+/// **Regulatory basis:** APERAK AHB 1.1 Kap. 2.3.1 — Gas Initialprozesse.
 ///
 /// # Panics
 ///
@@ -603,7 +603,7 @@ pub fn aperak_gas_initialprozess_due_at(received: OffsetDateTime) -> OffsetDateT
 /// of the next-Werktag-noon one.
 ///
 /// The BDEW makes this decidable rather than a matter of judgement. APERAK AHB
-/// 1.1 §2.1.3.6: the Initialprozessschritte of GeLi Gas, GPKE und WiM „sind im
+/// 1.1 Kap. 2.1.3.6: the Initialprozessschritte of GeLi Gas, GPKE und WiM „sind im
 /// EDI@Energy-Dokument ‚Anwendungsübersicht der Prüfidentifikatoren' daran zu
 /// erkennen, dass in der Spalte ‚Zuordnung zu einem Objekt' die
 /// Tupel-Kennzeichnung den (Teil-)String ‚ZO-F' enthält". Everything else is a
@@ -646,10 +646,10 @@ pub fn aperak_gas_due_at(pid: u32, received: OffsetDateTime) -> (&'static str, O
 
 /// Whether the Sparte's APERAK regime has a **positive** acknowledgement at all.
 ///
-/// * **Strom** (APERAK AHB 1.1 §2.4): both polarities — `BGM+312`
+/// * **Strom** (APERAK AHB 1.1 Kap. 2.4): both polarities — `BGM+312`
 ///   Anerkennungsmeldung when the Geschäftsvorfall is processable, `BGM+313`
 ///   Verarbeitbarkeitsfehlermeldung when it is not.
-/// * **Gas** (APERAK AHB 1.1 §2.3): the APERAK reports „ausschließlich" errors.
+/// * **Gas** (APERAK AHB 1.1 Kap. 2.3): the APERAK reports „ausschließlich" errors.
 ///   There is no Anerkennungsmeldung — silence past the Frist *is* the
 ///   acknowledgement — and every APERAK is answered with a CONTRL.
 #[must_use]
@@ -1536,21 +1536,21 @@ mod tests {
         assert_eq!(
             contrl_due_at(mittwoch, ContrlAnlass::Regelfall) - mittwoch,
             Duration::hours(CONTRL_FRIST_HOURS),
-            "§2.3.1 / §2.4.1: 6 Stunden"
+            "Kap. 2.3.1 / Kap. 2.4.1: 6 Stunden"
         );
         assert_eq!(
             contrl_due_at(mittwoch, ContrlAnlass::GasAlocat) - mittwoch,
             Duration::minutes(CONTRL_ALOCAT_MINUTEN),
-            "§2.3.1: 45 Minuten für die ALOCAT"
+            "Kap. 2.3.1: 45 Minuten für die ALOCAT"
         );
         assert_eq!(
             contrl_due_at(mittwoch, ContrlAnlass::StromUtilmdOderOrders) - mittwoch,
             Duration::minutes(CONTRL_STROM_SCHNELL_MINUTEN),
-            "§2.4.1: 15 Minuten für UTILMD/ORDERS"
+            "Kap. 2.4.1: 15 Minuten für UTILMD/ORDERS"
         );
     }
 
-    /// §2.4.1 states the Saturday exception for UTILMD/ORDERS separately, and it
+    /// Kap. 2.4.1 states the Saturday exception for UTILMD/ORDERS separately, and it
     /// is a **German** Saturday: 23:30 UTC on a Friday is already Saturday in
     /// Berlin, so the window is 6 hours rather than 15 minutes.
     #[test]
@@ -1582,7 +1582,7 @@ mod tests {
         );
     }
 
-    /// §2.3.1 / §2.4.1 close by making deviations inside the Formatumstellung
+    /// Kap. 2.3.1 / Kap. 2.4.1 close by making deviations inside the Formatumstellung
     /// window something the counterparty must accept. A CONTRL owed inside it is
     /// therefore owed at its end, not fifteen minutes after the interchange —
     /// otherwise every Formatumstellung weekend reports Fristverletzungen that
@@ -1993,7 +1993,7 @@ mod tests {
     // ── aperak_strom_due_at ───────────────────────────────────────────────────
 
     /// Any day but Samstag: the deadline is exactly 45 minutes after receipt.
-    /// APERAK AHB 1.1 § 2.4.1 carves out Samstag and nothing else.
+    /// APERAK AHB 1.1 Kap. 2.4.1 carves out Samstag and nothing else.
     #[test]
     fn aperak_strom_non_saturday_is_45_minutes() {
         // Monday 2025-01-06 10:00 UTC (= 11:00 CET)
@@ -2017,7 +2017,7 @@ mod tests {
     }
 
     /// Saturday: deadline is next Sunday 12:00 Berlin.
-    /// APERAK AHB 1.1 §2.4.1: "samstags bis spätestens Sonntag 12:00 Uhr".
+    /// APERAK AHB 1.1 Kap. 2.4.1: "samstags bis spätestens Sonntag 12:00 Uhr".
     ///
     /// 2025-01-11 (Saturday) in CET → 2025-01-12 12:00 CET = 11:00 UTC.
     #[test]
@@ -2167,7 +2167,7 @@ mod tests {
     fn aperak_gas_initialprozess_3_werktage_winter_cet() {
         // Monday 2025-01-13 10:00 UTC (= 11:00 CET).
         // 3 Werktage: Tue 14 (+1), Wed 15 (+2), Thu 16 (+3).
-        // APERAK AHB 1.1 §2.3.1 names no clock time for the Initialprozess
+        // APERAK AHB 1.1 Kap. 2.3.1 names no clock time for the Initialprozess
         // window — „spätestens 3 Werktage nach Eingang" — so the whole of
         // Thursday 2025-01-16 is inside it, ending 23:59:59.999999999 CET.
         let received =
@@ -2199,7 +2199,7 @@ mod tests {
 
     /// The Initialprozess window is not the Folgeprozess window.
     ///
-    /// APERAK AHB 1.1 §2.3.1 states the Folgeprozess rule („bis zum nächsten
+    /// APERAK AHB 1.1 Kap. 2.3.1 states the Folgeprozess rule („bis zum nächsten
     /// Werktag 12 Uhr") in the paragraph directly above the Initialprozess one
     /// („spätestens 3 Werktage nach Eingang"), and only the first names a clock
     /// time. Carrying the noon over to the second removes twelve hours from
@@ -2352,7 +2352,7 @@ mod tests {
         );
     }
 
-    /// GeLi Gas 3.0 Kap. 2.6: the arrival day is not counted (§ 187 Abs. 1
+    /// GeLi Gas 3.0 Kap. 2.6: the arrival day is not counted (Kap. 187 Abs. 1
     /// BGB), and the Frist runs to the **end** of the n-th Werktag.
     #[test]
     fn end_of_werktag_after_counts_from_the_day_after_arrival() {

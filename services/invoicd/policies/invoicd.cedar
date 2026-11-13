@@ -43,3 +43,18 @@ permit(
     context.principal_tenant == context.resource_tenant &&
     context.principal_roles.contains("LF")
 };
+
+// ── Statements for the Prüfschritte no INVOIC answers ─────────────────────────
+//
+// A Leistungsnachweis (Prüfschritt 310) and the answers stated on a held
+// invoice (310, 320, 330, 80) decide whether that invoice is paid or refused,
+// so they are the recipient's own: the roles that receive a PID 31009 — the
+// ESA, the LF and the NB.
+permit(
+    principal,
+    action == Action::"record-feststellung",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.containsAny(["ESA", "LF", "NB"])
+};

@@ -71,9 +71,13 @@ A `Warn` escalates to `Dispute` only above `auto_dispute_threshold_eur`
 | `POST` | `/api/v1/receipts/{id}/confirm-payment` | `write-receipt` |
 | `POST` | `/api/v1/receipts/{id}/dispatch-answer` | `write-receipt` |
 | `POST` | `/api/v1/receipts/{id}/resolve-dispute` | `write-receipt` |
+| `POST` | `/api/v1/receipts/{id}/feststellungen` | `record-feststellung` |
+| `POST` | `/api/v1/leistungsnachweise` | `record-feststellung` |
 | `GET` | `/invoicd/metrics` | — (internal) |
 
-Write actions are restricted to the `LF` role (`policies/invoicd.cedar`).
+`write-receipt` is restricted to the `LF` role, `record-feststellung` — the
+statements that decide a held invoice — to the 31009 recipients `ESA`, `LF` and
+`NB` (`policies/invoicd.cedar`).
 `/webhook` answers `204` once an event is finished with — answered, deliberately
 unanswered or dead-lettered — and `503` when the reference data (Preisblatt,
 Mehr-/Mindermengenpreise, ESA-Angebot) could not be read from `marktd`, so the
@@ -118,7 +122,7 @@ total_tolerance            = 0.01
 tariff_tolerance           = 0.03
 require_tariff             = false  # true: a missing PRICAT entry disputes
 auto_dispute_threshold_eur = "0.00"    # EUR as a string; "0.00" = never escalate a Warn
-max_zahlungsziel_days      = 30     # § 7 Allgemeine Festlegungen V6.1d
+# max_zahlungsziel_days    = 60     # optional ceiling in days, an operator choice; unset = none
 
 [erp]
 webhook_url = "https://erp.example.com/webhooks/invoicd"

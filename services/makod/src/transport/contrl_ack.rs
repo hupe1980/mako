@@ -1,4 +1,4 @@
-//! CONTRL Empfangsbestätigung service — CONTRL AHB 1.0 §2.3 / APERAK AHB 1.1 §2.3.
+//! CONTRL Empfangsbestätigung service — CONTRL AHB 1.0 Kap. 2.3 / APERAK AHB 1.1 Kap. 2.3.
 //!
 //! ## Regulatory obligation
 //!
@@ -7,17 +7,17 @@
 //! > (UCI DE0083 = 7) oder Syntaxfehlermeldung (UCI DE0083 = 4)) zu versenden,
 //! > außer als Reaktion auf eine CONTRL."
 //! >
-//! > — CONTRL AHB 1.0 §2.3.1
+//! > — CONTRL AHB 1.0 Kap. 2.3.1
 //!
 //! > „Auf eine APERAK ist immer eine CONTRL zu senden."
 //! >
-//! > — APERAK AHB 1.1 §2.3 (Gas rules)
+//! > — APERAK AHB 1.1 Kap. 2.3 (Gas rules)
 //!
 //! For every inbound **Gas** interchange (UNB…UNZ) **or Gas APERAK**, makod MUST
 //! send a CONTRL Empfangsbestätigung (UCI DE0083 = 7) back to the sender.
-//! Only CONTRL-on-CONTRL is forbidden (§2.2.2.2).
+//! Only CONTRL-on-CONTRL is forbidden (Kap. 2.2.2.2).
 //!
-//! For **Strom** interchanges no Empfangsbestätigung is required: §2.4 uses the
+//! For **Strom** interchanges no Empfangsbestätigung is required: Kap. 2.4 uses the
 //! CONTRL there for nothing but the Syntaxfehlermeldung.
 //!
 //! ## The two Ausprägungen
@@ -34,9 +34,9 @@
 //!
 //! ## The window is not one number
 //!
-//! Six wall-clock hours is the Regelfall (§2.3.1, §2.4.1). §2.4.1 shortens a
+//! Six wall-clock hours is the Regelfall (Kap. 2.3.1, Kap. 2.4.1). Kap. 2.4.1 shortens a
 //! Strom UTILMD or ORDERS to **15 minutes** — six hours again when it arrived on
-//! a Saturday — and §2.3.1 shortens a GABi-Gas ALOCAT to **45 minutes**. The
+//! a Saturday — and Kap. 2.3.1 shortens a GABi-Gas ALOCAT to **45 minutes**. The
 //! deadline registered beside the outbox entry carries whichever applies; see
 //! [`mako_fristen::ContrlAnlass`].
 //!
@@ -50,7 +50,7 @@
 //! interchange, passing all messages contained in the UNB…UNZ **and the
 //! recipient MP-ID** (UNB DE0010 — the own party the interchange is addressed to).
 //! The recipient MP-ID resolves the interchange's Sparte via the own-party
-//! registry (each `[[party]]` is exactly one Sparte, BDEW §2.13); only Gas
+//! registry (each `[[party]]` is exactly one Sparte, Allgemeine Festlegungen Kap. 2.13); only Gas
 //! interchanges get a CONTRL. The service enqueues a single [`OutboxMessage`] of
 //! type `"CONTRL"` which the [`OutboxWorker`] renders via
 //! `edifact_renderer::render_contrl` and delivers to the counterparty's AS4 endpoint.
@@ -89,7 +89,7 @@ use crate::party_registry::{MpIdRegistry, RoleSparte};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     /// Empfangsbestätigung — `UCI` DE 0083 = `7`. Gas only: in Strom the CONTRL
-    /// is used **exclusively** as a Syntaxfehlermeldung (AHB §2.4).
+    /// is used **exclusively** as a Syntaxfehlermeldung (AHB Kap. 2.4).
     Empfangsbestaetigung,
     /// Syntaxfehlermeldung — `UCI` DE 0083 = `4` plus the DE 0085 code, and with
     /// it the statement that the Übertragungsdatei is not processed further.
@@ -133,7 +133,7 @@ pub enum SyntaxFehler {
     /// `12` „Ungültiger Wert" — the catch-all for a file that did not parse.
     UngueltigerWert,
     /// `25` „Test-Kennzeichen nicht unterstützt" — `UNB` DE 0035 = `1` on a
-    /// production endpoint (Allgemeine Festlegungen §3).
+    /// production endpoint (Allgemeine Festlegungen Kap. 3).
     TestKennzeichen,
     /// `7` „Empfänger der Übertragungsdatei ist nicht der tatsächliche
     /// Empfänger" — `UNB` DE 0010 names a party this deployment does not hold.
@@ -514,7 +514,7 @@ pub fn unb_parties(raw: &[u8]) -> Option<(String, String, String)> {
 /// methods are not dyn-compatible.
 pub struct ContrlAckService {
     /// Shared store: the CONTRL message and its 6-hour delivery deadline
-    /// (CONTRL AHB 1.0 §2.3.1) are written in **one** transaction via
+    /// (CONTRL AHB 1.0 Kap. 2.3.1) are written in **one** transaction via
     /// [`SlateDbStore::enqueue_outbox_with_deadlines`], so a crash can never
     /// queue the message without its escalation deadline.
     outbox: Arc<SlateDbStore>,
@@ -530,7 +530,7 @@ impl ContrlAckService {
     /// Construct a new service.
     ///
     /// - `outbox`: shared `SlateDbStore` — enqueues the CONTRL message and
-    ///   registers its 6h deadline (CONTRL AHB 1.0 §2.3.1) atomically.
+    ///   registers its 6h deadline (CONTRL AHB 1.0 Kap. 2.3.1) atomically.
     /// - `tenant_id`: the active tenant identifier.
     /// - `mp_id_registry`: the own-party registry, used to resolve the recipient
     ///   MP-ID to its Sparte and to pick the CONTRL sender MP-ID.
@@ -552,14 +552,14 @@ impl ContrlAckService {
     /// interchange carries ([`notify_quittungen`](Self::notify_quittungen)).
     ///
     /// **Regulatory basis:**
-    /// - CONTRL AHB 1.0 §2.3.1: "Der Empfänger der Übertragungsdatei **oder APERAK**
+    /// - CONTRL AHB 1.0 Kap. 2.3.1: "Der Empfänger der Übertragungsdatei **oder APERAK**
     ///   teilt dem Absender unverzüglich, jedoch spätestens **6 Stunden** nach Erhalt
     ///   der Übertragungsdatei oder APERAK, das Ergebnis seiner syntaktischen Prüfung
     ///   mittels der Nachricht CONTRL mit."
-    /// - APERAK AHB 1.1 §2.3: "Auf eine APERAK ist immer eine CONTRL zu senden."
+    /// - APERAK AHB 1.1 Kap. 2.3: "Auf eine APERAK ist immer eine CONTRL zu senden."
     ///
     /// This means: we MUST send CONTRL for both Gas interchanges AND Gas APERAKs we
-    /// receive.  Only CONTRL-on-CONTRL is forbidden (§2.2.2.2).
+    /// receive.  Only CONTRL-on-CONTRL is forbidden (Kap. 2.2.2.2).
     ///
     /// `interchange_ref` is the UNB DE0020 interchange control reference.  Pass
     /// `pi.header.control_ref.as_ref()` from the parsed interchange.  An empty
@@ -575,7 +575,7 @@ impl ContrlAckService {
     /// Passes silently when:
     /// - The interchange is not Gas (recipient MP-ID resolves to Strom, or — for a
     ///   sparte-neutral / unknown recipient — no message carries a Gas signal).
-    /// - All messages are CONTRL (§2.2.2.2 exception: no CONTRL-on-CONTRL).
+    /// - All messages are CONTRL (Kap. 2.2.2.2 exception: no CONTRL-on-CONTRL).
     /// - No sender MP-ID can be extracted from any acknowledgeable message.
     ///
     /// `messages` should contain every successfully-parsed message from one
@@ -671,12 +671,12 @@ impl ContrlAckService {
         recipient_mp_id: &str,
     ) -> Result<(), EngineError> {
         // ── Determine the interchange Sparte ───────────────────────────────────
-        // The CONTRL Empfangsbestätigung obligation (CONTRL AHB 1.0 §2.3.1) is a
+        // The CONTRL Empfangsbestätigung obligation (CONTRL AHB 1.0 Kap. 2.3.1) is a
         // property of the *Übertragungsdatei*, keyed purely on Sparte — every
         // inbound Gas interchange gets a CONTRL; Strom does not.
         //
         // Primary signal: the recipient MP-ID (UNB DE0010) is one of our own
-        // parties, and every `[[party]]` covers exactly one Sparte (BDEW §2.13).
+        // parties, and every `[[party]]` covers exactly one Sparte (Allgemeine Festlegungen Kap. 2.13).
         // This is authoritative — unlike PID/release heuristics, which fail for
         // INVOIC/ORDERS/MSCONS (no Sparte prefix in the release code, and NAD
         // DE3055 agency 293 is shared across both sectors in modern MaKo).
@@ -696,8 +696,8 @@ impl ContrlAckService {
             return Ok(());
         }
 
-        // §2.2.2.2 exception: no CONTRL in response to CONTRL. APERAK is NOT
-        // excluded (CONTRL AHB §2.3.1 + APERAK AHB §2.3 mandate a CONTRL even for
+        // Kap. 2.2.2.2 exception: no CONTRL in response to CONTRL. APERAK is NOT
+        // excluded (CONTRL AHB Kap. 2.3.1 + APERAK AHB Kap. 2.3 mandate a CONTRL even for
         // inbound Gas APERAKs). An interchange of only CONTRL is skipped here.
         let ackable: Vec<&AnyMessage> =
             messages.iter().copied().filter(|m| !is_contrl(m)).collect();
@@ -720,7 +720,7 @@ impl ContrlAckService {
             interchange_ref,
             recipient_mp_id,
             Verdict::Empfangsbestaetigung,
-            // The Empfangsbestätigung is Gas-only, and §2.3.1 shortens only the
+            // The Empfangsbestätigung is Gas-only, and Kap. 2.3.1 shortens only the
             // ALOCAT — which rides DVGW, not this path.
             mako_fristen::ContrlAnlass::Regelfall,
         )
@@ -730,7 +730,7 @@ impl ContrlAckService {
     /// Enqueue the Empfangsbestätigung for a **DVGW** gas-transport interchange.
     ///
     /// The obligation is a property of the Übertragungsdatei and keyed on Sparte
-    /// (CONTRL AHB 1.0 §2.3.1), and a DVGW interchange is Gas by definition — the
+    /// (CONTRL AHB 1.0 Kap. 2.3.1), and a DVGW interchange is Gas by definition — the
     /// DVGW formats *are* the gas transport layer — so neither of the two
     /// decisions the BDEW path makes from its messages applies here: the Sparte
     /// is not in question, and a DVGW message is never a CONTRL, so the
@@ -741,7 +741,7 @@ impl ContrlAckService {
     /// # Errors
     ///
     /// As [`emit_for_interchange`](Self::emit_for_interchange).
-    /// `ist_alocat` shortens the window to 45 minutes: CONTRL AHB 1.0 §2.3.1
+    /// `ist_alocat` shortens the window to 45 minutes: CONTRL AHB 1.0 Kap. 2.3.1
     /// singles out „der Prozess der ALOCAT-Übermittlung vom NB an den MGV nach
     /// GABi Gas". It is the caller's to state because the document code that
     /// decides it is in the ingest report, not in the envelope.
@@ -778,20 +778,20 @@ impl ContrlAckService {
     /// processed — `UCI` DE 0083 = `4` with the DE 0085 code in `fehler`.
     ///
     /// This is the half of the CONTRL that both Sparten owe. Where the
-    /// Empfangsbestätigung is Gas-only, CONTRL AHB 1.0 §2.4 is explicit that in
+    /// Empfangsbestätigung is Gas-only, CONTRL AHB 1.0 Kap. 2.4 is explicit that in
     /// Strom „wird die CONTRL **ausschließlich** als Syntaxfehlermeldung
     /// eingesetzt" — so there is no Sparte gate here, and the `messages` the
-    /// interchange was *meant* to carry decide only the window (§2.4.1 gives a
+    /// interchange was *meant* to carry decide only the window (Kap. 2.4.1 gives a
     /// UTILMD or ORDERS 15 minutes rather than 6 hours).
     ///
-    /// Sending it says two things at once (§2.3.2 / §2.4.2): the Übertragungsdatei
+    /// Sending it says two things at once (Kap. 2.3.2 / Kap. 2.4.2): the Übertragungsdatei
     /// arrived, and it „wird nicht weiterbearbeitet". This is the variant for a
     /// fault that cannot be placed on a message; one that can is reported with
     /// [`emit_message_syntax_errors`](Self::emit_message_syntax_errors).
     ///
     /// # When no CONTRL can be sent at all
     ///
-    /// §2.2.2.1: the CONTRL's Muss-Datenelemente are copied out of the subject
+    /// Kap. 2.2.2.1: the CONTRL's Muss-Datenelemente are copied out of the subject
     /// interchange, so a `UNB` that is itself missing or invalid makes a
     /// syntactically correct CONTRL impossible — „Der Fehler muss dann durch
     /// andere Mittel als durch die CONTRL mitgeteilt werden." The callers
@@ -818,7 +818,7 @@ impl ContrlAckService {
             return Ok(());
         }
         let types = unh_message_types(interchange);
-        // §2.2.2.2: never a CONTRL in answer to a CONTRL, however broken.
+        // Kap. 2.2.2.2: never a CONTRL in answer to a CONTRL, however broken.
         if !types.is_empty() && types.iter().all(|t| t == "CONTRL") {
             return Ok(());
         }
@@ -953,7 +953,7 @@ impl ContrlAckService {
             }),
         );
 
-        // The CONTRL delivery deadline (CONTRL AHB 1.0 §2.3.1 / §2.4.1), whose
+        // The CONTRL delivery deadline (CONTRL AHB 1.0 Kap. 2.3.1 / Kap. 2.4.1), whose
         // width `anlass` decides.
         //
         // `OutboxWorker::discharge_delivery_window` retires this deadline as
@@ -1000,14 +1000,14 @@ impl ContrlAckService {
                 Ok(())
             }
             Err(e) => {
-                // Log at error: a missing CONTRL triggers §1.3 clarification
+                // Log at error: a missing CONTRL triggers Kap. 1.3 clarification
                 // obligations on the counterparty side.
                 tracing::error!(
                     error      = %e,
                     sender_mp_id,
                     verdict = verdict.label(),
                     "CONTRL: atomic outbox+deadline enqueue failed — the regulatory \
-                     CONTRL window is at risk (CONTRL AHB 1.0 §2.3.1 / §2.4.1)",
+                     CONTRL window is at risk (CONTRL AHB 1.0 Kap. 2.3.1 / Kap. 2.4.1)",
                 );
                 Err(e)
             }
@@ -1142,13 +1142,13 @@ fn quittung_notice(msg: &AnyMessage, tenant_id: TenantId) -> Option<(OutboxMessa
 /// The window a Syntaxfehlermeldung earns, from the recipient's Sparte and the
 /// message types the rejected interchange carried.
 ///
-/// §2.3.1 gives the ALOCAT 45 minutes for „die zugehörige CONTRL" without
+/// Kap. 2.3.1 gives the ALOCAT 45 minutes for „die zugehörige CONTRL" without
 /// distinguishing the two verdicts, so a broken ALOCAT owes the same window as
 /// an accepted one. It is decided first because it names the message and not the
 /// Sparte, and an ALOCAT interchange carries no UTILMD or ORDERS to compete
 /// with it.
 ///
-/// §2.4.1's 15-minute window sits in the **Strom** chapter, so it applies only
+/// Kap. 2.4.1's 15-minute window sits in the **Strom** chapter, so it applies only
 /// where the recipient is a Strom party. A sparte-neutral or unknown recipient
 /// keeps the Regelfall — the longer window, and the one that cannot be missed by
 /// having been applied wrongly.
@@ -1165,7 +1165,7 @@ fn syntaxfehler_anlass(sparte: Option<RoleSparte>, types: &[String]) -> mako_fri
 }
 
 /// `true` when the DVGW interchange carried an ALOCAT, which shortens the CONTRL
-/// window to 45 minutes (CONTRL AHB 1.0 §2.3.1).
+/// window to 45 minutes (CONTRL AHB 1.0 Kap. 2.3.1).
 ///
 /// Read off the ingest report rather than the envelope: the document code that
 /// decides it is in the message body.
@@ -1181,7 +1181,7 @@ pub fn dvgw_report_has_alocat(report: &crate::dvgw_ingest::DvgwIngestReport) -> 
 ///
 /// Read off the wire rather than off a parsed model, because the case that needs
 /// it is the one where nothing parsed: a Syntaxfehlermeldung on an unreadable
-/// UTILMD still owes the 15-minute window of §2.4.1, and the message type sits
+/// UTILMD still owes the 15-minute window of Kap. 2.4.1, and the message type sits
 /// in the `UNH` whether or not the body behind it is valid.
 ///
 /// Read through the recovering scan, which reads a `UNH` the parser refused as
@@ -1200,11 +1200,11 @@ fn unh_message_types(interchange: &[u8]) -> Vec<String> {
 
 /// Returns `true` when the message is a CONTRL.
 ///
-/// Per CONTRL AHB 1.0 §2.2.2.2: "Als Antwort auf eine empfangene CONTRL-Nachricht
+/// Per CONTRL AHB 1.0 Kap. 2.2.2.2: "Als Antwort auf eine empfangene CONTRL-Nachricht
 /// darf weder eine CONTRL-Nachricht noch eine andere UN/EDIFACT-Nachricht gesendet
 /// werden."  No CONTRL-on-CONTRL, ever.
 ///
-/// Note: APERAKs are NOT excluded here — CONTRL AHB §2.3.1 and APERAK AHB §2.3
+/// Note: APERAKs are NOT excluded here — CONTRL AHB Kap. 2.3.1 and APERAK AHB Kap. 2.3
 /// explicitly require a CONTRL reply when a Gas APERAK is received.
 fn is_contrl(msg: &AnyMessage) -> bool {
     matches!(msg, AnyMessage::Contrl(_))
@@ -1275,7 +1275,7 @@ fn message_is_gas(msg: &AnyMessage) -> bool {
 ///   Teil 2* as well as Gas under *AWH WiM Gas 2.0*.
 ///
 /// **Not 31004:** the Stornorechnung is a Sparte-neutral universal Storno (INVOIC
-/// AHB §3.1.2) — the same PID is used for Strom *and* Gas across GPKE/MMM/WiM/
+/// AHB Kap. 3.1.2) — the same PID is used for Strom *and* Gas across GPKE/MMM/WiM/
 /// Kapazität/AWH/GeLi. Like the other Sparte-agnostic PIDs it is resolved by
 /// recipient MP-ID in [`emit_for_interchange`], never forced to Gas here.
 fn is_unambiguous_gas_pid(pid: u32) -> bool {
@@ -1553,7 +1553,7 @@ mod tests {
         }
     }
 
-    /// §2.4.1 is the Strom chapter, so its short window follows both the Sparte
+    /// Kap. 2.4.1 is the Strom chapter, so its short window follows both the Sparte
     /// and the message type. This is the rule itself, decided without a clock:
     /// the window it names is 15 minutes or 6 hours depending on the weekday,
     /// and that arithmetic belongs to `mako_fristen`.
@@ -1574,15 +1574,15 @@ mod tests {
             syntaxfehler_anlass(Some(S::Strom), &orders),
             A::StromUtilmdOderOrders
         );
-        // The same message types toward a Gas recipient: §2.3.1, six hours.
+        // The same message types toward a Gas recipient: Kap. 2.3.1, six hours.
         assert_eq!(syntaxfehler_anlass(Some(S::Gas), &utilmd), A::Regelfall);
-        // A Strom recipient, and a message type §2.4.1 does not name.
+        // A Strom recipient, and a message type Kap. 2.4.1 does not name.
         assert_eq!(syntaxfehler_anlass(Some(S::Strom), &mscons), A::Regelfall);
         // Unknown or sparte-neutral: the longer window.
         assert_eq!(syntaxfehler_anlass(None, &utilmd), A::Regelfall);
         assert_eq!(syntaxfehler_anlass(Some(S::Both), &utilmd), A::Regelfall);
 
-        // §2.3.1 gives „die zugehörige CONTRL" on an ALOCAT 45 minutes and does
+        // Kap. 2.3.1 gives „die zugehörige CONTRL" on an ALOCAT 45 minutes and does
         // not exempt the Syntaxfehlermeldung, so the rejected ALOCAT is owed the
         // same window as the accepted one — and it is a DVGW message, so the
         // recipient's Sparte adds nothing to it.
@@ -1599,7 +1599,7 @@ mod tests {
                     UNH+1+UTILMD:D:11B:UN:S2.1'BGM+E01+DOC1+9'UNT+3+1'UNZ+1+IC4711'";
         assert_eq!(super::unh_message_types(raw), vec!["UTILMD".to_owned()]);
 
-        // A CONTRL interchange, which §2.2.2.2 forbids answering.
+        // A CONTRL interchange, which Kap. 2.2.2.2 forbids answering.
         let contrl = b"UNB+UNOC:3+A+B+260912:0900+IC1'UNH+1+CONTRL:D:3:UN:2.0b'UNT+2+1'UNZ+1+IC1'";
         assert_eq!(super::unh_message_types(contrl), vec!["CONTRL".to_owned()]);
 

@@ -79,7 +79,7 @@
 //! - **§36 / §38 / §38a EnWG**, **§§2–3 StromGVV**
 //! - **GPKE Teil 2 Kap. 2.3 (BK6-24-174)** — Beginn der Ersatz-/Grundversorgung
 //! - **UTILMD AHB Strom S2.1/S2.2 Kap. 8.6**, **EBD E_0615**
-//! - **APERAK AHB 1.1 §2.4.1** — Strom UTILMD 45-min APERAK Frist
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — Strom UTILMD 45-min APERAK Frist
 
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::payload::{Stammdaten, UtilmdPayload};
@@ -1070,7 +1070,7 @@ impl Workflow for GpkeEogWorkflow {
                         message_ref: message_ref.clone(),
                     });
                     // APERAK BGM+312 (Anerkennung) — Strom UTILMD 45-min Frist
-                    // (APERAK AHB 1.1 §2.4.1).
+                    // (APERAK AHB 1.1 Kap. 2.4.1).
                     let outbox = vec![
                         // The business notification. Without it `processd`'s LF
                         // module never sees the Zuordnung: `makod` delivers a

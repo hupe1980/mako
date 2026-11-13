@@ -61,7 +61,7 @@ async fn gnb() -> (
         snapshot_interval: 100,
         cedar,
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone(), tenant_id)),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
         marktd_client: Some(Arc::new(

@@ -40,7 +40,7 @@ pub struct OrdersQuery {
     /// This is the field-dispatch list, and it measures the **Lieferant's** date
     /// (`DTM+203 Ausführungsdatum` or `DTM+469 frühestes Startdatum`): when the
     /// LF wanted the work done. The regulatory window — 6 WT after the
-    /// frühestmöglicher Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 1,
+    /// frühestmöglicher Sperrtermin (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1,
     /// [`crate::sperr::pg::AUSFUEHRUNG_WERKTAGE`]) — is a different question and is
     /// reported separately as `frist_ueberschritten` on `/stats`.
     #[serde(default)]
@@ -185,10 +185,10 @@ pub struct FailRequest {
     /// cluster (`A04`/`A05`/`A06` under EBD E_0472 for a Sperrung).
     pub pruefschritt_code: Option<String>,
     /// `true` when no further Sperrversuch will be made — a court injunction, a
-    /// glaubhaft gemachter Verhinderungsgrund (§ 3.5.1.2 Nr. 5), or simply the
+    /// glaubhaft gemachter Verhinderungsgrund (Kap. 3.5.1.2 Nr. 5), or simply the
     /// field team calling it off.
     ///
-    /// Defaults to `false`: GPKE Teil 2 § 3.5.1.2 Nr. 5 gives the NB **two**
+    /// Defaults to `false`: GPKE Teil 2 Kap. 3.5.1.2 Nr. 5 gives the NB **two**
     /// Sperrversuche within one Sperrauftrag, so an ordinary "nobody home"
     /// report records the attempt and leaves the order in the queue. The second
     /// failure closes it regardless of this flag.
@@ -201,7 +201,7 @@ pub struct FailRequest {
 /// A Sperrversuch that did not succeed.
 ///
 /// The **first** one is recorded and the order stays in the queue: GPKE Teil 2
-/// § 3.5.1.2 Nr. 5 gives the NB two Sperrversuche within one Sperrauftrag, and
+/// Kap. 3.5.1.2 Nr. 5 gives the NB two Sperrversuche within one Sperrauftrag, and
 /// answering `Z13 gescheitert` after one visit ends a process that still owes a
 /// second. The second attempt — or `endgueltig: true` for a legal or factual
 /// impossibility — closes the order and dispatches IFTSTA 21039 so the Lieferant
@@ -254,7 +254,7 @@ async fn finish(
                 "status": "pending",
                 "sperrversuche": sperrversuche,
                 "iftsta_queued": false,
-                "note": "Sperrversuch recorded. GPKE Teil 2 § 3.5.1.2 Nr. 5 allows two \
+                "note": "Sperrversuch recorded. GPKE Teil 2 Kap. 3.5.1.2 Nr. 5 allows two \
                          attempts within one Sperrauftrag, so the order stays in the \
                          queue and no IFTSTA 21039 is sent yet. Use endgueltig=true to \
                          close it on a legal or factual impossibility.",

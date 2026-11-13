@@ -864,6 +864,17 @@ impl Generator<'_> {
                 coded.push(c.clone());
             }
         }
+        // DE 2379 follows the value DE 2380 already holds: where the column
+        // admits two formats (`102` or `303`), the Formatbedingungen on 2380
+        // (`[931]` ZZZ = +00) can have fitted the value to the other one.
+        if el.id == "2379"
+            && let Some(passend) = current.get(1).and_then(|v| format_of_value(v))
+            && let Some(i) = coded.iter().position(|c| c == passend)
+        {
+            let c = coded.remove(i);
+            coded.insert(0, c);
+            return Some(coded[0].clone());
+        }
         if !coded.is_empty() {
             return if unconditional > 0 || mig_required {
                 // The one code the column admits without a Voraussetzung is
@@ -925,6 +936,12 @@ impl Generator<'_> {
             "1154" | "1156" => {
                 if qualifier == "Z13" {
                     pid
+                } else if qualifier == "AUU" || first_in_element == "AUU" {
+                    // „Version der Summenzeitreihe" (IFTSTA AHB 2.1, SG4
+                    // RFF+AUU): the series' Versionsangabe, a `304`
+                    // `CCYYMMDDHHMMSSZZZ` (MSCONS AHB 3.2 Kap. 8.3.3, S. 96).
+                    let tag = self.tagesbeginn_303();
+                    format!("{}00{}", &tag[..12], &tag[12..])
                 } else {
                     format!("REF{pid}")
                 }
@@ -939,7 +956,7 @@ impl Generator<'_> {
             "0010" => self.parties.receiver.clone(),
             "3055" => {
                 let id = current.first().map_or("", String::as_str);
-                crate::AgencyCode::for_mp_id(id).as_str().to_owned()
+                crate::AgencyCode::for_mp_id(id).map_or_else(String::new, |a| a.as_str().to_owned())
             }
             "3225" => match qualifier {
                 "Z17" | "172" | "Z04" => "DE00056266802AO6G56M11SN51G21M24S".into(),
@@ -964,10 +981,16 @@ impl Generator<'_> {
                     // begins (Allgemeine Festlegungen V6.1d Kap. 3.1), and
                     // that instant is a valid Zeitpunkt as well.
                     "303" => self.tagesbeginn_303().into(),
-                    "610" | "602" => "202610".into(),
-                    "802" => "2026".into(),
+                    // `CCYYMMDDHHMMSSZZZ` — the same instant with its seconds.
+                    "304" => {
+                        let tag = self.tagesbeginn_303();
+                        format!("{}00{}", &tag[..12], &tag[12..])
+                    }
+                    "610" => "202610".into(),
+                    // `CCYY` — a year, not a month.
+                    "602" | "802" => "2026".into(),
                     "104" | "106" => "1001".into(),
-                    "203" | "304" => "202610010000".into(),
+                    "203" => "202610010000".into(),
                     "204" => "20261001000000".into(),
                     "401" => "0000".into(),
                     "501" | "502" => "00000000".into(),
@@ -1065,6 +1088,28 @@ fn fit_format(rule: &ElementRule, value: String) -> String {
         .filter_map(formatbedingung::example)
         .find(|c| accepted(c))
         .map_or(value, ToOwned::to_owned)
+}
+
+/// The DE 2379 code whose shape `value` has — the inverse of the placeholders
+/// [`Generator::synthetic`] writes for DE 2380.
+fn format_of_value(value: &str) -> Option<&'static str> {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let zoned = |n: usize| value.len() == n + 3 && digits(&value[..n]) && &value[n..] == "+00";
+    if zoned(12) {
+        Some("303")
+    } else if zoned(14) {
+        Some("304")
+    } else if !digits(value) {
+        None
+    } else {
+        match value.len() {
+            8 => Some("102"),
+            12 => Some("203"),
+            14 => Some("204"),
+            6 => Some("610"),
+            _ => None,
+        }
+    }
 }
 
 fn nth_code(codes: &[String], skip: usize) -> Option<String> {

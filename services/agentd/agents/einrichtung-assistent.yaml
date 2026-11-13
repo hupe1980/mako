@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
+# The Einrichtung's pre-fill: one sentence an operator types about the deployment, read into proposed answers of the setup interview — each shown for confirmation before it is used.
+#
+# The proposal itself is not this agent's: makod builds it deterministically
+# from the confirmed answers (`einrichtung_vorschlag`), with a source per line
+# and a gap per unanswered fact. This agent only reads a sentence. It holds no
+# grant, so it reads no service and can change nothing; agentd keeps an
+# identifier it proposes only when that identifier occurs in the sentence
+# (`plane::einrichtung`), so a code the model made up never reaches the form.
+#
+# Started by hand only (`POST /api/v1/runs`), from the Desk; no event reaches
+# it. With agentd down the interview works without it.
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: einrichtung-assistent
+  version: "1.0.0"
+  annotations:
+    mako.de/titel: "Einrichtung vorbelegen"
+    mako.de/zweck: "Liest aus einem Satz über das Deployment die Antworten der Einrichtung vor — Rollen, MP-IDs, Bilanzkreise —, jede zur Bestätigung durch eine Person."
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 1
+
+  identity:
+    role: >-
+      Reads one sentence an operator wrote about their deployment into the
+      answers of the setup interview, for the operator to confirm one by one.
+    constraints: |
+      The input's `satz` is one sentence, usually German, in which an
+      operator of a German energy-market participant describes the
+      deployment they are setting up. Read it into `angaben`.
+
+      ## PROCEDURE
+      1. Name the Rollen (ROLLEN below).
+      2. Copy each identifier exactly as written (IDENTIFIERS below).
+      3. Leave out what the sentence does not say.
+
+      ## ROLLEN
+      Each Marktrolle and Sparte the sentence names is one entry of
+      `rollen`, spelled `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`,
+      `msb-strom`, `msb-gas` or `esa-strom`: Lieferant → `lf-…`,
+      Netzbetreiber or Gasnetzbetreiber → `nb-…`, Messstellenbetreiber →
+      `msb-…`, Energieserviceanbieter → `esa-strom`. „Strom und Gas" names
+      both Sparten. A Rolle without a Sparte in the sentence is left out.
+
+      ## IDENTIFIERS — only as written
+      `mp_id` is the 13-digit Codenummer or 16-character EIC the sentence
+      gives for that Rolle, copied character for character; null when the
+      sentence gives none for it. Never derive, complete or correct a code,
+      and never move a code to another Rolle because its prefix suggests
+      it: the interview checks the prefix and tells the operator. The same
+      holds for `primaer` (the MP-ID the sentence calls primary or main),
+      the Bilanzkreise in `bilanzkreise[].standard` and the codes in
+      `verbundene_lieferanten`.
+
+      ## WHAT THE SENTENCE DOES NOT SAY
+      Leave it out: null, or an empty list. `verbundene_lieferanten` is []
+      only when the sentence says there are none, null otherwise. An
+      unanswered question stays a question the operator answers in the
+      interview — a guess would be shown as their answer.
+
+  topology:
+    mode: single
+    role: specialist
+
+  capabilities:
+    provides: [einrichtung.vorbelegen]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  # One sentence in, one answer out: the smallest ceilings of any specialist
+  # (one turn's output ask is 16384 tokens).
+  budgets:
+    max_tokens: 20000
+    max_steps: 2
+    max_effects: 2
+    max_wallclock_secs: 30
+
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [angaben]
+      properties:
+        angaben:
+          type: object
+          additionalProperties: false
+          required: [rollen, primaer, bilanzkreise, verbundene_lieferanten]
+          properties:
+            rollen:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [rolle, mp_id]
+                properties:
+                  rolle:
+                    type: string
+                    enum: [lf-strom, lf-gas, nb-strom, nb-gas, msb-strom, msb-gas, esa-strom]
+                  mp_id:
+                    type: [string, "null"]
+                    description: The code as the sentence writes it, or null.
+            primaer:
+              type: [string, "null"]
+              description: The MP-ID the sentence calls primary, or null.
+            bilanzkreise:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [sparte, standard]
+                properties:
+                  sparte:
+                    type: string
+                    enum: [strom, gas]
+                  standard:
+                    type: array
+                    items:
+                      type: string
+            verbundene_lieferanten:
+              type: [array, "null"]
+              items:
+                type: string
+
+  tools: []

@@ -10,7 +10,7 @@
 //!
 //! # Why these belong here and not in the workflow
 //!
-//! ORDRSP AHB 1.1b §4.15 makes `SG2 AJT` **Muss** on all four answer PIDs:
+//! ORDRSP AHB 1.1b Kap. 4.15 makes `SG2 AJT` **Muss** on all four answer PIDs:
 //! DE 4465 carries the Prüfschritt code and DE 1082 the tree it belongs to.
 //! Conditions `[17]` and `[18]` then require the code to sit in that tree's
 //! **Zustimmungs-** resp. **Ablehnungs-Cluster** — so the cluster, not an
@@ -39,7 +39,7 @@
 //!
 //! - BK6-24-174 Anlage 2b, WiM Strom Teil 2 Kap. 4.1–4.3
 //! - *Entscheidungsbaum-Diagramme und Codelisten* 4.3, Kap. 8.25–8.26
-//! - ORDRSP AHB 1.1b §4.15, ORDERS AHB 1.1b §4.15, ORDCHG AHB 1.1 §3.2
+//! - ORDRSP AHB 1.1b Kap. 4.15, ORDERS AHB 1.1b Kap. 4.15, ORDCHG AHB 1.1 Kap. 3.2
 
 use time::{Date, OffsetDateTime};
 
@@ -65,7 +65,7 @@ pub enum Bestellart {
 
 /// The EBD an ORDRSP 19011/19012 must name, given the `IMD+7081` it carries.
 ///
-/// ORDRSP AHB 1.1b §4.15 conditions `[21]`–`[23]`: `Z01`/`Z03` → `E_0256`
+/// ORDRSP AHB 1.1b Kap. 4.15 conditions `[21]`–`[23]`: `Z01`/`Z03` → `E_0256`
 /// (the answer to a Bestellung), `Z02` → `E_0254` (the answer to a Beendigung).
 /// The Storno answers 19013/19014 always cite `E_0257` and have no `IMD`.
 #[must_use]

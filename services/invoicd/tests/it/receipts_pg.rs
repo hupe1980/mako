@@ -70,6 +70,9 @@ fn receipt(process_id: Uuid) -> ReceiptRow {
         checked_at: OffsetDateTime::now_utc(),
         dispatched_at: None,
         tenant: TENANT.to_owned(),
+        bestellung_ref: None,
+        rechnungstyp: None,
+        offen: serde_json::json!([]),
     }
 }
 
@@ -368,5 +371,185 @@ async fn the_receipt_event_survives_an_erp_outage_and_is_delivered_once() {
         calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
         "delivered exactly once"
+    );
+}
+
+// ── What a person states for the Prüfschritte no INVOIC answers ──────────────
+
+use invoicd::pg::feststellungen::{
+    Feststellungen, Leistungsnachweis, feststellen, feststellungen_of, gehalten_fuer_bestellung,
+    leistung_erbracht, record_leistungsnachweis,
+};
+use time::macros::date;
+
+fn nachweis(von: time::Date, bis: time::Date, erbracht: bool) -> Leistungsnachweis {
+    Leistungsnachweis {
+        rechnungssteller_mp_id: "9900357000004".to_owned(),
+        bestellung_ref: "ORDERS-17007-1".to_owned(),
+        artikel_id: "9990001100002".to_owned(),
+        von,
+        bis,
+        erbracht,
+        nachweis: "Werte für März per MSCONS 13027 erhalten".to_owned(),
+    }
+}
+
+/// Prüfschritt 310 reads the Leistungsnachweise covering the position's
+/// period: a covering one answers, an uncovered period stays unknown, and two
+/// covering ones that disagree answer neither way.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_leistungsnachweis_answers_the_positions_it_covers() {
+    let (pool, _pg) = pool_or_skip!();
+    record_leistungsnachweis(
+        &pool,
+        TENANT,
+        &nachweis(date!(2026 - 03 - 01), date!(2026 - 03 - 31), true),
+        "op",
+    )
+    .await
+    .unwrap();
+    let frage = |von, bis| {
+        leistung_erbracht(
+            &pool,
+            TENANT,
+            "9900357000004",
+            "ORDERS-17007-1",
+            "9990001100002",
+            von,
+            bis,
+        )
+    };
+    assert_eq!(
+        frage(date!(2026 - 03 - 01), date!(2026 - 03 - 31))
+            .await
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        frage(date!(2026 - 03 - 10), date!(2026 - 03 - 10))
+            .await
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        frage(date!(2026 - 03 - 15), date!(2026 - 04 - 15))
+            .await
+            .unwrap(),
+        None
+    );
+    record_leistungsnachweis(
+        &pool,
+        TENANT,
+        &nachweis(date!(2026 - 03 - 10), date!(2026 - 03 - 20), false),
+        "op",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        frage(date!(2026 - 03 - 12), date!(2026 - 03 - 12))
+            .await
+            .unwrap(),
+        None,
+        "a contradiction answers neither way"
+    );
+    assert!(
+        record_leistungsnachweis(
+            &pool,
+            TENANT,
+            &Leistungsnachweis {
+                nachweis: " ".to_owned(),
+                ..nachweis(date!(2026 - 05 - 01), date!(2026 - 05 - 31), true)
+            },
+            "op"
+        )
+        .await
+        .is_err(),
+        "a statement rests on something"
+    );
+}
+
+/// Statements land on a held receipt only, merge over earlier ones, and the
+/// receipt is found again for the order a Leistungsnachweis names.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn statements_land_on_a_held_receipt_only() {
+    let (pool, _pg) = pool_or_skip!();
+    let process_id = Uuid::new_v4();
+    let mut row = receipt(process_id);
+    row.pid = 31009;
+    row.outcome = "Offen".to_owned();
+    row.bestellung_ref = Some("ORDERS-17007-1".to_owned());
+    upsert_receipt(&pool, &row).await.unwrap();
+    let id: Uuid = sqlx::query_scalar("SELECT id FROM invoic_receipts WHERE process_id = $1")
+        .bind(process_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let mut erste = Feststellungen::default();
+    erste.leistung_erbracht.insert(1, false);
+    erste.preis_wie_angebot.insert(1, true);
+    assert!(
+        feststellen(
+            &pool,
+            TENANT,
+            id,
+            &erste,
+            "geprüft",
+            "op",
+            OffsetDateTime::now_utc()
+        )
+        .await
+        .unwrap()
+    );
+    let mut zweite = Feststellungen::default();
+    zweite.leistung_erbracht.insert(1, true);
+    assert!(
+        feststellen(
+            &pool,
+            TENANT,
+            id,
+            &zweite,
+            "Nachweis nachgereicht",
+            "op",
+            OffsetDateTime::now_utc()
+        )
+        .await
+        .unwrap()
+    );
+    let f = feststellungen_of(&pool, TENANT, process_id).await.unwrap();
+    assert_eq!(
+        f.leistung_erbracht.get(&1),
+        Some(&true),
+        "the later statement wins"
+    );
+    assert_eq!(
+        f.preis_wie_angebot.get(&1),
+        Some(&true),
+        "the earlier one stays"
+    );
+
+    let gehalten = gehalten_fuer_bestellung(&pool, TENANT, "9900357000004", "ORDERS-17007-1")
+        .await
+        .unwrap();
+    assert_eq!(gehalten.len(), 1);
+    assert_eq!(gehalten[0].data["bestellung_ref"], "ORDERS-17007-1");
+
+    row.outcome = "Ok".to_owned();
+    upsert_receipt(&pool, &row).await.unwrap();
+    assert!(
+        !feststellen(
+            &pool,
+            TENANT,
+            id,
+            &zweite,
+            "zu spät",
+            "op",
+            OffsetDateTime::now_utc()
+        )
+        .await
+        .unwrap(),
+        "a decided receipt takes no statement"
     );
 }

@@ -48,7 +48,6 @@ use mako_fristen as fristen;
 use mako_gpke::{
     GPKE_PROCESS_RESPONSE_LABEL, GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow,
     LfAnmeldungCommand, LfAnmeldungState, SupplierChangeCommand, SupplierChangeState,
-    post_acceptance,
 };
 use time::OffsetDateTime;
 
@@ -121,7 +120,7 @@ fn render_utilmd(
             ),
         )
         .marktlokation(malo)
-        // `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 §5.3): without a
+        // `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 Kap. 5.3): without a
         // Bilanzkreis the NB cannot assign the Marktlokation to the LF.
         .produktpaket(edi_energy::utilmd_codes::Produktpaket::bilanzkreis(
             "11XBK-EEG------Q",
@@ -308,9 +307,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
     let antwort_ref = "CROSS-FV-ANTWORT-001";
 
     // NB sends acceptance — this cancels the APERAK deadline.
-    let malo = MaLo::new(MALO_ID);
-    let lfn_code = MarktpartnerCode::new(LFN_ID);
-    let obligations = post_acceptance::lieferbeginn_obligations(55001, &malo, &lfn_code, None);
+    let obligations = Vec::new();
     nb.run(
         SupplierChangeCommand::SendAntwort {
             antwort: nb_antwort(true, None),
@@ -525,9 +522,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
 
     // ── Step 2: NB sends acceptance ───────────────────────────────────────────
 
-    let malo = MaLo::new(MALO_ID);
-    let lfn_code = MarktpartnerCode::new(LFN_ID);
-    let obligations = post_acceptance::lieferbeginn_obligations(55001, &malo, &lfn_code, None);
+    let obligations = Vec::new();
     nb.run(
         SupplierChangeCommand::SendAntwort {
             antwort: nb_antwort(true, None),

@@ -49,7 +49,7 @@ has the OIDC setup.
 
 The Marktpartner-IDs are synthetic on purpose. An MP-ID that satisfies a
 published check-digit procedure is an assigned code naming a real company
-(Identifikatoren AWH §2.1), and a public demo must not carry one.
+(Identifikatoren AWH Kap. 2.1), and a public demo must not carry one.
 
 ## What holds them to the code
 

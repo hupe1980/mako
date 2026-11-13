@@ -48,9 +48,9 @@
 //!
 //! # The answer shape decides the REMADV Prüfidentifikator
 //!
-//! REMADV AHB 1.0a § 3.1.2 carries **33003** „Abweisung Kopf und Summe" and
+//! REMADV AHB 1.0a Kap. 3.1.2 carries **33003** „Abweisung Kopf und Summe" and
 //! **33004** „Abweisung Position", whose `SG7 AJT` DE 1082 admits the Rechnungs-
-//! trees. The plain Abweisung **33002** of § 3.1.1 admits the Storno trees
+//! trees. The plain Abweisung **33002** of Kap. 3.1.1 admits the Storno trees
 //! instead, which answer with a single code.
 //! [`RechnungsAntwort::remadv_pid`] and [`StornoAntwort::remadv_pid`] are that
 //! mapping, so an answer cannot be sent under a Prüfidentifikator its tree is
@@ -61,7 +61,7 @@
 //! - BK6-24-174 Anlage 2b, WiM Strom Teil 2 Kap. 4.5
 //! - BDEW *AWH Prozesse zur Änderung der Technik an Lokationen* V1.1, Kap. 9.3/9.4
 //! - *Entscheidungsbaum-Diagramme und Codelisten* 4.3, Kap. 8.27 und 9.3/9.4
-//! - REMADV AHB 1.0a § 3.1.1 / § 3.1.2, COMDIS AHB 1.0h, INVOIC AHB 1.0b
+//! - REMADV AHB 1.0a Kap. 3.1.1 / Kap. 3.1.2, COMDIS AHB 1.0h, INVOIC AHB 1.0b
 
 use time::Date;
 
@@ -184,9 +184,13 @@ pub fn familie_fuer(
 /// identical sentence three times — once for each Abrechnungsart of the
 /// Dienstleistungsrechnung (Messstellenbetrieb, Geräteübernahme,
 /// Zusatz-/Kontrollablesung) — so it binds PID **31003** as well. These walks
-/// cover the 31009 families only, and 31003's own tree is not walked at all
-/// (`E_0566`/`E_0210`), so nothing enforces it there yet.
-pub const ZAHLUNGSZIEL_MINDEST_WT: u32 = 10;
+/// cover the 31009 families only; `invoic-checker` enforces it on 31003 as
+/// a plausibility finding, since 31003's own tree is not walked here
+/// (`E_0566`/`E_0210`).
+///
+/// One value with [`mako_fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT`], which
+/// carries every Fundstelle.
+pub const ZAHLUNGSZIEL_MINDEST_WT: u32 = mako_fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT;
 
 /// Which level of the EBD a Befund came from.
 ///
@@ -426,10 +430,11 @@ pub struct RechnungsFakten {
     /// first round has no such Prüfschritt; [`pruefe_rechnung_erneut`]
     /// refuses with `A25` on `Some(false)` and leaves the step open on `None`.
     pub einwaende_entkraeftet: Option<bool>,
-    /// Prüfschritt 10 — does the invoice carry the § 14 Abs. 4 UStG content?
-    /// `None` escalates rather than refusing a formally correct invoice on a
-    /// check nothing ran.
-    pub ustg_konform: Option<bool>,
+    /// Prüfschritt 10 — the § 14 Abs. 4 UStG Angaben the invoice lacks, each
+    /// named: empty is „ja", non-empty refuses with `A01` and is its
+    /// Begründung („Die Ablehnung ist zu begründen", EBD 4.3 Kap. 8.27.1,
+    /// S. 626). `None` is „not assessed" and leaves the walk open.
+    pub ustg_maengel: Option<Vec<String>>,
     /// `DTM+137` — the Rechnungsdatum (Prüfschritte 20, 30).
     pub rechnungsdatum: Date,
     /// The day the invoice arrived — the **ÜT of the AS4-Zustellquittung**,
@@ -662,19 +667,22 @@ fn kopfebene(
 
     // 10 — § 14 Abs. 4 UStG. `None` is „not assessed": neither „ja" nor
     // „nicht erfüllt", so the walk stops open rather than state either.
-    let Some(ustg_konform) = r.ustg_konform else {
+    let Some(ustg_maengel) = r.ustg_maengel.as_deref() else {
         return Err(offen(
             10,
             "Ob die Rechnung § 14 Abs. 4 UStG erfüllt, ist nicht beurteilt",
         ));
     };
-    if !ustg_konform {
+    if !ustg_maengel.is_empty() {
         return Ok(Some(befund(
             tree,
             kopf,
             "A01",
             10,
-            "Die RechnungsFakten erfüllt die Anforderungen des § 14 Abs. 4 UStG nicht",
+            format!(
+                "Die Rechnung entspricht nicht § 14 Abs. 4 UStG — es fehlt: {}",
+                ustg_maengel.join("; ")
+            ),
         )));
     }
 
@@ -1210,9 +1218,10 @@ pub struct StornoFakten {
     /// Prüfschritt 15 — is the Storno's own Rechnungsnummer already on file
     /// from this Rechnungssteller?
     pub rechnungsnummer_bereits_verwendet: bool,
-    /// Prüfschritt 17 — § 14 Abs. 4 UStG. `None` is „not assessed" and
-    /// leaves the walk [open](StornoAntwort::Offen).
-    pub ustg_konform: Option<bool>,
+    /// Prüfschritt 17 — the § 14 Abs. 4 UStG Angaben the Stornorechnung
+    /// lacks, each named: empty is „ja", non-empty refuses with `A07`. `None`
+    /// is „not assessed" and leaves the walk [open](StornoAntwort::Offen).
+    pub ustg_maengel: Option<Vec<String>>,
     /// Prüfschritt 20 — was the original already cancelled?
     pub bereits_storniert: bool,
     /// Prüfschritt 30 — same Rechnungstyp as the original?
@@ -1259,7 +1268,7 @@ pub fn pruefe_stornorechnung(familie: RechnungsFamilie, s: &StornoFakten) -> Sto
             "Die Rechnungsnummer der StornoFakten liegt von diesem Rechnungssteller bereits vor",
         );
     }
-    let Some(ustg_konform) = s.ustg_konform else {
+    let Some(ustg_maengel) = s.ustg_maengel.as_deref() else {
         return StornoAntwort::Offen(OffenerPruefschritt {
             ebene: Ebene::Kopf,
             pruefschritt: 17,
@@ -1267,11 +1276,14 @@ pub fn pruefe_stornorechnung(familie: RechnungsFamilie, s: &StornoFakten) -> Sto
                 .to_owned(),
         });
     };
-    if !ustg_konform {
+    if !ustg_maengel.is_empty() {
         return refuse(
             "A07",
             17,
-            "Die StornoFakten erfüllt die Anforderungen des § 14 Abs. 4 UStG nicht",
+            &format!(
+                "Die Stornorechnung entspricht nicht § 14 Abs. 4 UStG — es fehlt: {}",
+                ustg_maengel.join("; ")
+            ),
         );
     }
     if s.bereits_storniert {
@@ -1354,7 +1366,7 @@ mod tests {
     fn rechnung() -> RechnungsFakten {
         RechnungsFakten {
             einwaende_entkraeftet: None,
-            ustg_konform: Some(true),
+            ustg_maengel: Some(Vec::new()),
             rechnungsdatum: date!(2026 - 04 - 01),
             eingangsdatum: date!(2026 - 04 - 01),
             leistungszeitraum: Some(Zeitraum {
@@ -1553,7 +1565,7 @@ mod tests {
         StornoFakten {
             ursprungsrechnung_bekannt: true,
             rechnungsnummer_bereits_verwendet: false,
-            ustg_konform: Some(true),
+            ustg_maengel: Some(Vec::new()),
             bereits_storniert: false,
             rechnungstyp_identisch: true,
             zeitraum_identisch: true,
@@ -1586,7 +1598,7 @@ mod tests {
     }
 
     /// A refused Storno rides **33002** — the plain Abweisung — because
-    /// `E_0267` is the one tree of this family REMADV AHB 1.0a § 3.1.1 admits
+    /// `E_0267` is the one tree of this family REMADV AHB 1.0a Kap. 3.1.1 admits
     /// in `SG7 AJT` DE 1082.
     #[test]
     fn a_refused_storno_rides_the_plain_abweisung() {
@@ -1775,7 +1787,7 @@ mod tests {
     fn an_unassessed_step_leaves_the_walk_open() {
         for f in FAMILIEN {
             let mut r = rechnung();
-            r.ustg_konform = None;
+            r.ustg_maengel = None;
             let a = pruefe_rechnung(*f, &r, CAL);
             assert!(a.ist_offen() && !a.ist_zustimmung(), "{}", f.rechnung);
             assert_eq!(a.offen[0].pruefschritt, 10);
@@ -1789,13 +1801,34 @@ mod tests {
         }
     }
 
+    /// Prüfschritt 10's Hinweis — „Die Ablehnung ist zu begründen" (EBD 4.3
+    /// Kap. 8.27.1, S. 626): the `A01` names every Angabe the invoice lacks.
+    #[test]
+    fn a_missing_pflichtangabe_refuses_at_10_and_names_it() {
+        for f in FAMILIEN {
+            let mut r = rechnung();
+            r.ustg_maengel = Some(vec![
+                "§ 14 Abs. 4 Nr. 2 UStG — Steuernummer oder Umsatzsteuer-Identifikationsnummer"
+                    .to_owned(),
+            ]);
+            let a = pruefe_rechnung(*f, &r, CAL);
+            assert_eq!(a.antwortcodes(), vec!["A01"], "{}", f.rechnung);
+            assert_eq!(a.befunde[0].pruefschritt, 10);
+            assert!(
+                a.befunde[0].detail.contains("Nr. 2"),
+                "{}",
+                a.befunde[0].detail
+            );
+        }
+    }
+
     /// The Kopfebene sends one code, from the first step that refuses. An open
     /// step before a refusing one may own that code, so the walk stops open
     /// there; a refusal before the open step is decided.
     #[test]
     fn the_kopfebene_stops_open_at_its_first_unassessed_step() {
         let mut r = rechnung();
-        r.ustg_konform = None;
+        r.ustg_maengel = None;
         r.rechnungsnummer_bereits_verwendet = true;
         let a = pruefe_rechnung(ESA, &r, CAL);
         assert!(a.befunde.is_empty());
@@ -1831,7 +1864,7 @@ mod tests {
         let s = StornoFakten {
             ursprungsrechnung_bekannt: true,
             rechnungsnummer_bereits_verwendet: false,
-            ustg_konform: None,
+            ustg_maengel: None,
             bereits_storniert: true,
             rechnungstyp_identisch: true,
             zeitraum_identisch: true,

@@ -16,7 +16,7 @@
 //! | 19010 | ORDRSP | Ablehnung der Beendigung | answered by the 17006 receiver |
 //!
 //! Verified against the BDEW PID overview 4.0 (sheet *Prüf-ID Prozessschritt*)
-//! and the AWH Aktivitätsdiagramme WiM V1.3 §§2.8–2.11:
+//! and the AWH Aktivitätsdiagramme WiM V1.3 Kap. 2.8–2.11:
 //!
 //! - **17005 has no ORDRSP answer.** It is itself the answer ("Antwort auf das
 //!   Angebot", Prozessschritt 2/3 of the Angebot/Anfrage sequences) — receiving
@@ -29,8 +29,8 @@
 //!   `E_0208` when the LF asked first (31010/31020). A deployment that routes
 //!   only 17005 records every acceptance and can never receive a „nein" — the
 //!   Angebot then sits open until the operator notices.
-//! - **17006 flows both ways.** The MSB may end the arrangement (AD §2.9, EBD
-//!   `E_0206`) and so may the LF (AD §2.11, EBD `E_0209`); whichever side
+//! - **17006 flows both ways.** The MSB may end the arrangement (AD Kap. 2.9, EBD
+//!   `E_0206`) and so may the LF (AD Kap. 2.11, EBD `E_0209`); whichever side
 //!   *receives* the Beendigung answers with ORDRSP 19009/19010. The answer is
 //!   a decision, not an echo — it arrives through the ERP command API, exactly
 //!   like a Sperrung confirmation.
@@ -99,6 +99,31 @@ pub const fn angebot_ablehnung_ebd(herkunft: AngebotHerkunft) -> &'static str {
     }
 }
 
+/// Which side ended the arrangement — it picks the Entscheidungsbaum the
+/// receiving side answers out of: `E_0206` when the MSB ended it (the LF
+/// checks), `E_0209` when the LF did (the MSB checks). ORDRSP AHB 1.1b Kap.
+/// 4.14 (S. 58) ties DE 1082 to the sender's role, `[9]`/`[10]`; the ORDERS
+/// 17006 names neither, so the answering side states it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BeendigungDurch {
+    /// The MSB ended it; the LF answers out of `E_0206`.
+    Msb,
+    /// The LF ended it; the MSB answers out of `E_0209`.
+    Lf,
+}
+
+impl BeendigungDurch {
+    /// The Entscheidungsbaum the answer's code comes from.
+    #[must_use]
+    pub const fn ebd(self) -> &'static str {
+        match self {
+            Self::Msb => mako_pruefung::codes::EBD_RECHNUNGSABWICKLUNG_BEENDIGUNG_MSB,
+            Self::Lf => mako_pruefung::codes::EBD_RECHNUNGSABWICKLUNG_BEENDIGUNG_LF,
+        }
+    }
+}
+
 /// ORDRSP PID for a Zustimmung / an Ablehnung to a received Beendigung.
 #[must_use]
 pub fn antwort_pid(zustimmung: bool) -> u32 {
@@ -158,6 +183,13 @@ pub enum RechnungsabwicklungEvent {
         receiver: MarktpartnerCode,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `BGM` DE 1004 of the ORDERS — the answer's `SG1 RFF+ON`.
+        #[serde(default)]
+        dokumentennummer: String,
+        /// `DTM+203` of the ORDERS, the German day (`YYYYMMDD`) the
+        /// arrangement ends — the answer restates it.
+        #[serde(default)]
+        ausfuehrungsdatum: Option<String>,
     },
     /// ORDERS 17006 dispatched — mako initiated the Beendigung and now awaits
     /// the counterparty's ORDRSP.
@@ -266,6 +298,13 @@ pub struct RechnungsabwicklungData {
     /// received Beendigung this is what the ORDRSP echoes in `RFF+ON`, so the
     /// counterparty can correlate the answer.
     pub message_ref: MessageRef,
+    /// `BGM` DE 1004 of a received ORDERS 17006 — the answer's `SG1 RFF+ON`
+    /// (ORDRSP AHB 1.1b Kap. 4.14, `[520]`).
+    #[serde(default)]
+    pub dokumentennummer: String,
+    /// `DTM+203` of a received ORDERS 17006, `YYYYMMDD`.
+    #[serde(default)]
+    pub ausfuehrungsdatum: Option<String>,
 }
 
 /// State of a Rechnungsabwicklung process.
@@ -379,6 +418,10 @@ pub enum RechnungsabwicklungCommand {
         receiver: MarktpartnerCode,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `BGM` DE 1004.
+        dokumentennummer: String,
+        /// `DTM+203` Ausführungsdatum, the German day `YYYYMMDD` — 17006 only.
+        ausfuehrungsdatum: Option<String>,
         /// `true` if AHB validation passed.
         validation_passed: bool,
         /// Validation errors.
@@ -408,12 +451,23 @@ pub enum RechnungsabwicklungCommand {
     },
     /// Initiate a Beendigung (mako's side, via the ERP command API).
     SendBeendigung {
+        /// This party's MP-ID — `SG2 NAD+MS`.
+        sender: MarktpartnerCode,
         /// GLN of the counterparty (the other side of the arrangement).
         counterparty: MarktpartnerCode,
         /// MaLo the arrangement concerns — the ORDERS carries it in `LOC`.
         location_id: String,
-        /// EDIFACT message reference of the outbound ORDERS 17006.
+        /// EDIFACT message reference of the outbound ORDERS 17006; also its
+        /// `BGM` DE 1004, which the answer's `SG1 RFF+ON` echoes.
         message_ref: MessageRef,
+        /// Which side ends it — this one.
+        beendet_durch: BeendigungDurch,
+        /// `DTM+203` — the day the arrangement ends, a German calendar day.
+        ausfuehrungsdatum: String,
+        /// `SG29 IMD` Grund der Anforderung — `Z61` Direkter Vertrag MSB – AN,
+        /// `Z62` – ANN, `Z63` Änderung im Lokationsbündel; Muss from the MSB
+        /// (`[15]`), absent from the LF.
+        grund: Option<String>,
     },
     /// Answer a received Beendigung (decision via the ERP command API —
     /// EBD `E_0206`/`E_0209` is the counterparty's check, the decision here
@@ -421,6 +475,11 @@ pub enum RechnungsabwicklungCommand {
     SendAntwort {
         /// `true` → ORDRSP 19009 (Bestätigung), `false` → 19010 (Ablehnung).
         zustimmung: bool,
+        /// `SG2 AJT` DE 4465 — a code of [`BeendigungDurch::ebd`] in the
+        /// cluster `zustimmung` names.
+        antwort_code: String,
+        /// Which side ended the arrangement.
+        beendet_durch: BeendigungDurch,
         /// EDIFACT message reference of the outbound ORDRSP.
         message_ref: MessageRef,
     },
@@ -493,6 +552,8 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                 sender: sender.clone(),
                 receiver: receiver.clone(),
                 message_ref: message_ref.clone(),
+                dokumentennummer: String::new(),
+                ausfuehrungsdatum: None,
             }),
             RechnungsabwicklungEvent::AngebotAbgelehnt {
                 ebd, antwort_code, ..
@@ -504,10 +565,14 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                 sender,
                 receiver,
                 message_ref,
+                dokumentennummer,
+                ausfuehrungsdatum,
             } => RechnungsabwicklungState::BeendigungEingegangen(RechnungsabwicklungData {
                 sender: sender.clone(),
                 receiver: receiver.clone(),
                 message_ref: message_ref.clone(),
+                dokumentennummer: dokumentennummer.clone(),
+                ausfuehrungsdatum: ausfuehrungsdatum.clone(),
             }),
             RechnungsabwicklungEvent::BeendigungGesendet { .. } => match state {
                 RechnungsabwicklungState::New => RechnungsabwicklungState::BeendigungAngefragt,
@@ -559,6 +624,8 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                 sender,
                 receiver,
                 message_ref,
+                dokumentennummer,
+                ausfuehrungsdatum,
                 validation_passed,
                 validation_errors,
             } => {
@@ -587,6 +654,8 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                         sender,
                         receiver,
                         message_ref,
+                        dokumentennummer,
+                        ausfuehrungsdatum,
                     }
                 };
                 Ok(vec![event].into())
@@ -629,25 +698,59 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
             }
 
             RechnungsabwicklungCommand::SendBeendigung {
+                sender,
                 counterparty,
                 location_id,
                 message_ref,
+                beendet_durch,
+                ausfuehrungsdatum,
+                grund,
             } => {
                 if !matches!(state, RechnungsabwicklungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                // The renderer supplies mako's own GLN as sender when the
-                // payload names none — the sending role differs per deployment
-                // (an MSB ends it as readily as an LF).
-                let outbox = PendingOutbox::new(
-                    "ORDERS",
+                // ORDERS AHB 1.1b Kap. 4.14.2 (S. 93–94): the `SG29` Grund der
+                // Anforderung is Muss when the MSB sends (`[15]`) and has no
+                // place when the LF does.
+                let grund = match (beendet_durch, grund) {
+                    (BeendigungDurch::Msb, Some(g))
+                        if matches!(g.as_str(), "Z61" | "Z62" | "Z63") =>
+                    {
+                        Some(g)
+                    }
+                    (BeendigungDurch::Msb, other) => {
+                        return Err(WorkflowError::rejected(format!(
+                            "an MSB's Beendigung 17006 names its Grund der Anforderung — Z61, \
+                             Z62 or Z63 (ORDERS AHB 1.1b Kap. 4.14.2, S. 94, [15]); got {other:?}"
+                        )));
+                    }
+                    (BeendigungDurch::Lf, None) => None,
+                    (BeendigungDurch::Lf, Some(g)) => {
+                        return Err(WorkflowError::rejected(format!(
+                            "an LF's Beendigung 17006 carries no Grund der Anforderung — the \
+                             SG29 is the MSB's (ORDERS AHB 1.1b Kap. 4.14.2, S. 94, [15]); got {g:?}"
+                        )));
+                    }
+                };
+                if ausfuehrungsdatum.is_empty() {
+                    return Err(WorkflowError::rejected(
+                        "the Beendigung 17006 names the day it takes effect (DTM+203, Muss)"
+                            .to_owned(),
+                    ));
+                }
+                let outbox = PendingOutbox::typed(
                     counterparty.as_str(),
-                    serde_json::json!({
-                        "pid": 17006,
-                        "receiver": counterparty.as_str(),
-                        "location": location_id,
-                        "message_ref": message_ref.as_str(),
-                    }),
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(17_006),
+                        sender: Some(sender.as_str().to_owned()),
+                        sparte: Some(mako_engine::types::Sparte::Strom),
+                        location: Some(location_id),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        document_id: Some(message_ref.as_str().to_owned()),
+                        ausfuehrungsdatum: Some(ausfuehrungsdatum),
+                        grund,
+                        ..Default::default()
+                    },
                 );
                 Ok(WorkflowOutput {
                     events: vec![RechnungsabwicklungEvent::BeendigungGesendet { message_ref }],
@@ -658,6 +761,8 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
 
             RechnungsabwicklungCommand::SendAntwort {
                 zustimmung,
+                antwort_code,
+                beendet_durch,
                 message_ref,
             } => {
                 let RechnungsabwicklungState::BeendigungEingegangen(data) = state else {
@@ -666,20 +771,58 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                         state.label(),
                     ));
                 };
+                // `SG2 AJT` is Muss: a code of the tree the ending side picks,
+                // in the cluster of the answer (`[17]`/`[18]`).
+                let tree = beendet_durch.ebd();
+                let code = mako_pruefung::codes::lookup(tree, &antwort_code).ok_or_else(|| {
+                    WorkflowError::rejected(format!(
+                        "Antwortcode {antwort_code:?} is not published in {tree}"
+                    ))
+                })?;
+                if code.ist_zustimmung() != Some(zustimmung) {
+                    return Err(WorkflowError::rejected(format!(
+                        "{tree} {} sits in the {} cluster, not the one a {} answers with",
+                        code.code,
+                        code.cluster.label(),
+                        antwort_pid(zustimmung),
+                    )));
+                }
+                // `SG1 RFF+ON` names the ORDERS 17006 by its `BGM` DE 1004
+                // (`[520]`), and `DTM+203` restates its Ausführungsdatum —
+                // both Muss.
+                if data.dokumentennummer.is_empty() {
+                    return Err(WorkflowError::rejected(
+                        "the answer names the ORDERS 17006 by its BGM Dokumentennummer \
+                         (SG1 RFF+ON), and none was recorded with it",
+                    ));
+                }
+                let Some(ausfuehrungsdatum) = data.ausfuehrungsdatum.clone() else {
+                    return Err(WorkflowError::rejected(
+                        "the answer restates the ORDERS 17006's Ausführungsdatum (DTM+203), \
+                         and none was recorded with it",
+                    ));
+                };
                 let response_pid = Pruefidentifikator::new(antwort_pid(zustimmung))
                     .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                // The ORDRSP goes back to whoever sent the Beendigung and
-                // echoes its message reference in `RFF+ON` so the initiator
-                // can correlate the LOC-less answer.
-                let outbox = PendingOutbox::new(
-                    "ORDRSP",
+                // ORDRSP AHB 1.1b Kap. 4.14 (S. 57–59): `BGM+Z29`, `DTM+203`,
+                // `IMD++Z02` Ende Abo, `SG1 RFF+ON`, `SG2 AJT` with the EBD.
+                // A Strom-only exchange (`[30]`), so the day begins in Strom.
+                let outbox = PendingOutbox::typed(
                     data.sender.as_str(),
-                    serde_json::json!({
-                        "pid": response_pid.as_u32(),
-                        "receiver": data.sender.as_str(),
-                        "order_reference": data.message_ref.as_str(),
-                        "message_ref": message_ref.as_str(),
-                    }),
+                    &mako_engine::payload::OrdrspPayload {
+                        pid: Some(response_pid.as_u32()),
+                        sender: Some(data.receiver.as_str().to_owned()),
+                        receiver: Some(data.sender.as_str().to_owned()),
+                        document_code: Some("Z29".to_owned()),
+                        order_reference: Some(data.dokumentennummer.clone()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        ausfuehrungsdatum: Some(ausfuehrungsdatum),
+                        sparte: Some(mako_engine::types::Sparte::Strom),
+                        leistung: Some("Z02".to_owned()),
+                        antwort_code: Some(code.code.to_owned()),
+                        antwort_codeliste: Some(code.wire_codeliste().unwrap_or(tree).to_owned()),
+                        ..Default::default()
+                    },
                 );
                 Ok(WorkflowOutput {
                     events: vec![RechnungsabwicklungEvent::AntwortGesendet {
@@ -749,6 +892,8 @@ mod tests {
             sender: mcod("9900000000004"),
             receiver: mcod("9900357000004"),
             message_ref: mref("ORDERS-1"),
+            dokumentennummer: "ORD-17006-1".to_owned(),
+            ausfuehrungsdatum: Some("20270101".to_owned()),
             validation_passed: ok,
             validation_errors: if ok { vec![] } else { vec!["AHB".into()] },
         }
@@ -807,6 +952,8 @@ mod tests {
                 &state,
                 RechnungsabwicklungCommand::SendAntwort {
                     zustimmung: true,
+                    antwort_code: "A02".to_owned(),
+                    beendet_durch: BeendigungDurch::Msb,
                     message_ref: mref("X"),
                 },
             )
@@ -819,7 +966,9 @@ mod tests {
     /// 19009, Ablehnung to 19010, and the terminal state records which.
     #[test]
     fn a_received_beendigung_is_answered_by_decision() {
-        for (zustimmung, want_pid, want_ended) in [(true, 19009, true), (false, 19010, false)] {
+        for (zustimmung, code, want_pid, want_ended) in
+            [(true, "A02", 19009, true), (false, "A01", 19010, false)]
+        {
             let out = WimRechnungsabwicklungWorkflow::handle(
                 &RechnungsabwicklungState::New,
                 receive(17006, true),
@@ -835,10 +984,32 @@ mod tests {
                 &state,
                 RechnungsabwicklungCommand::SendAntwort {
                     zustimmung,
+                    antwort_code: code.to_owned(),
+                    beendet_durch: BeendigungDurch::Msb,
                     message_ref: mref("ORDRSP-1"),
                 },
             )
             .unwrap();
+            // A code off the answer's cluster, or out of the other tree, is
+            // refused.
+            for (wrong, durch) in [
+                (if zustimmung { "A01" } else { "A02" }, BeendigungDurch::Msb),
+                ("A04", BeendigungDurch::Msb),
+            ] {
+                assert!(
+                    WimRechnungsabwicklungWorkflow::handle(
+                        &state,
+                        RechnungsabwicklungCommand::SendAntwort {
+                            zustimmung,
+                            antwort_code: wrong.to_owned(),
+                            beendet_durch: durch,
+                            message_ref: mref("ORDRSP-1"),
+                        },
+                    )
+                    .is_err(),
+                    "{wrong} answering a {want_pid}"
+                );
+            }
             let RechnungsabwicklungEvent::AntwortGesendet { response_pid, .. } = &out.events[0]
             else {
                 panic!("expected AntwortGesendet");
@@ -858,12 +1029,21 @@ mod tests {
         let out = WimRechnungsabwicklungWorkflow::handle(
             &RechnungsabwicklungState::New,
             RechnungsabwicklungCommand::SendBeendigung {
+                sender: mcod("9900000000011"),
                 counterparty: mcod("9900000000004"),
                 location_id: "51238696012".to_owned(),
                 message_ref: mref("ORDERS-OUT-1"),
+                beendet_durch: BeendigungDurch::Lf,
+                ausfuehrungsdatum: "20270101".to_owned(),
+                grund: None,
             },
         )
         .unwrap();
+        // The ORDERS 17006 reads back as its typed payload.
+        use mako_engine::payload::OutboundPayload as _;
+        let typed = mako_engine::payload::OrdersPayload::from_payload(&out.outbox[0].payload)
+            .expect("an ORDERS payload");
+        assert_eq!(typed.location.as_deref(), Some("51238696012"));
         let state = apply_all(RechnungsabwicklungState::New, &out.events);
         assert!(matches!(
             state,
@@ -925,6 +1105,8 @@ mod tests {
                 sender: mcod("9900000000004"),
                 receiver: mcod("9900357000004"),
                 message_ref: mref("ORDERS-1"),
+                dokumentennummer: String::new(),
+                ausfuehrungsdatum: None,
             }),
             RechnungsabwicklungState::Beendet { zugestimmt: true },
         ] {
@@ -1054,6 +1236,8 @@ mod verlauf_tests {
             sender: MarktpartnerCode::new("9900000000001"),
             receiver: MarktpartnerCode::new("9900000000002"),
             message_ref: MessageRef::new("ORD-1"),
+            dokumentennummer: "ORD-1".to_owned(),
+            ausfuehrungsdatum: None,
         };
         assert_eq!(
             beendigung.verlauf(),

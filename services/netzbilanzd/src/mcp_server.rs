@@ -24,7 +24,7 @@
 //! | `get_submission_status` | MaBiS: latest runs + open-Korrekturbedarf and failed counts |
 //! | `list_failed_submissions` | MaBiS: failed runs, newest first, with `attempt_count` |
 //! | `get_submission_run` | MaBiS: one Summenzeitreihe run by UUID |
-//! | `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (§9.8.1 obligations), typed |
+//! | `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (Kap. 9.8.1 obligations), typed |
 //!
 //! Filing a Summenzeitreihe is not a tool either: it is a binding filing with
 //! the BIKO and stays behind `POST /api/v1/mabis/sync`, where Cedar authorises
@@ -159,7 +159,7 @@ pub struct SubmissionRunParams {
 
 /// One MaBiS run, in the wire shape the REST surface serves — RFC 3339
 /// instants, never `time`'s derived component arrays. `version` matters most:
-/// §3.8.2 identifies a Summenzeitreihe by it, and the Prüfmitteilung endpoint
+/// Kap. 3.8.2 identifies a Summenzeitreihe by it, and the Prüfmitteilung endpoint
 /// parses it back as RFC 3339.
 fn run_json(r: &SubmissionRunRow) -> serde_json::Value {
     serde_json::json!({
@@ -436,7 +436,7 @@ impl NetzbilanzMcpHandler {
     }
 
     #[tool(
-        description = "MaBiS submission health snapshot: the most recent Summenzeitreihe runs (with status, Datenstatus and attempt_count), plus failed-run and open-Korrekturbedarf counts. BK6-24-174 Anlage 3 §3.10: Erstaufschlag closes 10 Werktage after month end, Clearing 30.",
+        description = "MaBiS submission health snapshot: the most recent Summenzeitreihe runs (with status, Datenstatus and attempt_count), plus failed-run and open-Korrekturbedarf counts. BK6-24-174 Anlage 3 Kap. 3.10: Erstaufschlag closes 10 Werktage after month end, Clearing 30.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_submission_status(
@@ -492,7 +492,7 @@ impl NetzbilanzMcpHandler {
             "count": runs.len(),
             "failed_runs": runs.iter().map(run_json).collect::<Vec<_>>(),
             "regulatory_note":
-                "BK6-24-174 Anlage 3 §3.10: a version filed within the Erstaufschlag window \
+                "BK6-24-174 Anlage 3 Kap. 3.10: a version filed within the Erstaufschlag window \
                  becomes Abrechnungsdaten directly; after it, corrections start as Prüfdaten \
                  and need a positive Prüfmitteilung.",
         }))
@@ -525,7 +525,7 @@ impl NetzbilanzMcpHandler {
 
     #[tool(
         description = "Open Korrekturbedarf: negative Prüfmitteilungen (BK6-24-174 Anlage 3 \
-§9.8.1) with no correcting submission yet, the earliest received first. Each is answered by a \
+Kap. 9.8.1) with no correcting submission yet, the earliest received first. Each is answered by a \
 corrected Summenzeitreihe under a higher version, filed by an operator through \
 POST /api/v1/mabis/sync with corrects_run_id.",
         annotations(read_only_hint = true, open_world_hint = false),
@@ -865,7 +865,7 @@ impl NetzbilanzMcpHandler {
                  month end. A version filed later starts as Prüfdaten (needs a positive \
                  Prüfmitteilung) — say so in the escalation.\n\n\
                  **Step 3 — Korrekturbedarf**\n\
-                 Call `list_korrekturbedarf`. Each entry is an open §9.8.1 obligation: a \
+                 Call `list_korrekturbedarf`. Each entry is an open Kap. 9.8.1 obligation: a \
                  corrected Summenzeitreihe under a higher version, within the Clearing window \
                  (30 Werktage after month end). The correction itself is an operator action \
                  (`POST /api/v1/mabis/sync` with `corrects_run_id`) — name the run and the deadline \
@@ -917,12 +917,12 @@ impl ServerHandler for NetzbilanzMcpHandler {
              retry-exhausted / Korrekturbedarf counts\n\
              - `list_failed_submissions(limit)` — MaBiS: failed runs with attempt_count and error_msg\n\
              - `get_submission_run(id)` — MaBiS: one run, full detail\n\
-             - `list_korrekturbedarf` — MaBiS: open negative Prüfmitteilungen (§9.8.1)\n\n\
+             - `list_korrekturbedarf` — MaBiS: open negative Prüfmitteilungen (Kap. 9.8.1)\n\n\
              ## Prompts (7)\n\
              `nb-invoic-overview` · `run-nne-billing` · `mmm-monthly-run` · \
              `investigate-dispute` · `ggv-nne-billing` · `redispatch-monthly-submit` · \
              `submission-triage`\n\n\
-             ## MaBiS timing (BK6-24-174 Anlage 3 §3.10)\n\
+             ## MaBiS timing (BK6-24-174 Anlage 3 Kap. 3.10)\n\
              Filing a Summenzeitreihe is not exposed here: it is a binding filing with the BIKO \
              and stays behind the authenticated REST surface. Erstaufschlag: 10 Werktage after \
              month end — a new version becomes Abrechnungsdaten directly. Clearing: 30 Werktage \

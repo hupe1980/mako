@@ -113,7 +113,7 @@ pub(crate) fn read_to_energiemenge(r: &crate::domain::MeterRead) -> Energiemenge
 /// Convert a `MeterRead` to a BO4E `Zeitreihenwert`.
 ///
 /// Timestamps are in UTC; `startuhrzeit`/`enduhrzeit` are formatted as
-/// `HH:MM:SS+00:00` per Allgemeine Festlegungen V6.1d §3.
+/// `HH:MM:SS+00:00` per Allgemeine Festlegungen V6.1d Kap. 3.
 pub(crate) fn read_to_zeitreihenwert(r: &crate::domain::MeterRead) -> Zeitreihenwert {
     fn fmt_uhrzeit(dt: OffsetDateTime) -> String {
         format!(

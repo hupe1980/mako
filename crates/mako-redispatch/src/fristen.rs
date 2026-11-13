@@ -93,6 +93,88 @@ pub const AUSFALLARBEIT_FOLGEMONATE: u32 = 3;
 /// it changes hands.
 pub const WETTERDATEN_WERKTAGE: u32 = 4;
 
+/// Last day the Anlagenbetreiber may deliver Wetterdaten or Referenzanlagen-
+/// Messdaten for a Maßnahme on `massnahme_tag`: the [`WETTERDATEN_WERKTAGE`]-th
+/// Werktag of the following month (`BilAReM` Kap. 3.2.1, S. 12: „spätestens
+/// bis zum Ablauf des vierten Werktags des Folgemonats").
+///
+/// `BilAReM` defines no calendar of its own; the caller supplies the one its
+/// Werktage count in.
+#[must_use]
+pub fn wetterdaten_frist(massnahme_tag: Date, kalender: mako_fristen::HolidayCalendar) -> Date {
+    let monatsende = Date::from_calendar_date(
+        massnahme_tag.year(),
+        massnahme_tag.month(),
+        time::util::days_in_month(massnahme_tag.month(), massnahme_tag.year()),
+    )
+    .unwrap_or(massnahme_tag);
+    mako_fristen::add_werktage(monatsende, WETTERDATEN_WERKTAGE, kalender)
+}
+
+/// Who supplies the Wetterdaten (or Referenzanlagen-Messdaten) a Spitz- or
+/// vereinfachte Spitzabrechnung is formed from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Wetterdatenherkunft {
+    /// Delivered by the Anlagenbetreiber on this day.
+    Anlagenbetreiber(Date),
+    /// Ersatzwerte the ANB formed „auf Basis von Referenzanlagen oder
+    /// Wetterdaten".
+    ErsatzwertAnb,
+}
+
+/// Why a Wetterdaten basis may not be used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum WetterdatenError {
+    /// The Anlagenbetreiber delivered after the Frist; from then the ANB
+    /// forms Ersatzwerte (Kap. 3.2.1).
+    #[error(
+        "Wetterdaten am {eingang} nach Fristablauf am {frist} geliefert — es gelten die \
+         Ersatzwerte des ANB (BilAReM Kap. 3.2.1)"
+    )]
+    VerspaetetGeliefert {
+        /// Day of delivery.
+        eingang: Date,
+        /// Last day of the Frist.
+        frist: Date,
+    },
+    /// The ANB forms Ersatzwerte only once the Anlagenbetreiber's Frist has
+    /// run out without a delivery.
+    #[error("Ersatzwerte des ANB erst nach Fristablauf am {frist} (BilAReM Kap. 3.2.1)")]
+    ErsatzwertVorFristablauf {
+        /// Last day of the Frist.
+        frist: Date,
+    },
+}
+
+/// Whether `herkunft` is the basis `BilAReM` Kap. 3.2.1 allows for a Maßnahme
+/// on `massnahme_tag`, judged on `heute`.
+///
+/// The Anlagenbetreiber's delivery counts up to the end of the Frist; „Tut er
+/// dies nicht, bildet der ANB geeignete Ersatzwerte" — so the ANB's Ersatzwert
+/// is the basis only after the Frist, and a later delivery no longer is.
+///
+/// # Errors
+///
+/// The [`WetterdatenError`] naming the Frist.
+pub fn wetterdaten_zulaessig(
+    herkunft: Wetterdatenherkunft,
+    massnahme_tag: Date,
+    heute: Date,
+    kalender: mako_fristen::HolidayCalendar,
+) -> Result<(), WetterdatenError> {
+    let frist = wetterdaten_frist(massnahme_tag, kalender);
+    match herkunft {
+        Wetterdatenherkunft::Anlagenbetreiber(eingang) if eingang > frist => {
+            Err(WetterdatenError::VerspaetetGeliefert { eingang, frist })
+        }
+        Wetterdatenherkunft::ErsatzwertAnb if heute <= frist => {
+            Err(WetterdatenError::ErsatzwertVorFristablauf { frist })
+        }
+        _ => Ok(()),
+    }
+}
+
 /// **Sourced.** A Stammdatum's `gueltig_ab` must lie at least this many
 /// Werktage in the future, counted from receipt — `Stammdaten` AWT 1.4b Fußnote 27.
 pub const STAMMDATEN_GUELTIG_AB_MIN_WERKTAGE: u32 = 5;
@@ -365,6 +447,50 @@ mod tests {
             ausfallarbeit_endet_am(d(2027, Month::November, 30)),
             d(2028, Month::February, 29)
         );
+    }
+
+    /// Kap. 3.2.1: the Anlagenbetreiber's Wetterdaten count up to the end of
+    /// the 4. Werktag of the following month; after it the ANB's Ersatzwerte
+    /// are the basis, and not before.
+    #[test]
+    fn the_wetterdaten_frist_hands_over_to_the_anb_after_the_fourth_werktag() {
+        use mako_fristen::HolidayCalendar::BdewMaKo;
+        use time::macros::date;
+        let tag = date!(2027 - 01 - 15);
+        // Feb 2027 opens on a Monday: Mo 1, Di 2, Mi 3, Do 4.
+        assert_eq!(wetterdaten_frist(tag, BdewMaKo), date!(2027 - 02 - 04));
+        let heute = date!(2027 - 02 - 10);
+        assert_eq!(
+            wetterdaten_zulaessig(
+                Wetterdatenherkunft::Anlagenbetreiber(date!(2027 - 02 - 04)),
+                tag,
+                heute,
+                BdewMaKo
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            wetterdaten_zulaessig(
+                Wetterdatenherkunft::Anlagenbetreiber(date!(2027 - 02 - 05)),
+                tag,
+                heute,
+                BdewMaKo
+            ),
+            Err(WetterdatenError::VerspaetetGeliefert { .. })
+        ));
+        assert_eq!(
+            wetterdaten_zulaessig(Wetterdatenherkunft::ErsatzwertAnb, tag, heute, BdewMaKo),
+            Ok(())
+        );
+        assert!(matches!(
+            wetterdaten_zulaessig(
+                Wetterdatenherkunft::ErsatzwertAnb,
+                tag,
+                date!(2027 - 02 - 04),
+                BdewMaKo
+            ),
+            Err(WetterdatenError::ErsatzwertVorFristablauf { .. })
+        ));
     }
 
     #[test]

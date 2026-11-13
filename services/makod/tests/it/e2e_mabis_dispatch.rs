@@ -48,10 +48,11 @@ fn utilmd(pid: u32) -> String {
 /// A UTILMD announcing `pid`, optionally carrying the `SG10` pair that names
 /// which Summenzeitreihe it is about.
 ///
-/// 55062 and 55063 are shared by eleven Summenzeitreihen, so a message using
-/// them **must** carry `CCI+++ZB4` / `CAV` DE 7111 and `CCI+6` — the adapter
-/// refuses without them rather than guessing, and there are eleven wrong
-/// answers to guess between (UTILMD AHB Strom 2.2 Kap. 13.1).
+/// 55062 and 55063 are shared by eleven Summenzeitreihen. The Aktivierung
+/// 55062 carries `CCI+++ZB4` / `CAV` DE 7111 and `CCI+6`; the Deaktivierung
+/// 55063 does not and takes the series of the recorded activation — the
+/// adapter refuses either without one rather than guessing (UTILMD AHB Strom
+/// 2.2 Kap. 13.1, S. 1100).
 fn utilmd_mit_serie(pid: u32, serie: Option<(&str, &str)>) -> String {
     let sg10 = serie.map_or_else(String::new, |(cav, verantwortlicher)| {
         format!("CCI+++ZB4'CAV+{cav}'CCI+6++{verantwortlicher}'")
@@ -396,4 +397,83 @@ async fn the_three_workflows_do_not_claim_each_others_pids() {
             "{workflow} accepted PID {pid}, which belongs to a sibling workflow: {outcome:?}"
         );
     }
+}
+
+/// The Deaktivierung 55063 carries no `SG8 SEQ+Z22` / `SG10` (UTILMD AHB
+/// Strom 2.2 Kap. 13.1, S. 1100): its series is the one the MaBiS-ZP was
+/// activated for. Without a recorded activation it is refused by name.
+#[tokio::test]
+async fn a_deaktivierung_takes_the_series_of_its_activation() {
+    use mako_engine::event_store::CorrelationEntry;
+    use mako_engine::process::{Process, RunOptions};
+    use mako_engine::types::{BillingPeriod, MarktpartnerCode, MessageRef, Pruefidentifikator};
+    let store = SlateDbStore::open_in_memory()
+        .await
+        .expect("in-memory store");
+    let tenant = TenantId::from_party_id(OWN_MP);
+    let dispatcher = EdifactIngestDispatcher::new(
+        Arc::new(store.clone()),
+        store.as_snapshot_store(),
+        100,
+        tenant,
+    );
+    let deaktivierung = edi_energy::parse(utilmd(55063).as_bytes()).expect("parses");
+    let ohne = dispatcher
+        .dispatch(
+            &deaktivierung,
+            "mabis-zp-lifecycle",
+            55063,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await;
+    assert!(
+        ohne.as_ref()
+            .is_err_and(|e| e.to_string().contains("Aktivierung")),
+        "{ohne:?}"
+    );
+
+    // The LF holds the NB's 55062 for its LF-SZR (Kategorie A).
+    let process = Process::<mako_mabis::MabisZpLifecycleWorkflow, _>::new(
+        Arc::new(store.clone()),
+        tenant,
+        mako_engine::version::WorkflowId::new("mabis-zp-lifecycle", "FV2026-10-01"),
+    );
+    let korrelation = CorrelationEntry {
+        tenant_id: tenant,
+        tag: LOC.to_owned(),
+        process_id: process.process_id(),
+        identity: process.identity(),
+    };
+    process
+        .run(
+            mako_mabis::ZpLifecycleCommand::ReceiveAnfrage {
+                pid: Pruefidentifikator::const_new(55_062),
+                serie: mako_mabis::ZpSerie::LieferantensummenzeitreiheNb,
+                vorgang: mako_mabis::ZpVorgang::Aktivierung,
+                mabis_zp_id: LOC.to_owned(),
+                sender: MarktpartnerCode::new(SENDER_MP),
+                receiver: MarktpartnerCode::new(OWN_MP),
+                billing_period: BillingPeriod::new("2026-09"),
+                document_date: "20260801".to_owned(),
+                message_ref: MessageRef::new("AKT-1"),
+                validation_passed: true,
+                validation_errors: vec![],
+            },
+            RunOptions::new().correlations(&[korrelation]),
+        )
+        .await
+        .expect("the activation is recorded");
+
+    let outcome = dispatcher
+        .dispatch(
+            &deaktivierung,
+            "mabis-zp-lifecycle",
+            55063,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await;
+    assert!(
+        matches!(outcome, Ok(IngestOutcome::Spawned { .. })),
+        "the Deaktivierung names its series through the activation: {outcome:?}"
+    );
 }

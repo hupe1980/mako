@@ -64,6 +64,31 @@ export interface MakodTools {
       berichte: DienstBericht[];
     };
   };
+  einrichtung_vorschlag: {
+    input: {
+      antworten: Antworten;
+    };
+    output: {
+      /**
+       * One file per daemon the answers configure.
+       */
+      dateien: Datei[];
+      /**
+       * Every answer refused, at its path in the answers (`rollen[1].mp_id`),
+       * with the rule it breaks.
+       */
+      abgelehnt: Befund[];
+      /**
+       * Gaps across all files.
+       */
+      luecken: number;
+      /**
+       * No gap and no refused answer.
+       */
+      vollstaendig: boolean;
+      vorbelegt: Antworten1;
+    };
+  };
   get_process: {
     input: {
       /**
@@ -390,6 +415,225 @@ export interface Partei {
    * The 13-digit BDEW-/DVGW-Codenummer or GLN, or a 16-character EIC.
    */
   mp_id: string;
+}
+/**
+ * The setup interview's answers; every question is optional and an
+ * unanswered one is a gap in the proposal.
+ */
+export interface Antworten {
+  /**
+   * The Rollen the deployment plays, each with its MP-ID.
+   */
+  rollen?: RolleAntwort[];
+  /**
+   * The MP-ID that is the storage key, where several are named.
+   */
+  primaer?: string | null;
+  /**
+   * A Lieferant's Bilanzkreise per Sparte.
+   */
+  bilanzkreise?: BilanzkreisAntwort[];
+  /**
+   * The MP-IDs of the operator's affiliated Lieferanten; `[]` for none.
+   */
+  verbundene_lieferanten?: string[] | null;
+  /**
+   * AS4 key material; unanswered, each `[[party]]` carries a gap.
+   */
+  as4?: As4Antwort | null;
+  /**
+   * The deployment's other daemons, for the checklist.
+   */
+  dienste?: DienstAntwort[];
+}
+/**
+ * One Rolle the deployment plays and the MP-ID it plays it under.
+ */
+export interface RolleAntwort {
+  /**
+   * The Rolle.
+   */
+  rolle: "lf-strom" | "lf-gas" | "nb-strom" | "nb-gas" | "msb-strom" | "msb-gas" | "esa-strom";
+  /**
+   * Its MP-ID: a 13-digit BDEW- (`99…`, Strom) or DVGW-Codenummer (`98…`,
+   * Gas), a GS1 GLN, or a 16-character EIC. Unanswered, it is a gap.
+   */
+  mp_id?: string | null;
+}
+/**
+ * The Bilanzkreise a Lieferant assigns to in one Sparte.
+ */
+export interface BilanzkreisAntwort {
+  /**
+   * The Sparte.
+   */
+  sparte: "strom" | "gas";
+  /**
+   * The ordinary Bilanzkreise, as the BKV's grant names them.
+   */
+  standard?: string[];
+}
+/**
+ * AS4: the deployment-wide settings and each MP-ID's key material.
+ */
+export interface As4Antwort {
+  /**
+   * The domain every `eb:MessageId` ends in.
+   */
+  message_id_domain?: string | null;
+  /**
+   * Path of the SM-PKI root certificate.
+   */
+  trust_anchor_pem_file?: string | null;
+  /**
+   * Path of the CRL signer's certificate.
+   */
+  crl_signer_pem_file?: string | null;
+  /**
+   * Per MP-ID, the paths of its key pairs.
+   */
+  schluessel?: As4Schluessel[];
+}
+/**
+ * One MP-ID's AS4 key material, by the path each file lives at.
+ */
+export interface As4Schluessel {
+  /**
+   * The MP-ID these files belong to.
+   */
+  mp_id: string;
+  /**
+   * Path of the signing certificate.
+   */
+  signing_cert_pem_file?: string | null;
+  /**
+   * Path of the signing key.
+   */
+  signing_key_pem_file?: string | null;
+  /**
+   * Path of the encryption certificate.
+   */
+  encryption_cert_pem_file?: string | null;
+  /**
+   * Path of the encryption key.
+   */
+  encryption_key_pem_file?: string | null;
+  /**
+   * Path of the TLS certificate.
+   */
+  tls_cert_pem_file?: string | null;
+  /**
+   * Path of the TLS key.
+   */
+  tls_key_pem_file?: string | null;
+}
+/**
+ * Another daemon of the deployment and where it runs.
+ */
+export interface DienstAntwort {
+  /**
+   * Its name (`processd`, `edmd`, …).
+   */
+  name: string;
+  /**
+   * Its base URL.
+   */
+  url: string;
+  /**
+   * Path of the file holding the key its `read-config` admits.
+   */
+  api_key_file?: string | null;
+}
+/**
+ * One daemon's proposed file.
+ */
+export interface Datei {
+  /**
+   * The daemon.
+   */
+  dienst: string;
+  /**
+   * Its configuration file.
+   */
+  datei: string;
+  /**
+   * The daemon reports the facts the file sets, so [`Art::Gleich`] and
+   * [`Art::Weg`] are known; otherwise every line is [`Art::Neu`].
+   */
+  abgeglichen: boolean;
+  /**
+   * Every line, in file order.
+   */
+  zeilen: Zeile[];
+  /**
+   * The file to paste: each line under its `# Quelle:`, a removed line as
+   * `# ENTFÄLLT:`, a gap as `# FEHLT:`.
+   */
+  toml: string;
+  /**
+   * The change as a diff: `+` new, `-` removed, ` ` unchanged.
+   */
+  diff: string;
+  /**
+   * Lines to add or remove.
+   */
+  aenderungen: number;
+  /**
+   * Gaps.
+   */
+  luecken: number;
+}
+/**
+ * One line of a proposed file.
+ */
+export interface Zeile {
+  /**
+   * What it does.
+   */
+  art: "abschnitt" | "gleich" | "neu" | "weg" | "fehlt";
+  /**
+   * The TOML line, or for a gap the comment.
+   */
+  text: string;
+  /**
+   * The rule or document the line satisfies; absent only on a header.
+   */
+  quelle?: string | null;
+  /**
+   * The interview question the line answers (`rollen.lf-gas`,
+   * `bilanzkreise.gas`, `as4`, …), so a gap leads to its question.
+   */
+  frage?: string | null;
+}
+/**
+ * The answers the loaded configuration already gives — where an
+ * interview starts.
+ */
+export interface Antworten1 {
+  /**
+   * The Rollen the deployment plays, each with its MP-ID.
+   */
+  rollen?: RolleAntwort[];
+  /**
+   * The MP-ID that is the storage key, where several are named.
+   */
+  primaer?: string | null;
+  /**
+   * A Lieferant's Bilanzkreise per Sparte.
+   */
+  bilanzkreise?: BilanzkreisAntwort[];
+  /**
+   * The MP-IDs of the operator's affiliated Lieferanten; `[]` for none.
+   */
+  verbundene_lieferanten?: string[] | null;
+  /**
+   * AS4 key material; unanswered, each `[[party]]` carries a gap.
+   */
+  as4?: As4Antwort | null;
+  /**
+   * The deployment's other daemons, for the checklist.
+   */
+  dienste?: DienstAntwort[];
 }
 /**
  * One process under a business key, with the deadlines pending on it.

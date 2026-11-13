@@ -32,11 +32,8 @@
 //! - **PID 55005**: Bestätigung Abmeldung (NB → LF, accept)
 //! - **PID 55006**: Ablehnung Abmeldung (NB → LF, reject)
 //! - **Deadline**: **06:00 Uhr des 1. Werktags nach dem ÜT** for the NB's answer
-//!   to a 55004 Abmeldung (BK6-24-174 GPKE Teil 2 § 2.5.1.2 Nr. 2/3)
-//! - **No MSCONS 13015**: Bewegungsdaten obligations are triggered **only** by
-//!   PID 55001 (Anmeldung). For PID 55004 (Abmeldung) the acceptance does
-//!   not require a subsequent MSCONS 13015 — there are no Bewegungsdaten to
-//!   request when a supply relationship is ending.
+//!   to a 55004 Abmeldung (BK6-24-174 GPKE Teil 2 Kap. 2.5.1.2 Nr. 2/3)
+//! - **No MSCONS**: the answer to a 55004 queues no follow-up message.
 //!
 //! AHB validation is bypassed for the NB's inbound `ReceiveUtilmd` because
 //! `render_to_wire_bytes` generates a minimal UTILMD that does not satisfy
@@ -296,15 +293,11 @@ impl MockNb {
     ///
     /// Asserts outbox content:
     /// - Both accept and reject produce exactly **one** UTILMD outbox entry.
-    /// - **No MSCONS 13015** in either case: Bewegungsdaten obligations are
-    ///   triggered only by PID 55001 (Anmeldung). For PID 55004 (Abmeldung)
-    ///   `post_acceptance::lieferbeginn_obligations(55004, …)` returns empty.
+    /// - No MSCONS in either case.
     ///
     /// Returns the rendered UTILMD wire bytes for transport back to the LFN.
     async fn send_antwort(&self, accepted: bool, reason: Option<&str>) -> Vec<u8> {
-        // PID 55004 Abmeldung has no post-acceptance obligations.
-        // `lieferbeginn_obligations` guards on `anfrage_pid != 55001` and
-        // returns an empty Vec for all other PIDs.
+        // The answer to a 55004 carries no follow-up obligations.
         let obligations: Vec<mako_engine::outbox::PendingOutbox> = vec![];
 
         let (_, outbox) = self

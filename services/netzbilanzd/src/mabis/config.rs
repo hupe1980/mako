@@ -42,7 +42,7 @@ pub struct MabisConfig {
 pub struct ScheduleConfig {
     /// Werktag after the Bilanzierungsmonat on which to submit.
     ///
-    /// BK6-24-174 Anlage 3 §3.10, Tabelle 2: the Erstaufschlag window for a
+    /// BK6-24-174 Anlage 3 Kap. 3.10, Tabelle 2: the Erstaufschlag window for a
     /// BG-SZR is the 1.–10. Werktag. Submitting on the last of them maximises
     /// the input data while the BIKO still assigns `Abrechnungsdaten` directly;
     /// a version sent later starts as `Prüfdaten`.

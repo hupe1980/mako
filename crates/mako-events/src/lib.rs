@@ -613,13 +613,13 @@ pub mod sperr {
     /// so the LF learns *why* instead of waiting out its ORDRSP deadline.
     pub const FEHLGESCHLAGEN: &str = "de.sperr.fehlgeschlagen";
     /// A Sperrversuch did not succeed but the order stays in the queue: GPKE
-    /// Teil 2 § 3.5.1.2 Nr. 5 gives the NB **two** Sperrversuche within one
+    /// Teil 2 Kap. 3.5.1.2 Nr. 5 gives the NB **two** Sperrversuche within one
     /// Sperrauftrag, and only the second turns into `FEHLGESCHLAGEN`.
     pub const VERSUCH_GESCHEITERT: &str = "de.sperr.versuch.gescheitert";
     /// A pending order was withdrawn before execution (operator action, or an
     /// inbound ORDCHG 39000 Stornierung). No IFTSTA is dispatched.
     pub const STORNIERT: &str = "de.sperr.storniert";
-    /// A pending order is past the window GPKE Teil 2 § 3.5.1.2 Nr. 1 gives the
+    /// A pending order is past the window GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 gives the
     /// NB for the physical act — 6 Werktage after the frühestmöglicher
     /// Sperrtermin. Announced once per order.
     pub const AUSFUEHRUNG_UEBERFAELLIG: &str = "de.sperr.ausfuehrung.ueberfaellig";
@@ -638,11 +638,11 @@ pub mod sperr {
 /// per success would be noise nobody subscribes to.
 pub mod mabis {
     /// A Summenzeitreihe aggregation or BIKO submission failed
-    /// (BK6-24-174 Anlage 3 §3.10). Carries the run id, the
+    /// (BK6-24-174 Anlage 3 Kap. 3.10). Carries the run id, the
     /// Bilanzierungsgebiet, the period, the phase and `attempt_count` — after
     /// three attempts the scheduler stops retrying and a human has to look.
     pub const SUBMISSION_FAILED: &str = "de.mabis.submission.failed";
-    /// A negative Prüfmitteilung opened a Korrekturbedarf (§9.8.1): the BIKO
+    /// A negative Prüfmitteilung opened a Korrekturbedarf (Kap. 9.8.1): the BIKO
     /// or a BKV objected to a filed Summenzeitreihe, and a corrected version
     /// must be submitted within the Clearing window.
     pub const KORREKTURBEDARF_OPENED: &str = "de.mabis.korrekturbedarf.opened";

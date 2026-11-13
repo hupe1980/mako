@@ -95,7 +95,7 @@ const EXEMPT: &[Exempt] = &[
     },
     Exempt {
         path: "services/netzbilanzd/src/mcp_server.rs",
-        fragment: "## MaBiS timing (BK6-24-174 Anlage 3 §3.10)",
+        fragment: "## MaBiS timing (BK6-24-174 Anlage 3 Kap. 3.10)",
         reason: MABIS_TABELLE_2,
     },
     Exempt {
@@ -137,7 +137,7 @@ const MABIS_TABELLE_2: &str = "MaBiS has no answer Frist; the WT figures are cle
 
 /// Why the Sperrung execution window is admitted.
 const SPERR_AUSFUEHRUNG: &str = "the execution window is the Hinweis column of GPKE Teil 2 \
-     § 3.5.1.2 Nr. 1 and has no catalogue entry; `mako_fristen::vorlauf::SPERRAUFTRAG_VORLAUF_WT` \
+     Kap. 3.5.1.2 Nr. 1 and has no catalogue entry; `mako_fristen::vorlauf::SPERRAUFTRAG_VORLAUF_WT` \
      is the 6 WT before the frühestmöglicher Sperrtermin, a different window";
 
 /// The `mako_fristen` calls whose second argument is a number of Werktage.
@@ -254,12 +254,12 @@ const PROCEDURE_EXPLANATIONS: &[(&str, &str, &str)] = &[
     (
         "deadline-alert-agent.yaml",
         "12:00",
-        "explains the APERAK windows the alert carries — APERAK AHB 1.1 § 2.3.1/§ 2.4.1, as AGENTS.md quotes them",
+        "explains the APERAK windows the alert carries — APERAK AHB 1.1 Kap. 2.3.1/Kap. 2.4.1, as AGENTS.md quotes them",
     ),
     (
         "deadline-alert-agent.yaml",
         "3 Werktage",
-        "the Gas Initialprozess APERAK window, APERAK AHB 1.1 § 2.3.1",
+        "the Gas Initialprozess APERAK window, APERAK AHB 1.1 Kap. 2.3.1",
     ),
     (
         "deadline-alert-agent.yaml",
@@ -284,12 +284,12 @@ const PROCEDURE_EXPLANATIONS: &[(&str, &str, &str)] = &[
     (
         "mabis-agent.yaml",
         "10 Werktage",
-        "the BKA Erstaufschlag window, BK6-24-174 Anlage 3 § 3.10",
+        "the BKA Erstaufschlag window, BK6-24-174 Anlage 3 Kap. 3.10",
     ),
     (
         "mabis-agent.yaml",
         "30 Werktage",
-        "the BKA clearing window, BK6-24-174 Anlage 3 § 3.10",
+        "the BKA clearing window, BK6-24-174 Anlage 3 Kap. 3.10",
     ),
     (
         "mabis-agent.yaml",
@@ -309,7 +309,7 @@ const PROCEDURE_EXPLANATIONS: &[(&str, &str, &str)] = &[
     (
         "sperrd-agent.yaml",
         "6 Werktage",
-        "explains `frist_ueberschritten`: the execution window of GPKE Teil 2 § 3.5.1.2 Nr. 1",
+        "explains `frist_ueberschritten`: the execution window of GPKE Teil 2 Kap. 3.5.1.2 Nr. 1",
     ),
     (
         "sperrd-agent.yaml",
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn an_admitted_explanation_passes_only_in_its_own_manifest() {
         let m = Matcher::new();
-        let line = "past the 6 Werktage of GPKE Teil 2 § 3.5.1.2 Nr. 1";
+        let line = "past the 6 Werktage of GPKE Teil 2 Kap. 3.5.1.2 Nr. 1";
         assert!(
             m.procedure_findings("services/agentd/agents/sperrd-agent.yaml", line)
                 .is_empty()

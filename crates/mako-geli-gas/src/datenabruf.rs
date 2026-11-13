@@ -402,19 +402,19 @@ impl Workflow for GeliGasDatenabrufWorkflow {
                     receiver: receiver.clone(),
                     message_ref: message_ref.clone(),
                 };
-                let outbox = mako_engine::outbox::PendingOutbox::new(
-                    "ORDERS",
+                // The receiver is the outbox entry's recipient; the ORDERS
+                // states no other.
+                let outbox = mako_engine::outbox::PendingOutbox::typed(
                     receiver.as_str(),
-                    serde_json::json!({
-                        "direction":  "outbound",
-                        "pid":        pid.as_u32(),
-                        "sender":     sender.as_str(),
-                        "receiver":   receiver.as_str(),
-                        "message_ref": message_ref.as_str(),
-                        "location":   messlokation.as_str(),
-                        "zeitspanne_von": zeitspanne_von.to_string(),
-                        "zeitspanne_bis": zeitspanne_bis.to_string(),
-                    }),
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(pid.as_u32()),
+                        sender: Some(sender.as_str().to_owned()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        location: Some(messlokation.as_str().to_owned()),
+                        zeitspanne_von: Some(zeitspanne_von.to_string()),
+                        zeitspanne_bis: Some(zeitspanne_bis.to_string()),
+                        ..Default::default()
+                    },
                 );
                 Ok(mako_engine::workflow::WorkflowOutput::with_outbox(
                     vec![event],

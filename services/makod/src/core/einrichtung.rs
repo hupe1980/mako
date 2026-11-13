@@ -102,6 +102,7 @@ pub fn pruefe(e: &Eingabe<'_>) -> Pruefung {
         .zertifikat_warnfenster_tage
         .unwrap_or(befund::ZERTIFIKAT_WARNFENSTER_TAGE);
     befunde.extend(zertifikat_befunde(e.as4, e.parties, e.jetzt, fenster));
+    befunde.extend(de0004_befunde(e.as4));
     let (dienste, b) = dienste(e.einrichtung);
     befunde.extend(b);
 
@@ -319,6 +320,33 @@ fn signatur_paar_befunde(e: &Eingabe<'_>) -> Vec<Befund> {
     }
 }
 
+/// A warning per `[[as4.partner]] de0004_ausnahme` entry: each one admits
+/// interchanges from that partner naming another market participant as sender
+/// (`UNB` DE 0004), which Allgemeine Festlegungen 6.1d Kap. 2.13 binds to the
+/// sender's own MP-ID — so the operator sees every one at startup.
+#[must_use]
+pub fn de0004_befunde(as4: &As4Config) -> Vec<Befund> {
+    as4.partner
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| {
+            p.de0004_ausnahme.iter().map(move |vertreten| {
+                Befund::warnung(
+                    format!("as4.partner[{i}].de0004_ausnahme"),
+                    format!(
+                        "Der Partner {} darf Übertragungsdateien mit UNB DE 0004 = {vertreten} \
+                         einreichen, obwohl er sich als {} authentisiert — nur für einen \
+                         Dienstleister, der für {vertreten} sendet",
+                        p.mp_id, p.mp_id
+                    ),
+                )
+                .bereich(Bereich::Identitaeten)
+                .quelle("Allgemeine Festlegungen 6.1d, Kap. 2.13 (S. 17)")
+            })
+        })
+        .collect()
+}
+
 /// Every `[party.as4]` and `[[as4.partner]]` certificate that has expired
 /// (blocking) or expires inside `fenster` days (a warning), with its date.
 ///
@@ -331,6 +359,29 @@ pub fn zertifikat_befunde(
     jetzt: time::OffsetDateTime,
     fenster: u32,
 ) -> Vec<Befund> {
+    zertifikate(as4, parties)
+        .into_iter()
+        .filter_map(|z| befund::zertifikat_ablauf(&z.pfad, &z.was, z.gueltig_bis, jetzt, fenster))
+        .collect()
+}
+
+/// One configured AS4 certificate and the end of its validity, as its file
+/// reads now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Zertifikat {
+    /// Its `makod.toml` path, e.g. `party[0].as4.signing_cert_pem_file`.
+    pub pfad: String,
+    /// What it is, for the finding's text.
+    pub was: String,
+    /// `notAfter`.
+    pub gueltig_bis: time::OffsetDateTime,
+}
+
+/// Every `[party.as4]` and `[[as4.partner]]` certificate whose file reads and
+/// parses, with its `notAfter`. The files are read on every call, so a
+/// certificate replaced on disk is seen at once.
+#[must_use]
+pub fn zertifikate(as4: &As4Config, parties: &[PartyConfig]) -> Vec<Zertifikat> {
     let mut dateien: Vec<(String, String, &Path)> = Vec::new();
     for (i, p) in parties.iter().enumerate() {
         let Some(k) = &p.as4 else { continue };
@@ -375,8 +426,11 @@ pub fn zertifikat_befunde(
         .filter_map(|(pfad, was, datei)| {
             let pem = std::fs::read(datei).ok()?;
             let cert = asx::Certificate::from_pem(&pem).ok()?;
-            let bis = gueltig_bis(cert.der())?;
-            befund::zertifikat_ablauf(&pfad, &was, bis, jetzt, fenster)
+            Some(Zertifikat {
+                pfad,
+                was,
+                gueltig_bis: gueltig_bis(cert.der())?,
+            })
         })
         .collect()
 }
@@ -648,6 +702,7 @@ mod tests {
                 encryption_cert_pem_file: Some(schreibe("abgelaufen", -1)),
                 signing_cert_pem_files: vec![schreibe("bald", 10), schreibe("lange", 365)],
                 quirks: Vec::new(),
+                de0004_ausnahme: Vec::new(),
             }],
             ..As4Config::default()
         };
@@ -696,5 +751,32 @@ mod tests {
             Some(time::macros::datetime!(2050-01-01 00:00 UTC))
         );
         assert_eq!(asn1_zeit(0x17, b"2611091200Z"), None);
+    }
+
+    /// Every DE 0004 escape is reported at startup, per partner and entry;
+    /// a partner without one reports nothing.
+    #[test]
+    fn every_de0004_ausnahme_is_warned() {
+        let partner = |mp_id: &str, ausnahme: &[&str]| crate::config::As4PartnerConfig {
+            mp_id: mp_id.to_owned(),
+            agency: None,
+            endpoint: None,
+            encryption_cert_pem_file: None,
+            signing_cert_pem_files: Vec::new(),
+            quirks: Vec::new(),
+            de0004_ausnahme: ausnahme.iter().map(|s| (*s).to_owned()).collect(),
+        };
+        let as4 = As4Config {
+            partner: vec![
+                partner("9900001000002", &[]),
+                partner("9900001000003", &["9900001000005"]),
+            ],
+            ..As4Config::default()
+        };
+        let befunde = de0004_befunde(&as4);
+        assert_eq!(befunde.len(), 1, "{befunde:?}");
+        assert_eq!(befunde[0].pfad, "as4.partner[1].de0004_ausnahme");
+        assert_eq!(befunde[0].schwere, befund::Schwere::Warnung);
+        assert!(befunde[0].text.contains("9900001000005"));
     }
 }

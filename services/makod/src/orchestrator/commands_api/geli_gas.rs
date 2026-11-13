@@ -181,7 +181,7 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
 
     let malo_record = state
         .malo_cache
-        .get(&state.tenant_id.to_string(), malo_id.as_str())
+        .get(malo_id.as_str())
         .await
         .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
         .ok_or_else(|| DispatchError::MaloNotFound(malo_id.to_string()))?;
@@ -454,7 +454,7 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
 
     let malo_record = state
         .malo_cache
-        .get(&state.tenant_id.to_string(), malo_id.as_str())
+        .get(malo_id.as_str())
         .await
         .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
         .ok_or_else(|| DispatchError::MaloNotFound(malo_id.to_string()))?;
@@ -659,7 +659,7 @@ async fn gnb_of(
 ) -> Result<MarktpartnerCode, DispatchError> {
     let malo_record = state
         .malo_cache
-        .get(&state.tenant_id.to_string(), malo_id.as_str())
+        .get(malo_id.as_str())
         .await
         .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
         .ok_or_else(|| DispatchError::MaloNotFound(malo_id.to_string()))?;

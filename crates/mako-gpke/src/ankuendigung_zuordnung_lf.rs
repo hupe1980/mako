@@ -63,7 +63,7 @@
 //!   LF-Zuordnung zu einer erzeugenden Marktlokation", SD Fälle 1–4
 //! - **EDI@Energy EBD 4.3** Kap. 6.50–6.53 — `E_0603`–`E_0606`
 //! - **UTILMD AHB Strom 2.1/2.2** — message layout
-//! - **APERAK AHB 1.1 § 2.4.1** — the separate technical acknowledgement,
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — the separate technical acknowledgement,
 //!   45 minutes on every day but Samstag (Sonntag 12:00 for a Saturday arrival)
 
 use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
@@ -575,8 +575,8 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                     events.push(AnkuendigungZuordnungLfEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 §2.4.
-                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
+                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 Kap. 2.4.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 Kap. 2.4.1).
                     let outbox = vec![
                         // The business notification. `processd`'s LF module
                         // decides this process, and it only ever sees a message
@@ -605,8 +605,8 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                     events.push(AnkuendigungZuordnungLfEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
-                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 Kap. 2.1.1.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 Kap. 2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),

@@ -289,7 +289,7 @@ def _identify(args: argparse.Namespace) -> int:
     lines = []
     if malo_is_valid(value):
         payload["kinds"].append("marktlokation")
-        lines.append("Marktlokations-ID — 11 digits, §8.1 check digit valid")
+        lines.append("Marktlokations-ID — 11 digits, Kap. 8.1 check digit valid")
     if melo_is_valid(value):
         payload["kinds"].append("messlokation")
         lines.append("Messlokations-ID — 33 characters (no check digit is defined)")

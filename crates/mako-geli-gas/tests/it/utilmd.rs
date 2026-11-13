@@ -57,7 +57,7 @@ use mako_geli_gas::{
 ///
 /// # Regulatory context
 ///
-/// Gas APERAK: negative only, nächster Werktag 12:00 (APERAK AHB 1.1 §2.3.1).
+/// Gas APERAK: negative only, nächster Werktag 12:00 (APERAK AHB 1.1 Kap. 2.3.1).
 /// Saturdays, Sundays and federal public holidays are not Werktage.
 const UTILMD_44001_BYTES: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:500+250115:0800+GAS-2025-001'\
@@ -296,7 +296,7 @@ UNZ+1+GAS-NEG-001'";
         .expect("parse must succeed even for an AHB-invalid message");
 
     // UTILMD AHB Gas 1.1 (G1.1) was published 01.10.2025 and applies from
-    // 01.04.2026 (Allgemeine Festlegungen 6.1d §2.5.2).
+    // 01.04.2026 (Allgemeine Festlegungen 6.1d Kap. 2.5.2).
     let ref_date = time::Date::from_calendar_date(2026, time::Month::June, 15).unwrap();
     let report = msg
         .validate_on_date(ref_date)

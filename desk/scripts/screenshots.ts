@@ -265,6 +265,9 @@ function answer(message: {
   if (message.params?.name === "einrichtung_checkliste") {
     return { content: [], structuredContent: CHECKLISTE };
   }
+  if (message.params?.name === "einrichtung_vorschlag") {
+    return { content: [], structuredContent: VORSCHLAG };
+  }
   if (message.params?.name === "get_process_history") {
     return {
       content: [],
@@ -303,6 +306,10 @@ const CHECKLISTE = JSON.parse(
   readFileSync(resolve(desk, "fixtures/einrichtung-checkliste.json"), "utf8"),
 );
 const PROBE = readFileSync(resolve(desk, "fixtures/probe-44004-abgelehnt.json"), "utf8");
+const VORBELEGT = readFileSync(resolve(desk, "fixtures/vorbelegen.json"), "utf8");
+const VORSCHLAG = JSON.parse(
+  readFileSync(resolve(desk, "fixtures/einrichtung-vorschlag.json"), "utf8"),
+);
 
 async function recordedMakod(context: BrowserContext) {
   await context.route("**/svc/makod/api/v1/probe/**", (route) =>
@@ -585,16 +592,24 @@ async function recordedAgentd(context: BrowserContext) {
     route.fulfill({ contentType: "application/json", body: JSON.stringify(katalog) }),
   );
   await context.route("**/svc/agentd/api/v1/runs", (route) => {
-    const input = (route.request().postDataJSON() as { input?: { freigabe?: string } }).input;
-    const run_id = input?.freigabe ? "run-freigabe-1" : RUN;
+    const body = route.request().postDataJSON() as {
+      agent?: string;
+      input?: { freigabe?: string };
+    };
+    const vorbelegen = body.agent === "einrichtung-assistent";
+    const run_id = vorbelegen ? "vorbelegen" : body.input?.freigabe ? "run-freigabe-1" : RUN;
     return route.fulfill({
       status: 202,
       contentType: "application/json",
       body: JSON.stringify([
-        { agent_name: "desk-assistant", run_id, fresh: true, retryable: false },
+        { agent_name: body.agent ?? "desk-assistant", run_id, fresh: true, retryable: false },
       ]),
     });
   });
+  // The Einrichtung's pre-fill: agentd's answer for one sentence (desk/fixtures/).
+  await context.route("**/svc/agentd/api/v1/runs/vorbelegen/antwort", (route) =>
+    route.fulfill({ contentType: "application/json", body: VORBELEGT }),
+  );
   // The run agentd computed for the Freigabe before anyone asked: its proposal.
   const proposal = {
     run: "run-freigabe-1",
@@ -864,6 +879,22 @@ try {
     await page.locator("[data-urteil]").waitFor();
     await page.locator("[data-urteil]").evaluate((el) => el.scrollIntoView({ block: "start" }));
     await shot(page, "probelauf", theme);
+
+    // The proposal: a sentence pre-fills the interview, each answer offered
+    // for confirmation, and makod's files beside it, line by line with sources.
+    await page.goto(`${base}einrichtung`);
+    await page.getByRole("tablist", { name: "Dateien" }).waitFor();
+    await page
+      .getByRole("textbox", { name: "Aus einem Satz" })
+      .fill(
+        "Wir sind Lieferant Strom und Gas, Strom unter 9900357000004, Bilanzkreis 11XBK-STD------Y.",
+      );
+    await page.getByRole("button", { name: "Vorbelegen" }).click();
+    await page.getByRole("list", { name: "Vorgeschlagene Antworten" }).waitFor();
+    await page
+      .getByRole("heading", { name: "Vorschlag", level: 2 })
+      .evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await shot(page, "einrichtung-vorschlag", theme);
 
     // At a phone's width: the sidebar folds into a sheet behind the top bar's
     // button, and the views keep a 16 px gutter with no sideways scroll.

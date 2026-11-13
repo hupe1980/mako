@@ -14,7 +14,7 @@
 //! It is mounted only when `netzbilanzd.toml` carries a `[mabis]` section
 //! ([`config::MabisConfig`]).
 //!
-//! ## Schedule (BK6-24-174 Anlage 3 §3.10, Werktage after month end)
+//! ## Schedule (BK6-24-174 Anlage 3 Kap. 3.10, Werktage after month end)
 //!
 //! One scheduled submission per Bilanzierungsmonat: the background scheduler
 //! fires at `run_hour_utc` (default 05:00 UTC) on the configured Werktag after
@@ -29,8 +29,8 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **BK6-24-174 Anlage 3 MaBiS** — Versionierung (§3.8.2), Datenstatus (§3.8.3), Fristen (§3.10)
-//! - **MSCONS AHB 3.2 §8.3.1** — EDIFACT message format for PID 13003
+//! - **BK6-24-174 Anlage 3 MaBiS** — Versionierung (Kap. 3.8.2), Datenstatus (Kap. 3.8.3), Fristen (Kap. 3.10)
+//! - **MSCONS AHB 3.2 Kap. 8.3.1** — EDIFACT message format for PID 13003
 //!
 //! ## Configuration (`[mabis]` in `netzbilanzd.toml`)
 //!
@@ -63,7 +63,7 @@ use self::sync_engine::SyncEngine;
 
 /// Start the scheduler — one scheduled submission per Bilanzierungsmonat.
 ///
-/// BK6-24-174 Anlage 3 §3.10, Tabelle 2: the Erstaufschlag window for a BG-SZR
+/// BK6-24-174 Anlage 3 Kap. 3.10, Tabelle 2: the Erstaufschlag window for a BG-SZR
 /// runs to the 10. Werktag after the Bilanzierungsmonat. Submitting on that last
 /// Werktag gives the aggregate the most complete input while the BIKO still
 /// assigns 'Abrechnungsdaten' automatically — a later version starts as

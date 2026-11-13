@@ -130,7 +130,7 @@ pub use zeitreihen::{
     Aggregationsebene, Bezugszeitraum, CCI_BEZEICHNUNG_SUMMENZEITREIHE,
     CCI_KLASSENTYP_VERANTWORTLICHER, Familie, KAPITEL_17_2_ENDE, Kategorie, Messtechnik, Rolle,
     UnbekannteKategorie, Zeitreihe, aggregationsverantwortung, alle as alle_zeitreihen,
-    cav_aus_zeitreihe, cci_aus_rolle, rolle_aus_cci, zeitreihe_aus_cav,
+    cav_aus_zeitreihe, cci_aus_rolle, rolle_aus_cci, zeitreihe_aus_cav, zeitreihe_aus_pid,
 };
 // Canonical balance-group topology IDs (defined in `ids`).
 pub use anforderung::{ABLEHNUNG_PID, all_pids as anforderung_pids};
@@ -138,7 +138,8 @@ pub use ids::{BilanzierungsgebietId, BilanzkreisId, InvalidMabisZaehlpunkt, Mabi
 pub use profile::{
     Bilanzierungsverfahren, ERSTLIEFERUNG_WERKTAGE, MabisProfilWorkflow, PROFIL_PIDS,
     ProfilCommand, ProfilData, ProfilEvent, ProfilState, Profilart, REKLAMATION_EBD,
-    REKLAMATION_PID, WORKFLOW_NAME as PROFIL_WORKFLOW_NAME, all_pids as profil_pids,
+    REKLAMATION_PID, ReklamationEingang, WORKFLOW_NAME as PROFIL_WORKFLOW_NAME,
+    all_pids as profil_pids, reklamation_key,
 };
 pub use summenzeitreihe::{
     MABIS_SLOT, SlotResolutionError, SumInterval, Summenzeitreihe, SummenzeitreiheBuilder,
@@ -277,7 +278,7 @@ impl mako_engine::builder::EngineModule for MabisModule {
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
         // ── MSCONS Summenzeitreihen ─────────────────────────────────────────
         //
-        // 13003 „Summenzeitreihen und Ausfallarbeitssummen" (MSCONS AHB 3.1g §5)
+        // 13003 „Summenzeitreihen und Ausfallarbeitssummen" (MSCONS AHB 3.1g Kap. 5)
         // carries every BG-/BK-/LF-SZR, the DZÜ, the NZR and the
         // Abrechnungssummenzeitreihe.
         //

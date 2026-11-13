@@ -237,8 +237,25 @@ fn edifact_findings(
     let rendered = crate::orchestrator::edifact_renderer::render_to_wire_bytes(&msg, &registry)
         .map_err(|e| e.to_string())?;
     let parsed = edi_energy::parse(&rendered.bytes).map_err(|e| e.to_string())?;
+    // The sender's role decides an AHB role Bedingung; this door knows it when
+    // the deployment plays one AHB role. A combined deployment leaves it
+    // undecided here, and the outbox's pre-send gate decides it per MP-ID.
+    let mut rollen = state
+        .configured_marktrollen
+        .iter()
+        .filter_map(|r| crate::party_registry::ahb_rolle(r));
+    let absender = rollen
+        .next()
+        .filter(|erste| rollen.all(|r| r == *erste))
+        .map(str::to_owned);
     let report = parsed
-        .validate_on_date(mako_fristen::heute())
+        .validate_on_date_with_rollen(
+            mako_fristen::heute(),
+            &edi_energy::profile::Parteirollen {
+                absender,
+                empfaenger: None,
+            },
+        )
         .map_err(|e| e.to_string())?;
     Ok(report
         .sending_refusals()

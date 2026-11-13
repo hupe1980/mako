@@ -255,7 +255,7 @@ Named from the network operator's side, which inverts the intuitive reading:
 
 ## Settling an invoice
 
-A billing run carries an issue date, a due date, an optional Rechnungskreis and up to **1 000
+A billing run carries an issue date, an optional due date, an optional Rechnungskreis and up to **1 000
 positions** (one MaLo, one period, one settlement each), all in **one transaction**. The
 settlement is a **tagged union** on `billing_type`; a field belonging to another kind is a `422`.
 
@@ -346,6 +346,26 @@ Monatsleistungspreissystem, published in the Netzbetreiber's Preisblatt. `system
 A monthly invoice that omits `system` bills the whole year's demand charge and raises
 `JAHRESLEISTUNGSPREIS_UNTERJAEHRIG`; `MONATSLEISTUNGSPREIS_MONATE_MISMATCH` fires when `monate`
 and the period length disagree by more than a month.
+
+### The Zahlungsziel
+
+The payment term is the Netzbetreiber's own: `zahlungsziel_werktage` counts Werktage from the
+Rechnungsdatum and has **no default** — unset, or below 10, the boot is refused. A request may
+state its own `due_date` instead. Either way the drafted invoice runs through `invoic-checker`
+first, and a breach of a published bound is a `422` (`zahlungsziel_unzulaessig`) before an invoice
+number is spent:
+
+| Bound | Applies to | Source |
+|---|---|---|
+| at least 10 WT after receipt | 31001, 31002, 31003, 31009 with a fälliger Betrag ≥ 0 | „Das Zahlungsziel darf 10 WT nach Empfang der Rechnung nicht unterschreiten" — GPKE Teil 2 Kap. 3.3.2 Nr. 1 (S. 90) |
+| at least 10 WT after the Rechnungsdatum | 31005 with a fälliger Betrag ≥ 0; 31007; 31001–31003 in Gas | INVOIC AHB 1.0b `SG8 DTM+265` `[24]` (S. 16, S. 39) |
+| at most 10 WT after the Rechnungsdatum | a Rückerstattung on 31001, 31002, 31005, and on 31003 in Gas; 31006 and 31008 always | INVOIC AHB 1.0b `SG8 DTM+265` `[25]` (S. 16, S. 39); `E_0406` Prüfschritt 34, EBD 4.3 Kap. 6.10.1 (S. 108) |
+
+The recipient's Sparte is the invoice's: it holds one MP-ID per Rolle and Sparte (BDEW-AWH
+Identifikatoren V1.2, Kap. 2.1). A configured term longer than 10 WT does not reach a Rückerstattung: such an invoice
+falls due on the tenth Werktag after its Rechnungsdatum. A Stornorechnung (31004 on the wire)
+carries neither bound. The drafting check counts the receipt from the Rechnungsdatum; dispatch
+counts it from the day the invoice leaves and refuses a draft that has since fallen short.
 
 ### Invoice numbers are allocated here
 
@@ -573,7 +593,7 @@ curl -X POST .../drafts/{id}/korrektur -d '{"grund": "Messwertkorrektur", "settl
 
 | Rule | Behaviour |
 |---|---|
-| A Storno is **recomputed** | the stored settlement input is replayed and negated by `grid_billing::reverse`; the document sets `ist_storno` + `original_rechnungsnummer`, the fields `invoic-checker` stage 0 reads (BK6-24-174 §5) |
+| A Storno is **recomputed** | the stored settlement input is replayed and negated by `grid_billing::reverse`; the document sets `ist_storno` + `original_rechnungsnummer`, the fields `invoic-checker` stage 0 reads (INVOIC AHB 1.0b Kap. 3.1.2: `SG1 RFF+OI` is Muss on a Stornorechnung) |
 | Only a dispatched invoice can be reversed or corrected | `draft` and `rejected` answer `409`; reject a draft and bill again |
 | A Korrektur needs the Storno first | it carries the whole corrected amount; `409` until the original is reversed |
 | A Korrektur corrects the **same** invoice | changing `settlement_type`, `sparte`, `sender_mp_id` or `recipient_mp_id` is a `422` naming the field |
@@ -713,6 +733,29 @@ and `vergleichstag` (Kap. 3.2.4.1, solar: a whole calendar day without a Maßnah
 against the SR). Callers supply the quarter-hour series; sourcing them from
 SCADA, `edmd` or DWD stays with the operator.
 
+A `compute` request names its TR under `tr` — `massnahme_tag`, `modell`,
+`pauschal_bei_bekanntmachung`, `viertelstundenerfassung` (`"keine"` or
+`{"seit": "YYYY-MM-DD"}`), `wetterdaten_an_der_tr_gemessen` and the
+Anlagenbetreiber's `festlegung`, if any — and
+is refused `422` unless its `verfahren` is the variant BilAReM Kap. 3.2.1 / 3.3
+assigns that TR on that day. The response names that variant as
+`abrechnungsverfahren`.
+
+| TR | Variant |
+|---|---|
+| Maßnahme before 01.07.2026 | refused — BK6-20-059 (Tenor Ziff. 1) |
+| fluctuating, not viertelstundenscharf erfasst | Pauschal; from the end of the next 31.12. at least three months after the Erfassung begins, the vereinfachte Spitzabrechnung unless Spitz was festgelegt by 30.11. |
+| fluctuating, in Pauschal at the Bekanntmachung, Prognosemodell | Pauschal up to 31.12.2028; from 01.01.2029 the vereinfachte Spitzabrechnung unless Spitz was festgelegt by 30.11.2028 |
+| fluctuating, otherwise | the Festlegung (Spitz or vereinfachte Spitz); without one the vereinfachte Spitzabrechnung — refused for a TR with geeigneten Wetterdaten measured at it, which the vereinfachte Spitzabrechnung presupposes absent |
+| nicht-fluktuierend | Planwertmodell Spitz; Prognosemodell Pauschal, Spitz on Festlegung |
+
+A yearly `festlegung` (`{"art": "jaehrlich", "verfahren", "festgelegt_am"}`) governs
+from the 01.01. after the next 30.11.; an initial one (`{"art": "initial",
+"verfahren", "ab"}`) from its Monatsbeginn. A `wind_spitz` or `solar_spitz`
+request also states its `wetterdaten`: `{"anlagenbetreiber": "YYYY-MM-DD"}` is
+refused when delivered after the 4. Werktag of the month after the Maßnahme, and
+`"ersatzwert_anb"` before that Frist has passed (Kap. 3.2.1).
+
 Every JSON request body here rejects unknown fields; query strings are not strict.
 
 ---
@@ -731,13 +774,15 @@ when the configuration carries a `[mabis]` section; without one the
 [`makod`](@/docs/services/makod.md). Strom only — Gas balances under GaBi Gas.
 
 A Summenzeitreihe is an **MSCONS** message, Prüfidentifikator **13003**
-("Übertragung Summenzeitreihe", MSCONS AHB 3.2 §8.3.1). Submission goes out through `makod` as
+("Übertragung Summenzeitreihe", MSCONS AHB 3.2 Kap. 8.3.1). Submission goes out through `makod` as
 `mabis.summenzeitreihe.uebermitteln` (Marktrolle `NB`/`ÜNB`), which enqueues the
 MSCONS directly rather than spawning a workflow; the BIKO's Datenstatus (IFTSTA
 21003/21004) and Prüfmitteilung (21000/21001) are recorded here, where the
 version history lives. The wire message carries the identifying 3-tuple as `LOC`
 (MaBiS-Zählpunkt), `DTM+492` (Bilanzierungsmonat, `CCYYMM`) and `DTM+293`
-(Versionsangabe, `CCYYMMDDHHMMSSZZZ`), and one `QTY+220` per settlement slot
+(Versionsangabe, `CCYYMMDDHHMMSSZZZ`), the OBIS-Kennzahl `1-1:1.29.0` in
+`SG9 PIA+5` (the series is summed from the Bezug projection; Codeliste der
+OBIS-Kennzahlen 2.5c Kap. 3.2 marks it for 13003), and one `QTY+220` per settlement slot
 bounded by `DTM+163`/`DTM+164`; how `makod` renders the other MSCONS
 Anwendungsfälle is in its [operator guide](@/docs/services/makod.md).
 
@@ -812,13 +857,13 @@ plainly `ABGELESEN` counts as non-measured.
 ### Versionierung and Datenstatus
 
 A Summenzeitreihe is identified by **(MaBiS-Zählpunkt, Bilanzierungsmonat,
-Version)**, and §3.8.2 requires only that the version ascend: *"Die Version einer
+Version)**, and Kap. 3.8.2 requires only that the version ascend: *"Die Version einer
 Summenzeitreihe ist jeweils aufsteigend zu vergeben und ist über die gesamte BKA
 beizubehalten."* A correction is the same series under a higher version. The
 version is a timestamp (`SG6 DTM+293`, format 304); `BGM 1225` is always `9`.
 
 **Datenstatus** is the separate, inbound axis. It is assigned exclusively by the
-BIKO (§3.8.3: *"Der Datenstatus wird ausschließlich vom BIKO vergeben"*) and
+BIKO (Kap. 3.8.3: *"Der Datenstatus wird ausschließlich vom BIKO vergeben"*) and
 arrives via IFTSTA `SG7 STS+Z04`:
 
 | Datenstatus | Meaning |
@@ -832,7 +877,7 @@ arrives via IFTSTA `SG7 STS+Z04`:
 Settlement uses the **highest version carrying `Abrechnungsdaten`** (or
 `Abrechnungsdaten KBKA`). `netzbilanzd` only records what the BIKO sent.
 
-### Fristen (§3.10, Tabelle 2)
+### Fristen (Kap. 3.10, Tabelle 2)
 
 Werktage after the end of the Bilanzierungsmonat, measured at **arrival at the
 BIKO**; executable as `mako_mabis::Bilanzierungsmonat`. `netzbilanzd` files a
@@ -854,16 +899,16 @@ The Redispatch-Ausfallarbeit series have their own windows (Kap. 17.3.1.3);
 
 Within the Erstaufschlag a new version is assigned `Abrechnungsdaten`
 automatically; after it a new version starts as `Prüfdaten` and needs a positive
-Prüfmitteilung (§3.8.3). A BG-SZR filed on the 11. WT is already in the
+Prüfmitteilung (Kap. 3.8.3). A BG-SZR filed on the 11. WT is already in the
 Clearingphase, so the scheduler submits on the **10. Werktag** by default, at
 `run_hour_utc`.
 
-**There is no Prüfmitteilung deadline.** §9.8.2 Nr. 1 leaves the Frist cell
-empty — the receiving party „kann" answer — and §13.8.2 defines no answer at
+**There is no Prüfmitteilung deadline.** Kap. 9.8.2 Nr. 1 leaves the Frist cell
+empty — the receiving party „kann" answer — and Kap. 13.8.2 defines no answer at
 all; its two rows are the BIKO's own dispatch dates above. What bounds a
 Prüfmitteilung is the clearing window. The two genuine 1-Werktag Fristen are the
-BIKO's: forwarding a Prüfmitteilung (§9.8.2 Nr. 3) and dispatching the
-Datenstatus (§9.9.2 Nr. 1).
+BIKO's: forwarding a Prüfmitteilung (Kap. 9.8.2 Nr. 3) and dispatching the
+Datenstatus (Kap. 9.9.2 Nr. 1).
 
 ### Submission target
 
@@ -882,7 +927,7 @@ are to be EDIFACT, not API-Webdienste ([BNetzA](@/docs/regulatory/bnetza.md)).
 | `PUT /api/v1/mabis/runs/{id}/retry` | `trigger-mabis-run` | retry a failed run (≤ 3 attempts) |
 | `POST /api/v1/mabis/datenstatus` | `record-biko-response` | record the BIKO Datenstatus (IFTSTA 21003/21004) |
 | `POST /api/v1/mabis/pruefmitteilung` | `record-biko-response` | record a Prüfmitteilung (IFTSTA 21000/21001) |
-| `GET /api/v1/mabis/korrekturbedarf` | `read-mabis-run` | negative Prüfmitteilungen not yet corrected (§9.8.1) |
+| `GET /api/v1/mabis/korrekturbedarf` | `read-mabis-run` | negative Prüfmitteilungen not yet corrected (Kap. 9.8.1) |
 
 ```
 pending ──► acked      (terminal — every territory filed)
@@ -906,7 +951,7 @@ or `21001` (benachbarter NB → NB); anything else is a `422`.
 
 ```bash
 # Trigger a submission for May 2026. The version is assigned by the service —
-# it must ascend (§3.8.2) — and the phase follows from the Werktag calendar.
+# it must ascend (Kap. 3.8.2) — and the phase follows from the Werktag calendar.
 curl -X POST http://netzbilanzd:8680/api/v1/mabis/sync \
   -H "Content-Type: application/json" \
   -d '{ "period_from": "2026-05-01", "period_to": "2026-05-31" }'
@@ -941,8 +986,8 @@ curl -X POST http://netzbilanzd:8680/api/v1/mabis/sync \
 |---|---|
 | `submission_runs.status = failed` older than 24 h | Immediate escalation — regulatory deadline at risk |
 | `submission_series.status <> 'acked'` on an otherwise finished run | A territory was not filed; the month is settled short |
-| No acked submission by the 10. Werktag | Erstaufschlag window closed — a later version starts as `Prüfdaten` (§3.10) |
-| Open Korrekturbedarf after the 30. Werktag | Clearingphase for the ordinary BKA closing (§3.10) |
+| No acked submission by the 10. Werktag | Erstaufschlag window closed — a later version starts as `Prüfdaten` (Kap. 3.10) |
+| Open Korrekturbedarf after the 30. Werktag | Clearingphase for the ordinary BKA closing (Kap. 3.10) |
 | MaLo coverage < 95 % in `submission_malo_log` | Missing data — check `edmd` quality warnings |
 
 ---
@@ -1098,7 +1143,7 @@ tools:
 | `get_submission_status` | MaBiS: recent runs + failed / retry-exhausted / open-Korrekturbedarf counts |
 | `list_failed_submissions` | MaBiS: failed runs, newest first, with `attempt_count` and `error_msg` |
 | `get_submission_run` | MaBiS: one run by UUID (version as RFC 3339) |
-| `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (§9.8.1 obligations), typed (`Korrekturbedarf`) |
+| `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (Kap. 9.8.1 obligations), typed (`Korrekturbedarf`) |
 
 Settling, dispatching, rejecting, correcting and filing a Summenzeitreihe live on REST, where
 the action is attributable to an operator. `agentd`'s `mabis-agent` reads the four MaBiS tools.
@@ -1154,6 +1199,10 @@ edmd_api_key   = "env:NETZBILANZD_EDMD_API_KEY"
 erp_webhook_url    = "http://erp:9000/webhooks/mako"
 erp_webhook_secret = "env:NETZBILANZD_WEBHOOK_SECRET"
 inbound_secret     = "env:NETZBILANZD_INBOUND_SECRET"
+
+# Werktage after the Rechnungsdatum an invoice falls due when its request states
+# no due_date. Required, at least 10.
+zahlungsziel_werktage = 14
 
 dispatch_alert_interval_secs    = 3600
 dispatch_stale_hours            = 48
@@ -1243,8 +1292,8 @@ PostgreSQL.
 | GeLi Gas 3.0 (BK7-24-01-009) §5.4 | AWH Sperrprozesse, billed per action |
 | §42b EnWG | GGV: each tenant Marktlokation billed for its own metered Netzentgelt |
 | §§13, 13a EnWG · BK6-20-061 §4.2 · BK6-23-241 | Redispatch Kostenblatt, angemessene Vergütung, BilAReM Ausfallarbeit |
-| BK6-24-174 Anlage 3 (MaBiS) §§3.8.2, 3.8.3, 3.10, 9.8.1 | Summenzeitreihe versioning, BIKO-assigned Datenstatus, the Tabelle 2 windows, the correction after a negative Prüfmitteilung |
-| MSCONS AHB 3.2 §8.3.1 · IFTSTA AHB 2.1 | PID 13003 Summenzeitreihe; 21000/21001 Prüfmitteilung, 21003/21004 Datenstatus |
+| BK6-24-174 Anlage 3 (MaBiS) Kap. 3.8.2, 3.8.3, 3.10, 9.8.1 | Summenzeitreihe versioning, BIKO-assigned Datenstatus, the Tabelle 2 windows, the correction after a negative Prüfmitteilung |
+| MSCONS AHB 3.2 Kap. 8.3.1 · IFTSTA AHB 2.1 | PID 13003 Summenzeitreihe; 21000/21001 Prüfmitteilung, 21003/21004 Datenstatus |
 | §14 Abs. 4 Nr. 4 UStG | consecutive, single-use invoice numbering |
 | § 147 Abs. 3 AO · § 14b UStG | invoices are Buchungsbelege — 8 years |
 

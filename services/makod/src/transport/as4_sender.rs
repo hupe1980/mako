@@ -54,7 +54,6 @@
 
 use std::sync::Arc;
 
-use edi_energy::EdiEnergyMessage as _;
 use mako_as4::bdew_action_from_str;
 use mako_engine::builder::As4Sender;
 use mako_engine::error::EngineError;
@@ -190,14 +189,14 @@ impl As4Sender for WebhookEdifactSender {
                 match edifact_renderer::render_to_wire_bytes(&msg_owned, &mp_id_registry) {
                     Ok(rendered) => String::from_utf8_lossy(&rendered.bytes).into_owned(),
                     Err(ref e) if edifact_renderer::is_suppressed(e) => {
-                        // Gas positive APERAK: silence = acceptance per APERAK AHB 1.1 §2.3.
+                        // Gas positive APERAK: silence = acceptance per APERAK AHB 1.1 Kap. 2.3.
                         // No wire EDIFACT sent; deliver domain JSON to ERP webhook so the
                         // operator sees the positive outcome.
                         tracing::debug!(
                             message_id   = %msg_owned.message_id,
                             message_type = %msg_owned.message_type,
                             "WebhookEdifactSender: Gas positive APERAK suppressed — \
-                             sending domain JSON (silence = acceptance, APERAK AHB 1.1 §2.3)",
+                             sending domain JSON (silence = acceptance, APERAK AHB 1.1 Kap. 2.3)",
                         );
                         msg_owned.payload.to_string()
                     }
@@ -351,6 +350,28 @@ pub struct BdewAs4Sender {
     /// the counter, which is the right trade for a runaway guard — it must never
     /// be the reason a legitimate long conversation stalls.
     loopback_hops: Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+}
+
+/// The refusal text of a pre-send or loopback gate.
+fn gate_refusal(
+    gate: &str,
+    message_id: &str,
+    message_type: &str,
+    sperre: &crate::transport::sendepruefung::Sperre,
+) -> String {
+    use crate::transport::sendepruefung::Sperre;
+    match sperre {
+        Sperre::Parse(e) => format!(
+            "{gate}: rendered EDIFACT does not parse for {message_id} ({message_type}): {e}"
+        ),
+        Sperre::Validierung(e) => {
+            format!("{gate}: AHB validation failed to run for {message_id} ({message_type}): {e}")
+        }
+        Sperre::Profil(refusals) => format!(
+            "{gate}: rendered EDIFACT violates its AHB profile for {message_id} \
+             ({message_type}): {refusals:?}"
+        ),
+    }
 }
 
 /// Count one loopback hop for `conversation_id`.
@@ -546,29 +567,18 @@ impl As4Sender for BdewAs4Sender {
                     // moves to a separate MP-ID. Skipping the gate here made the
                     // loopback path the one place a non-conformant message could
                     // be accepted.
-                    match loopback_state.platform.parse(&payload_bytes) {
-                        Err(e) => {
-                            return Err(EngineError::Serialization(format!(
-                                "loopback gate: rendered EDIFACT does not parse for \
-                                 {message_id_str} ({message_type}): {e}"
-                            )));
-                        }
-                        Ok(parsed) => match parsed.validate_on_date(mako_fristen::heute()) {
-                            Err(e) => {
-                                return Err(EngineError::Serialization(format!(
-                                    "loopback gate: AHB validation failed to run for \
-                                     {message_id_str} ({message_type}): {e}"
-                                )));
-                            }
-                            Ok(report) if !report.is_sendable() => {
-                                return Err(EngineError::Serialization(format!(
-                                    "loopback gate: rendered EDIFACT violates its AHB \
-                                     profile for {message_id_str} ({message_type}): {:?}",
-                                    report.sending_refusals().collect::<Vec<_>>()
-                                )));
-                            }
-                            Ok(_) => {}
-                        },
+                    if let Err(sperre) = crate::transport::sendepruefung::pruefe(
+                        &loopback_state.platform,
+                        &payload_bytes,
+                        &mp_id_registry,
+                        mako_fristen::heute(),
+                    ) {
+                        return Err(EngineError::Serialization(gate_refusal(
+                            "loopback gate",
+                            &message_id_str,
+                            &message_type,
+                            &sperre,
+                        )));
                     }
 
                     // Recipient MP-ID (UNB DE0010) → commodity-aware routing of
@@ -763,14 +773,14 @@ impl As4Sender for BdewAs4Sender {
                     rendered
                 }
                 Err(ref e) if edifact_renderer::is_suppressed(e) => {
-                    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.1 §2.3.
+                    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.1 Kap. 2.3.
                     // No AS4 message is sent; the outbox entry is acknowledged immediately.
                     tracing::debug!(
                         message_id   = %message_id_str,
                         message_type = %message_type,
                         recipient    = %recipient,
                         "BdewAs4Sender: Gas positive APERAK suppressed — \
-                         no wire EDIFACT sent (silence = acceptance, APERAK AHB 1.1 §2.3)",
+                         no wire EDIFACT sent (silence = acceptance, APERAK AHB 1.1 Kap. 2.3)",
                     );
                     return Ok(());
                 }
@@ -809,35 +819,24 @@ impl As4Sender for BdewAs4Sender {
             // rendered Übertragungsdatei back and run the edi-energy profile
             // validation. Failures are permanent (Serialization → dead-letter)
             // — retrying an invalid rendering can never succeed.
-            match platform.parse(&rendered.bytes) {
-                Err(e) => {
-                    return Err(EngineError::Serialization(format!(
-                        "pre-send gate: rendered EDIFACT does not parse for \
-                         {message_id_str} ({message_type}): {e}"
-                    )));
-                }
-                Ok(parsed) => match parsed.validate_on_date(mako_fristen::heute()) {
-                    Err(e) => {
-                        return Err(EngineError::Serialization(format!(
-                            "pre-send gate: AHB validation failed to run for \
-                             {message_id_str} ({message_type}): {e}"
-                        )));
-                    }
-                    Ok(report) if !report.is_sendable() => {
-                        return Err(EngineError::Serialization(format!(
-                            "pre-send gate: rendered EDIFACT violates its AHB \
-                             profile for {message_id_str} ({message_type}): {:?}",
-                            report.sending_refusals().collect::<Vec<_>>()
-                        )));
-                    }
-                    Ok(_) => {}
-                },
+            if let Err(sperre) = crate::transport::sendepruefung::pruefe(
+                &platform,
+                &rendered.bytes,
+                &mp_id_registry,
+                mako_fristen::heute(),
+            ) {
+                return Err(EngineError::Serialization(gate_refusal(
+                    "pre-send gate",
+                    &message_id_str,
+                    &message_type,
+                    &sperre,
+                )));
             }
 
             // The interchange's sender (UNB DE0004) selects the client: the
             // partner checks that the signing certificate's OU carries the
             // `eb:From` MP-ID, and it is this MP-ID's certificate that does.
-            let Some(client) = clients.client(&rendered.sender_mp_id).cloned() else {
+            let Some(client) = clients.client(&rendered.sender_mp_id) else {
                 return Err(EngineError::Serialization(format!(
                     "the interchange {message_id_str} is sent by {}, which has no AS4 identity \
                      ([party.as4]) in this deployment",
@@ -860,7 +859,7 @@ impl As4Sender for BdewAs4Sender {
             };
             let as4_message_id = clients.message_id(&message_id_str);
 
-            // Allgemeine Festlegungen V6.1d §2.12:
+            // Allgemeine Festlegungen V6.1d Kap. 2.12:
             // Nachrichtentyp_Anwendungsreferenz_von_an_yyyymmdd_DAR.txt, the
             // creation date in UTC, von/an from the interchange's UNB.
             let payload_filename = {
@@ -971,13 +970,13 @@ fn delivery_error(e: &asx::Error, recipient: &str, message_id: &str) -> EngineEr
     }
 }
 
-// ── §AF §2.12 helpers ─────────────────────────────────────────────────────────
+// ── §AF Kap. 2.12 helpers ─────────────────────────────────────────────────────────
 
 /// Returns the `Anwendungsreferenz` (UNB DE0026) token for a given EDIFACT
 /// message type, as defined by the BDEW Nachrichtenbeschreibungen.
 ///
 /// For most types (UTILMD, APERAK, CONTRL, etc.) the field is empty — the
-/// §AF §2.12 filename then renders the second position as an empty string,
+/// §AF Kap. 2.12 filename then renders the second position as an empty string,
 /// producing a double underscore (e.g. `UTILMD__9900…`).
 ///
 /// For MSCONS the value depends on the message content and is not knowable
@@ -985,7 +984,7 @@ fn delivery_error(e: &asx::Error, recipient: &str, message_id: &str) -> EngineEr
 /// (`BDEWApplicationReference` PartProperty) carries the same information and
 /// is also absent because our builders produce bare UNH…UNT without UNB.
 fn anwendungsreferenz_for(_message_type: &str) -> &'static str {
-    // Per AF §2.12 and BDEW Nachrichtenbeschreibungen:
+    // Per AF Kap. 2.12 and BDEW Nachrichtenbeschreibungen:
     // VL / TL / EM are only used for MSCONS, and only when the sender
     // explicitly sets UNB DE0026 — which our bare-UNH builders never do.
     ""

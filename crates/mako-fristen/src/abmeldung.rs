@@ -10,7 +10,7 @@
 //!
 //! # The windows
 //!
-//! GPKE Teil 2 § 2.5.2 SD „Lieferende von NB an LF" Nr. 1 states four, keyed on
+//! GPKE Teil 2 Kap. 2.5.2 SD „Lieferende von NB an LF" Nr. 1 states four, keyed on
 //! the Beendigungsgrund:
 //!
 //! | Grund | Spätester ÜT |
@@ -30,7 +30,7 @@
 //!
 //! # Sources
 //!
-//! - BK6-24-174 GPKE Teil 2, § 2.5.2 SD „Lieferende von NB an LF" Nr. 1
+//! - BK6-24-174 GPKE Teil 2, Kap. 2.5.2 SD „Lieferende von NB an LF" Nr. 1
 //! - BDEW *Entscheidungsbaum-Diagramme und Codelisten* 4.3, `E_0609` 40 / 520
 
 use time::Date;
@@ -121,7 +121,7 @@ impl AbmeldungVorlauf {
             Some(false) => Self::TagVorDemLetztenWerktag,
             None => Self::Unbestimmt {
                 grund: "Für EEG-Marktlokationen und Tranchen von EEG-Marktlokationen gilt \
-                        ein Monat statt des letzten Werktags (GPKE Teil 2 § 2.5.2 Nr. 1); \
+                        ein Monat statt des letzten Werktags (GPKE Teil 2 Kap. 2.5.2 Nr. 1); \
                         ob die Marktlokation eine EEG-Marktlokation ist, ist nicht bekannt.",
             },
         }

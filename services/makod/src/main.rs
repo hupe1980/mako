@@ -62,7 +62,7 @@ mod transport;
 use crate::api::{edifact_api, malo_admin_api, migration_api, partner_api};
 use crate::core::{
     cedar_authz, config, deployment, einrichtung, erp_adapter, health, malo_cache, malo_sync,
-    party_registry, preflight, worker_health,
+    party_registry, preflight, worker_health, zertifikat_monitor,
 };
 use crate::orchestrator::{
     adapters, commands_api, deadline_dispatch, dvgw_ingest, edifact_renderer, ingest_dispatcher,
@@ -558,6 +558,29 @@ struct Cli {
     #[arg(long, value_name = "URL", env = "MAKOD_VERZEICHNISDIENST_URL")]
     verzeichnisdienst_url: Option<String>,
 
+    /// A counterparty's EMT.API signature certificate, `MP-ID=PATH` (PEM).
+    ///
+    /// A Verzeichnisdienst record is used only when its signature verifies
+    /// against one of the certificates given for its provider; a provider with
+    /// none has every record refused. Repeat the flag for several partners, or
+    /// for one partner during a certificate rollover.
+    #[arg(
+        long,
+        value_name = "MP_ID=PATH",
+        env = "MAKOD_VERZEICHNISDIENST_SIGNING_CERT",
+        value_delimiter = ','
+    )]
+    verzeichnisdienst_signing_cert: Vec<String>,
+
+    /// The SM-PKI root certificate(s) (PEM file) every
+    /// `--verzeichnisdienst-signing-cert` must chain to; required with them.
+    #[arg(
+        long,
+        value_name = "PATH",
+        env = "MAKOD_VERZEICHNISDIENST_TRUST_ANCHOR"
+    )]
+    verzeichnisdienst_trust_anchor: Option<std::path::PathBuf>,
+
     /// ERP webhook URL for outbound BO4E event delivery.
     ///
     /// When set, `makod` starts an `OutboxErpWorker` that POSTs every ERP-
@@ -588,12 +611,13 @@ struct Cli {
     #[arg(long, value_name = "URL", env = "MAKOD_EDIFACT_OUTBOX_WEBHOOK_URL")]
     edifact_outbox_webhook_url: Option<String>,
 
-    /// §20b EnWG Netzzugangsplattform endpoint URL (optional).
+    /// § 20b EnWG Netzzugangsplattform endpoint URL — refused at startup.
     ///
-    /// No platform interface exists yet (no BNetzA Festlegung under §20b
-    /// Abs. 3); when unset, §20b requests are delivered to the ERP webhook as
-    /// `de.mako.netzzugang.uebermittlungsbedarf` CloudEvents so the operator
-    /// can submit them via the Netzbetreiber's Webportal.
+    /// No platform interface is published (§ 20b Abs. 3 EnWG leaves it to a
+    /// BNetzA Festlegung, and none is issued). § 20b requests are delivered to
+    /// the ERP webhook as `de.mako.netzzugang.uebermittlungsbedarf`
+    /// CloudEvents so the operator can submit them via the Netzbetreiber's
+    /// Webportal.
     #[arg(long, value_name = "URL", env = "MAKOD_NETZZUGANG_ENDPOINT_URL")]
     netzzugang_endpoint_url: Option<String>,
 
@@ -765,7 +789,7 @@ struct Cli {
     /// A fired deadline reaches its workflow's `on_deadline` at most this long
     /// after it fell due. The tightest window makod registers is the Strom
     /// APERAK for UTILMD / ORDERS, 45 Minuten after receipt (APERAK AHB 1.1
-    /// §2.4.1), so the interval stays well below it.
+    /// Kap. 2.4.1), so the interval stays well below it.
     ///
     /// Defaults to 30 seconds. Minimum 1 second.
     ///
@@ -1004,6 +1028,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         netzzugang_endpoint_url: cli.netzzugang_endpoint_url.as_deref(),
         maloid_partner: &cli.maloid_partner,
         verzeichnisdienst_url: cli.verzeichnisdienst_url.as_deref(),
+        verzeichnisdienst_signing_cert: &cli.verzeichnisdienst_signing_cert,
+        verzeichnisdienst_trust_anchor: cli.verzeichnisdienst_trust_anchor.as_deref(),
         marktd_url: cli.marktd_url.as_deref(),
         marktd_api_key: cli.marktd_api_key.as_deref(),
         auth_keys: &cli.auth_keys,
@@ -1169,7 +1195,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     //
     // Shared read-side snapshot of the operator's MaLo master data.
     // Populated via `PUT /admin/malo/{malo_id}` or the ERP command source.
-    let malo_cache = std::sync::Arc::new(malo_cache::SlateDbMaloCache::new(store.clone()));
+    // One cache, scoped by the engine tenant: the doors, the MaLo-ID answer,
+    // the admin API and the marktd fan-out all file and read under it.
+    let malo_cache =
+        std::sync::Arc::new(malo_cache::SlateDbMaloCache::new(store.clone(), tenant_id));
 
     let modules = ctx.registered_modules();
     let pid_count = ctx.pid_router().len();
@@ -1296,8 +1325,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             SecretString::from(cli.marktd_api_key.clone().unwrap_or_default()),
             webhook_url.clone(),
             cli.marktd_webhook_secret.clone().map(SecretString::from),
-            malo_cache::SlateDbMaloCache::new(store.clone()),
-            mp_id_registry.primary_mp_id(),
+            (*malo_cache).clone(),
             Arc::clone(&mp_id_registry),
         ))),
         _ => None,
@@ -1448,6 +1476,27 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         dead_letter_sink: dl_sink_ingest,
     };
 
+    // ── AS4 certificate expiry, re-read while running ────────────────────────
+    let zertifikate = (cli.parties.iter().any(|p| p.as4.is_some()) || !cli.as4.partner.is_empty())
+        .then(|| zertifikat_monitor::ZertifikatMonitor::new(&cli.as4, &cli.parties));
+    if let Some(m) = &zertifikate {
+        server_handles.push(Arc::clone(m).spawn(shutdown_token.clone()));
+    }
+    // A certificate replaced on disk is put into use without a restart.
+    if let Some(clients) = checked.as4.clone() {
+        let (as4, parties, registry) = (
+            cli.as4.clone(),
+            cli.parties.clone(),
+            Arc::clone(&mp_id_registry),
+        );
+        let policy = cli.policy.as4.unbekannte_absender.get();
+        server_handles.push(as4_clients::spawn_rotation(
+            clients,
+            move || as4_clients::As4Setup::from_config(&as4, &parties, &registry, policy),
+            shutdown_token.clone(),
+        ));
+    }
+
     // ── Optional: HTTP REST API server (--http-addr) ──────────────────────────
     if let Some(addr) = cli.http_addr {
         server_handles.push(
@@ -1465,6 +1514,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                     volatile_mode: cli.data_dir.is_none() && cli.allow_volatile,
                     einrichtung: Arc::clone(&einrichtung_bericht),
                     einrichtung_dienste: einrichtung_dienste.clone(),
+                    zertifikate: zertifikate.clone(),
                 },
             )
             .await?,
@@ -1546,7 +1596,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         erp_webhook_url: cli.erp_webhook_url.clone(),
         erp_webhook_secret: cli.erp_webhook_secret.clone(),
         edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.clone(),
-        netzzugang_endpoint_url: cli.netzzugang_endpoint_url.clone(),
         marktd_client: marktd_client.clone(),
         snapshot_interval: cli.snapshot_interval,
         deadline_poll_interval_secs: cli.deadline_poll_interval_secs,
@@ -2048,6 +2097,14 @@ fn apply_config_file(
         if cli.verzeichnisdienst_url.is_none() {
             cli.verzeichnisdienst_url = maloid.verzeichnisdienst_url;
         }
+        if cli.verzeichnisdienst_signing_cert.is_empty()
+            && let Some(certs) = maloid.verzeichnisdienst_signing_certs
+        {
+            cli.verzeichnisdienst_signing_cert = certs;
+        }
+        if cli.verzeichnisdienst_trust_anchor.is_none() {
+            cli.verzeichnisdienst_trust_anchor = maloid.verzeichnisdienst_trust_anchor_pem_file;
+        }
     }
 
     // ── [[party]] — multi-MP-ID identity table ───────────────────────────────
@@ -2493,6 +2550,7 @@ mod config_surface_tests {
             "encryption_cert_pem_file",
             "signing_cert_pem_files",
             "quirks",
+            "de0004_ausnahme",
             "signing_cert_pem_file",
             "signing_key_pem_file",
             "encryption_key_pem_file",

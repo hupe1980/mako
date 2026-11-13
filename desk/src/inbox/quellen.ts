@@ -8,7 +8,9 @@ import { ROLLEN, type Rolle, useRolle } from "../app/rollen";
 import { type Answer, type Hinweis, hinweise, type VorschlagArt, vorschlaege } from "../data/agent";
 import { abgelehntWeil, buchungsart } from "../data/buchung";
 import { call, ServiceUnavailable } from "../data/mcp";
+import { offeneSchritte } from "../data/rechnung";
 import type { Decimal, Instant } from "../format/brands";
+import { formatCount } from "../format/count";
 import { formatBusinessDate, formatInstant } from "../format/date";
 import { formatCent, formatEuro } from "../format/money";
 import { katalog } from "../i18n";
@@ -17,18 +19,21 @@ import type { Eintrag, QuelleId, Stand } from "./model";
 
 /** What each Rolle's Heute reads; every Rolle also reads the agent's Hinweise. */
 export const QUELLEN: Record<Rolle, QuelleId[]> = {
-  netz: ["freigaben", "ueberfaellig", "korrekturbedarf"],
+  // A 31009 MSB-Rechnung reaches NB, LF and ESA alike (PID-Übersicht 4.0),
+  // so each holds its received invoices at an open Prüfschritt.
+  netz: ["freigaben", "ueberfaellig", "gehalten", "korrekturbedarf"],
   lieferant: [
     "anmeldungen",
     "freigaben",
     "ueberfaellig",
     "dispute",
+    "gehalten",
     "pruefposten",
     "geparkt",
     "nicht_uebermittelt",
   ],
   messstelle: ["freigaben", "ueberfaellig", "ableseauftraege"],
-  energieservice: ["freigaben", "ueberfaellig"],
+  energieservice: ["freigaben", "ueberfaellig", "gehalten"],
 };
 
 /** The sources' words, in the Sprache in force. */
@@ -267,6 +272,58 @@ function useDispute(aktiv: boolean): Stand {
   return stand("dispute", wort().dispute, q, eintraege, q.data?.saturated ?? false);
 }
 
+/**
+ * INVOIC receipts the Entscheidungsbaum held Offen — a Prüfschritt no record
+ * answers, no answer sent — due by the Zahlungsziel, the nearest first as
+ * invoicd orders them, each titled by its Rechnungssteller as a dispute is.
+ */
+function useGehalten(aktiv: boolean): Stand {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "invoicd", "list_held_receipts"],
+    queryFn: () => call("invoicd", "list_held_receipts", {}),
+    enabled: aktiv,
+    refetchInterval: TAKT,
+  });
+  const mpIds = [...new Set((q.data?.gehalten ?? []).map((g) => g.sender_mp_id))].sort();
+  const namen = useQuery({
+    queryKey: [rolle, "marktd", "partner_namen", mpIds],
+    queryFn: () => call("marktd", "partner_namen", { mp_ids: mpIds }),
+    enabled: aktiv && mpIds.length > 0,
+    staleTime: 300_000,
+  });
+  const name = new Map((namen.data?.partner ?? []).map((p) => [p.mp_id, p.name]));
+  const eintraege: Eintrag[] = (q.data?.gehalten ?? []).map((g) => {
+    const schritte = offeneSchritte(g.offen);
+    const erster = schritte[0];
+    return {
+      id: `prozess:${g.process_id}`,
+      quelle: "gehalten",
+      titel:
+        name.get(g.sender_mp_id) ??
+        (g.rechnungsnummer ? wort().rechnung(g.rechnungsnummer) : wort().gehalten),
+      kennung: false,
+      detail: [
+        name.has(g.sender_mp_id) && g.rechnungsnummer ? wort().rechnung(g.rechnungsnummer) : null,
+        g.sender_mp_id,
+        `PID ${g.pid}`,
+        g.bestellung_ref ? wort().bestellung(g.bestellung_ref) : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      grund: erster
+        ? wort().gehaltenGrund(schritte.length, formatCount(schritte.length), erster.detail)
+        : wort().gehaltenOhneSchritt,
+      frist: (g.frist as Instant | null) ?? null,
+      bezug: [g.process_id],
+      anker: null,
+      ziel: { to: "/prozess", search: { key: g.process_id } },
+      gehalten: g,
+    };
+  });
+  return stand("gehalten", wort().gehalten, q, eintraege, q.data?.saturated ?? false);
+}
+
 /** Billing records the risk check held for a person, highest risk first. */
 function usePruefposten(aktiv: boolean): Stand {
   const { rolle } = useRolle();
@@ -443,6 +500,7 @@ export function useQuellen(rolle: Rolle, nur?: readonly QuelleId[]): Stand[] {
     useKorrekturbedarf(liest.has("korrekturbedarf")),
     useAbleseauftraege(liest.has("ableseauftraege")),
     useDispute(liest.has("dispute")),
+    useGehalten(liest.has("gehalten")),
     usePruefposten(liest.has("pruefposten")),
     useGeparkt(liest.has("geparkt")),
   ];

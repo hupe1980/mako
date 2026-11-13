@@ -113,6 +113,10 @@ pub struct PreflightInput<'a> {
     pub maloid_partner: &'a [String],
     /// `--verzeichnisdienst-url`.
     pub verzeichnisdienst_url: Option<&'a str>,
+    /// `--verzeichnisdienst-signing-cert MP-ID=PATH` pairs.
+    pub verzeichnisdienst_signing_cert: &'a [String],
+    /// `--verzeichnisdienst-trust-anchor`: the SM-PKI root(s) they chain to.
+    pub verzeichnisdienst_trust_anchor: Option<&'a std::path::Path>,
     /// `--marktd-url`.
     pub marktd_url: Option<&'a str>,
     /// `--marktd-api-key`.
@@ -140,6 +144,10 @@ pub struct Preflight {
     pub maloid_partners: HashMap<String, reqwest::Url>,
     /// Verzeichnisdienst base URL.
     pub verzeichnisdienst_url: Option<reqwest::Url>,
+    /// Each counterparty's EMT.API signature keys, against which its
+    /// Verzeichnisdienst records are verified.
+    pub verzeichnisdienst_signers:
+        HashMap<String, Vec<energy_api::transport::jws::RecordVerifyingKey>>,
     /// Parsed named API keys.
     pub auth_keys: Vec<NamedKey>,
     /// Cedar policy text supplied by the operator.
@@ -430,6 +438,27 @@ pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
         );
     }
 
+    // ── § 20b EnWG platform endpoint ─────────────────────────────────────────
+    //
+    // § 20b Abs. 3 EnWG leaves the platform's interface and the Zeitpunkt of
+    // the data exchange to a BNetzA Festlegung nach § 29 Abs. 1, and none has
+    // been issued. An endpoint configured now could only receive mako's
+    // internal request JSON — a format nobody published — so it is refused;
+    // requests reach the operator over the ERP webhook.
+    if input.netzzugang_endpoint_url.is_some() {
+        out.push(
+            Befund::blockiert(
+                "erp.netzzugang_endpoint_url",
+                "--netzzugang-endpoint-url is set, but no § 20b EnWG platform interface is \
+                 published (§ 20b Abs. 3 EnWG leaves it to a BNetzA Festlegung nach § 29 Abs. 1, \
+                 and none is issued). Remove the setting: § 20b requests reach the operator as \
+                 de.mako.netzzugang.uebermittlungsbedarf CloudEvents on the ERP webhook.",
+            )
+            .bereich(Bereich::Erreichbarkeit)
+            .quelle("§ 20b Abs. 3 EnWG"),
+        );
+    }
+
     // ── Outbound callback URLs ───────────────────────────────────────────────
     //
     // Every one of these is a delivery destination. An unparseable URL is not
@@ -446,11 +475,6 @@ pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
             "--erp-webhook-url",
             "erp.webhook_url",
             input.erp_webhook_url,
-        ),
-        (
-            "--netzzugang-endpoint-url",
-            "netzzugang.endpoint_url",
-            input.netzzugang_endpoint_url,
         ),
         ("--marktd-url", "marktd.url", input.marktd_url),
     ] {
@@ -530,6 +554,81 @@ pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
         }
     };
 
+    // ── Verzeichnisdienst record signers ─────────────────────────────────────
+    //
+    // A record is the provider's statement, verified against its EMT.API
+    // signature certificate (Regelungen zum Verzeichnisdienst 1.1, Kap. 2.2,
+    // S. 6), which only the issuing Sub-CA distributes (Kap. 1.6, S. 4). A
+    // certificate that does not load would leave that partner's records
+    // refused at runtime, so it is refused here. A pinned certificate is used
+    // only once it chains to the SM-PKI root (Kap. 3.2, S. 7: the CP governs
+    // their validation) and names its MP-ID in the OU; the CP is not mirrored,
+    // so the root is the operator's to configure, and without it every pinned
+    // certificate is refused rather than trusted because a file says so.
+    let mut verzeichnisdienst_signers: HashMap<String, Vec<_>> = HashMap::new();
+    let anker = match input.verzeichnisdienst_trust_anchor {
+        _ if input.verzeichnisdienst_signing_cert.is_empty() => Vec::new(),
+        None => {
+            out.push(
+                Befund::blockiert(
+                    "maloid.verzeichnisdienst_trust_anchor_pem_file",
+                    "--verzeichnisdienst-signing-cert is set without \
+                     --verzeichnisdienst-trust-anchor: a pinned EMT.API certificate is used only \
+                     once it chains to the SM-PKI root, so name the root certificate",
+                )
+                .bereich(Bereich::Zertifikate)
+                .quelle("Regelungen zum Verzeichnisdienst 1.1, Kap. 3.2 (S. 7)"),
+            );
+            Vec::new()
+        }
+        Some(pfad) => match std::fs::read_to_string(pfad)
+            .map_err(|e| e.to_string())
+            .and_then(|pem| crate::transport::sm_pki::pem_certificates(&pem))
+        {
+            Ok(anker) => anker,
+            Err(e) => {
+                out.push(
+                    Befund::blockiert(
+                        "maloid.verzeichnisdienst_trust_anchor_pem_file",
+                        format!("{}: {e}", pfad.display()),
+                    )
+                    .bereich(Bereich::Zertifikate),
+                );
+                Vec::new()
+            }
+        },
+    };
+    let jetzt = std::time::SystemTime::now();
+    for pair in input.verzeichnisdienst_signing_cert {
+        let loaded = pair
+            .split_once('=')
+            .ok_or_else(|| format!("expected MP-ID=PATH, got {pair:?}"))
+            .and_then(|(mp_id, path)| {
+                let pem = std::fs::read_to_string(path.trim())
+                    .map_err(|e| format!("{}: {e}", path.trim()))?;
+                if !anker.is_empty() {
+                    crate::transport::sm_pki::check_emt_api(&pem, mp_id.trim(), &anker, jetzt)
+                        .map_err(|e| format!("{}: {e}", path.trim()))?;
+                }
+                crate::transport::webdienste::verifying_key_from_cert_pem(&pem)
+                    .map(|key| (mp_id.trim().to_owned(), key))
+                    .map_err(|e| format!("{}: {e}", path.trim()))
+            });
+        match loaded {
+            Ok((mp_id, key)) => verzeichnisdienst_signers
+                .entry(mp_id)
+                .or_default()
+                .push(key),
+            Err(e) => out.push(
+                Befund::blockiert(
+                    "maloid.verzeichnisdienst_signing_certs",
+                    format!("--verzeichnisdienst-signing-cert: {e}"),
+                )
+                .bereich(Bereich::Zertifikate),
+            ),
+        }
+    }
+
     if input.edifact_outbox_webhook_url.is_some() && !input.erp_webhook_secret_set {
         // The body is the rendered market message — the MaLo-IDs, the
         // counterparty and the customer data the Vorgang is about. Unsigned,
@@ -571,6 +670,7 @@ pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
             as4,
             maloid_partners,
             verzeichnisdienst_url,
+            verzeichnisdienst_signers,
             auth_keys,
             cedar_policies: input.cedar_policies.clone(),
             cedar_default_policy,
@@ -676,6 +776,8 @@ mod tests {
             netzzugang_endpoint_url: None,
             maloid_partner: &[],
             verzeichnisdienst_url: None,
+            verzeichnisdienst_signing_cert: &[],
+            verzeichnisdienst_trust_anchor: None,
             marktd_url: None,
             marktd_api_key: None,
             auth_keys: &[],
@@ -758,6 +860,7 @@ mod tests {
                     encryption_cert_pem_file: Some(self.path("partner.enc.pem")),
                     signing_cert_pem_files: vec![self.path("partner.sig.pem")],
                     quirks: Vec::new(),
+                    de0004_ausnahme: Vec::new(),
                 }],
                 allow_no_signing: false,
                 lenient_receipts: None,
@@ -942,6 +1045,21 @@ mod tests {
         as4.partner[0].quirks = vec!["lenient".to_owned()];
         let err = as4_rejection(&as4, &f.parties());
         assert!(err.contains("unknown quirk"), "{err}");
+    }
+
+    /// A DE 0004 escape names another market participant's MP-ID — never a
+    /// malformed one, the partner itself or one of this deployment's own.
+    #[test]
+    fn a_de0004_ausnahme_names_another_mp_id() {
+        let f = As4Files::new();
+        let mut as4 = f.as4();
+        as4.partner[0].de0004_ausnahme = vec!["9900001000005".to_owned()];
+        as4_preflight(&as4, &f.parties()).expect("a represented MP-ID is a valid setting");
+        for falsch in ["99000010", "9900001000002", "9900001000001"] {
+            as4.partner[0].de0004_ausnahme = vec![falsch.to_owned()];
+            let err = as4_rejection(&as4, &f.parties());
+            assert!(err.contains("de0004_ausnahme"), "{falsch}: {err}");
+        }
     }
 
     #[test]
@@ -1221,13 +1339,6 @@ mod tests {
                     ..base()
                 },
             ),
-            (
-                "--netzzugang-endpoint-url",
-                PreflightInput {
-                    netzzugang_endpoint_url: Some("not a url"),
-                    ..base()
-                },
-            ),
         ] {
             input.auth_keys = &keys;
             let err = rejection(&input);
@@ -1255,10 +1366,30 @@ mod tests {
             auth_keys: &keys,
             edifact_outbox_webhook_url: Some("http://webhook:8000/edifact"),
             erp_webhook_url: Some("https://erp.example.com/mako/events"),
-            netzzugang_endpoint_url: Some("https://nzp.example.com/api"),
             ..base()
         };
         preflight(&input).expect("well-formed callback URLs are startable");
+    }
+
+    /// No § 20b EnWG platform interface is published, so a configured
+    /// endpoint would receive mako's internal request JSON: refused at
+    /// startup, while the webhook alone starts.
+    #[test]
+    fn a_netzzugang_endpoint_is_refused() {
+        let keys = vec!["erp=token".to_owned()];
+        let input = PreflightInput {
+            auth_keys: &keys,
+            netzzugang_endpoint_url: Some("https://nzp.example.com/api"),
+            ..base()
+        };
+        let err = rejection(&input);
+        assert!(err.contains("§ 20b"), "{err}");
+        preflight(&PreflightInput {
+            auth_keys: &keys,
+            erp_webhook_url: Some("https://erp.example.com/mako/events"),
+            ..base()
+        })
+        .expect("the webhook fallback alone is startable");
     }
 
     #[test]
@@ -1272,5 +1403,152 @@ mod tests {
         };
         let err = rejection(&input);
         assert!(err.contains("--maloid-partner"), "{err}");
+    }
+
+    /// A partner's EMT.API signature certificate loads into the key its
+    /// Verzeichnisdienst records are verified against; a second one for the
+    /// same MP-ID (a rollover) is kept beside it.
+    #[test]
+    fn verzeichnisdienst_signing_certs_load_per_partner() {
+        let pki = EmtApiPki::new();
+        let keys = vec!["erp=token".to_owned()];
+        let certs = vec![
+            format!("9900001000002={}", pki.leaf("9900001000002").display()),
+            format!("9900001000002={}", pki.leaf("9900001000002").display()),
+        ];
+        let input = PreflightInput {
+            auth_keys: &keys,
+            verzeichnisdienst_signing_cert: &certs,
+            verzeichnisdienst_trust_anchor: Some(&pki.anchor),
+            ..base()
+        };
+        let checked = preflight(&input).expect("a certificate under the anchor is startable");
+        assert_eq!(
+            checked
+                .verzeichnisdienst_signers
+                .get("9900001000002")
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+
+    /// A test SM-PKI: a Brainpool root and Sub-CA issuing P-256 EMT.API
+    /// signature certificates with the MP-ID as OU, each written with its
+    /// Sub-CA.
+    struct EmtApiPki {
+        dir: tempfile::TempDir,
+        sub: asx::testkit::pki::TestCa,
+        anchor: std::path::PathBuf,
+        _root: asx::testkit::pki::TestCa,
+    }
+
+    impl EmtApiPki {
+        fn new() -> Self {
+            use asx::testkit::pki::{KeyAlg, TestCa};
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = TestCa::new("SM-Root", KeyAlg::EcBrainpoolP256r1);
+            let sub = root.sub_ca("SM-Sub", KeyAlg::EcBrainpoolP256r1);
+            let anchor = dir.path().join("root.pem");
+            std::fs::write(&anchor, root.cert_pem()).expect("write");
+            Self {
+                dir,
+                sub,
+                anchor,
+                _root: root,
+            }
+        }
+
+        fn leaf(&self, mp_id: &str) -> std::path::PathBuf {
+            use asx::testkit::pki::{KeyAlg, Nid};
+            self.leaf_of(
+                &self.sub,
+                mp_id,
+                || KeyAlg::EcP256,
+                Nid::ORGANIZATIONALUNITNAME,
+            )
+        }
+
+        fn leaf_of(
+            &self,
+            ca: &asx::testkit::pki::TestCa,
+            mp_id: &str,
+            alg: impl Fn() -> asx::testkit::pki::KeyAlg,
+            ou: asx::testkit::pki::Nid,
+        ) -> std::path::PathBuf {
+            use asx::testkit::pki::Nid;
+            let leaf = ca.issue_named(&[(Nid::COMMONNAME, "EMT.API sig"), (ou, mp_id)], alg());
+            let path = self
+                .dir
+                .path()
+                .join(format!("{mp_id}-{}.pem", uuid::Uuid::new_v4()));
+            let mut pem = leaf.cert_pem.clone();
+            pem.extend_from_slice(ca.cert_pem());
+            std::fs::write(&path, pem).expect("write");
+            path
+        }
+    }
+
+    /// A pinned EMT.API certificate is used only once it chains to the
+    /// configured SM-PKI root and names its MP-ID: without a root every pin is
+    /// refused, and one under another root or for another MP-ID is refused.
+    #[test]
+    fn a_pinned_emt_api_certificate_must_chain_to_the_sm_pki_root() {
+        use asx::testkit::pki::{KeyAlg, Nid, TestCa};
+        let pki = EmtApiPki::new();
+        let keys = vec!["erp=token".to_owned()];
+        let input = |certs: &[String], anchor: Option<&std::path::Path>| {
+            rejection(&PreflightInput {
+                auth_keys: &keys,
+                verzeichnisdienst_signing_cert: certs,
+                verzeichnisdienst_trust_anchor: anchor,
+                ..base()
+            })
+        };
+        let own = vec![format!(
+            "9900001000002={}",
+            pki.leaf("9900001000002").display()
+        )];
+        let err = input(&own, None);
+        assert!(err.contains("--verzeichnisdienst-trust-anchor"), "{err}");
+
+        let fremd = TestCa::new("Other-Root", KeyAlg::EcBrainpoolP256r1);
+        let fremd_sub = fremd.sub_ca("Other-Sub", KeyAlg::EcBrainpoolP256r1);
+        let outside = vec![format!(
+            "9900001000002={}",
+            pki.leaf_of(
+                &fremd_sub,
+                "9900001000002",
+                || KeyAlg::EcP256,
+                Nid::ORGANIZATIONALUNITNAME
+            )
+            .display()
+        )];
+        let err = input(&outside, Some(&pki.anchor));
+        assert!(err.contains("neither in the file nor"), "{err}");
+
+        let other_mp = vec![format!(
+            "9900001000003={}",
+            pki.leaf("9900001000002").display()
+        )];
+        let err = input(&other_mp, Some(&pki.anchor));
+        assert!(err.contains("OU=9900001000003"), "{err}");
+    }
+
+    /// A certificate that does not load blocks the boot: that partner's
+    /// records would otherwise be refused at runtime with nothing at startup
+    /// saying why.
+    #[test]
+    fn an_unloadable_verzeichnisdienst_signing_cert_is_rejected() {
+        let keys = vec!["erp=token".to_owned()];
+        for pair in ["9900001000002=/nonexistent/partner.pem", "no-separator"] {
+            let certs = vec![pair.to_owned()];
+            let input = PreflightInput {
+                auth_keys: &keys,
+                verzeichnisdienst_signing_cert: &certs,
+                ..base()
+            };
+            let err = rejection(&input);
+            assert!(err.contains("--verzeichnisdienst-signing-cert"), "{err}");
+        }
     }
 }

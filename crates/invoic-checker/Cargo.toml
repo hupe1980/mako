@@ -21,10 +21,14 @@ mako-pruefung = { workspace = true, features = ["role-esa"] }
 rubo4e       = { workspace = true }
 rust_decimal = { workspace = true }
 serde       = { workspace = true }
+# `ZusatzAttribut::wert` — the Steuerkategorie and Steuernummer BO4E has no
+# field for.
+serde_json  = { workspace = true }
 time        = { workspace = true }
+# The Umsatzsteuer rate in force for a period, `E_0264` Prüfschritt 330.
+energy-billing = { workspace = true }
 
 [dev-dependencies]
-serde_json  = { workspace = true }
 
 [lints]
 workspace = true

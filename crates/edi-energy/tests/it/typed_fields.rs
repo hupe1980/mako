@@ -525,6 +525,7 @@ fn contrl_builder_serialize_roundtrip() {
     let bytes = ContrlBuilder::new(Release::new("1.0a"))
         .interchange_ref("INTER-SER-001")
         .sender("9900111222333")
+        .receiver("9900111222340")
         .accept()
         .serialize()
         .expect("ContrlBuilder::serialize must succeed");
@@ -1035,7 +1036,7 @@ fn partin_round_trip_serialize() {
 
 // ── ORDRSP SG2 AJT — the published Antwortcode ────────────────────────────────
 
-/// An ESA order answer (ORDRSP AHB 1.1b §4.15). `SG2 AJT` is **Muss** on
+/// An ESA order answer (ORDRSP AHB 1.1b Kap. 4.15). `SG2 AJT` is **Muss** on
 /// 19011–19014 and those four use cases publish no free-text segment at all, so
 /// this segment is the entire statement of what the answer means.
 #[cfg(feature = "ordrsp")]

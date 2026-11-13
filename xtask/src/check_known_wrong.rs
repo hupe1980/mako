@@ -63,13 +63,50 @@ struct Rule {
     reason: &'static str,
 }
 
+/// A BDEW document numbered in Kapitel: the Allgemeine Festlegungen, an AHB,
+/// MIG or EBD (named by its message type or bare), and the Anwendungshilfen
+/// Identifikatoren and Rollenmodell.
+macro_rules! bdew_document {
+    () => {
+        r"\b(Allgemeine[n]? Festlegungen( zu den EDIFACT- und XML-Nachrichten)?|AF|(APERAK|CONTRL|UTILMD|UTILTS|INVOIC|REMADV|REQOTE|QUOTES|ORDERS|ORDRSP|ORDCHG|PRICAT|MSCONS|IFTSTA|INSRPT|PARTIN|COMDIS)[ -](AHB|MIG)( (Strom|Gas))?|(AHB|MIG) (APERAK|CONTRL|UTILMD|UTILTS|INVOIC|REMADV|REQOTE|QUOTES|ORDERS|ORDRSP|ORDCHG|PRICAT|MSCONS|IFTSTA|INSRPT|PARTIN|COMDIS)|AHB|MIG|EBD|Identifikatoren[- ]AWH|AWH Identifikatoren( in der Marktkommunikation)?|Rollenmodell( für die Marktkommunikation)?)"
+    };
+}
+
+/// The rules whose `§` names a document's chapter: a match is withdrawn when
+/// what follows the `§ n` is a statute, so „GPKE Teil 2, § 41 EnWG" and
+/// „INVOIC AHB 1.0b, § 14 UStG" pass.
+const CHAPTER_RULES: &[&str] = &["bk6-24-174-paragraph", "bdew-document-paragraph"];
+
+/// What a statute citation continues with after `§ n`: the rest of the number,
+/// an Absatz, Satz or Nummer, then the statute's abbreviation.
+const STATUTE_AFTER: &str = r"^\d*[a-z]?( Abs\. \d+[a-z]?)?( (S\.|Satz) \d+)?( Nr\. \d+[a-z]?)?( und \d+[a-z]?)? (UStG|EnWG|MsbG|EEG|StromNEV|GasNEV|StromNZV|GasNZV|StromGVV|GasGVV|AO|BGB|KWKG|StromStG|EnergieStG|NAV|NDAV|HGB|EnFG|BEHG|ARegV|MessEG|MessEV|DSGVO|GWB|EnSiG|EWSG)\b";
+
+/// Whether `re` matches `line` with at least one match that is not a
+/// statute citation (for a [`CHAPTER_RULES`] rule; any match otherwise).
+fn rule_hits(rule: &Rule, re: &Regex, line: &str) -> bool {
+    if !CHAPTER_RULES.contains(&rule.id) {
+        return re.is_match(line);
+    }
+    static STATUTE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(STATUTE_AFTER).expect("STATUTE_AFTER is a valid pattern"));
+    re.find_iter(line)
+        .any(|m| !statute_follows(&STATUTE, line, m.end()))
+}
+
+/// Whether the text from `end` — just past the `§ n` digit a chapter rule
+/// matched — reads as a statute citation. A match that does not end in a
+/// digit (the „§ n Allgemeine Festlegungen" form) is never one.
+fn statute_follows(statute: &Regex, line: &str, end: usize) -> bool {
+    line[..end].ends_with(|c: char| c.is_ascii_digit()) && statute.is_match(&line[end..])
+}
+
 /// The phrase list. Each `row` must occur in the `AGENTS.md` table.
 const RULES: &[Rule] = &[
     Rule {
         id: "aperak-weekday",
         row: "The Strom UTILMD/ORDERS APERAK window is 45 Minuten",
         pattern: r"(?i)45[ -]?(min\b|minuten|minutes|-minute).{0,40}(weekday|mo[–-]fr|montag|on a werktag|am werktag|an werktagen|werktags)|(weekday|mo[–-]fr\b|montag bis freitag).{0,40}45[ -]?(min\b|minuten|minutes)",
-        reason: "APERAK AHB 1.1 § 2.4.1 states the 45 Minuten unqualified and carves out \
+        reason: "APERAK AHB 1.1 Kap. 2.4.1 states the 45 Minuten unqualified and carves out \
                  Samstag alone — no weekday or Werktag qualifier; render it from \
                  `mako_fristen::aperak_strom_due_at`",
     },
@@ -77,7 +114,7 @@ const RULES: &[Rule] = &[
         id: "aperak-gas-initial-noon",
         row: "The Gas APERAK Initialprozess window is 3 Werktage",
         pattern: r"(?i)\b3\.? ?(werktage?n?|wt)\b[^.;|()]{0,12}12 ?(uhr|:00)",
-        reason: "APERAK AHB 1.1 § 2.3.1: „spätestens 3 Werktage nach Eingang\" names no clock \
+        reason: "APERAK AHB 1.1 Kap. 2.3.1: „spätestens 3 Werktage nach Eingang\" names no clock \
                  time; the 12 Uhr belongs to the Folgeprozess sentence",
     },
     Rule {
@@ -88,11 +125,35 @@ const RULES: &[Rule] = &[
                  naming a Werktag runs to the end of that day",
     },
     Rule {
-        id: "mabis-paragraph",
+        id: "bk6-24-174-paragraph",
         row: "MaBiS § 10.2.1 grants the Zuordnungsermächtigung",
-        pattern: r"MaBiS §",
-        reason: "MaBiS (BK6-24-174 Anlage 3) is numbered in Kapitel, not §§ — cite \
-                 „MaBiS Kap. n\"",
+        // The document name, then any of its qualifiers (Sparte, Teil, Anlage,
+        // Aktenzeichen, parenthesised or not), then the `§` — nothing else
+        // between. A statute `§` later on the line is not attached to the
+        // name and passes: `GPKE Teil 3 Kap. 1.3 and §14a EnWG`.
+        pattern: r"\b(BK6-24-174|GPKE|WiM|MaBiS|Teil [1-4])(,? \(?(Strom|Gas|Teil [1-4]|Anlage [1-4][a-d]?|BK6-2[24]-(174|024)|GPKE|WiM|MaBiS)\)?)*\)?,? ?§§? \d",
+        reason: "BK6-24-174's Anlagen (GPKE Teil 1–3, WiM Teil 1–2, MaBiS) and GPKE Teil 4 \
+                 (BK6-22-024 Anlage 1d) are numbered in Kapitel, not §§ — cite \
+                 „GPKE Teil 2 Kap. n\", „MaBiS Kap. n\"",
+    },
+    Rule {
+        id: "bdew-document-paragraph",
+        row: "MaBiS § 10.2.1 grants the Zuordnungsermächtigung",
+        // The document name, then its edition, Sparte, FV or EBD qualifiers,
+        // then the `§` — or the `§ n` first and the document right after it
+        // („§ 2.13 der Allgemeinen Festlegungen"). A statute `§` that follows
+        // the name is not a chapter: [`statute_follows`] passes
+        // „INVOIC AHB 1.0b, § 14 UStG".
+        pattern: concat!(
+            bdew_document!(),
+            r"( ?\(?(V ?)?\d+\.\d+[a-z]?\)?|,? (Strom|Gas)\b| ?\(?FV ?\d{4}-?\d{2}-?\d{2}\)?| ?\(?fv\d{8}\)?| ?\(?E_\d{4}\)?)*\)?,? ?§§? \d",
+            r"|§§? \d+(\.\d+)*,? ((der|des|of the|in the|in|of) )?",
+            bdew_document!(),
+        ),
+        reason: "the Allgemeine Festlegungen, every AHB, MIG and EBD document, and the BDEW \
+                 Anwendungshilfen Identifikatoren and Rollenmodell are numbered in Kapitel, \
+                 not §§ — cite „APERAK AHB 1.1 Kap. 2.4.1\", „Allgemeine Festlegungen 6.1d \
+                 Kap. 2.13\"",
     },
     Rule {
         id: "gpke-kap-1-7",
@@ -294,6 +355,15 @@ const RULES: &[Rule] = &[
                  — `A02` has four meanings across E_0607, E_0622, E_0249 and E_0250; read the \
                  wording from `mako_pruefung::codes::lookup(tree, code)`",
     },
+    Rule {
+        id: "eic-nad-agency",
+        row: "An EIC party's NAD DE3055 is ZEW",
+        pattern: r"(?i)\bZEW\b|\bEIC\b[^.;|]{0,60}\b305\b|\b305\b[^.;|]{0,40}\b(EIC|ETSO|ENTSO)",
+        reason: "the MIGs list `9` GS1, `293` BDEW and `332` DVGW on a NAD and nothing else \
+                 (UTILMD MIG Strom S2.2 S. 32–33, UTILMD MIG Gas G1.2 S. 17–18); an EIC is not \
+                 an MP-ID and travels in CCI DE 7037 / LOC DE 3225 — derive the NAD code from \
+                 `edi_energy::AgencyCode::for_mp_id`",
+    },
 ];
 
 /// Table rows no phrase can catch, by the first cell's text.
@@ -391,6 +461,18 @@ const ALLOWED: &[Allow] = &[
         rule: "seventeen-cutoff",
         fragment: "End of the Werktag, not a 17:00 cut-off",
         reason: "refutes the cut-off",
+    },
+    Allow {
+        path: "services/agentd/src/plane/beleg.rs",
+        rule: "bdew-document-paragraph",
+        fragment: "zitiert(\"APERAK AHB 1.1 § 2.4.1 nennt 45 Minuten.\")",
+        reason: "the test feeds the wrong spelling to the matcher that tolerates it",
+    },
+    Allow {
+        path: "CHANGELOG.md",
+        rule: "bdew-document-paragraph",
+        fragment: "(APERAK AHB 1.1 § 2.4.1). mako-engine's",
+        reason: "a released version's entry, kept as it shipped",
     },
     Allow {
         path: "crates/edi-energy/src/builders/aperak.rs",
@@ -632,7 +714,7 @@ fn phrase_findings(compiled: &[(&'static Rule, Regex)], rel: &str, src: &str) ->
         }
         let line = normalise(raw);
         for (rule, re) in compiled {
-            if !re.is_match(&line) {
+            if !rule_hits(rule, re, &line) {
                 continue;
             }
             let admitted = ALLOWED
@@ -796,7 +878,7 @@ mod tests {
         let n = normalise(line);
         compile()
             .into_iter()
-            .filter(|(_, re)| re.is_match(&n))
+            .filter(|(r, re)| rule_hits(r, re, &n))
             .map(|(r, _)| r.id)
             .collect()
     }
@@ -823,9 +905,57 @@ mod tests {
                 "Saturday is not a Werktag (GPKE Teil 1 Kap. 1.7).",
             ),
             (
-                "mabis-paragraph",
+                "bk6-24-174-paragraph",
                 "/// MaBiS § 10.2.1 grants the Zuordnungsermächtigung",
             ),
+            ("bk6-24-174-paragraph", "// MaBiS (BK6-24-174 § 10.2.1)"),
+            (
+                "bk6-24-174-paragraph",
+                "source: \"BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2\",",
+            ),
+            ("bk6-24-174-paragraph", "| BK6-24-174 Anlage 3 §3.10 |"),
+            (
+                "bk6-24-174-paragraph",
+                "/// **GPKE Teil 2**, § 2.5.2 SD Lieferende",
+            ),
+            (
+                "bk6-24-174-paragraph",
+                "//! GPKE Teil 4 (BK6-22-024 Anlage 1d) §1.4 Stammdatenänderung",
+            ),
+            (
+                "bk6-24-174-paragraph",
+                "/// (WiM Strom Teil 2 §4) Werte nach Typ 2",
+            ),
+            ("bk6-24-174-paragraph", "/// GPKE Teil 1 § 3.2.1.5: Tranche"),
+            (
+                "bdew-document-paragraph",
+                "/// Allgemeine Festlegungen V6.1d §2.13: UNB and NAD agree",
+            ),
+            (
+                "bdew-document-paragraph",
+                "#### §2.12 Filename convention (§ 2.12 der Allgemeinen Festlegungen)",
+            ),
+            ("bdew-document-paragraph", "// AF 6.1d §3: test indicator"),
+            (
+                "bdew-document-paragraph",
+                "| Strom | UTILMD | 45 Minuten | APERAK AHB 1.1 §2.4.1 |",
+            ),
+            (
+                "bdew-document-paragraph",
+                "/// **Muss** on 17007 (ORDERS AHB 1.1b §4.15)",
+            ),
+            (
+                "bdew-document-paragraph",
+                "#: Muss on 55001 (UTILMD AHB Strom 2.1 §5.3)",
+            ),
+            (
+                "bdew-document-paragraph",
+                "/// INVOIC AHB §3.1.2 Stornorechnung",
+            ),
+            ("bdew-document-paragraph", "/// MSCONS MIG 2.5 § 4"),
+            ("bdew-document-paragraph", "// EBD E_0406 § 31"),
+            ("bdew-document-paragraph", "(Identifikatoren AWH V1.2 §2.1)"),
+            ("bdew-document-paragraph", "BDEW-AWH Rollenmodell V2.2 §3"),
             (
                 "asx-sign-only",
                 "// a sign-only override is valid AS4 and would send",
@@ -928,7 +1058,10 @@ mod tests {
                 "ust-12-3-pv",
                 "// 50 kWp: exceeds the §19 turnover reality → Regelbesteuerung",
             ),
-            ("aperak-ahb-1-0", "/// APERAK AHB 1.0 §2.4.1: 45 Minuten"),
+            (
+                "aperak-ahb-1-0",
+                "/// APERAK AHB 1.0 Kap. 2.4.1: 45 Minuten",
+            ),
             (
                 "fv2027-04-release",
                 "pub const RELEASE_2_0_0: &str = \"2.0.0\";",
@@ -958,6 +1091,15 @@ mod tests {
                 "role-features-6a",
                 "# processd's role features enforce § 6a EnWG informatorische Entflechtung",
             ),
+            ("eic-nad-agency", "        _ => \"ZEW\","),
+            (
+                "eic-nad-agency",
+                "| ENTSO-E **EIC** | 16 alphanumeric | `305` (`AgencyCode::Etso`) |",
+            ),
+            (
+                "eic-nad-agency",
+                "/// `\"305\"` — ETSO, the agency for EIC codes",
+            ),
         ];
         for rule in RULES {
             assert!(
@@ -980,7 +1122,7 @@ mod tests {
     fn the_right_statements_pass() {
         for line in [
             "| APERAK | 45 min Strom on every day but Samstag; Gas next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) |",
-            "/// APERAK AHB 1.1 § 2.4.1: 45 Minuten for a UTILMD or ORDERS",
+            "/// APERAK AHB 1.1 Kap. 2.4.1: 45 Minuten for a UTILMD or ORDERS",
             "| 55037 | Fall 2 | 8 | **17:00 Uhr am ÜT** von Nr. 1 |",
             "Saturday is not a Werktag (GPKE Teil 1 Kap. 7 Fristenberechnung)",
             "| Kündigungsbestätigung | § 41 Abs. 8 Nr. 2 EnWG, § 20 Abs. 2 GVV |",
@@ -999,10 +1141,77 @@ mod tests {
             "/// Zuschlag erlischt (§ 36e EEG 2023) when the plant is not commissioned",
             "/// § 6a EnWG informatorisches Unbundling: in a combined-role (VIU) deployment",
             "| § 6a EnWG informatorisches Unbundling | Cedar on the `ReadProcess` action |",
+            "/// - **EIC** (16-char ENTSO-E) — used by TSOs / Regelzonen",
+            "/// C082 DE 3055 — `332` (DVGW) or `9` (GS1), NOMINT 4.6 S. 305",
+            "/// BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 Nr. 1",
+            "| MaBiS (BK6-24-174 Anlage 3) Kap. 10.2.1 |",
         ] {
             assert!(
                 hit_ids(line).is_empty(),
                 "must pass: {line} ({:?})",
+                hit_ids(line)
+            );
+        }
+    }
+
+    /// A `§` attached to a BK6-24-174 chapter is refused; a statute `§` on the
+    /// same line, after a correct chapter citation, is not.
+    #[test]
+    fn a_statute_beside_a_chapter_citation_passes() {
+        for line in [
+            "/// GPKE Teil 3 Kap. 1.3 and §14a EnWG",
+            "// BK6-24-174 GPKE Teil 2 Kap. 2.1.2; § 41 Abs. 8 EnWG",
+            "| WiM Teil 1 Kap. 2.2.2 | § 29 Abs. 1 MsbG |",
+            "/// MaBiS (BK6-24-174 Anlage 3) Kap. 3.10 — § 147 AO keeps the record",
+            "/// GPKE (§14a EnWG Modul 1)",
+            "//! Teil 2 of § 42c EnWG",
+        ] {
+            assert!(
+                !hit_ids(line).contains(&"bk6-24-174-paragraph"),
+                "must pass: {line} ({:?})",
+                hit_ids(line)
+            );
+        }
+        for line in [
+            "// BK6-24-174 GPKE Teil 2 § 2.1.2; § 41 Abs. 8 EnWG",
+            "/// **MaBiS** §3.10 and §14a EnWG",
+            "| `GPKE Teil 2` § 3.5 |",
+        ] {
+            assert!(
+                hit_ids(line).contains(&"bk6-24-174-paragraph"),
+                "must catch: {line} ({:?})",
+                hit_ids(line)
+            );
+        }
+    }
+
+    /// A chapter of a BDEW document cited with `§` is refused; the same
+    /// citation with „Kap." passes, and so does a statute `§` beside it or
+    /// right after the document's name.
+    #[test]
+    fn a_statute_beside_a_bdew_document_chapter_passes() {
+        for line in [
+            "/// APERAK AHB 1.1 Kap. 2.4.1: 45 Minuten for a UTILMD or ORDERS",
+            "/// Allgemeine Festlegungen 6.1d Kap. 2.13; § 20 Abs. 1 EnWG",
+            "/// INVOIC AHB 1.0b, § 14 Abs. 4 Nr. 8 UStG makes the rate mandatory",
+            "| INVOIC AHB 1.0b Kap. 3.1.1 | § 40 EnWG |",
+            "// REMADV AHB 1.0a § 14 UStG",
+            "/// MIG and AHB carry it; § 60 Abs. 1 MsbG obliges the MSB",
+            "/// Identifikatoren AWH V1.2 Kap. 2.1",
+        ] {
+            assert!(
+                !hit_ids(line).contains(&"bdew-document-paragraph"),
+                "must pass: {line} ({:?})",
+                hit_ids(line)
+            );
+        }
+        for line in [
+            "/// INVOIC AHB 1.0b, § 14 UStG and INVOIC AHB 1.0b § 3.1.2",
+            "/// § 2.4.1 APERAK AHB: 45 Minuten",
+        ] {
+            assert!(
+                hit_ids(line).contains(&"bdew-document-paragraph"),
+                "must catch: {line} ({:?})",
                 hit_ids(line)
             );
         }
@@ -1027,7 +1236,11 @@ mod tests {
             .is_empty()
         );
         assert_eq!(
-            hits("crates/mako-engine/src/erc.rs", "/// APERAK AHB 1.0 §2.4.1").len(),
+            hits(
+                "crates/mako-engine/src/erc.rs",
+                "/// APERAK AHB 1.0 Kap. 2.4.1"
+            )
+            .len(),
             1,
             "a second, unadmitted occurrence in the same file still fails"
         );

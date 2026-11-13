@@ -40,7 +40,10 @@ async fn gnb(
             makod::cedar_authz::CedarAuthorizer::unauthenticated().expect("infallible"),
         ),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new((*store).clone())),
+        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
+            (*store).clone(),
+            TenantId::from_party_id(GNB_MP),
+        )),
         maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((*store).clone()),
         store,
         marktd_client: Some(Arc::new(support::stub_marktd(record).await)),
@@ -319,7 +322,10 @@ async fn an_msb_deployment_answers_a_44113() {
         configured_marktrollen: vec!["GMSB".to_owned()],
         store: Arc::clone(&store),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new((*store).clone())),
+        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
+            (*store).clone(),
+            TenantId::from_party_id(MSB_MP),
+        )),
         maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((*store).clone()),
         marktd_client: None,
         ..gnb(None).await

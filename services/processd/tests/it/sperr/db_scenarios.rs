@@ -454,7 +454,7 @@ async fn an_entsperrauftrag_keeps_its_arbeitszeit() {
     );
 }
 
-/// GPKE Teil 2 § 3.5.1.2 Nr. 5: „Der NB führt bis zu zwei Sperrversuche
+/// GPKE Teil 2 Kap. 3.5.1.2 Nr. 5: „Der NB führt bis zu zwei Sperrversuche
 /// innerhalb eines Sperrauftrags durch."
 ///
 /// The first unsuccessful visit is recorded and the order stays in the queue —
@@ -518,7 +518,7 @@ async fn the_first_sperrversuch_does_not_close_the_order() {
     );
 }
 
-/// A legal or factual impossibility (§ 3.5.1.2 Nr. 5: „gerichtliche Verfügung",
+/// A legal or factual impossibility (Kap. 3.5.1.2 Nr. 5: „gerichtliche Verfügung",
 /// „lebenserhaltende medizinische Geräte") closes the order on the first
 /// report — there is nothing a second visit could change.
 #[tokio::test]
@@ -606,7 +606,7 @@ async fn the_execution_window_is_stored_and_swept() {
 
 /// An IFTSTA past its Frist is escalated while its command is still being
 /// retried: the Lieferant is owed the Auftragsstatus by the 1. WT nach Abschluss
-/// (GPKE Teil 2 § 3.5.1.2 Nr. 5), whatever the delivery is doing.
+/// (GPKE Teil 2 Kap. 3.5.1.2 Nr. 5), whatever the delivery is doing.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_overdue_iftsta_is_escalated_while_still_retrying() {

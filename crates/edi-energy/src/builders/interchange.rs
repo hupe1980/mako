@@ -108,8 +108,8 @@ impl InterchangeBuilder {
         // would put trailing separators on every interchange.
         let unb: &[&[&str]] = &[
             &["UNOC", "3"],
-            &[&self.sender, unb_qualifier(&self.sender)],
-            &[&self.receiver, unb_qualifier(&self.receiver)],
+            &[&self.sender, unb_qualifier_or_refuse(&self.sender)?],
+            &[&self.receiver, unb_qualifier_or_refuse(&self.receiver)?],
             &[&self.date, &self.time],
             &[&self.dar],
         ];
@@ -168,20 +168,27 @@ const INTERCHANGE_CHARSET: edifact_rs::Charset = edifact_rs::Charset::UnoC;
 
 /// The UNB party-identification qualifier (DE 3055) for a market-partner ID.
 ///
-/// `14` = GS1 GLN, `500` = DE BDEW, `502` = DE DVGW. BDEW-issued 13-digit
-/// MP-IDs start with `99` and DVGW-issued with `98`; 16-character EIC codes are
-/// issued by BDEW as the German issuing office.
+/// `14` = GS1 GLN, `500` = DE BDEW, `502` = DE DVGW (Allgemeine Festlegungen
+/// 6.1d S. 50). BDEW-issued 13-digit MP-IDs start with `99` and DVGW-issued
+/// with `98`. An identifier that is no 13-digit MP-ID — an EIC among them — has
+/// no qualifier: `None`, the twin of [`crate::AgencyCode::for_mp_id`].
 #[must_use]
-pub fn unb_qualifier(mp_id: &str) -> &'static str {
-    if mp_id.len() == 13 && mp_id.starts_with("99") {
-        "500"
-    } else if mp_id.len() == 13 && mp_id.starts_with("98") {
-        "502"
-    } else if mp_id.len() == 13 {
-        "14"
-    } else {
-        "500"
-    }
+pub fn unb_qualifier(mp_id: &str) -> Option<&'static str> {
+    crate::AgencyCode::for_mp_id(mp_id).map(|a| match a {
+        crate::AgencyCode::Bdew => "500",
+        crate::AgencyCode::Dvgw => "502",
+        crate::AgencyCode::Gs1 => "14",
+    })
+}
+
+/// [`unb_qualifier`], refused by name for an identifier that is no MP-ID.
+pub(crate) fn unb_qualifier_or_refuse(mp_id: &str) -> Result<&'static str, Error> {
+    unb_qualifier(mp_id).ok_or_else(|| {
+        Error::Serialize(format!(
+            "{mp_id:?} is no MP-ID (BDEW-/DVGW-Codenummer or GLN, 13 digits): UNB DE 0007 has \
+             no qualifier for it"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -191,10 +198,10 @@ mod tests {
     /// EDI@Energy `AF61d`: 14 = GS1, 500 = DE BDEW, 502 = DE DVGW.
     #[test]
     fn qualifier_per_af61d() {
-        assert_eq!(unb_qualifier("9900123456789"), "500");
-        assert_eq!(unb_qualifier("9870123456789"), "502");
-        assert_eq!(unb_qualifier("4012345000023"), "14");
-        assert_eq!(unb_qualifier("10XDE-EON-NETZ-C"), "500");
+        assert_eq!(unb_qualifier("9900123456789"), Some("500"));
+        assert_eq!(unb_qualifier("9870123456789"), Some("502"));
+        assert_eq!(unb_qualifier("4012345000023"), Some("14"));
+        assert_eq!(unb_qualifier("10XDE-EON-NETZ-C"), None);
     }
 
     #[test]

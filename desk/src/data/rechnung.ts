@@ -67,6 +67,82 @@ export function ablehnungSenden(id: string, keepalive = false): Promise<void> {
   return senden(`${RECEIPTS}/${encodeURIComponent(id)}/dispatch-answer`, DISPUT, null, keepalive);
 }
 
+const FESTSTELLEN: Handlung = { dienst: "invoicd", aktion: "feststellen" };
+
+/** A held invoice's open Prüfschritt, as invoicd lists it. */
+export interface OffenerSchritt {
+  pruefschritt: number;
+  /** The `SG26 LIN` Positionsnummer on the Positionsebene; null on Kopf and Summe. */
+  position: number | null;
+  detail: string;
+}
+
+/**
+ * The open Prüfschritte of a held invoice, read from invoicd's `offen` —
+ * `{ ebene: { ebene: "position", position }, pruefschritt, detail }`. An entry
+ * of another shape is kept with what it names, never dropped.
+ */
+export function offeneSchritte(offen: unknown[]): OffenerSchritt[] {
+  return offen.flatMap((o) => {
+    if (!o || typeof o !== "object") return [];
+    const r = o as { pruefschritt?: unknown; detail?: unknown; ebene?: unknown };
+    if (typeof r.pruefschritt !== "number") return [];
+    const ebene = r.ebene as { position?: unknown } | string | undefined;
+    const position =
+      ebene && typeof ebene === "object" && typeof ebene.position === "number"
+        ? ebene.position
+        : null;
+    return [
+      {
+        pruefschritt: r.pruefschritt,
+        position,
+        detail: typeof r.detail === "string" ? r.detail : JSON.stringify(o),
+      },
+    ];
+  });
+}
+
+/** The answers a statement gives, as `POST /receipts/{id}/feststellungen` takes them. */
+export interface Feststellungen {
+  leistung_erbracht?: Record<string, boolean>;
+  preis_wie_angebot?: Record<string, boolean>;
+  steuersatz_korrekt?: Record<string, boolean>;
+  preisblatt_version_gueltig?: boolean;
+}
+
+/** State what a held invoice's walk could not read; invoicd walks it again. */
+export function feststellen(
+  id: string,
+  feststellungen: Feststellungen,
+  begruendung: string,
+  keepalive = false,
+): Promise<void> {
+  return senden(
+    `${RECEIPTS}/${encodeURIComponent(id)}/feststellungen`,
+    FESTSTELLEN,
+    { feststellungen, begruendung: begruendung.trim() },
+    keepalive,
+  );
+}
+
+/** A Leistungsnachweis for an ordered Leistung (Prüfschritt 310), as invoicd records it. */
+export interface Leistungsnachweis {
+  rechnungssteller_mp_id: string;
+  bestellung_ref: string;
+  artikel_id: string;
+  /** `YYYY-MM-DD`. */
+  von: string;
+  /** `YYYY-MM-DD`, inclusive. */
+  bis: string;
+  erbracht: boolean;
+  nachweis: string;
+}
+
+/** Record a Leistungsnachweis; every invoice held on its order walks again. */
+export function leistungsnachweisErfassen(n: Leistungsnachweis, keepalive = false): Promise<void> {
+  return senden("/svc/invoicd/api/v1/leistungsnachweise", FESTSTELLEN, n, keepalive);
+}
+
 /** Issue an invoice the risk gate held. */
 export function freigeben(id: string, keepalive = false): Promise<void> {
   return senden(

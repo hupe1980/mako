@@ -22,6 +22,9 @@
 use base64ct::{Base64UrlUnpadded, Encoding};
 use p256::ecdsa::signature::{Signer, Verifier};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
+/// The P-256 key types a directory record is signed and verified with,
+/// re-exported so a consumer needs no `p256` dependency of its own.
+pub use p256::ecdsa::{SigningKey as RecordSigningKey, VerifyingKey as RecordVerifyingKey};
 use p256::pkcs8::{DecodePrivateKey, DecodePublicKey};
 
 use crate::error::Error;
@@ -49,9 +52,11 @@ pub fn sign(record: &ApiRecord, signing_key: &SigningKey) -> Result<String, Erro
 
 /// Verify the JWS signature on an [`ApiRecord`].
 ///
-/// For production use, first extract the `VerifyingKey` from the signing
-/// certificate (`X-BDEW-CERT` / `signing_cert`), validate the certificate
-/// against the SM-PKI trust anchor, then call this function.
+/// `verifying_key` is the provider's EMT.API signature key, taken from a
+/// certificate the caller obtained from the issuing Sub-CA — not from the
+/// `X-BDEW-CERT` / `signing_cert` beside the record, which the record's own
+/// sender chooses. `DirectoryServiceClient::get_record` (feature `client`)
+/// applies this check to every record it returns.
 ///
 /// # Errors
 /// Returns [`Error::Signature`] if the signature is malformed or does not match.
@@ -60,7 +65,32 @@ pub fn verify(
     signature_b64: &str,
     verifying_key: &VerifyingKey,
 ) -> Result<(), Error> {
-    let input = signing_input(record)?;
+    verify_input(&signing_input(record)?, signature_b64, verifying_key)
+}
+
+/// Verify the JWS signature over a record exactly as it arrived.
+///
+/// The payload is the JCS form of the received JSON rather than of an
+/// [`ApiRecord`] re-serialised from it: what the provider signed is the record
+/// it sent, and a re-serialisation that spells a field differently (a
+/// timestamp's fractional seconds, a member this crate does not model) would
+/// refuse a record that is genuinely signed.
+///
+/// # Errors
+/// Returns [`Error::Signature`] if the signature is malformed or does not match.
+pub fn verify_value(
+    record: &serde_json::Value,
+    signature_b64: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), Error> {
+    verify_input(&signing_input(record)?, signature_b64, verifying_key)
+}
+
+fn verify_input(
+    input: &str,
+    signature_b64: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), Error> {
     let sig_bytes = Base64UrlUnpadded::decode_vec(signature_b64)
         .map_err(|e| Error::Signature(format!("base64url decode: {e}")))?;
     let sig = Signature::from_slice(&sig_bytes)
@@ -85,7 +115,7 @@ pub fn verifying_key_from_pem(pem: &str) -> Result<VerifyingKey, Error> {
 // ── Internal ──────────────────────────────────────────────────────────────────
 
 /// Build `BASE64URL(protected_header) + "." + BASE64URL(JCS(record))`.
-fn signing_input(record: &ApiRecord) -> Result<String, Error> {
+fn signing_input<T: serde::Serialize + ?Sized>(record: &T) -> Result<String, Error> {
     let canonical = serde_jcs::to_string(record)
         .map_err(|e| Error::Signature(format!("JCS serialisation: {e}")))?;
     let payload = Base64UrlUnpadded::encode_string(canonical.as_bytes());

@@ -160,17 +160,21 @@ pub async fn run_billing(
 /// # Errors
 ///
 /// - `409` when a position's MaLo, period and Prüfidentifikator are already billed.
-/// - `422` when a position does not describe a computable settlement.
+/// - `422` when a position does not describe a computable settlement, or when
+///   its Zahlungsziel is unset or breaks a published bound
+///   ([`crate::zahlungsziel`]).
 pub async fn draft_positions(
     pool: &PgPool,
     marktd: &Arc<MarktdClient>,
     cfg: &NetzbilanzConfig,
     positions: &mut [crate::request::BillingPositionRequest],
     invoice_date: time::Date,
-    due_date: time::Date,
+    requested_due_date: Option<time::Date>,
     rechnungskreis: Option<&str>,
 ) -> ApiResult<Vec<serde_json::Value>> {
-    if due_date < invoice_date {
+    if let Some(due_date) = requested_due_date
+        && due_date < invoice_date
+    {
         return Err(ApiError::unprocessable(format!(
             "due_date {due_date} is before invoice_date {invoice_date}"
         )));
@@ -214,6 +218,15 @@ pub async fn draft_positions(
             ))
         })?;
 
+        let due_date = crate::zahlungsziel::faellig(
+            cfg.zahlungsziel_werktage,
+            invoice_date,
+            requested_due_date,
+            settlement.settlement_type.default_pid(),
+            settlement.sparte,
+            billing::zu_zahlen_eur(&settlement, &abschlaege) < rust_decimal::Decimal::ZERO,
+            false,
+        )?;
         let settled = billing::render_and_check(
             settlement,
             rechnungsnummer.clone(),
@@ -228,6 +241,7 @@ pub async fn draft_positions(
         );
         billing::refuse_unissuable(position, &settled)
             .map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
+        crate::zahlungsziel::refuse_unzulaessig(&settled.report)?;
         let id = store(
             &mut tx,
             cfg,
@@ -647,7 +661,19 @@ async fn dispatch_one(
     })?;
 
     let pid = u32::try_from(row.pid).unwrap_or_default();
-    let report = billing::check(&rechnung, &row.sender_mp_id, pid);
+    // Dispatched today, so received today at the earliest.
+    let sparte = if row.sparte == "GAS" {
+        grid_billing::Sparte::Gas
+    } else {
+        grid_billing::Sparte::Strom
+    };
+    let report = billing::check(
+        &rechnung,
+        &row.sender_mp_id,
+        pid,
+        mako_fristen::heute(),
+        sparte,
+    );
     if report.outcome == invoic_checker::CheckOutcome::Dispute {
         return Err(ApiError::unprocessable(format!(
             "invoic-checker disputes this invoice — fix it before dispatching: {}",
@@ -1017,7 +1043,8 @@ pub struct StornoRequest {
     /// Issue date of the Stornorechnung. Defaults to today.
     #[serde(default)]
     pub invoice_date: Option<time::Date>,
-    /// Payment due date. Defaults to 30 days after the issue date.
+    /// Payment due date. Absent, `zahlungsziel_werktage` Werktage after the
+    /// issue date ([`crate::zahlungsziel::faellig`]).
     #[serde(default)]
     pub due_date: Option<time::Date>,
 }
@@ -1075,9 +1102,16 @@ pub async fn post_storno(
     }
 
     let invoice_date = req.invoice_date.unwrap_or_else(mako_fristen::heute);
-    let due_date = req
-        .due_date
-        .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));
+    // A Stornorechnung is 31004 on the wire, which publishes neither bound.
+    let due_date = crate::zahlungsziel::faellig(
+        cfg.zahlungsziel_werktage,
+        invoice_date,
+        req.due_date,
+        31_004,
+        input.sparte(),
+        false,
+        true,
+    )?;
 
     let position = crate::request::BillingPositionRequest {
         malo_id: original.malo_id.clone(),
@@ -1222,7 +1256,9 @@ pub struct KorrekturRequest {
     /// Issue date. Defaults to today.
     #[serde(default)]
     pub invoice_date: Option<time::Date>,
-    /// Payment due date. Defaults to 30 days after the issue date.
+    /// Payment due date. Absent, `zahlungsziel_werktage` Werktage after the
+    /// issue date, held to the published floor and ceiling
+    /// ([`crate::zahlungsziel`]).
     #[serde(default)]
     pub due_date: Option<time::Date>,
 }
@@ -1293,9 +1329,6 @@ pub async fn post_korrektur(
     }
 
     let invoice_date = req.invoice_date.unwrap_or_else(mako_fristen::heute);
-    let due_date = req
-        .due_date
-        .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));
 
     let mut position = crate::request::BillingPositionRequest {
         malo_id: original.malo_id.clone(),
@@ -1360,6 +1393,15 @@ pub async fn post_korrektur(
                 problems.join("; ")
             ))
         })?;
+    let due_date = crate::zahlungsziel::faellig(
+        cfg.zahlungsziel_werktage,
+        invoice_date,
+        req.due_date,
+        replacement.settlement_type.default_pid(),
+        replacement.sparte,
+        billing::zu_zahlen_eur(&replacement, &abschlaege) < rust_decimal::Decimal::ZERO,
+        false,
+    )?;
     let settled = billing::render_and_check(
         replacement,
         rechnungsnummer.clone(),
@@ -1374,6 +1416,7 @@ pub async fn post_korrektur(
     );
     billing::refuse_unissuable(&position, &settled)
         .map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
+    crate::zahlungsziel::refuse_unzulaessig(&settled.report)?;
     let korrektur_id = store(
         &mut tx,
         &cfg,

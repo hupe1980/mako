@@ -1556,7 +1556,6 @@ async fn verzugszinsen_book_to_their_own_gl_account() {
         "LF1",
         None,
         50_000,
-        false,
         date!(2026 - 02 - 01),
         date!(2026 - 05 - 01),
     )
@@ -2137,7 +2136,6 @@ async fn interest_for_the_same_period_is_charged_once() {
         "LF1",
         Some("RE-2026-001"),
         50_000,
-        false,
         date!(2026 - 02 - 01),
         date!(2026 - 03 - 01),
     )
@@ -2153,7 +2151,6 @@ async fn interest_for_the_same_period_is_charged_once() {
         "LF1",
         Some("RE-2026-001"),
         50_000,
-        false,
         date!(2026 - 02 - 01),
         date!(2026 - 03 - 01),
     )
@@ -2335,7 +2332,6 @@ async fn changing_the_iban_rekeys_the_lookup_hash() {
             abschlag_ct: None,
             billing_day: None,
             address: Default::default(),
-            verbraucher: None,
         },
     )
     .await
@@ -2369,7 +2365,6 @@ async fn changing_the_iban_rekeys_the_lookup_hash() {
             abschlag_ct: Some(9_900),
             billing_day: None,
             address: Default::default(),
-            verbraucher: None,
         },
     )
     .await
@@ -2989,7 +2984,6 @@ async fn account_postal_address_round_trips() {
                 post_code: Some("04107".to_owned()),
                 country_subdivision: Some("SN".to_owned()),
             },
-            verbraucher: None,
         },
     )
     .await
@@ -3023,7 +3017,6 @@ async fn account_postal_address_round_trips() {
             abschlag_ct: Some(4_200),
             billing_day: None,
             address: Default::default(),
-            verbraucher: None,
         },
     )
     .await
@@ -3641,7 +3634,7 @@ async fn interest_is_charged_per_basiszinssatz_segment() {
         .unwrap();
 
     // 1 000,00 EUR overdue across 2026-07-01, where the seeded series steps
-    // 1,27 % → 1,52 %. B2C is + 5 pp (§ 288 Abs. 1).
+    // 1,27 % → 1,52 %. An unrecorded Verbraucher status is + 5 pp (§ 288 Abs. 1).
     let row = pg::create_interest_charge(
         &ledger,
         &pool,
@@ -3651,7 +3644,6 @@ async fn interest_is_charged_per_basiszinssatz_segment() {
         "LF1",
         None,
         100_000,
-        false,
         date!(2026 - 06 - 01),
         date!(2026 - 09 - 01),
     )

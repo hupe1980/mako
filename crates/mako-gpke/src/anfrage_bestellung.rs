@@ -43,7 +43,7 @@
 //! - **BNetzA BK6-22-024 Anlage 1d** — GPKE Teil 4 Kap. 1.4.4 / 1.5.4. The
 //!   Festlegung has no numbered § 5 and no 24-hour window; the windows are the
 //!   2 and 10 Werktage in the table above.
-//! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.1 § 2.4.1, same as all GPKE
+//! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.1 Kap. 2.4.1, same as all GPKE
 //!   processes)
 
 use mako_engine::envelope::{Richtung, Verlauf};

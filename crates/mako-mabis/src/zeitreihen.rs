@@ -575,6 +575,21 @@ pub fn zeitreihe_aus_cav(code: &str) -> Option<(Zeitreihe, Option<Aggregationseb
     Zeitreihe::new(familie, kategorie).ok().map(|z| (z, ebene))
 }
 
+/// The Summenzeitreihe a MSCONS Prüfidentifikator names on its own.
+///
+/// MSCONS carries no `CCI`/`CAV` on 13003 or 13023 (MSCONS AHB 3.2 Kap. 8.3.3,
+/// S. 94–97): the series is the MaBiS-ZP in `SG6 LOC+172`. Only 13023 is
+/// unambiguous by its PID — Kap. 8.3.2 (S. 93) gives it one row: NB an LF, Art der
+/// Werte LF-AASZR. 13003 is shared by every Tabelle-1 series and 13020 by the
+/// monthly and the daily AAÜZ, so neither names one here.
+#[must_use]
+pub fn zeitreihe_aus_pid(pid: u32) -> Option<Zeitreihe> {
+    match pid {
+        13_023 => Zeitreihe::new(Familie::LfAaszr, None).ok(),
+        _ => None,
+    }
+}
+
 /// The `SG10 CAV` DE 7111 code for a Summenzeitreihe.
 ///
 /// `ebene` is required for the Kategorie-B rows of the BK-SZR and LF-SZR and
@@ -682,6 +697,14 @@ pub fn aggregationsverantwortung(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_13023_names_its_series_by_the_pid() {
+        let z = zeitreihe_aus_pid(13_023).expect("13023 is the LF-AASZR");
+        assert_eq!(z.familie(), Familie::LfAaszr);
+        assert_eq!(zeitreihe_aus_pid(13_003), None);
+        assert_eq!(zeitreihe_aus_pid(13_020), None);
+    }
 
     #[test]
     fn the_catalogue_has_thirteen_rows() {

@@ -13,7 +13,7 @@
 //!   beantwortet" (EBD 4.3 Kap. 6.27.1 / 6.27.2, S. 315).
 //!
 //! That answer is the business answer; it is not the APERAK. APERAK AHB 1.1
-//! § 2.4 has the receiver of every Strom Geschäftsvorfall state the result of
+//! Kap. 2.4 has the receiver of every Strom Geschäftsvorfall state the result of
 //! its Verarbeitbarkeitsprüfung by APERAK — Anerkennungsmeldung or
 //! Verarbeitbarkeitsfehlermeldung — so a processable 55022 is acknowledged with
 //! APERAK 29002 on receipt, and the 55023/55024 follows when the NB decides.
@@ -23,7 +23,7 @@
 //! **No Festlegung states an answer window for 55022.** GPKE Teil 4 Kap. 5
 //! gives the Stornierung a *precondition* instead — „auslösende Meldung wurde
 //! noch nicht beantwortet" — and defers everything else to the EDI@Energy
-//! „Allgemeine Festlegungen", which quantify nothing either (§ 7.3). The AWH
+//! „Allgemeine Festlegungen", which quantify nothing either (Kap. 7.3). The AWH
 //! GeLi Gas says the same for Gas in so many words: „Eine Stornierung der
 //! Anmeldung kann bis zum Eingang der Antwortnachricht erfolgen" (Kap. 2.5.2
 //! Nr. 2).
@@ -63,9 +63,9 @@
 //!   Kündigung, Lieferbeginn, Neuanlage, Beginn der Ersatz-/Grundversorgung,
 //!   Herstellung einer 100 % LF-Zuordnung and both Lieferende directions, plus
 //!   the WiM Teil 1 Kündigung Messstellenbetrieb — and states no Frist.
-//! - **EDI@Energy Allgemeine Festlegungen 6.1d § 7.3** — a Stornierung is a new
+//! - **EDI@Energy Allgemeine Festlegungen 6.1d Kap. 7.3** — a Stornierung is a new
 //!   message carrying Transaktionsgrund „Stornierung"; also no Frist.
-//! - **APERAK AHB 1.1 § 2.4 / § 2.4.1** — Anerkennungs- or
+//! - **APERAK AHB 1.1 Kap. 2.4 / Kap. 2.4.1** — Anerkennungs- or
 //!   Verarbeitbarkeitsfehlermeldung for the 55022, within 45 Minuten for a UTILMD
 
 use mako_engine::envelope::{Richtung, Verlauf};
@@ -596,8 +596,8 @@ impl Workflow for GpkeStornierungWorkflow {
                     });
                     // APERAK 29002 Anerkennungsmeldung — in the Sparte Strom the
                     // receiver states the result of its Verarbeitbarkeitsprüfung
-                    // either way (APERAK AHB 1.1 § 2.4), within 45 Minuten for a
-                    // UTILMD (§ 2.4.1). The 55023/55024 is the separate business
+                    // either way (APERAK AHB 1.1 Kap. 2.4), within 45 Minuten for a
+                    // UTILMD (Kap. 2.4.1). The 55023/55024 is the separate business
                     // answer that `SendAntwort` queues.
                     let outbox = vec![
                         PendingOutbox::aperak_anerkennung(
@@ -613,7 +613,7 @@ impl Workflow for GpkeStornierungWorkflow {
                     events.push(GpkeStornierungEvent::ValidationFailed {
                         errors: validation_errors,
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 Kap. 2.1.1.
                     // It has to be emitted here: `ValidationFailed` folds to
                     // `Rejected`, which is terminal, and `SendAntwort` requires
                     // `ValidationPassed` — so a refusal raised later is
@@ -763,7 +763,7 @@ mod tests {
 
     /// A processable 55022 is acknowledged by APERAK 29002 on receipt — the
     /// Sparte Strom states the Verarbeitbarkeitsprüfung either way (APERAK AHB
-    /// 1.1 § 2.4) — and nothing else goes out until the NB decides.
+    /// 1.1 Kap. 2.4) — and nothing else goes out until the NB decides.
     #[test]
     fn a_processable_55022_is_acknowledged_by_aperak_29002() {
         let out = GpkeStornierungWorkflow::handle(
@@ -875,7 +875,7 @@ mod tests {
 
     /// A refused Stornierung must answer with the negative APERAK.
     ///
-    /// APERAK AHB 1.1 § 2.1.1 makes it mandatory, and it has to be emitted on
+    /// APERAK AHB 1.1 Kap. 2.1.1 makes it mandatory, and it has to be emitted on
     /// this transition: `ValidationFailed` folds to `Rejected`, which is
     /// terminal, and `SendAntwort` requires `ValidationPassed` — so a refusal
     /// raised anywhere later is unreachable and the counterparty waits with no

@@ -756,7 +756,7 @@ pub async fn post_delivery_surveillance_scan(
 ///
 /// The key is **(Meldepunkt, subscription, register)**. A MSCONS 13027 carries
 /// `SG9 PIA+5 … :SRW` (the OBIS) per line item and names its subscription in
-/// `SG1 RFF+AGI` (MSCONS AHB 3.2 §11.2 hint `[574]`) — `esa_typ2_reads` records
+/// `SG1 RFF+AGI` (MSCONS AHB 3.2 Kap. 11.2 hint `[574]`) — `esa_typ2_reads` records
 /// both, so a finding can say which subscription stopped rather than leaving an
 /// operator to work it out from the registers.
 ///

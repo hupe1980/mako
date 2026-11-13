@@ -256,7 +256,7 @@ mako_service::policy_choice! {
 /// Multiple `[[party]]` entries on the same `makod` instance describe an
 /// operator who has registered separate Marktpartner-IDs for different roles
 /// (e.g. a utility with distinct NB, LF, and MSB registrations). Allgemeine
-/// Festlegungen §2.13 requires a separate code per Energieart *and* Marktrolle
+/// Festlegungen Kap. 2.13 requires a separate code per Energieart *and* Marktrolle
 /// for a market participant active in both Sparten, so a Strom NB and a Gas GNB
 /// are always two entries.
 ///
@@ -274,7 +274,7 @@ pub struct PartyConfig {
     /// 13-digit BDEW-Codenummer, DVGW-Codenummer, or 16-char EIC (Marktpartner-ID).
     /// Must be globally unique per entry.
     /// BDEW-Codenummern start with `99`, DVGW-Codenummern with `98`.
-    /// Only GS1-issued 13-digit codes are true GLNs (Allgemeine Festlegungen §2.13).
+    /// Only GS1-issued 13-digit codes are true GLNs (Allgemeine Festlegungen Kap. 2.13).
     pub mp_id: String,
     /// BDEW Marktrollen this Marktpartner-ID is authorised for.
     ///
@@ -289,11 +289,12 @@ pub struct PartyConfig {
     /// first entry in document order is used.
     #[serde(default)]
     pub primary: bool,
-    /// NAD agency code for EDIFACT sender segments.
+    /// NAD DE 3055 agency code of this MP-ID.
     ///
-    /// Derived from the Marktpartner-ID prefix when omitted (`99…` → `"293"`,
-    /// `98…` → `"332"`, 16-char EIC → `"ZEW"`, otherwise `"9"`). Set explicitly
-    /// only for a GS1-issued GLN, which needs `"305"`.
+    /// Derived from the Marktpartner-ID when omitted, by
+    /// `edi_energy::AgencyCode::for_mp_id` (`99…` → `"293"`, `98…` → `"332"`,
+    /// other 13-digit → `"9"`). Must be one of `"9"`, `"293"`, `"332"` — the
+    /// MIGs' NAD code list; anything else is refused at startup.
     pub agency: Option<String>,
     /// `[party.as4]` — this MP-ID's AS4 key material. Every `[[party]]` needs
     /// one as soon as any does: a receiving MSH checks the signing
@@ -675,6 +676,13 @@ pub struct As4PartnerConfig {
     /// unsigned or mis-signed receipt is refused whatever is set here.
     #[serde(default)]
     pub quirks: Vec<String>,
+    /// MP-IDs this partner may name as the interchange sender (`UNB`
+    /// DE 0004) while it authenticates as itself — a Dienstleister sending on
+    /// their behalf. Empty, the default: an interchange from this partner
+    /// names the partner's own MP-ID in DE 0004 or is refused. Every entry is
+    /// reported as a warning at startup.
+    #[serde(default)]
+    pub de0004_ausnahme: Vec<String>,
 }
 
 /// The refusal of the removed `as4.lenient_receipts` key.
@@ -705,8 +713,9 @@ pub struct ErpConfig {
     /// signing material is configured (development / ERP-side transport).
     pub edifact_outbox_webhook_url: Option<String>,
 
-    /// §20b EnWG Netzzugangsplattform endpoint. Absent until a platform
-    /// interface exists; requests then fall back to the ERP webhook.
+    /// § 20b EnWG Netzzugangsplattform endpoint — refused at startup: no
+    /// platform interface is published, and requests reach the operator over
+    /// the ERP webhook.
     pub netzzugang_endpoint_url: Option<String>,
 }
 
@@ -740,6 +749,16 @@ pub struct MaloIdConfig {
     /// Base URL of the BDEW Verzeichnisdienst used to resolve unknown
     /// counterparty endpoints.
     pub verzeichnisdienst_url: Option<String>,
+    /// Each counterparty's EMT.API signature certificate as `"MP-ID=PATH"`
+    /// pairs (a PEM file; repeat the MP-ID for a rollover). A Verzeichnisdienst
+    /// record is used only when its signature verifies against one of these —
+    /// the directory distributes no certificates (Regelungen zum
+    /// Verzeichnisdienst 1.1, Kap. 1.6, S. 4).
+    pub verzeichnisdienst_signing_certs: Option<Vec<String>>,
+    /// The SM-PKI root certificate(s) (PEM) every `verzeichnisdienst_signing_certs`
+    /// entry must chain to — required with them. Each entry's file holds the
+    /// leaf first, then its Sub-CA.
+    pub verzeichnisdienst_trust_anchor_pem_file: Option<PathBuf>,
 }
 
 // ── Loading ───────────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@
 //! | Kind | Discovered from | Consulted when |
 //! |---|---|---|
 //! | Frist constant | `pub const` named `*_FRIST*`, `*_WERKTAGE`, `*_MONATE` in `crates/*/src` | its name appears in production code beyond its definition |
-//! | Meldepflicht row | `pid:` rows of `mako_fristen::meldung` | production code outside `mako-fristen` calls `meldepflichten_for(` or `meldung::all(` |
+//! | Meldepflicht row | each `Meldepflicht` of `mako_fristen::meldung`, named `pid←triggers` | production code outside `mako-fristen` calls `meldepflichten_for(<trigger>)` with one of its triggers as a literal, or `meldung::all(`; a step owed on silence (`AusbleibendeAntwort`, named by its PID) when its constant is named there |
 //! | Credential field | `pub` `String`/`SecretString` fields named for a secret, key or token in `services/*/src/config.rs` and `mako-service` | `.field` appears in the owning crate's production code |
 //! | Role column | a `rolle`/`role`/`roles`/`marktrolle`/`marktrole`/`*_rolle`/`*_role` column in `services/*/migrations` | the declared site in [`ROLE_COLUMNS`] still contains its needle |
 //! | Feature-gated security module | `#[cfg(feature …)]` on a module named for auth, Cedar, OIDC, signing, TLS or crypto | the declared `Cargo.toml` in [`FEATURE_GATES`] still enables the feature |
@@ -65,23 +65,8 @@ const FRIST_UNREAD: &[Unread] = &[
         milestone: "M13",
     },
     Unread {
-        name: "PAUSCHAL_WECHSEL_FRIST_MONATE",
-        reason: "the BilAReM Pauschal-option switch window; the module is not wired into netzbilanzd or makod",
-        milestone: "M33",
-    },
-    Unread {
-        name: "PLANWERT_UEBERFUEHRUNG_VORLAUF_MONATE",
-        reason: "BilAReM Planwert-Überführung lead time; the module is not wired",
-        milestone: "M33",
-    },
-    Unread {
-        name: "SPITZ_WAHL_FRIST",
-        reason: "the BilAReM Spitz election deadline; the module is not wired",
-        milestone: "M33",
-    },
-    Unread {
         name: "STAMMDATEN_BESTELLUNG_WERKTAGE",
-        reason: "the Bearbeitungsstand to a Bestellung einer Stammdatenänderung (GPKE Teil 4 § 1.5.2); no catalogue row or workflow applies it",
+        reason: "the Bearbeitungsstand to a Bestellung einer Stammdatenänderung (GPKE Teil 4 Kap. 1.5.2); no catalogue row or workflow applies it",
         milestone: "M11",
     },
     Unread {
@@ -89,58 +74,33 @@ const FRIST_UNREAD: &[Unread] = &[
         reason: "Redispatch Stammdaten lead time; the module is not wired",
         milestone: "M33",
     },
-    Unread {
-        name: "WETTERDATEN_LIEFERFRIST_WERKTAGE",
-        reason: "Redispatch Wetterdaten delivery window; the module is not wired",
-        milestone: "M33",
-    },
-    Unread {
-        name: "WETTERDATEN_WERKTAGE",
-        reason: "Redispatch Wetterdaten window; the module is not wired",
-        milestone: "M33",
-    },
 ];
 
 /// Meldepflicht rows (by PID) nothing reads. May only shrink.
 const MELDUNG_UNREAD: &[Unread] = &[
     Unread {
-        name: "55007",
-        reason: "the NB's 05:00–06:00 send window on a silent LF (GPKE Teil 2 Kap. 2.5.2.2 Nr. 3) is catalogued; no NB-side workflow sends 55007 yet",
+        name: "44036←44001",
+        reason: "GeLi Gas 3.0 Kap. 3.2.3 (S. 9) owes it beside the Abmeldungsanfrage 44010, and no GNB door sends a 44010 yet, so nothing declares it owed",
         milestone: "M11",
     },
     Unread {
-        name: "44036",
-        reason: "catalogued Meldepflicht no workflow applies yet — nothing outside mako-fristen reads `mako_fristen::meldung`",
+        name: "44037←44001",
+        reason: "GeLi Gas 3.0 Kap. 3.2.3 (S. 9) owes it beside the Abmeldungsanfrage 44010, and no GNB door sends a 44010 yet, so nothing declares it owed",
         milestone: "M11",
     },
     Unread {
-        name: "44037",
-        reason: "catalogued Meldepflicht no workflow applies yet — nothing outside mako-fristen reads `mako_fristen::meldung`",
+        name: "44038←44001",
+        reason: "whether a LFZ is displaced is decided by no source processd reads (nb_module.rs: the 55038/44038 is not derived from the Anmeldung decision), so no process can know it is owed",
         milestone: "M11",
     },
     Unread {
-        name: "44038",
-        reason: "catalogued Meldepflicht no workflow applies yet — nothing outside mako-fristen reads `mako_fristen::meldung`",
+        name: "55038←55001/55077",
+        reason: "whether a LFZ is displaced is decided by no source processd reads (nb_module.rs: the 55038 is not derived from the Anmeldung decision); the Abmeldeanfrage door names it `nicht_entschieden`",
         milestone: "M11",
     },
     Unread {
-        name: "55036",
-        reason: "catalogued Meldepflicht no workflow applies yet — nothing outside mako-fristen reads `mako_fristen::meldung`",
-        milestone: "M11",
-    },
-    Unread {
-        name: "55037",
-        reason: "catalogued Meldepflicht no workflow applies yet — nothing outside mako-fristen reads `mako_fristen::meldung`",
-        milestone: "M11",
-    },
-    Unread {
-        name: "55038",
-        reason: "catalogued Meldepflicht no workflow applies yet — nothing outside mako-fristen reads `mako_fristen::meldung`",
-        milestone: "M11",
-    },
-    Unread {
-        name: "55611",
-        reason: "catalogued Meldepflicht no workflow applies yet — nothing outside mako-fristen reads `mako_fristen::meldung`",
+        name: "55037←55607",
+        reason: "no NB-side workflow sends the Ankündigung Zuordnung 55607 it is triggered by",
         milestone: "M11",
     },
 ];
@@ -407,23 +367,81 @@ fn meldung_rows(root: &Path, corpus: &Corpus) -> Vec<Finding> {
             "crates/mako-fristen/src/meldung.rs is unreadable — the catalogue moved".into(),
         ];
     };
-    let row = Regex::new(r"\bpid:\s*([0-9_]+)").expect("pattern");
-    let all: BTreeSet<String> = row
-        .captures_iter(&src)
-        .map(|c| c[1].replace('_', ""))
-        .collect();
     let outside = |p: &str| !p.starts_with("crates/mako-fristen/");
-    let whole = Regex::new(r"meldepflichten_for\(|meldung::all\(").expect("pattern");
-    let reads_all = corpus.count(&whole, outside) > 0;
-    // `meldepflichten_for` is the one lookup — a PID recurs in several
-    // Sequenzdiagramme with a different window each, so no per-PID reader
-    // exists to count.
-    let unread: BTreeSet<String> = if reads_all {
-        BTreeSet::new()
-    } else {
-        all.clone()
-    };
-    reconcile("Meldepflicht row", &unread, &all, MELDUNG_UNREAD)
+    let pid = |s: &str| s.trim().replace('_', "");
+    // A PID recurs in several Sequenzdiagramme with a different window each,
+    // so a row is its PID *and* the triggers that open it, and it is read by a
+    // lookup naming one of those triggers.
+    let meldepflicht =
+        Regex::new(r"(?s)Meldepflicht\s*\{\s*pid:\s*([0-9_]+),.*?triggered_by:\s*&\[([^\]]*)\]")
+            .expect("pattern");
+    let rows: Vec<(String, Vec<String>)> = meldepflicht
+        .captures_iter(&src)
+        .map(|c| {
+            let triggers: Vec<String> =
+                c[2].split(',').map(pid).filter(|t| !t.is_empty()).collect();
+            (format!("{}←{}", pid(&c[1]), triggers.join("/")), triggers)
+        })
+        .collect();
+    let reads_all = corpus.count(&Regex::new(r"meldung::all\(").expect("pattern"), outside) > 0;
+    let lookup = Regex::new(r"meldepflichten_for\(\s*([^)]*)\)").expect("pattern");
+    let mut findings = Vec::new();
+    let mut read: BTreeSet<String> = BTreeSet::new();
+    for (path, text) in corpus.files.iter().filter(|(p, _)| outside(p)) {
+        for c in lookup.captures_iter(text) {
+            let arg = pid(&c[1]);
+            if arg.chars().all(|ch| ch.is_ascii_digit()) && !arg.is_empty() {
+                read.insert(arg);
+            } else {
+                findings.push(format!(
+                    "{path}: `meldepflichten_for({})` — name the trigger PID literally, so the \
+                     rows it reads can be counted",
+                    &c[1]
+                ));
+            }
+        }
+    }
+    // A row the lookup returns and the code names as undecided —
+    // `nicht_entschieden(m, <trigger>, <pid>, reason)` — is not consulted.
+    let skip = Regex::new(r"nicht_entschieden\(\s*[^,]+,\s*([0-9_]+)\s*,\s*([0-9_]+)\s*,")
+        .expect("pattern");
+    let skipped: BTreeSet<(String, String)> = corpus
+        .files
+        .iter()
+        .filter(|(p, _)| outside(p))
+        .flat_map(|(_, text)| {
+            skip.captures_iter(text)
+                .map(|c| (pid(&c[1]), pid(&c[2])))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut all: BTreeSet<String> = BTreeSet::new();
+    let mut unread: BTreeSet<String> = BTreeSet::new();
+    for (name, triggers) in &rows {
+        all.insert(name.clone());
+        let row_pid = name.split('←').next().unwrap_or_default().to_owned();
+        let consulted = triggers
+            .iter()
+            .any(|t| read.contains(t) && !skipped.contains(&(t.clone(), row_pid.clone())));
+        if !reads_all && !consulted {
+            unread.insert(name.clone());
+        }
+    }
+    // A step owed on silence is one named constant, read where it is named.
+    let ohne_antwort = Regex::new(
+        r"pub const (\w+): AusbleibendeAntwort = AusbleibendeAntwort \{\s*pid:\s*([0-9_]+)",
+    )
+    .expect("pattern");
+    for c in ohne_antwort.captures_iter(&src) {
+        let name = pid(&c[2]);
+        all.insert(name.clone());
+        let named = Regex::new(&format!(r"\b{}\b", &c[1])).expect("pattern");
+        if corpus.count(&named, outside) == 0 {
+            unread.insert(name);
+        }
+    }
+    findings.extend(reconcile("Meldepflicht row", &unread, &all, MELDUNG_UNREAD));
+    findings
 }
 
 // ── Credential fields ────────────────────────────────────────────────────────
@@ -626,11 +644,15 @@ mod tests {
 
     const MELDUNG: (&str, &str) = (
         "crates/mako-fristen/src/meldung.rs",
-        "pub const GPKE: &[M] = &[M { pid: 99_999 }];\n",
+        "pub const GPKE: &[Meldepflicht] = &[Meldepflicht { pid: 99_999, triggered_by: &[11_111] }];\n",
+    );
+    const OHNE_ANTWORT: (&str, &str) = (
+        "crates/mako-fristen/src/meldung.rs",
+        "pub const STILLE: AusbleibendeAntwort = AusbleibendeAntwort { pid: 88_888 };\n",
     );
     const MELDUNG_READER: (&str, &str) = (
         "services/makod/src/meldung_reader.rs",
-        "fn f() { for m in mako_fristen::meldung::meldepflichten_for(1) {} }",
+        "fn f() { for m in mako_fristen::meldung::meldepflichten_for(11_111) {} }",
     );
 
     fn corpus_of(t: &tempdir::Dir) -> Corpus {
@@ -674,6 +696,67 @@ mod tests {
         let t = tree(&[MELDUNG]);
         assert_eq!(planted(meldung_rows(&t.0, &corpus_of(&t))).len(), 1);
         let t = tree(&[MELDUNG, MELDUNG_READER]);
+        assert!(planted(meldung_rows(&t.0, &corpus_of(&t))).is_empty());
+    }
+
+    /// A row is read by a lookup naming one of its own triggers — the same PID
+    /// opened by another Sequenzdiagramm stays unread — and a lookup whose
+    /// trigger is not a literal cannot be counted, so it is a finding.
+    #[test]
+    fn a_meldepflicht_row_is_read_only_through_its_own_trigger() {
+        let other = (
+            "services/makod/src/other.rs",
+            "fn f() { for m in mako_fristen::meldung::meldepflichten_for(22_222) {} }",
+        );
+        let t = tree(&[MELDUNG, other]);
+        let f = planted(meldung_rows(&t.0, &corpus_of(&t)));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].contains("99999←11111"), "{f:?}");
+        let variable = (
+            "services/makod/src/variable.rs",
+            "fn f(p: u32) { for m in mako_fristen::meldung::meldepflichten_for(p) {} }",
+        );
+        let t = tree(&[MELDUNG, variable]);
+        assert!(
+            meldung_rows(&t.0, &corpus_of(&t))
+                .iter()
+                .any(|f| f.contains("name the trigger PID literally")),
+        );
+    }
+
+    /// A row the lookup returns and the code names `nicht_entschieden` is a
+    /// deliberate skip, not a reading; the other rows of that lookup are read.
+    #[test]
+    fn a_row_named_undecided_is_not_consulted() {
+        const TWO: (&str, &str) = (
+            "crates/mako-fristen/src/meldung.rs",
+            "pub const G: &[Meldepflicht] = &[Meldepflicht { pid: 99_999, triggered_by: &[11_111] }, Meldepflicht { pid: 88_888, triggered_by: &[11_111] }];\n",
+        );
+        let reader = (
+            "services/makod/src/reader.rs",
+            "fn f() { for m in mako_fristen::meldung::meldepflichten_for(11_111) { if mako_fristen::meldung::nicht_entschieden(m, 11_111, 88_888, \"no fact\") { continue; } } }",
+        );
+        let t = tree(&[TWO, reader]);
+        let f = planted(meldung_rows(&t.0, &corpus_of(&t)));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].contains("88888←11111"), "{f:?}");
+    }
+
+    /// A step owed on silence is read where its constant is named — not by a
+    /// reader of the Meldepflicht catalogue, nor by its own test.
+    #[test]
+    fn a_step_owed_on_silence_is_read_where_its_constant_is_named() {
+        let t = tree(&[OHNE_ANTWORT, MELDUNG_READER]);
+        let f = planted(meldung_rows(&t.0, &corpus_of(&t)));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].contains("88888"), "{f:?}");
+        let t = tree(&[
+            OHNE_ANTWORT,
+            (
+                "services/makod/src/door.rs",
+                "fn f() { mako_fristen::meldung::STILLE.window(); }\n",
+            ),
+        ]);
         assert!(planted(meldung_rows(&t.0, &corpus_of(&t))).is_empty());
     }
 

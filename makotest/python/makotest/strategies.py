@@ -104,7 +104,7 @@ def marktpartner_ids(*, kind: str = "bdew") -> SearchStrategy[str]:
     Numbers (qualifier 14).
 
     The check digit is not decoration and the two families do not share one:
-    §2.3 of the BDEW Anwendungshilfe defines the Lok- und
+    Kap. 2.3 of the BDEW Anwendungshilfe defines the Lok- und
     Waggon-Kennzeichnungsverfahren for BDEW/DVGW codes and the GS1/EAN-13
     procedure for a GLN, and they disagree on almost every base. Each digit here
     is computed by `rubo4e`, so a drawn ID survives a counterparty that checks.
@@ -172,7 +172,7 @@ def _eic(issuer: str, object_type: str, complete) -> SearchStrategy[str]:
 
 
 def resource_ids(*, kind: str = "nelo") -> SearchStrategy[str]:
-    """BDEW §8.2 ASCII identifiers with a valid check digit.
+    """Identifikatoren Kap. 8.2 ASCII identifiers with a valid check digit.
 
     `kind` is one of `nelo` (Netzlokation), `nebe` (Netzbereich), `tr`
     (Technische Ressource), `sr` (Steuerbare Ressource), `sg` (Steuergruppe),

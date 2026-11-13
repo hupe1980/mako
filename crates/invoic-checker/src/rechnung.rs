@@ -16,21 +16,26 @@
 //!
 //! # What the invoice cannot answer about itself
 //!
-//! Seven Prüfschritte need facts no INVOIC carries: whether the invoice
+//! Five Prüfschritte need facts no INVOIC carries: whether the invoice
 //! references an order this ESA placed (40), whether the Rechnungsnummer is a
 //! repeat (50), whether the billed service was actually performed (310),
-//! whether the Umsatzsteuersatz is the one valid for the period (330), whether
-//! the Artikel-ID was billed before (370), whether the § 14 Abs. 4 UStG
-//! content is complete (10), and — on the second round — whether the MSB's
-//! COMDIS rebutted the objections (`E_0266` Prüfschritt 1). Every one of them
-//! is `Option` or explicit in [`EmpfaengerFakten`]. An unknown answer neither
-//! refuses nor passes: the walk ends open, and no REMADV is owed until the
-//! fact is stated.
+//! whether the Artikel-ID was billed before (370), and — on the second round —
+//! whether the MSB's COMDIS rebutted the objections (`E_0266` Prüfschritt 1).
+//! Every one of them is `Option` or explicit in [`EmpfaengerFakten`]. An
+//! unknown answer neither refuses nor passes: the walk ends open, and no
+//! REMADV is owed until the fact is stated.
+//!
+//! The invoice answers two about itself ([`crate::ustg`]): the § 14 Abs. 4
+//! UStG Pflichtangaben (10, and 17 on a Storno) and, for a position of
+//! Steuerkategorie `S`, the Umsatzsteuersatz valid for its period (330).
+//! Where 330 is not settled by the message — another category, no period, a
+//! period across a change of the rate — [`EmpfaengerFakten::steuersatz_korrekt`]
+//! is the recipient's answer, and without one the step stays open.
 //!
 //! # Sources
 //!
 //! - *Entscheidungsbaum-Diagramme und Codelisten* 4.3, Kap. 8.27.1 / 8.27.3
-//! - WiM Strom Teil 2 Kap. 4.5, INVOIC AHB 1.0b, REMADV AHB 1.0a § 3.1.2
+//! - WiM Strom Teil 2 Kap. 4.5, INVOIC AHB 1.0b, REMADV AHB 1.0a Kap. 3.1.2
 
 use std::collections::HashMap;
 
@@ -53,9 +58,6 @@ pub struct EmpfaengerFakten {
     /// The day the invoice arrived — the **ÜT of the AS4-Zustellquittung**,
     /// not the local ingest timestamp (WiM Teil 1). Prüfschritte 20 and 70.
     pub eingangsdatum: Option<time::Date>,
-    /// Prüfschritt 10 — does the invoice carry the § 14 Abs. 4 UStG content?
-    /// `None` when nothing assessed it.
-    pub ustg_konform: Option<bool>,
     /// Prüfschritt 40 — does it reference an ORDERS 17007 this ESA placed?
     /// WiM Teil 2 UC 4.5.1: „Eine Rechnung referenziert auf die zugrunde-
     /// liegende Bestellung." Defaults to `true`: refusing every invoice
@@ -67,9 +69,15 @@ pub struct EmpfaengerFakten {
     /// performed? Absent means unknown, which leaves the walk open.
     pub leistung_erbracht: HashMap<u16, bool>,
     /// Prüfschritt 330, per Positionsnummer — is the Umsatzsteuersatz the one
-    /// valid for the position's period? Absent means not assessed, which
-    /// leaves the walk open.
+    /// valid for the position's period? Read only where the message does not
+    /// settle it ([`crate::ustg::steuersatz_korrekt`]); absent there leaves
+    /// the walk open.
     pub steuersatz_korrekt: HashMap<u16, bool>,
+    /// Prüfschritt 320, per Positionsnummer — does the price match the offer
+    /// valid for the position? Read only where no offer on record prices the
+    /// Artikel-ID (a Preisblatt-B Leistung, an ESA offer mako did not file);
+    /// absent there leaves the walk open.
+    pub preis_wie_angebot: HashMap<u16, bool>,
     /// Prüfschritt 370, per Positionsnummer — the Rechnungsnummer of an
     /// earlier, not-cancelled invoice that already billed this Artikel-ID for
     /// the same period.
@@ -179,7 +187,7 @@ fn build(
         .rechnungspositionen
         .iter()
         .flatten()
-        .map(|pos| position(pos, &preis_je_artikel, fakten, config))
+        .map(|pos| position(pos, leistungszeitraum, &preis_je_artikel, fakten, config))
         .collect();
 
     // Prüfschritt 500 — Artikel-IDs the offer priced that this invoice omits.
@@ -197,7 +205,7 @@ fn build(
 
     RechnungsFakten {
         einwaende_entkraeftet: fakten.einwaende_entkraeftet,
-        ustg_konform: fakten.ustg_konform,
+        ustg_maengel: Some(crate::ustg::ustg_14_4_maengel(rechnung)),
         rechnungsdatum: rechnungsdatum.unwrap_or(eingangsdatum),
         eingangsdatum,
         leistungszeitraum,
@@ -220,6 +228,7 @@ fn build(
 
 fn position(
     pos: &Rechnungsposition,
+    kopfzeitraum: Option<Zeitraum>,
     preis_je_artikel: &HashMap<&str, EuroAmount>,
     fakten: &EmpfaengerFakten,
     config: &CheckConfig,
@@ -235,13 +244,32 @@ fn position(
             .is_some_and(|id| preis_je_artikel.contains_key(id));
 
     let invoiced = pos.einzelpreis.wert_decimal().and_then(euro);
-    // Prüfschritt 320 — the price against the offer valid for this position.
+    // Prüfschritt 320 — the price against the offer valid for this position;
+    // where no offer on record prices it, the recipient's statement.
     let preis_wie_angebot = match (invoiced, artikel_id.as_deref()) {
         (Some(actual), Some(id)) => preis_je_artikel
             .get(id)
             .map(|expected| actual.within_tolerance_ppm(*expected, config.tariff_tolerance_ppm)),
         _ => None,
+    }
+    .or_else(|| fakten.preis_wie_angebot.get(&nr).copied());
+
+    let zeitraum = match (pos.lieferung_von_date(), pos.lieferung_bis_date()) {
+        (Some(von), Some(bis)) => Some(Zeitraum { von, bis }),
+        (Some(tag), None) | (None, Some(tag)) => Some(Zeitraum::tag(tag)),
+        (None, None) => None,
     };
+    // Prüfschritt 330 — „für diesen Zeitpunkt/Zeitraum": the position's own,
+    // else the head's. The message settles it for a Standard-rated position;
+    // otherwise the recipient's statement answers, and without one it stays
+    // open.
+    let steuersatz_korrekt = pos
+        .steuerbetrag
+        .as_ref()
+        .and_then(|s| {
+            crate::ustg::steuersatz_korrekt(s, zeitraum.or(kopfzeitraum).map(|z| (z.von, z.bis)))
+        })
+        .or_else(|| fakten.steuersatz_korrekt.get(&nr).copied());
 
     PositionsFakten {
         positionsnummer: nr,
@@ -249,16 +277,8 @@ fn position(
         artikel_id_aus_bestellung,
         leistung_erbracht: fakten.leistung_erbracht.get(&nr).copied(),
         preis_wie_angebot,
-        // Prüfschritt 330 needs the rate valid for the period, which is a
-        // legal fact about the Leistungszeitraum rather than a property of the
-        // document. `crate::check` runs the arithmetic on it; the *validity*
-        // of the rate is the caller's to state, and unstated it stays open.
-        steuersatz_korrekt: fakten.steuersatz_korrekt.get(&nr).copied(),
-        zeitraum: match (pos.lieferung_von_date(), pos.lieferung_bis_date()) {
-            (Some(von), Some(bis)) => Some(Zeitraum { von, bis }),
-            (Some(tag), None) | (None, Some(tag)) => Some(Zeitraum::tag(tag)),
-            (None, None) => None,
-        },
+        steuersatz_korrekt,
+        zeitraum,
         bereits_abgerechnet_in: fakten.bereits_abgerechnet_in.get(&nr).cloned(),
         rechenfehler: rechenfehler(pos, config),
         sonstiger_fehler: None,
@@ -303,7 +323,7 @@ fn rechenfehler(pos: &Rechnungsposition, config: &CheckConfig) -> bool {
 /// business. Read from `zuZahlen` where the invoice states one, else from
 /// `gesamtbrutto`; an invoice stating neither is a § 14 UStG defect that
 /// Prüfschritt 10 owns, so this one passes it.
-fn faelliger_betrag_nicht_negativ(rechnung: &Rechnung) -> bool {
+pub(crate) fn faelliger_betrag_nicht_negativ(rechnung: &Rechnung) -> bool {
     rechnung
         .zu_zahlen
         .wert_decimal()
@@ -414,8 +434,6 @@ pub struct StornoEmpfaengerFakten {
     /// Prüfschritt 15 — is the Storno's own Rechnungsnummer already on file
     /// from this Rechnungssteller?
     pub rechnungsnummer_bereits_verwendet: bool,
-    /// Prüfschritt 17 — § 14 Abs. 4 UStG. `None` is „not assessed".
-    pub ustg_konform: Option<bool>,
     /// Prüfschritt 20 — was the original already cancelled?
     pub bereits_storniert: bool,
     /// Prüfschritt 30 — same Rechnungstyp as the original?
@@ -441,7 +459,6 @@ impl StornoEmpfaengerFakten {
         Self {
             ursprungsrechnung_bekannt: true,
             rechnungsnummer_bereits_verwendet: false,
-            ustg_konform: None,
             bereits_storniert: false,
             rechnungstyp_identisch: true,
             zeitraum_identisch: true,
@@ -480,7 +497,8 @@ pub fn antwort_auf_stornorechnung(
                 .as_deref()
                 .is_some_and(|n| !n.is_empty()),
             rechnungsnummer_bereits_verwendet: fakten.rechnungsnummer_bereits_verwendet,
-            ustg_konform: fakten.ustg_konform,
+            // Prüfschritt 17 — the Storno answers it about itself.
+            ustg_maengel: Some(crate::ustg::ustg_14_4_maengel(rechnung)),
             bereits_storniert: fakten.bereits_storniert,
             rechnungstyp_identisch: fakten.rechnungstyp_identisch,
             zeitraum_identisch: fakten.zeitraum_identisch,
@@ -498,7 +516,10 @@ mod tests {
     use mako_pruefung::rechnung::ESA as ESA_F;
 
     use super::*;
-    use rubo4e::current::{Betrag, Menge, Mengeneinheit, Preis, Steuerbetrag, Waehrungscode};
+    use rubo4e::current::{
+        Adresse, Betrag, Geschaeftspartner, Menge, Mengeneinheit, Preis, Steuerbetrag,
+        Waehrungscode, ZusatzAttribut,
+    };
     use time::macros::date;
 
     const CAL: HolidayCalendar = HolidayCalendar::BdewMaKo;
@@ -536,15 +557,46 @@ mod tests {
             }),
             steuerbetrag: Some(Steuerbetrag {
                 steuersatz: Some(dec("19")),
+                zusatz_attribute: standard(),
                 ..Steuerbetrag::default()
             }),
             ..Rechnungsposition::default()
         }
     }
 
+    /// `TAX` DE 5305 `S`, as makod's inbound adapter records it.
+    fn standard() -> Option<Vec<ZusatzAttribut>> {
+        Some(vec![ZusatzAttribut {
+            name: Some(crate::ustg::STEUERKATEGORIE_ATTRIBUT.to_owned()),
+            wert: Some(serde_json::Value::from("S")),
+            ..ZusatzAttribut::default()
+        }])
+    }
+
+    /// A `NAD` party with name and Anschrift.
+    fn partei(name: &str) -> Option<Box<Geschaeftspartner>> {
+        Some(Box::new(Geschaeftspartner {
+            organisationsname: Some(name.to_owned()),
+            adresse: Some(Adresse {
+                strasse: Some("Hauptstraße 1".to_owned()),
+                ort: Some("Köln".to_owned()),
+                postleitzahl: Some("50667".to_owned()),
+                ..Adresse::default()
+            }),
+            ..Geschaeftspartner::default()
+        }))
+    }
+
     /// 31 Tage Betriebspreis à 0,45 EUR = 13,95 netto, 19 % = 2,6505.
     fn rechnung() -> Rechnung {
+        let mut msb = partei("Messstellenbetrieb GmbH");
+        if let Some(g) = msb.as_deref_mut() {
+            g.umsatzsteuer_id = Some("DE999999999".to_owned());
+        }
         Rechnung {
+            rechnungsnummer: Some("RE-2026-0001".to_owned()),
+            rechnungsersteller: msb,
+            rechnungsempfaenger: partei("Energieservice AG"),
             rechnungsdatum: Some(date!(2026 - 04 - 01).midnight().assume_utc()),
             faelligkeitsdatum: Some(date!(2026 - 05 - 15).midnight().assume_utc()),
             rechnungsperiode: Some(rubo4e::current::Zeitraum {
@@ -557,6 +609,7 @@ mod tests {
                 steuersatz: Some(dec("19")),
                 basiswert: Some(dec("13.95")),
                 steuerwert: Some(dec("2.6505")),
+                zusatz_attribute: standard(),
                 ..Steuerbetrag::default()
             }]),
             gesamtnetto: Some(betrag("13.95")),
@@ -574,16 +627,130 @@ mod tests {
     }
 
     /// Every fact the invoice cannot answer about itself, stated as
-    /// assessed and clean.
+    /// assessed and clean. Prüfschritte 10 and 330 are not among them: the
+    /// invoice answers both.
     fn fakten() -> EmpfaengerFakten {
         let mut f = EmpfaengerFakten::neu(date!(2026 - 04 - 01));
-        f.ustg_konform = Some(true);
         f.preisblatt_version_gueltig = Some(true);
         for nr in 1..=3 {
             f.leistung_erbracht.insert(nr, true);
-            f.steuersatz_korrekt.insert(nr, true);
         }
         f
+    }
+
+    /// Prüfschritt 320 with no offer on record: the recipient's statement
+    /// answers it, and without one it stays open.
+    #[test]
+    fn without_an_offer_the_recipients_price_statement_answers_320() {
+        let mut f = fakten();
+        f.preis_wie_angebot.insert(1, true);
+        let a = antwort_auf_rechnung(ESA_F, &rechnung(), &[], &f, &CheckConfig::default(), CAL);
+        assert!(a.ist_zustimmung(), "{:?} {:?}", a.befunde, a.offen);
+        f.preis_wie_angebot.insert(1, false);
+        let a = antwort_auf_rechnung(ESA_F, &rechnung(), &[], &f, &CheckConfig::default(), CAL);
+        assert_eq!(a.codes(), vec!["A11"]);
+    }
+
+    /// Prüfschritte 10 and 330 are answered from the INVOIC: a conformant
+    /// invoice with nothing stated about either is not held open on them.
+    #[test]
+    fn the_invoice_answers_10_and_330_about_itself() {
+        for f in mako_pruefung::rechnung::FAMILIEN {
+            let a = antwort_auf_rechnung(
+                *f,
+                &rechnung(),
+                &agreed(),
+                &fakten(),
+                &CheckConfig::default(),
+                CAL,
+            );
+            assert!(
+                a.ist_zustimmung(),
+                "{}: {:?} {:?}",
+                f.rechnung,
+                a.befunde,
+                a.offen
+            );
+        }
+    }
+
+    /// Prüfschritt 10 refuses an invoice that does not state a Pflichtangabe
+    /// and names it — „Die Ablehnung ist zu begründen" (EBD 4.3 S. 626).
+    #[test]
+    fn a_missing_pflichtangabe_is_a01_and_named() {
+        let mut r = rechnung();
+        if let Some(g) = r.rechnungsersteller.as_deref_mut() {
+            g.umsatzsteuer_id = None;
+        }
+        r.rechnungsempfaenger = None;
+        let a = antwort_auf_rechnung(
+            ESA_F,
+            &r,
+            &agreed(),
+            &fakten(),
+            &CheckConfig::default(),
+            CAL,
+        );
+        assert_eq!(a.codes(), vec!["A01"]);
+        let detail = &a.befunde[0].detail;
+        assert!(
+            detail.contains("Nr. 2") && detail.contains("NAD+MR"),
+            "{detail}"
+        );
+    }
+
+    /// Prüfschritt 330 refuses a Standard-rated position that does not state
+    /// the § 12 Abs. 1 UStG rate of its period — `A12` on the Positionsebene.
+    #[test]
+    fn a_standard_position_at_another_rate_is_a12() {
+        let mut r = rechnung();
+        if let Some(p) = r.rechnungspositionen.as_mut().and_then(|p| p.first_mut())
+            && let Some(s) = p.steuerbetrag.as_mut()
+        {
+            s.steuersatz = Some(dec("7"));
+        }
+        let a = antwort_auf_rechnung(
+            ESA_F,
+            &r,
+            &agreed(),
+            &fakten(),
+            &CheckConfig::default(),
+            CAL,
+        );
+        assert_eq!(a.codes(), vec!["A12"], "{:?}", a.befunde);
+        assert_eq!(a.remadv_pid(), Some(33_004));
+    }
+
+    /// A position the message does not settle — here `O` nicht steuerbar —
+    /// stays open at 330 until the recipient states it.
+    #[test]
+    fn a_position_the_message_does_not_settle_waits_for_the_recipient() {
+        let mut r = rechnung();
+        if let Some(p) = r.rechnungspositionen.as_mut().and_then(|p| p.first_mut())
+            && let Some(s) = p.steuerbetrag.as_mut()
+        {
+            s.zusatz_attribute = Some(vec![ZusatzAttribut {
+                name: Some(crate::ustg::STEUERKATEGORIE_ATTRIBUT.to_owned()),
+                wert: Some(serde_json::Value::from("O")),
+                ..ZusatzAttribut::default()
+            }]);
+        }
+        let a = antwort_auf_rechnung(
+            ESA_F,
+            &r,
+            &agreed(),
+            &fakten(),
+            &CheckConfig::default(),
+            CAL,
+        );
+        assert_eq!(
+            a.offen.iter().map(|o| o.pruefschritt).collect::<Vec<_>>(),
+            vec![330]
+        );
+        let mut f = fakten();
+        f.steuersatz_korrekt.insert(1, true);
+        let a = antwort_auf_rechnung(ESA_F, &r, &agreed(), &f, &CheckConfig::default(), CAL);
+        assert!(a.ist_zustimmung(), "{:?}", a.offen);
     }
 
     #[test]

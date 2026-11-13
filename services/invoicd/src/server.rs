@@ -9,6 +9,8 @@
 //! | `POST` | `/api/v1/receipts/{id}/confirm-payment` | `write-receipt` |
 //! | `POST` | `/api/v1/receipts/{id}/dispatch-answer` | `write-receipt` |
 //! | `POST` | `/api/v1/receipts/{id}/resolve-dispute` | `write-receipt` |
+//! | `POST` | `/api/v1/receipts/{id}/feststellungen` | `record-feststellung` |
+//! | `POST` | `/api/v1/leistungsnachweise` | `record-feststellung` |
 //! | `GET` | `/api/v1/disputes` | `read-disputes` |
 //! | `GET` | `/api/v1/overdue-remadv` | `read-overdue-remadv` |
 //! | `GET` | `/api/v1/zahlungsstatus/{malo_id}` | `read-receipt` |
@@ -67,7 +69,8 @@ impl Daemon for Invoicd {
 
     /// Fail closed on both doors — the REST API and the inbound webhook each
     /// reach the receipt store and the market answer — and refuse an
-    /// auto-dispute threshold that is no EUR amount.
+    /// auto-dispute threshold that is no EUR amount and a Zahlungsziel ceiling
+    /// of zero days.
     fn validate(cfg: &Config) -> Vec<mako_service::Befund> {
         use mako_service::befund::{Befund, Bereich};
         let mut out = Vec::new();
@@ -81,6 +84,15 @@ impl Daemon for Invoicd {
         }
         if let Err(e) = cfg.check.auto_dispute_threshold_raw() {
             out.push(Befund::aus_fehler("check.auto_dispute_threshold_eur", e));
+        }
+        if cfg.check.max_zahlungsziel_days == Some(0) {
+            // `0` would warn on every invoice not due on its own date. Leave
+            // the key out for no ceiling.
+            out.push(Befund::blockiert(
+                "check.max_zahlungsziel_days",
+                "check.max_zahlungsziel_days = 0 accepts no payment term at all; \
+                 omit the key to check no ceiling",
+            ));
         }
         out
     }
@@ -110,6 +122,7 @@ pub const CEDAR_ACTIONS: &[&str] = &[
     "read-disputes",
     "read-overdue-remadv",
     "write-receipt",
+    "record-feststellung",
     "use-mcp",
     "read-policy",
     "read-config",
@@ -136,6 +149,11 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/receipts/{id}/resolve-dispute",
             post(resolve_dispute),
         )
+        .route(
+            "/api/v1/receipts/{id}/feststellungen",
+            post(post_feststellungen),
+        )
+        .route("/api/v1/leistungsnachweise", post(post_leistungsnachweis))
         .route("/api/v1/disputes", get(list_disputes))
         .route("/api/v1/overdue-remadv", get(list_overdue_remadv))
         .route("/api/v1/zahlungsstatus/{malo_id}", get(get_zahlungsstatus))
@@ -539,6 +557,107 @@ async fn resolve_dispute(
         Ok(false) => Err(ApiError::NotFound),
         Err(e) => Err(e.into()),
     }
+}
+
+/// The body of `POST /api/v1/receipts/{id}/feststellungen`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FeststellungBody {
+    feststellungen: pg::feststellungen::Feststellungen,
+    /// Why — never empty: the statement replaces a check the tree asks for.
+    begruendung: String,
+}
+
+/// `POST /api/v1/receipts/{id}/feststellungen`
+///
+/// State the answers a held invoice's walk could not read — Prüfschritt 310
+/// (Leistung erbracht), 320 (Preis wie Angebot), 330 (Steuersatz) per
+/// Positionsnummer, and 80 (Preisblatt-Version) — and walk it again in place.
+/// A walk that now reaches a verdict is answered and announced as an
+/// automatic one would be; one still open names what is missing. `409` when
+/// the receipt is not held.
+async fn post_feststellungen(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(body): Json<FeststellungBody>,
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "record-feststellung", &state.tenant)?;
+    if body.begruendung.trim().is_empty() {
+        return Err(ApiError::unprocessable("begruendung is required"));
+    }
+    if body.feststellungen.ist_leer() {
+        return Err(ApiError::unprocessable(
+            "feststellungen states no Prüfschritt",
+        ));
+    }
+    let recorded = pg::feststellungen::feststellen(
+        &state.pool,
+        &state.tenant,
+        id,
+        &body.feststellungen,
+        &body.begruendung,
+        claims.sub(),
+        time::OffsetDateTime::now_utc(),
+    )
+    .await?;
+    if !recorded {
+        return Err(ApiError::conflict("receipt is not held for a statement"));
+    }
+    let Some(gehalten) =
+        pg::feststellungen::gehaltene_rechnung(&state.pool, &state.tenant, id).await?
+    else {
+        return Err(ApiError::conflict("receipt is not held for a statement"));
+    };
+    let outcome = crate::handler::erneut_pruefen(&state, &gehalten)
+        .await
+        .map_err(|e| ApiError::upstream("invoicd", anyhow::anyhow!(e)))?;
+    Ok(Json(serde_json::json!({ "receipt_id": id, "outcome": outcome })).into_response())
+}
+
+/// `POST /api/v1/leistungsnachweise`
+///
+/// Record that the MSB performed — or did not perform — an ordered Leistung
+/// for an Artikel-ID over a period: Prüfschritt 310 for every position it
+/// covers. Every invoice of that MSB held on that order walks again at once;
+/// one recorded before its invoice arrives is read when it does.
+async fn post_leistungsnachweis(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Json(body): Json<pg::feststellungen::Leistungsnachweis>,
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "record-feststellung", &state.tenant)?;
+    if body.nachweis.trim().is_empty() {
+        return Err(ApiError::unprocessable("nachweis is required"));
+    }
+    if body.von > body.bis {
+        return Err(ApiError::unprocessable("von is after bis"));
+    }
+    pg::feststellungen::record_leistungsnachweis(&state.pool, &state.tenant, &body, claims.sub())
+        .await?;
+    let gehalten = pg::feststellungen::gehalten_fuer_bestellung(
+        &state.pool,
+        &state.tenant,
+        &body.rechnungssteller_mp_id,
+        &body.bestellung_ref,
+    )
+    .await?;
+    let mut erneut = Vec::with_capacity(gehalten.len());
+    for g in &gehalten {
+        let outcome = crate::handler::erneut_pruefen(&state, g).await;
+        erneut.push(serde_json::json!({
+            "process_id": g.process_id,
+            "outcome": outcome.as_ref().ok(),
+            "fehler": outcome.as_ref().err(),
+        }));
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "erneut_geprueft": erneut })),
+    )
+        .into_response())
 }
 
 /// `POST /api/v1/receipts/{id}/dispatch-answer`

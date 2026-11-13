@@ -114,7 +114,7 @@ pub struct MeloShadowColumns {
 /// — makes every answer built on it wrong.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ObjektcodeError {
-    /// Not a 13-digit BDEW code with a valid § 8.1 check digit.
+    /// Not a 13-digit BDEW code with a valid Kap. 8.1 check digit.
     #[error("lokationsbuendelObjektcode {code} is not a valid BDEW code: {grund}")]
     Ungueltig {
         /// The value as supplied.
@@ -733,7 +733,7 @@ mod objektcode_tests {
         );
     }
 
-    /// A wrong BDEW § 8.1 check digit never reaches the catalogue lookup.
+    /// A wrong Identifikatoren Kap. 8.1 check digit never reaches the catalogue lookup.
     #[test]
     fn a_bad_check_digit_is_refused() {
         assert!(matches!(

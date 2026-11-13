@@ -84,6 +84,10 @@ pub enum WeiterverpflichtungEvent {
         verschobenes_zuordnungsende: String,
         /// EDIFACT message reference of the ORDERS.
         message_ref: MessageRef,
+        /// `BGM` DE 1004 of the ORDERS — what the answer names in `SG1
+        /// RFF+ON`.
+        #[serde(default)]
+        dokumentennummer: String,
         /// Which Sparte the Use-Case runs in.
         ///
         /// ORDERS 17002 and its ORDRSP answers are Sparte-neutral AHBs — the
@@ -178,8 +182,12 @@ pub struct WeiterverpflichtungData {
     pub msba: MarktpartnerCode,
     /// The date the NB asked for.
     pub verschobenes_zuordnungsende: String,
-    /// Reference of the inbound ORDERS, echoed in `RFF+ACW` of the answer.
+    /// `UNH` reference of the inbound ORDERS.
     pub message_ref: MessageRef,
+    /// `BGM` DE 1004 of the inbound ORDERS — `SG1 RFF+ON` of the answer
+    /// (ORDRSP AHB 1.1b Kap. 4.11, S. 48).
+    #[serde(default)]
+    pub dokumentennummer: String,
     /// The Sparte the Use-Case runs in — it picks the Entscheidungsbaum.
     pub sparte: Sparte,
 }
@@ -282,13 +290,15 @@ pub enum WeiterverpflichtungCommand {
         verschobenes_zuordnungsende: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `BGM` DE 1004 of the ORDERS.
+        dokumentennummer: String,
         /// `true` if the ORDERS passed AHB validation.
         validation_passed: bool,
         /// Validation issues, for the `Rejected` event.
         validation_errors: Vec<String>,
         /// The Sparte of the interchange — the Sparte of **our own** MP-ID in
         /// `UNB` DE 0010, since every MP-ID covers exactly one (BDEW Allgemeine
-        /// Festlegungen §2.13). ORDERS 17002 is a Sparte-neutral AHB, so this
+        /// Festlegungen Kap. 2.13). ORDERS 17002 is a Sparte-neutral AHB, so this
         /// is the only thing that tells `E_0203` from `E_2004`.
         sparte: Sparte,
     },
@@ -361,8 +371,10 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                 msba,
                 verschobenes_zuordnungsende,
                 message_ref,
+                dokumentennummer,
                 sparte,
             } => WeiterverpflichtungState::AuftragEmpfangen(WeiterverpflichtungData {
+                dokumentennummer: dokumentennummer.clone(),
                 sparte: *sparte,
                 melo_id: melo_id.clone(),
                 nb: nb.clone(),
@@ -407,6 +419,7 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                 melo_id,
                 verschobenes_zuordnungsende,
                 message_ref,
+                dokumentennummer,
                 validation_passed,
                 validation_errors,
                 sparte,
@@ -432,6 +445,7 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                     msba,
                     verschobenes_zuordnungsende,
                     message_ref,
+                    dokumentennummer,
                     sparte,
                 }]
                 .into())
@@ -469,22 +483,45 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                 } else {
                     ANTWORT_PIDS.1
                 };
-
-                let mut payload = serde_json::json!({
-                    "pid":          antwort_pid,
-                    "sender":       data.msba.as_str(),
-                    "receiver":     data.nb.as_str(),
-                    "melo":         data.melo_id.as_str(),
-                    "antwort_code": code.code,
-                    "antwort_codeliste": code.wire_codeliste().ok_or_else(|| {
-                        WorkflowError::rejected(format!("{tree} {} names no Codeliste", code.code))
-                    })?,
-                    "antwort_tree":  tree,
-                    "orig_message_ref": data.message_ref.as_str(),
-                });
-                if let Some(ref t) = abweichender_termin {
-                    payload["abmeldetermin"] = serde_json::Value::String(t.clone());
+                // `SG1 RFF+ON` names the ORDERS by its `BGM` DE 1004, Muss on
+                // both answers.
+                if data.dokumentennummer.is_empty() {
+                    return Err(WorkflowError::rejected(
+                        "the answer names the ORDERS 17002 by its BGM Dokumentennummer \
+                         (SG1 RFF+ON), and none was recorded with it",
+                    ));
                 }
+
+                // ORDRSP AHB 1.1b Kap. 4.11 (S. 48–49): `BGM+Z11`, `DTM+Z02`
+                // the day the MSBA is obliged to continue to (`[503]`) — the
+                // corrected one where the code names one (`[504]`), else the
+                // one asked for — `SG1 RFF+ON`, and `SG2 AJT` with the
+                // `S_0061`/`S_0062` resp. `G_0072`/`G_0073` Codeliste.
+                let payload = mako_engine::payload::OrdrspPayload {
+                    pid: Some(antwort_pid),
+                    sender: Some(data.msba.as_str().to_owned()),
+                    receiver: Some(data.nb.as_str().to_owned()),
+                    document_code: Some("Z11".to_owned()),
+                    order_reference: Some(data.dokumentennummer.clone()),
+                    abmeldetermin: Some(
+                        abweichender_termin
+                            .clone()
+                            .unwrap_or_else(|| data.verschobenes_zuordnungsende.clone()),
+                    ),
+                    sparte: Some(data.sparte),
+                    antwort_code: Some(code.code.to_owned()),
+                    antwort_codeliste: Some(
+                        code.wire_codeliste()
+                            .ok_or_else(|| {
+                                WorkflowError::rejected(format!(
+                                    "{tree} {} names no Codeliste",
+                                    code.code
+                                ))
+                            })?
+                            .to_owned(),
+                    ),
+                    ..Default::default()
+                };
 
                 Ok(WorkflowOutput::with_outbox(
                     vec![WeiterverpflichtungEvent::AntwortGesendet {
@@ -494,7 +531,7 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                         antwort_ebd: tree.to_owned(),
                         abweichender_termin,
                     }],
-                    vec![PendingOutbox::new("ORDRSP", data.nb.as_str(), payload).caused_by(0)],
+                    vec![PendingOutbox::typed(data.nb.as_str(), &payload).caused_by(0)],
                 ))
             }
 
@@ -572,6 +609,7 @@ mod tests {
             melo_id: MeLo::new("DE0000000001234567890000000000001"),
             verschobenes_zuordnungsende: "20260501".to_owned(),
             message_ref: MessageRef::new("ORD-17002-1"),
+            dokumentennummer: "ORD-17002-1".to_owned(),
             validation_passed: true,
             validation_errors: vec![],
             sparte,
@@ -607,7 +645,10 @@ mod tests {
             )
             .expect("Z13");
             assert_eq!(out.outbox[0].payload["pid"], 19_003, "{sparte}");
-            assert_eq!(out.outbox[0].payload["antwort_tree"], ebd);
+            assert_eq!(
+                out.events[0].antwort().and_then(|a| a.codeliste).as_deref(),
+                Some(ebd)
+            );
             assert_eq!(out.outbox[0].payload["antwort_codeliste"], codeliste);
         }
     }
@@ -647,7 +688,13 @@ mod tests {
         .expect("Z13");
         assert_eq!(&*out.outbox[0].message_type, "ORDRSP");
         assert_eq!(out.outbox[0].payload["pid"], 19_003);
-        assert_eq!(out.outbox[0].payload["antwort_tree"], "E_0203");
+        // ORDRSP AHB 1.1b Kap. 4.11: `BGM+Z11`, and the entry reads back as
+        // the ORDRSP's typed payload.
+        assert_eq!(out.outbox[0].payload["document_code"], "Z11");
+        use mako_engine::payload::OutboundPayload as _;
+        let typed = mako_engine::payload::OrdrspPayload::from_payload(&out.outbox[0].payload)
+            .expect("an ORDRSP payload");
+        assert_eq!(typed.antwort_code.as_deref(), Some("Z13"));
         // DE 1082 names the **Codeliste**, not the Entscheidungsbaum.
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "S_0061");
     }
@@ -665,7 +712,13 @@ mod tests {
         )
         .expect("Z22");
         assert_eq!(out.outbox[0].payload["pid"], 19_004);
-        assert_eq!(out.outbox[0].payload["abmeldetermin"], "20260401");
+        assert!(matches!(
+            &out.events[0],
+            WeiterverpflichtungEvent::AntwortGesendet {
+                abweichender_termin: Some(t),
+                ..
+            } if t == "20260401"
+        ));
     }
 
     /// `Z14` means „to a corrected Abmeldetermin", and its Bedingung names the

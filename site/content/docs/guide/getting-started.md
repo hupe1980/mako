@@ -14,7 +14,10 @@ It runs every daemon's `--check-config` against its dev config and prints one
 checklist — identities, certificates, Bilanzkreise, access, reachability, format
 coverage — each finding with its setting path and source, and exits non-zero
 while anything is red. [Einrichtung](@/docs/guide/einrichtung.md) explains the
-checklist and how to ask a running deployment.
+checklist, how to ask a running deployment, and how the setup interview
+proposes the configuration that turns it green. `just doctor` prints one line
+per daemon; `just erstlauf` runs a first deployment from empty to a passing
+Probelauf and times every step.
 
 This guide then runs the NB STP demo stack locally: UTILMD 55001 → automatic NB
 decision → UTILMD 55002.

@@ -171,7 +171,7 @@ pub struct ContactPerson {
 #[serde(deny_unknown_fields)]
 pub struct PartnerRecord {
     /// The partner's Marktpartner-ID — a BDEW-Codenummer, a DVGW-Codenummer,
-    /// a GS1 GLN or an EIC (Allgemeine Festlegungen §2.13).
+    /// a GS1 GLN or an EIC (Allgemeine Festlegungen Kap. 2.13).
     pub mp_id: MarktpartnerCode,
 
     /// Company name from the PARTIN `NAD` segment.

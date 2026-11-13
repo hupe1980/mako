@@ -12,3 +12,4 @@ pub mod malo_sync;
 pub mod party_registry;
 pub mod preflight;
 pub mod worker_health;
+pub mod zertifikat_monitor;

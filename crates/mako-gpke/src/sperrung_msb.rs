@@ -146,21 +146,21 @@ pub fn antwort_outbox(
     codeliste: &str,
     freitext: Option<&str>,
 ) -> PendingOutbox {
-    PendingOutbox::new(
-        "ORDRSP",
+    PendingOutbox::typed(
         anfrage.netzbetreiber.as_str(),
-        serde_json::json!({
-            "pid": antwort.pid.as_u32(),
-            "sender": anfrage.msb.as_str(),
-            "receiver": anfrage.netzbetreiber.as_str(),
-            "message_ref": antwort.message_ref.as_str(),
-            "document_code": BGM_SPERRUNG,
-            "document_id": antwort.message_ref.as_str(),
-            "order_reference": anfrage.dokumentennummer,
-            "antwort_code": antwort.antwortcode,
-            "antwort_codeliste": codeliste,
-            "antwort_freitext": freitext,
-        }),
+        &mako_engine::payload::OrdrspPayload {
+            pid: Some(antwort.pid.as_u32()),
+            sender: Some(anfrage.msb.as_str().to_owned()),
+            receiver: Some(anfrage.netzbetreiber.as_str().to_owned()),
+            message_ref: Some(antwort.message_ref.as_str().to_owned()),
+            document_code: Some(BGM_SPERRUNG.to_owned()),
+            document_id: Some(antwort.message_ref.as_str().to_owned()),
+            order_reference: Some(anfrage.dokumentennummer.clone()),
+            antwort_code: Some(antwort.antwortcode.clone()),
+            antwort_codeliste: Some(codeliste.to_owned()),
+            antwort_freitext: freitext.map(str::to_owned),
+            ..Default::default()
+        },
     )
 }
 

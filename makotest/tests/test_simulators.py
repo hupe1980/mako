@@ -236,7 +236,7 @@ class TestMultiMessageInterchange:
     #: `(PID, BGM DE 1001, transaction)` — the AHB fixes the document code per
     #: process: 55004 Abmeldung is `E02` „Abmeldungen" where 55001 Anmeldung is
     #: `E01`, and the Abmeldung names its Ende (`DTM+93`) with a Transaktionsgrund
-    #: `E01`/`ZW4` and no Produktpaket (UTILMD AHB Strom 2.2 §§ 8.6/8.9).
+    #: `E01`/`ZW4` and no Produktpaket (UTILMD AHB Strom 2.2 Kap. 8.6/8.9).
     VORGAENGE = (
         (55001, "E01", dict(dates=[("92", "20260501")], bilanzkreis=BILANZKREIS)),
         (55004, "E02", dict(dates=[("93", "20260501")], transaktionsgrund="E01")),

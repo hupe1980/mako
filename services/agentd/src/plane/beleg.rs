@@ -128,7 +128,8 @@ impl Adresse {
     }
 }
 
-/// A chapter: `Kap. 2.4.1`, `Kapitel 3`, or an AHB's own `§ 2.4.1`.
+/// A chapter: `Kap. 2.4.1`, `Kapitel 3`, or a dotted `§ 2.4.1` written for
+/// one — the AHBs are numbered in Kapitel, and a statute `§` is never dotted.
 static KAPITEL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:Kap\.|Kapitel)\s*(\d+(?:\.\d+)*)|§\s*(\d+(?:\.\d+)+)").expect("chapter")
 });
@@ -476,7 +477,8 @@ mod tests {
         let z11 = zitat("APERAK AHB", "1.1", "2.4.1", "binnen 45 Minuten");
         assert!(!belegt_im_lauf(&s, Some(&z10), &[&z10]), "1.0 is not 1.1");
         assert!(belegt_im_lauf(&s, Some(&z11), &[&z10, &z11]));
-        // The AHB's own `§ 2.4.1` is the same chapter.
+        // A `§` written for the chapter names the same chapter: the AHB is
+        // numbered in Kapitel, but the spelling turns up in prose.
         let s = zitiert("APERAK AHB 1.1 § 2.4.1 nennt 45 Minuten.");
         assert!(belegt_im_lauf(&s, Some(&z11), &[&z11]));
     }

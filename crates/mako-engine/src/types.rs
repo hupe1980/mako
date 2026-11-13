@@ -149,15 +149,18 @@ domain_id!(
     /// | Scheme | Digits | EDIFACT DE 3055 | Typical holders |
     /// |--------|--------|-----------------|-----------------|
     /// | **BDEW code** | 13 numeric | `"293"` | Suppliers (LFN), DSOs (NB/VNB), MSBs, BKVs — the dominant scheme |
+    /// | **DVGW code** | 13 numeric | `"332"` | Gas market participants |
     /// | **GLN** (GS1) | 13 numeric | `"9"` | Global GS1 scheme; rare in German MaKo |
-    /// | **EIC** (ENTSO-E) | 16 alphanumeric | `"305"` | TSOs (ÜNB), Regelzonen, cross-border |
+    ///
+    /// A 16-character EIC is not an MP-ID and no MIG lists a NAD DE 3055 code
+    /// for one (see `edi_energy::AgencyCode`).
     ///
     /// Used as `sender` and `receiver` in EDIFACT message headers and as
     /// domain party identifiers in all MaKo process commands. The numeric
     /// value is stored without the agency qualifier — use
     /// `edi_energy::AgencyCode` when rendering outbound NAD segments.
     MarktpartnerCode,
-    "Marktpartner-Code — BDEW code (293), GS1 GLN (9), or EIC (305) market-participant identifier"
+    "Marktpartner-Code — BDEW code (293), DVGW code (332) or GS1 GLN (9) market-participant identifier"
 );
 
 domain_id!(
@@ -243,7 +246,7 @@ domain_id!(
 /// # What is kept raw
 ///
 /// `qualifier` is `SG10 QTY` DE 6063 exactly as it arrived — `220` Wahrer Wert,
-/// `67` Ersatzwert, `Z18` Vorläufiger Wert (MSCONS AHB 3.1g §11.2). The
+/// `67` Ersatzwert, `Z18` Vorläufiger Wert (MSCONS AHB 3.1g Kap. 11.2). The
 /// translation into the quality vocabulary the ERP and `edmd` share is
 /// [`MeteredInterval::quality`], applied when the payload is built. An inbound
 /// value stays representable so a message carrying an unexpected qualifier can
@@ -465,7 +468,7 @@ pub fn messwesen_version(pid: u32, nachrichtendatum: &str) -> Option<String> {
 /// 17001/17002/17009 and their ORDRSP answers, REQOTE 35001 / QUOTES 15001, and
 /// the IFTSTA Statusmeldungen. The Sparte is not in the message body — it is
 /// the Sparte of the **interchange recipient's MP-ID** (BDEW Allgemeine
-/// Festlegungen §2.13: every MP-ID covers exactly one Sparte). The ingest layer
+/// Festlegungen Kap. 2.13: every MP-ID covers exactly one Sparte). The ingest layer
 /// resolves it there and supplies it to [`PidRouter::route_with_sparte`].
 ///
 /// The two Sparten differ in more than routing:

@@ -37,7 +37,10 @@ async fn state_for(role: &str) -> CommandsApiState {
         snapshot_interval: 100,
         cedar: Arc::new(CedarAuthorizer::unauthenticated().expect("infallible")),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+        malo_cache: Arc::new(SlateDbMaloCache::new(
+            store.clone(),
+            TenantId::from_party_id(OWN_MP_ID),
+        )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
         marktd_client: None,

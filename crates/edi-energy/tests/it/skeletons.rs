@@ -270,3 +270,65 @@ fn every_303_sample_begins_a_german_day() {
         failures.join("\n  ")
     );
 }
+
+/// Every skeleton `DTM` value has the shape its own DE 2379 names — the code
+/// the column fixes and the generator writes beside it. A `303`-shaped value
+/// under `304` (`CCYYMMDDHHMMSSZZZ`, MSCONS AHB 3.2 Kap. 8.3.3, S. 96, the
+/// Versionsangabe) is refused by any receiver that reads the version.
+#[test]
+fn every_dtm_value_has_the_shape_of_its_format_code() {
+    let platform = Platform::with_all_profiles();
+    let mut failures: Vec<String> = Vec::new();
+    for profile in platform.registry().all_profiles() {
+        for af in profile.anwendungsfaelle() {
+            let segs = profile.skeleton(af, &SkeletonParties::default());
+            let wire = String::from_utf8(edifact_rs::segments_to_bytes(&segs).unwrap_or_default())
+                .unwrap_or_default();
+            for seg in wire.split('\'') {
+                let Some(body) = seg.trim().strip_prefix("DTM+") else {
+                    continue;
+                };
+                let parts: Vec<String> = body
+                    .replace("?+", "+")
+                    .split(':')
+                    .map(str::to_owned)
+                    .collect();
+                let (Some(value), Some(format)) = (parts.get(1), parts.get(2)) else {
+                    continue;
+                };
+                let digits =
+                    |n: usize| value.len() == n && value.bytes().all(|b| b.is_ascii_digit());
+                let zoned = |n: usize| {
+                    value.len() == n + 3
+                        && value[..n].bytes().all(|b| b.is_ascii_digit())
+                        && value[n..] == *"+00"
+                };
+                let fits = match format.as_str() {
+                    "102" => digits(8),
+                    "203" => digits(12),
+                    "204" => digits(14),
+                    "303" => zoned(12),
+                    "304" => zoned(14),
+                    "610" => digits(6),
+                    "602" => digits(4),
+                    _ => continue,
+                };
+                if !fits {
+                    failures.push(format!(
+                        "{} {} {}: DTM+{}:{value}:{format}",
+                        profile.message_type(),
+                        profile.release(),
+                        af.pid.map_or_else(|| af.name.clone(), |p| p.to_string()),
+                        parts[0],
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} skeleton DTM values do not match their format code:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}

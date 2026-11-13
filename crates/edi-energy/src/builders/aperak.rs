@@ -239,7 +239,7 @@ impl<S, R> AperakBuilder<S, R> {
     }
 
     /// A further Fehlerbeschreibung — its own `SG4 ERC` group with its text
-    /// and Ortsangabe, after the first. APERAK AHB 1.1 § 2.1.1: every AHB-Fehler
+    /// and Ortsangabe, after the first. APERAK AHB 1.1 Kap. 2.1.1: every AHB-Fehler
     /// is named; the MIG lets `SG4` repeat 99999 times.
     pub fn further_error(
         mut self,
@@ -356,7 +356,7 @@ impl<S, R> AperakBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
@@ -364,7 +364,7 @@ impl<S, R> AperakBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
         // `SG5` — the Fehlermeldung: code, text, then the references of the

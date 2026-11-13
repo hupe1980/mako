@@ -37,7 +37,10 @@ async fn state_for(roles: &[&str]) -> CommandsApiState {
         snapshot_interval: 100,
         cedar: Arc::new(CedarAuthorizer::unauthenticated().expect("infallible")),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+        malo_cache: Arc::new(SlateDbMaloCache::new(
+            store.clone(),
+            TenantId::from_party_id(OWN_MP_ID),
+        )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
         marktd_client: None,
@@ -392,6 +395,10 @@ async fn seed_wmsb_vorgang(state: &CommandsApiState) {
             melo_id: MeLo::new(MELO_ID),
             umstellungszeitpunkt: "20270601".to_owned(),
             message_ref: MessageRef::new("VORAB-1"),
+            referenz: Some(mako_wim::geraetewechsel::IftstaReferenz {
+                dokumentennummer: "VORAB-BGM-1".to_owned(),
+                vorgangsnummer: "1".to_owned(),
+            }),
             validation_passed: true,
             validation_errors: vec![],
         },
@@ -425,11 +432,60 @@ async fn the_wmsb_answers_the_vorabinformation_with_21030_or_21031() {
     }
 }
 
+/// After its `A02` Eigenausbau the wMSB reports the Scheitern
+/// (`wim.ersteinbau.scheitern-melden`) to every Marktrolle of the Use-Case:
+/// the gMSB by 21027; the NB (21027) and the LF (21025) come from marktd, and
+/// with no marktd both are escalated by name (IFTSTA AHB 2.1 Kap. 6.4, S. 24).
+#[tokio::test]
+async fn the_wmsb_reports_its_scheitern_to_every_role_or_escalates_it() {
+    let state = state_for(&["MSB"]).await;
+    seed_wmsb_vorgang(&state).await;
+    dispatch_command(
+        &state,
+        "wim.ersteinbau.beantworten",
+        &serde_json::json!({ "melo_id": MELO_ID, "antwortcode": "A02" }),
+    )
+    .await
+    .expect("A02 announces the Eigenausbau");
+    let refused = dispatch_command(
+        &state,
+        "wim.ersteinbau.scheitern-melden",
+        &serde_json::json!({ "melo_id": MELO_ID, "grund": "A99" }),
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(DispatchError::InvalidPayload(_))),
+        "{refused:?}"
+    );
+    dispatch_command(
+        &state,
+        "wim.ersteinbau.scheitern-melden",
+        &serde_json::json!({ "melo_id": MELO_ID, "grund": "Z74", "reason": "kein Zugang" }),
+    )
+    .await
+    .expect("reported");
+    let scheitern: Vec<_> = outbox(&state, "IFTSTA")
+        .await
+        .into_iter()
+        .filter(|(_, p)| p["pid"] == 21027 || p["pid"] == 21025)
+        .collect();
+    assert_eq!(scheitern.len(), 1, "{scheitern:?}");
+    assert_eq!(scheitern[0].0, PARTNER_MP_ID, "the gMSB");
+    let mut eskaliert: Vec<String> = outbox(&state, mako_engine::outbox::PROCESS_FAILED)
+        .await
+        .into_iter()
+        .filter_map(|(_, p)| p["recipient_role"].as_str().map(str::to_owned))
+        .collect();
+    eskaliert.sort();
+    assert_eq!(eskaliert, ["LF", "NB"]);
+}
+
 #[test]
 fn only_an_msb_runs_the_ersteinbau() {
     for command in [
         "wim.ersteinbau.vorabinformation-senden",
         "wim.ersteinbau.beantworten",
+        "wim.ersteinbau.scheitern-melden",
     ] {
         for role in ["NB", "LF"] {
             assert!(

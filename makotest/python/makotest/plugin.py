@@ -56,9 +56,9 @@ DEFAULT_REFERENCE_DATE = "2026-04-01"
 #: Marktpartner-IDs used by the fixtures. Each carries a **valid check digit**
 #: — an invented one is exactly the defect this toolkit exists to catch, and a
 #: fixture is the first place a reader copies from.
-NB_ID = "9900357000003"  # BDEW-Codenummer, §8.1 check digit
+NB_ID = "9900357000003"  # BDEW-Codenummer, Kap. 8.1 check digit
 LF_ID = "4012345000023"  # GS1 GLN, EAN-13 check digit
-BIKO_ID = "9979999000002"  # BDEW-Codenummer, §8.1 check digit
+BIKO_ID = "9979999000002"  # BDEW-Codenummer, Kap. 8.1 check digit
 
 #: `(message_type, sparte)` every fixture in this plugin can be asked to build.
 #: `makotest_on` resolves each on the session date, so a reference date with a

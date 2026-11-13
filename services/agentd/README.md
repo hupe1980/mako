@@ -21,10 +21,10 @@ a model-backed specialist.
 
 | | |
 |---|---|
-| **Specialists** | 29 manifests in [`agents/`](agents/) — 26 `tool-calling`, 2 model-free coded skills ([`src/skills/`](src/skills/)) |
-| **Grants** | read-only only: 161 grants across 29 manifests, each named by its procedure (`cargo xtask check-tool-grants`, `check-prompt-tools`) |
+| **Specialists** | 30 manifests in [`agents/`](agents/) — 28 `tool-calling`, 2 model-free coded skills ([`src/skills/`](src/skills/)) |
+| **Grants** | read-only only: 161 grants across 30 manifests, each named by its procedure (`cargo xtask check-tool-grants`, `check-prompt-tools`) |
 | **Prompts** | mako's MCP servers publish 54 step-by-step prompts across 11 servers; specialists reference them through `context.prompts` |
-| **Answers** | All 29 specialists declare a closed `output.schema`; coded finding codes are enums |
+| **Answers** | All 30 specialists declare a closed `output.schema`; coded finding codes are enums |
 | **Quotes** | agentd's own read-only `quote_source` / `find_source` (`tool://agentd/…`) answer a passage by address — document, edition, chapter or § — from the operator's passage index (`[quellen] index`); a desk-assistant sentence naming a § or a chapter is belegt only beside the quote of that address |
 | **Oversight** | triage rules open worklist rows under `/api/v1/oversight/*`; rows escalate, never expire. Mounted only with `[oidc]` |
 | **Journal** | `redb` (single instance) or Postgres; optional sealing (`[keyring]`), workload signatures (`[attestation]`) and C2SP `tlog-witness` cosigning (`[witness]`) |

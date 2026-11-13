@@ -7,15 +7,15 @@
 //!
 //! | PID   | ⚡ | 🔥 | Direction | Description |
 //! |-------|---|---|-----------|-------------|
-//! | 17110 | — | ✅ | LF → NB   | Anforderung Allokationsliste (Gas-only per ORDERS AHB 1.0; formally belongs to `mako-gabi-gas` `gabi-gas-mmma`) |
+//! | 17110 | — | ✅ | LF → NB   | Anforderung Allokationsliste (Gas-only; sent from here, received by `mako-gabi-gas` `gabi-gas-mmma`) |
 //! | 17114 | ✅ | — | NB → ÜNB  | Anforderung der bilanzierten Menge (Strom-only) |
-//! | 19110 | — | ✅ | NB → LF   | Ablehnung Allokationsliste (Gas-only; formally belongs to `mako-gabi-gas` `gabi-gas-mmma`) |
+//! | 19110 | — | ✅ | NB → LF   | Ablehnung Allokationsliste (Gas-only; sent by `mako-gabi-gas` `gabi-gas-mmma`) |
 //! | 19115 | ✅ | — | NB → LF   | Ablehnung Anforderung bilanzierte Menge (Strom-only) |
 //!
-//! > **Note on 17110 / 19110**: These PIDs are Gas-only (⚡=— in ORDERS/ORDRSP AHB 1.0),
-//! > the Gas twins of 17114/19115. The AHB puts their formal home in the Gas MMMA
-//! > process, but `mako-gabi-gas` `gabi-gas-mmma` registers MSCONS 13013 only, so
-//! > this workflow is the one that routes them.
+//! > **Note on 17110 / 19110**: These PIDs are Gas-only, the Gas twins of
+//! > 17114/19115. This workflow is the LF's side — it sends the 17110 and
+//! > receives the 19110. The inbound 17110 reaches the GNB, whose receiver is
+//! > `mako-gabi-gas` `gabi-gas-mmma`.
 //!
 //! Positive responses (actual data) arrive via **MSCONS** (13014 for Strom bilanzierte
 //! Menge, further MSCONS PIDs for Strom). PID 13013 (Gas-only Allokationsliste) is
@@ -47,7 +47,11 @@ pub const WORKFLOW_NAME: &str = "gpke-allokationsliste";
 /// |-------|---|---|-------------|
 /// | 17110 | — | ✅ | Anforderung Allokationsliste (Gas-only; formally `gabi-gas-mmma`) |
 /// | 17114 | ✅ | — | Anforderung der bilanzierten Menge (Strom-only) |
-pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[17110, 17114];
+pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[ORDERS_ANFRAGE_GAS_PID, 17114];
+
+/// ORDERS 17110 — sent from here, received by the GNB's `gabi-gas-mmma`, so
+/// `mako-gpke` does not route it.
+pub const ORDERS_ANFRAGE_GAS_PID: u32 = 17110;
 
 /// ORDRSP rejection PIDs sent by NB back to LF.
 ///
@@ -320,16 +324,18 @@ impl Workflow for GpkeAllokationslisteWorkflow {
                     malo: malo.clone(),
                     message_ref: message_ref.clone(),
                 };
-                let outbox = vec![PendingOutbox::new(
-                    "ORDERS",
-                    nb_mp_id.as_str(),
-                    serde_json::json!({
-                        "pid":        orders_pid.as_u32(),
-                        "malo":       malo.as_ref().map(|m| m.as_str()),
-                        "orders_ref": message_ref.as_str(),
-                        "payload":    payload,
-                    }),
-                )];
+                // The column's own fields come in `payload`, laid over the
+                // head at the top, where the renderer reads them.
+                let body = crate::outbound::mit_spalte(
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(orders_pid.as_u32()),
+                        location: malo.as_ref().map(|m| m.as_str().to_owned()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        ..Default::default()
+                    },
+                    &payload,
+                )?;
+                let outbox = vec![PendingOutbox::typed(nb_mp_id.as_str(), &body)];
                 Ok(WorkflowOutput::with_outbox(vec![event], outbox))
             }
 

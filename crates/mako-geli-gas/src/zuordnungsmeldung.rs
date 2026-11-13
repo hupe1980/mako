@@ -41,7 +41,7 @@
 //!
 //! - **BDEW/VKU/GEODE/FNB Gas AWH GeLi Gas V1.2** Kap. 2.5.2 SD Lieferbeginn Nr. 2 / 6 / 7
 //! - **UTILMD AHB Gas 1.1 / 1.2** Kap. 5.8
-//! - **APERAK AHB 1.1 § 2.3.1** — the Gas APERAK windows, a separate clock
+//! - **APERAK AHB 1.1 Kap. 2.3.1** — the Gas APERAK windows, a separate clock
 
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
@@ -475,10 +475,9 @@ impl Workflow for GeliGasZuordnungsmeldungWorkflow {
 
                 let pid = Pruefidentifikator::new(meldung.pid())
                     .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                let outbox = vec![PendingOutbox::new(
-                    "UTILMD",
+                let outbox = vec![PendingOutbox::typed(
                     receiver.as_str(),
-                    meldung_payload(
+                    &meldung_payload(
                         meldung,
                         &sender,
                         &receiver,
@@ -580,38 +579,25 @@ fn meldung_payload(
     bilanzierungsende: Option<&str>,
     beteiligte: &[MarktpartnerCode],
     referenz_vorgangsnummer: Option<&str>,
-) -> serde_json::Value {
-    let mut payload = serde_json::json!({
-        "pid":               meldung.pid(),
-        "sender":            sender.as_str(),
-        "receiver":          receiver.as_str(),
-        "malo":              location_id.as_str(),
-        "document_code":     BGM_INFORMATIONSMELDUNG,
-        "transaktionsgrund": transaktionsgrund,
-        "lokationstyp":      LOC_MELDEPUNKT,
-    });
-    let obj = payload.as_object_mut().expect("json! built an object");
-    if let Some(date) = process_date {
-        obj.insert("process_date".into(), date.into());
+) -> mako_engine::payload::UtilmdPayload {
+    mako_engine::payload::UtilmdPayload {
+        pid: meldung.pid(),
+        sender: sender.as_str().to_owned(),
+        receiver: Some(receiver.as_str().to_owned()),
+        malo: Some(location_id.as_str().to_owned()),
+        document_code: Some(BGM_INFORMATIONSMELDUNG.to_owned()),
+        transaktionsgrund: Some(transaktionsgrund.to_owned()),
+        lokationstyp: Some(LOC_MELDEPUNKT.to_owned()),
+        process_date: process_date.map(str::to_owned),
+        bilanzierungsende: bilanzierungsende
+            .filter(|d| !d.is_empty())
+            .map(str::to_owned),
+        referenz_vorgangsnummer: referenz_vorgangsnummer
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned),
+        beteiligte_marktpartner: beteiligte.iter().map(|m| m.as_str().to_owned()).collect(),
+        ..Default::default()
     }
-    if let Some(date) = bilanzierungsende.filter(|d| !d.is_empty()) {
-        obj.insert("bilanzierungsende".into(), date.into());
-    }
-    if let Some(vorgang) = referenz_vorgangsnummer.filter(|v| !v.is_empty()) {
-        obj.insert("referenz_vorgangsnummer".into(), vorgang.into());
-    }
-    if !beteiligte.is_empty() {
-        obj.insert(
-            "beteiligte_marktpartner".into(),
-            serde_json::Value::Array(
-                beteiligte
-                    .iter()
-                    .map(|m| serde_json::Value::String(m.as_str().to_owned()))
-                    .collect(),
-            ),
-        );
-    }
-    payload
 }
 
 #[cfg(test)]

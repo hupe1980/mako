@@ -98,7 +98,7 @@ pub const IFTSTA_SPERRUNG_PID: Pruefidentifikator = Pruefidentifikator::const_ne
 ///
 /// The window is a **Werktag** deadline, not 24 wall-clock hours: „Unverzüglich,
 /// jedoch spätester ÜT ist der 1. WT nach dem ÜT" (BK6-24-174 GPKE Teil 2
-/// §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2). The ORDERS/ORDRSP AHBs state no
+/// Kap. 3.5.1.2 / 3.5.2.2 Prozessschritt 2). The ORDERS/ORDRSP AHBs state no
 /// deadline for 17115/17117 at all — the Festlegung is the only source, and
 /// [`mako_fristen::antwort`] holds the number.
 pub const ANTWORT_WINDOW_LABEL: &str = "gpke-sperrung-lf-antwort";
@@ -565,21 +565,21 @@ impl Workflow for GpkeSperrungLfWorkflow {
                         "expected a Sperrung PID (17115 or 17117), got {pid}",
                     )));
                 }
-                let outbox = PendingOutbox::new(
-                    "ORDERS",
+                // ORDERS 17115/17117 are shared with the AWH Sperrprozesse Gas,
+                // where the sender is the LFG rather than the LF. Stating the
+                // Sparte is what lets the renderer pick the right own MP-ID in
+                // a dual-fuel deployment. `BGM` DE 1004 is the message
+                // reference, which the Stornierung's `RFF+ON` names.
+                let outbox = PendingOutbox::typed(
                     nb_mp_id.as_str(),
-                    serde_json::json!({
-                        "type":          "SperrungAuftrag",
-                        // ORDERS 17115/17117 are shared with the AWH Sperrprozesse
-                        // Gas, where the sender is the LFG rather than the LF.
-                        // Stating the Sparte is what lets the renderer pick the
-                        // right own MP-ID in a dual-fuel deployment instead of
-                        // weighing the two roles and falling back to the primary.
-                        "sparte":        "Strom",
-                        "pid":           pid.as_u32(),
-                        "location_id":   location_id.as_str(),
-                        "message_ref":   message_ref.as_str(),
-                    }),
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(pid.as_u32()),
+                        sparte: Some(mako_engine::types::Sparte::Strom),
+                        location: Some(location_id.as_str().to_owned()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        document_id: Some(message_ref.as_str().to_owned()),
+                        ..Default::default()
+                    },
                 );
                 let event = SperrungLfEvent::AuftragInitiiert {
                     location_id,
@@ -645,19 +645,21 @@ impl Workflow for GpkeSperrungLfWorkflow {
                         state.label(),
                     ));
                 }
-                let nb_mp_id = state
-                    .auftrag_data()
+                let auftrag = state.auftrag_data();
+                let nb_mp_id = auftrag
                     .map(|d| d.nb_mp_id.as_str().to_owned())
                     .unwrap_or_default();
                 let pid = 39000_u32;
-                let outbox = PendingOutbox::new(
-                    "ORDCHG",
+                // `SG1 RFF+ON` — the ORDERS being cancelled, by its `BGM` DE
+                // 1004: without it the NB cannot tell which Auftrag to stop.
+                let outbox = PendingOutbox::typed(
                     nb_mp_id.as_str(),
-                    serde_json::json!({
-                        "type":        "SperrungStornierung",
-                        "pid":         pid,
-                        "message_ref": message_ref.as_str(),
-                    }),
+                    &mako_engine::payload::OrdchgPayload {
+                        pid: Some(pid),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        order_reference: auftrag.map(|d| d.message_ref.as_str().to_owned()),
+                        ..Default::default()
+                    },
                 );
                 Ok(WorkflowOutput::with_outbox(
                     vec![SperrungLfEvent::StornierungGesendet { pid, message_ref }],

@@ -23,16 +23,14 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::Zero;
 use time::{Date, Month, OffsetDateTime, Time};
 
-// ── Frist constants (BilAReM Kap. 3.2.1) ─────────────────────────────────────
-
-/// Wetterdaten/Referenzmessdaten for Spitz-/vereinfachte Spitzabrechnung are
-/// due by the end of this Werktag of the following month; afterwards the ANB
-/// builds Ersatzwerte.
-pub const WETTERDATEN_LIEFERFRIST_WERKTAGE: u8 = 4;
+// ── Frist constant (BilAReM Kap. 3.2.1) ──────────────────────────────────────
 
 /// A TR leaving the (metering-driven) Pauschal-Abrechnung switches with this
 /// notice, effective at the end of the next 31.12., into the vereinfachte
-/// Spitzabrechnung (unless Spitzabrechnung was elected by 30.11.).
+/// Spitzabrechnung (unless Spitzabrechnung was elected by 30.11.) — `BilAReM`
+/// Kap. 3.2.1. [`crate::bilarem::pauschal_wechsel_ende`] applies it; the
+/// Wetterdaten Frist of the same chapter is
+/// [`crate::fristen::WETTERDATEN_WERKTAGE`].
 pub const PAUSCHAL_WECHSEL_FRIST_MONATE: u8 = 3;
 
 /// Quarter-hours count towards the Vergleichszeitraum only if the

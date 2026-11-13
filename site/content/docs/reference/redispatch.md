@@ -30,14 +30,18 @@ Bilanzierungsmodelle side by side and dates every transition
 
 Migration between them is one-way, at quarter boundaries, with ≥6 months' notice
 (soll-target 01.01.2031). Pauschal-Abrechnung grandfathering ends **31.12.2028**
-(the Spitz election is due 30.11.2028), and MaBiS Anlage 1 Kap. 17 was revoked
+for fluctuating TR erfasst viertelstundenscharf (the Spitz election is due
+30.11.2028); a TR without such an Erfassung, and a nicht-fluktuierende TR in the
+Prognosemodell, keep it, and MaBiS Anlage 1 Kap. 17 was revoked
 **30.09.2026**, its survivors continuing as the Anlage zur BilAReM.
 
 The BilAReM domain layer spans three seams:
 
-- `mako_redispatch::bilarem` — `Bilanzierungsmodell`, `Abrechnungsverfahren`
-  admissibility, quarter-boundary + 6-month-notice `Zuordnungsmitteilung`
-  validation, all key dates as constants.
+- `mako_redispatch::bilarem` — `Bilanzierungsmodell`, the Abrechnungsvariante
+  a TR is assigned (`abrechnungsverfahren`: fluctuating or not,
+  viertelstundenscharf erfasst or not, grandfathered Pauschal, the
+  Anlagenbetreiber's Festlegung), quarter-boundary + 6-month-notice
+  `Zuordnungsmitteilung` validation, all key dates as constants.
 - `mako_redispatch::ausfallarbeit` — the full Kap.-3 Ausfallarbeit engine per
   the final Anlage (Beschluss 07.05.2026): `P_lim` determination
   (Aufforderungs-/Duldungsfall, Referenzprofil/beidseitige Fixierung), Wind

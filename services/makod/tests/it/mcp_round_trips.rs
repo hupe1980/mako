@@ -25,7 +25,10 @@ async fn app() -> axum::Router {
     );
     let cedar =
         Arc::new(makod::cedar_authz::CedarAuthorizer::unauthenticated().expect("infallible"));
-    let malo_cache = Arc::new(makod::malo_cache::SlateDbMaloCache::new((*store).clone()));
+    let malo_cache = Arc::new(makod::malo_cache::SlateDbMaloCache::new(
+        (*store).clone(),
+        TenantId::from_party_id(TENANT),
+    ));
     let commands = Arc::new(CommandsApiState {
         tenant_id: TenantId::from_party_id(TENANT),
         sender_party_id: TENANT.to_owned(),
@@ -62,6 +65,7 @@ async fn app() -> axum::Router {
             http: mako_service::http::default_client(),
             cedar: Arc::clone(&cedar),
             tenant: TENANT.to_owned(),
+            zertifikate: None,
         }),
     });
     mcp_server::router(state, tokio_util::sync::CancellationToken::new())

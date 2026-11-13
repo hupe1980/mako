@@ -43,11 +43,11 @@
 //!
 //! - **INVOIC AHB 1.0** (FV2025-10-01 onwards; AHB 2.8e before) — the invoice
 //!   message and its Prüfidentifikatoren.
-//! - **REMADV AHB 1.0a § 3** — the payment advice. Settlement is „ganz oder gar
+//! - **REMADV AHB 1.0a Kap. 3** — the payment advice. Settlement is „ganz oder gar
 //!   nicht": there are no Teilzahlungen, so 33002/33003/33004 are all
 //!   Abweisungen and only 33001 confirms.
 //! - **COMDIS AHB 1.0** — the invoicer's refusal of a payer's REMADV (29001).
-//! - **APERAK AHB 1.1 § 2.4.1** — the technical acknowledgement: for an INVOIC
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — the technical acknowledgement: for an INVOIC
 //!   the next Werktag 12:00 (the 45 Minuten bind UTILMD and ORDERS). A different clock from the business answer this workflow runs.
 
 #![forbid(unsafe_code)]
@@ -73,7 +73,7 @@ use rubo4e::current::Rechnung;
 
 /// The REMADV Prüfidentifikatoren a payer can answer an invoice with.
 ///
-/// Received by the **invoicer** after sending an INVOIC. Per REMADV AHB 1.0a § 3
+/// Received by the **invoicer** after sending an INVOIC. Per REMADV AHB 1.0a Kap. 3
 /// settlement is „ganz oder gar nicht" — there are no Teilzahlungen, so only
 /// 33001 confirms payment and the other three are all Abweisungen.
 ///
@@ -89,13 +89,13 @@ pub const REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
 pub const REMADV_CONFIRMATION_PID: u32 = 33001;
 
 /// The REMADV a payer **sends** to confirm — the Zahlungsavis. It carries no
-/// `AJT` at all (REMADV AHB 1.0a § 3.1.1): agreement needs no Antwortcode.
+/// `AJT` at all (REMADV AHB 1.0a Kap. 3.1.1): agreement needs no Antwortcode.
 pub const ZAHLUNGSAVIS_PID: u32 = REMADV_CONFIRMATION_PID;
 
 /// The REMADV a payer sends to refuse an invoice whose tree answers with **one**
-/// code — the plain „Abweisung" of REMADV AHB 1.0a § 3.1.1.
+/// code — the plain „Abweisung" of REMADV AHB 1.0a Kap. 3.1.1.
 ///
-/// Not the default for every refusal: § 3.1.2's 33003 / 33004 pair is what
+/// Not the default for every refusal: Kap. 3.1.2's 33003 / 33004 pair is what
 /// carries a *set* of codes, and DE 1082 admits a different list of trees on
 /// each. [`RemadvAntwort::remadv_pid`] is what picks between them.
 pub const ABWEISUNG_PID: u32 = 33002;
@@ -597,7 +597,7 @@ pub enum InvoicCommand {
     },
     /// Dispute the invoice — a Nicht-Zahlungsavis to the issuer.
     ///
-    /// Settlement is „ganz oder gar nicht" (REMADV AHB 1.0a § 3): there is no
+    /// Settlement is „ganz oder gar nicht" (REMADV AHB 1.0a Kap. 3): there is no
     /// Teilzahlung, so this refuses the whole invoice.
     DisputeInvoice {
         /// Belegnummer of the outbound REMADV.
@@ -608,7 +608,7 @@ pub enum InvoicCommand {
         /// publishes them.
         ///
         /// `SG7 AJT` is **Muss** on every Nicht-Zahlungsavis (REMADV AHB 1.0a
-        /// § 3.1.1 / § 3.1.2), so a refusal without one is a message the issuer
+        /// Kap. 3.1.1 / Kap. 3.1.2), so a refusal without one is a message the issuer
         /// cannot act on. `None` is accepted only from a caller that could not
         /// resolve a tree at all, and the renderer then refuses to put an
         /// incomplete answer on the wire.
@@ -893,7 +893,7 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                         state.label(),
                     ));
                 }
-                // REMADV AHB 1.0a § 3.1.1/§ 3.1.2 make `SG7 AJT` Muss on every
+                // REMADV AHB 1.0a Kap. 3.1.1/Kap. 3.1.2 make `SG7 AJT` Muss on every
                 // Nicht-Zahlungsavis, and the Prüfidentifikator follows the
                 // shape of the answer: 33002 for a tree that states one code,
                 // 33003/33004 for one that states a set. Defaulting to 33002
@@ -959,16 +959,16 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                     ));
                 }
                 let outbox = vec![
-                    PendingOutbox::new(
-                        "INVOIC",
+                    // The message carries its PID and Rechnungsnummer itself;
+                    // the entry wraps it for the interchange and names the two
+                    // parties its `UNB` repeats.
+                    PendingOutbox::typed(
                         recipient.as_str(),
-                        serde_json::json!({
-                            "pid":         pid.as_u32(),
-                            "sender":      sender.as_str(),
-                            "receiver":    recipient.as_str(),
-                            "invoice_ref": invoice_ref.as_str(),
-                            "nachricht":   nachricht,
-                        }),
+                        &mako_engine::payload::InvoicPayload {
+                            nachricht,
+                            sender: sender.as_str().to_owned(),
+                            receiver: recipient.as_str().to_owned(),
+                        },
                     )
                     .caused_by(0),
                 ];
@@ -1003,7 +1003,7 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                         "expected a REMADV PID (33001–33004), got {pid}",
                     )));
                 }
-                // REMADV AHB 1.0a § 3 — settlement is „ganz oder gar nicht".
+                // REMADV AHB 1.0a Kap. 3 — settlement is „ganz oder gar nicht".
                 // Only 33001 confirms; 33002/33003/33004 are all Abweisungen.
                 let is_confirmed = remadv_confirms(pid);
                 Ok(vec![InvoicEvent::RemadvReceived {
@@ -1045,7 +1045,30 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                         state.label(),
                     ));
                 }
-                Ok(vec![InvoicEvent::ComdisAbLehnungReceived { comdis_ref }].into())
+                // The payer's checking service walks the second round
+                // (`E_0266`, EBD 4.3 Kap. 8.27.3) and owes the next answer, so
+                // it hears of the COMDIS the way it heard of the invoice: a
+                // `ProcessInitiated` for this process, naming PID 29001, the
+                // invoice the COMDIS answers and the COMDIS itself.
+                let data = state.data();
+                let outbox = vec![
+                    PendingOutbox::new(
+                        "ProcessInitiated",
+                        data.map(|d| d.recipient.as_str()).unwrap_or_default(),
+                        serde_json::json!({
+                            "pid":          COMDIS_ABLEHNUNG_PID.as_u32(),
+                            "invoice_ref":  data.map(|d| d.invoice_ref.as_str()),
+                            "sender_mp_id": data.map(|d| d.sender.as_str()),
+                            "workflow":     F::WORKFLOW_NAME,
+                            "comdis_ref":   comdis_ref.as_str(),
+                        }),
+                    )
+                    .caused_by(0),
+                ];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![InvoicEvent::ComdisAbLehnungReceived { comdis_ref }],
+                    outbox,
+                ))
             }
         }
     }
@@ -1091,23 +1114,31 @@ fn remadv_outbox(
 ) -> PendingOutbox {
     let data = state.data();
     let issuer = data.map(|d| d.sender.as_str()).unwrap_or_default();
-    let mut payload = serde_json::json!({
-        "pid":         pid,
-        "sender":      data.map(|d| d.recipient.as_str()).unwrap_or_default(),
-        "receiver":    issuer,
-        "message_ref": message_ref.as_str(),
+    let mut payload = mako_engine::payload::RemadvPayload {
+        pid: Some(pid),
+        sender: Some(
+            data.map(|d| d.recipient.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+        ),
+        receiver: Some(issuer.to_owned()),
+        message_ref: Some(message_ref.as_str().to_owned()),
         // BGM DE 1001: `481` Zahlungsavis, `239` Abgelehnte Forderung
-        // (Nicht-Zahlungsavis) — REMADV AHB 1.0a § 3.1.1.
-        "document_code": if pid == ZAHLUNGSAVIS_PID { "481" } else { "239" },
-        // `SG5 RFF` — the invoice this answers. The issuer correlates on it.
-        "invoice_ref": data.map(|d| d.invoice_ref.to_string()).unwrap_or_default(),
-        "document_date": data.map(|d| d.document_date.clone()).unwrap_or_default(),
-    });
-    let Some(obj) = payload.as_object_mut() else {
-        return PendingOutbox::new("REMADV", issuer, payload);
+        // (Nicht-Zahlungsavis) — REMADV AHB 1.0a Kap. 3.1.1. The REMADV's own
+        // `DTM+137` is the instant it is created; the invoice's date rides
+        // `SG5 DTM+137` below, and the issuer correlates by `SG5 DOC`.
+        document_code: Some(
+            if pid == ZAHLUNGSAVIS_PID {
+                "481"
+            } else {
+                "239"
+            }
+            .to_owned(),
+        ),
+        ..Default::default()
     };
     // `SG5` — the invoice being answered, its fälliger Betrag and its
-    // Rechnungsdatum, all **Muss** (REMADV AHB 1.0a § 3.1.1 segments
+    // Rechnungsdatum, all **Muss** (REMADV AHB 1.0a Kap. 3.1.1 segments
     // 00012–00015). Read off the stored BO4E `Rechnung`: the payer side keeps
     // it precisely so the answer need not go back to the EDIFACT archive.
     //
@@ -1127,44 +1158,50 @@ fn remadv_outbox(
         } else {
             rust_decimal::Decimal::ZERO
         };
-        obj.insert(
-            "rechnungsbezug".to_owned(),
-            serde_json::json!({
-                // `SG5 DOC` DE 1001. A Storno of a self-billed invoice is `Z25`,
-                // of an ordinary one `457`; otherwise `389` self-billed and
-                // `380` Handelsrechnung.
-                "dokumentenart": match (gutschrift, r.ist_original == Some(false)) {
-                    (true, true) => "Z25",
-                    (true, false) => "457",
-                    (false, true) => "389",
-                    (false, false) => "380",
-                },
-                "rechnungsnummer": r.rechnungsnummer.clone().unwrap_or_default(),
-                "faelliger_betrag": faellig.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero).to_string(),
-                "ueberweisungsbetrag": ueberweisung.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero).to_string(),
-                "rechnungsdatum": r
-                    .rechnungsdatum
-                    .map(|d| d.date().to_string())
-                    .unwrap_or_default(),
-            }),
-        );
+        payload.rechnungsbezug = Some(mako_engine::payload::Rechnungsbezug {
+            // `SG5 DOC` DE 1001. A Storno of a self-billed invoice is `Z25`,
+            // of an ordinary one `457`; otherwise `389` self-billed and
+            // `380` Handelsrechnung.
+            dokumentenart: match (gutschrift, r.ist_original == Some(false)) {
+                (true, true) => "Z25",
+                (true, false) => "457",
+                (false, true) => "389",
+                (false, false) => "380",
+            }
+            .to_owned(),
+            rechnungsnummer: r.rechnungsnummer.clone().unwrap_or_default(),
+            faelliger_betrag: faellig
+                .round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+                .to_string(),
+            ueberweisungsbetrag: ueberweisung
+                .round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+                .to_string(),
+            rechnungsdatum: r
+                .rechnungsdatum
+                .map(|d| d.date().to_string())
+                .unwrap_or_default(),
+        });
     }
-    if let Some(reason) = reason {
-        obj.insert("ablehnungsgrund".to_owned(), serde_json::json!(reason));
-    }
+    payload.ablehnungsgrund = reason.map(str::to_owned);
     if let Some(a) = antwort {
         // `SG7 AJT` DE 4465 / DE 1082. The head code renders as the single
         // `AJT` every REMADV carries; the full set travels alongside it for the
         // itemised 33003/33004 rendering and for the audit trail, which has to
         // show every Prüfschritt that refused.
-        obj.insert(
-            "antwort_code".to_owned(),
-            serde_json::json!(a.erster_code()),
-        );
-        obj.insert("antwort_codeliste".to_owned(), serde_json::json!(a.ebd));
-        obj.insert("antwort_befunde".to_owned(), serde_json::json!(a.befunde));
+        payload.antwort_code = a.erster_code().map(str::to_owned);
+        payload.antwort_codeliste = Some(a.ebd.clone());
+        payload.antwort_befunde = a
+            .befunde
+            .iter()
+            .map(|b| mako_engine::payload::RemadvBefund {
+                code: b.code.clone(),
+                ebene: Some(b.ebene.clone()),
+                positionsnummer: b.positionsnummer,
+                detail: b.detail.clone(),
+            })
+            .collect();
     }
-    PendingOutbox::new("REMADV", issuer, payload)
+    PendingOutbox::typed(issuer, &payload)
 }
 
 /// `completion` with the head code of a refusal and the tree that publishes

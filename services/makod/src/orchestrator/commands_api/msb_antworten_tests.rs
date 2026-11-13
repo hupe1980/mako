@@ -28,7 +28,10 @@ async fn state_for(own: &str, roles: &[&str]) -> CommandsApiState {
         snapshot_interval: 100,
         cedar: Arc::new(CedarAuthorizer::unauthenticated().expect("infallible")),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+        malo_cache: Arc::new(SlateDbMaloCache::new(
+            store.clone(),
+            TenantId::from_party_id(own),
+        )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
         marktd_client: None,
@@ -440,6 +443,114 @@ async fn an_answered_werte_anfrage_reaches_its_end_state() {
     assert_eq!(pids, vec![19_007, 19_102, 19_114]);
 }
 
+/// The MSB answers an Anfrage von Werten for Lastgangdaten with its MSCONS
+/// 13018 — passing the gate, `SG1 RFF+AGI` naming the 17102 — and the process
+/// ends; a Zählerstand Anfrage is refused at the door, naming why.
+#[tokio::test]
+async fn an_anfrage_von_werten_is_answered_with_its_lastgang() {
+    let state = state_for(MSB_MP_ID, &["MSB"]).await;
+    seed_werte_anfrage(&state, 17_102, "7", "Z11").await;
+    let body = serde_json::json!({
+        "anfragender_mp_id": NB_MP_ID,
+        "dokumentennummer": "DOK17102",
+        "werte": [
+            { "quantity_kwh": "1.250", "dtm_from": "202611012300+00",
+              "dtm_to": "202611012315+00", "obis_code": "1-1:1.29.0" },
+            { "quantity_kwh": "1.500", "dtm_from": "202611012315+00",
+              "dtm_to": "202611012330+00", "obis_code": "1-1:1.29.0" },
+        ],
+    });
+    dispatch_command(
+        &state,
+        mako_markt::commands::GPKE_DATENABRUF_WERTE_SENDEN,
+        &body,
+    )
+    .await
+    .expect("the values go out");
+    let current = current_state::<mako_gpke::GpkeDatenabrufMsbWorkflow>(
+        &state,
+        &mako_gpke::datenabruf_msb::anfrage_key(NB_MP_ID, "DOK17102"),
+        mako_gpke::datenabruf_msb::WORKFLOW_NAME,
+    )
+    .await
+    .expect("the process");
+    assert!(current.is_terminal(), "{current:?}");
+    let sent = outbox(&state, "MSCONS").await;
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].1["pid"], 13_018);
+    assert_eq!(sent[0].1["korrelation_ref"], "DOK17102");
+
+    let zaehlerstand = state_for(MSB_MP_ID, &["MSB"]).await;
+    seed_werte_anfrage(&zaehlerstand, 17_102, "7", "Z12").await;
+    let refused = dispatch_command(
+        &zaehlerstand,
+        mako_markt::commands::GPKE_DATENABRUF_WERTE_SENDEN,
+        &serde_json::json!({
+            "anfragender_mp_id": NB_MP_ID,
+            "dokumentennummer": "DOK17102",
+            "werte": body["werte"],
+        }),
+    )
+    .await;
+    assert!(
+        matches!(&refused, Err(DispatchError::InvalidPayload(m)) if m.contains("zaehlerstaende")),
+        "{refused:?}"
+    );
+}
+
+/// A Zählerstand Anfrage (`IMD++Z12`) is answered through the same door with
+/// its `zaehlerstaende` on MSCONS 13017 (MSCONS AHB 3.2 Kap. 6.3.1, S. 23–29);
+/// a body that names neither the Zähler nor the Konfigurations-ID is refused
+/// by name, before anything is written.
+#[tokio::test]
+async fn a_zaehlerstand_anfrage_is_answered_with_its_13017() {
+    let state = state_for(MSB_MP_ID, &["MSB"]).await;
+    seed_werte_anfrage(&state, 17_102, "7", "Z12").await;
+    let stand = serde_json::json!({
+        "obis_code": "1-1:1.8.0", "quantity": "12345.000",
+        "gueltig": "2026-11-01", "ablesedatum": "2026-11-01",
+    });
+    let ohne_zaehler = dispatch_command(
+        &state,
+        mako_markt::commands::GPKE_DATENABRUF_WERTE_SENDEN,
+        &serde_json::json!({
+            "anfragender_mp_id": NB_MP_ID,
+            "dokumentennummer": "DOK17102",
+            "zaehlerstaende": [stand.clone()],
+        }),
+    )
+    .await;
+    assert!(
+        matches!(&ohne_zaehler, Err(DispatchError::InvalidPayload(m)) if m.contains("geraetenummer")),
+        "{ohne_zaehler:?}"
+    );
+    assert!(outbox(&state, "MSCONS").await.is_empty());
+    dispatch_command(
+        &state,
+        mako_markt::commands::GPKE_DATENABRUF_WERTE_SENDEN,
+        &serde_json::json!({
+            "anfragender_mp_id": NB_MP_ID,
+            "dokumentennummer": "DOK17102",
+            "geraetenummer": "ZHR-4711",
+            "zaehlerstaende": [stand],
+        }),
+    )
+    .await
+    .expect("the Zählerstände go out");
+    let current = current_state::<mako_gpke::GpkeDatenabrufMsbWorkflow>(
+        &state,
+        &mako_gpke::datenabruf_msb::anfrage_key(NB_MP_ID, "DOK17102"),
+        mako_gpke::datenabruf_msb::WORKFLOW_NAME,
+    )
+    .await
+    .expect("the process");
+    assert!(current.is_terminal(), "{current:?}");
+    let sent = outbox(&state, "MSCONS").await;
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].1["pid"], 13_017);
+    assert_eq!(sent[0].1["geraetenummer"], "ZHR-4711");
+}
+
 // ── GPKE Teil 3 Konfiguration — the recipient's answer ───────────────────────
 
 async fn seed_konfiguration_auftrag(state: &CommandsApiState, pid: u32, bgm: &str) {
@@ -756,4 +867,144 @@ async fn the_msbn_orders_with_17001_and_a_19001_confirms_it() {
         matches!(current, MsbnState::Bestaetigt { .. }),
         "{current:?}"
     );
+}
+
+/// Render an outbox payload as the outbox worker does and hold it to the
+/// pre-send gate; the wire text.
+fn sendable_wire(message_type: &str, recipient: &str, payload: serde_json::Value) -> String {
+    use edi_energy::EdiEnergyMessage as _;
+    use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
+    let msg = mako_engine::outbox::OutboxMessage::new(
+        StreamId::new("test"),
+        ProcessId::new(),
+        mako_engine::ids::TenantId::new(),
+        CorrelationId::new(),
+        ConversationId::new(),
+        EventId::new(),
+        message_type,
+        recipient,
+        payload,
+    );
+    let registry =
+        crate::party_registry::MpIdRegistry::from_config(&[crate::config::PartyConfig {
+            mp_id: NB_MP_ID.to_owned(),
+            roles: Vec::new(),
+            primary: true,
+            agency: None,
+            as4: None,
+        }])
+        .expect("registry");
+    let wire = crate::orchestrator::edifact_renderer::render_to_wire_bytes(&msg, &registry)
+        .expect("renders");
+    let report = edi_energy::parse(&wire.bytes)
+        .expect("parses")
+        .validate_on_date(mako_fristen::heute())
+        .expect("validation runs");
+    let text = String::from_utf8_lossy(&wire.bytes).into_owned();
+    assert!(
+        report.is_sendable(),
+        "the pre-send gate refuses it: {:?}\n{text}",
+        report.sending_refusals().collect::<Vec<_>>()
+    );
+    text
+}
+
+/// **A command-sent 17011 is resumed by its 19005.** ORDERS AHB 1.1b Kap.
+/// 4.12 (S. 83–87): `BGM+Z12`, `DTM+203`, `LOC+172` the Messlokation and one
+/// `SG29 LIN+Z19` with `PIA+5+<code>:Z11` per Produkt; the MSB's ORDRSP names
+/// the 17011 by its `BGM` DE 1004 in `SG1 RFF+ON`.
+#[tokio::test]
+async fn a_command_sent_17011_is_resumed_by_its_19005() {
+    use crate::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
+    let state = state_for(NB_MP_ID, &["NB"]).await;
+    dispatch_command(
+        &state,
+        mako_markt::commands::WIM_TECHNIK_AENDERUNG_BESTELLEN,
+        &serde_json::json!({
+            "besteller": "NB",
+            "msb_mp_id": MSB_MP_ID,
+            "melo_id": MELO_ID,
+            "ausfuehrungsdatum": "2026-12-01",
+            "produkte": ["9991000002305", "9991000002321"],
+            "dokumentennummer": "TA-4711",
+        }),
+    )
+    .await
+    .expect("the Bestellung is sent");
+    let orders = outbox(&state, "ORDERS").await;
+    assert_eq!(orders.len(), 1);
+    let text = sendable_wire("ORDERS", MSB_MP_ID, orders[0].1.clone());
+    assert!(text.contains("BGM+Z12+TA-4711"), "{text}");
+    assert!(text.contains(&format!("LOC+172+{MELO_ID}")), "{text}");
+    assert!(text.contains("LIN+1+Z19'PIA+5+9991000002305:Z11"), "{text}");
+    assert!(text.contains("LIN+2+Z19'PIA+5+9991000002321:Z11"), "{text}");
+    assert!(text.contains("RFF+Z13:17011"), "{text}");
+
+    let wire = skeleton_answering(19_005, MSB_MP_ID, NB_MP_ID, "TA-4711");
+    let msg = edi_energy::parse(wire.as_bytes()).expect("parses");
+    let dispatcher = EdifactIngestDispatcher::new(
+        Arc::clone(&state.store),
+        state.snapshot_store.clone(),
+        100,
+        state.tenant_id,
+    );
+    let outcome = dispatcher
+        .dispatch(
+            &msg,
+            mako_wim::technik_aenderung::WORKFLOW_NAME,
+            19_005,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect("dispatch");
+    assert!(
+        matches!(outcome, IngestOutcome::Dispatched { .. }),
+        "{outcome:?}"
+    );
+    let current = current_state::<mako_wim::WimTechnikAenderungWorkflow>(
+        &state,
+        "TA-4711",
+        mako_wim::technik_aenderung::WORKFLOW_NAME,
+    )
+    .await
+    .expect("the process");
+    assert!(current.is_terminal(), "{current:?}");
+}
+
+/// A weitere Energieflussrichtung names the Marktlokation in `SG3 RFF+Z18`
+/// and its MSB in `SG2 NAD+DEB` (Bedingungen `[152]`/`[571]`); a Lieferant
+/// cannot order it (Codeliste der Konfigurationen 1.4 Kap. 7, S. 58).
+#[tokio::test]
+async fn a_weitere_energieflussrichtung_names_the_marktlokation_and_its_msb() {
+    let state = state_for(NB_MP_ID, &["NB", "LF"]).await;
+    let body = |besteller: &str| {
+        serde_json::json!({
+            "besteller": besteller,
+            "msb_mp_id": MSB_MP_ID,
+            "melo_id": MELO_ID,
+            "ausfuehrungsdatum": "2026-12-01",
+            "produkte": ["9991000002305", "9991000002339"],
+            "marktlokation": MALO_ID,
+            "msb_marktlokation": "9900077000006",
+        })
+    };
+    let refused = dispatch_command(
+        &state,
+        mako_markt::commands::WIM_TECHNIK_AENDERUNG_BESTELLEN,
+        &body("LF"),
+    )
+    .await
+    .expect_err("an LF cannot order it");
+    assert!(format!("{refused:?}").contains("Lieferant"), "{refused:?}");
+    dispatch_command(
+        &state,
+        mako_markt::commands::WIM_TECHNIK_AENDERUNG_BESTELLEN,
+        &body("NB"),
+    )
+    .await
+    .expect("the NB orders it");
+    let orders = outbox(&state, "ORDERS").await;
+    let text = sendable_wire("ORDERS", MSB_MP_ID, orders[0].1.clone());
+    assert!(text.contains(&format!("RFF+Z18:{MALO_ID}")), "{text}");
+    assert!(text.contains("NAD+DEB+9900077000006"), "{text}");
 }

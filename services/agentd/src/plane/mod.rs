@@ -21,6 +21,7 @@
 pub mod attest;
 pub mod beleg;
 pub mod calendar;
+pub mod einrichtung;
 pub mod keys;
 pub mod label;
 pub mod metrics;
@@ -102,6 +103,7 @@ pub fn manifests() -> &'static BTreeMap<String, Manifest> {
             "../../agents/desk-assistant.yaml",
             "../../agents/eeg-agent.yaml",
             "../../agents/eeg-compliance-agent.yaml",
+            "../../agents/einrichtung-assistent.yaml",
             "../../agents/einsd-batch-agent.yaml",
             "../../agents/gabi-gas-agent.yaml",
             "../../agents/grid-anomaly-agent.yaml",
@@ -204,7 +206,7 @@ mod tests {
     /// does not exist fails here rather than at first dispatch.
     #[test]
     fn every_specialist_manifest_parses() {
-        assert_eq!(manifests().len(), 29, "one manifest per specialist");
+        assert_eq!(manifests().len(), 30, "one manifest per specialist");
         for embedded in manifests() {
             let (name, m) = embedded;
             {
@@ -494,10 +496,12 @@ mod tests {
         // Coded specialists have no model to read a prompt. Billingd publishes
         // no VPP-specific prompt, and importing its EEG prompt is worse than
         // keeping the VPP procedure explicit. The Desk's assistant answers a
-        // person's question across services; no service publishes that.
+        // person's question across services; no service publishes that. The
+        // Einrichtung's pre-fill reads a sentence and reads no service.
         const NO_PROMPT_NEEDED: &[&str] = &[
             "deadline-alert-agent",
             "desk-assistant",
+            "einrichtung-assistent",
             "gabi-gas-agent",
             "vpp-billing-agent",
         ];

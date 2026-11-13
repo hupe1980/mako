@@ -251,7 +251,7 @@ pub enum MesswerteLieferungCommand {
         /// `SG1 RFF+AGI` — the Belegnummer of the ORDERS that ordered these
         /// values, on a **PID 13027** „Werte nach Typ 2" delivery.
         ///
-        /// MSCONS AHB 3.2 §11.2 hint `[574]`: „Wert aus BGM DE1004 der ORDERS
+        /// MSCONS AHB 3.2 Kap. 11.2 hint `[574]`: „Wert aus BGM DE1004 der ORDERS
         /// mit der die Bestellung der Werte nach Typ 2 erfolgt ist". It is the
         /// first hop of the PID overview's `EZ-03` routing and the only thing
         /// on a value delivery that names the subscription it belongs to — a

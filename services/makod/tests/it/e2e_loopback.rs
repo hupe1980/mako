@@ -99,14 +99,16 @@ async fn loopback_round_trip_spawns_process() {
             agency: "293".to_owned(),
             signer: party.signing.key_pair(),
             decrypter: party.encryption.key_pair(),
+            retired_decrypters: Vec::new(),
             tls: party.tls.key_pair(),
         }],
         partners: mako_as4::PartnerDirectory::default(),
         unbekannte_absender: makod::config::UnbekannteAbsender::NurKonfigurierte,
+        de0004_ausnahmen: std::collections::BTreeMap::new(),
     })
     .expect("clients build");
     let malo_sender = makod::malo_ident_sender::MaloIdentSender::new(
-        makod::malo_cache::SlateDbMaloCache::new(store.clone()),
+        makod::malo_cache::SlateDbMaloCache::new(store.clone(), tenant),
         reqwest::Client::new(),
         std::collections::HashMap::new(),
         None,
@@ -135,7 +137,7 @@ async fn loopback_round_trip_spawns_process() {
             "receiver": OWN_NB,
             "malo": malo,
             "process_date": "2026-03-01",
-            // `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 §5.3): the NB
+            // `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 Kap. 5.3): the NB
             // cannot assign the Marktlokation without a Bilanzkreis, so a command
             // that omits it renders a message the pre-send gate dead-letters.
             "bilanzkreis": "11XBK-EEG------Q",

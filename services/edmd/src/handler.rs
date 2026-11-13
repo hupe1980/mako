@@ -199,17 +199,28 @@ pub async fn handle_webhook(
             .checked_add(time::Duration::days(3))
             .unwrap_or(geplant_am);
 
-        if !malo_id.is_empty() {
+        // The role that ordered the reading is the one whose process the
+        // completion came from: the NB's on a 55007 it sent or a 55005 it
+        // confirmed, the LF's on an answer it received or sent.
+        let auftraggeber = auftraggeber_rolle(&event);
+        if auftraggeber.is_none() {
+            warn!(
+                malo_id = %malo_id, pid,
+                "edmd: {label} completion names no marktrole — no reading order without the \
+                 role that orders it"
+            );
+        }
+        if let (false, Some(auftraggeber)) = (malo_id.is_empty(), auftraggeber) {
             let process_id_str = event["subject"].as_str().unwrap_or("").to_owned();
             let pool = state.repo.pool();
-            // 55002/55078/55005/55008 are UTILMD Strom PIDs (GPKE), so the order reads
+            // 55002/55078/55005/55007/55008 are UTILMD Strom PIDs (GPKE), so the order reads
             // an electricity meter; the Gas Lieferbeginn is a 44xxx PID and
             // never reaches this branch.
             let result = sqlx::query(
                 r#"INSERT INTO ablese_auftraege
                    (malo_id, tenant, anlass, auftraggeber_rolle,
                     geplant_am, ausfuehrt_bis, insrpt_process_id, sparte)
-                   VALUES ($1, $2, $3, 'LF', $4, $5, $6, 'STROM')
+                   VALUES ($1, $2, $3, $7, $4, $5, $6, 'STROM')
                    ON CONFLICT DO NOTHING"#,
             )
             .bind(&malo_id)
@@ -222,6 +233,7 @@ pub async fn handle_webhook(
             } else {
                 Some(process_id_str.clone())
             })
+            .bind(auftraggeber)
             .execute(pool)
             .await;
 
@@ -369,6 +381,18 @@ fn ablese_datum(data: &serde_json::Value) -> Option<time::Date> {
         })
 }
 
+/// The Marktrolle that ordered a reading: the `marktrole` marktd sets on its
+/// fan-out from the workflow that completed — `NB` for the NB's own processes
+/// (a 55007 it sent, a 55005 it confirmed), `LF` for the Lieferant's. `None`
+/// when the event names no role this table admits.
+fn auftraggeber_rolle(event: &serde_json::Value) -> Option<&'static str> {
+    match event["marktrole"].as_str()? {
+        "NB" => Some("NB"),
+        "LF" => Some("LF"),
+        _ => None,
+    }
+}
+
 fn ablese_anlass(
     ce_type: &str,
     pid: u32,
@@ -388,6 +412,10 @@ fn ablese_anlass(
         // Lieferant agrees to the NB's Lieferende, after which the NB ends the
         // Zuordnung zum Zuordnungsende (GPKE Teil 2 Kap. 2.5.2.2 Nr. 2, S. 62).
         55005 | 55008 => Some(("LIEFERENDE", "Lieferende")),
+        // 55007 `ohne_antwort`: the LF did not answer in time and the NB ended
+        // the Zuordnung itself (Nr. 3, S. 62). The Ankündigung alone ends
+        // nothing.
+        55007 if data["ohne_antwort"].as_bool() == Some(true) => Some(("LIEFERENDE", "Lieferende")),
         _ => None,
     }
 }
@@ -438,6 +466,21 @@ mod ablese_anlass_tests {
         assert_eq!(ablese_anlass(t, 55009, &completed(55009, false)), None);
     }
 
+    /// An unanswered 55007 ends the Zuordnung as well (GPKE Teil 2 Kap.
+    /// 2.5.2.2 Nr. 3, S. 62): the NB's completion of it orders the
+    /// Schlussablesung; a 55007 that is not that completion orders nothing.
+    #[test]
+    fn an_unanswered_nb_lieferende_orders_the_schlussablesung() {
+        let t = mako_events::mako::PROCESS_COMPLETED;
+        let mut data = completed(55007, true);
+        assert_eq!(ablese_anlass(t, 55007, &data), None);
+        data["ohne_antwort"] = serde_json::json!(true);
+        assert_eq!(
+            ablese_anlass(t, 55007, &data),
+            Some(("LIEFERENDE", "Lieferende"))
+        );
+    }
+
     /// The completions carry the date the process is about as `process_date`
     /// (`CCYYMMDD`, as the UTILMD states it); the reading is planned for it.
     #[test]
@@ -451,6 +494,21 @@ mod ablese_anlass_tests {
             Some(time::macros::date!(2026 - 02 - 01))
         );
         assert_eq!(super::ablese_datum(&serde_json::json!({})), None);
+    }
+
+    /// The NB orders the reading on the 55007 it sent, the LF on its own
+    /// completions; a role the table does not admit orders nothing.
+    #[test]
+    fn the_ordering_role_is_the_completing_process_s() {
+        let nb = serde_json::json!({ "marktrole": "NB", "makopid": 55007 });
+        let lf = serde_json::json!({ "marktrole": "LF", "makopid": 55008 });
+        assert_eq!(super::auftraggeber_rolle(&nb), Some("NB"));
+        assert_eq!(super::auftraggeber_rolle(&lf), Some("LF"));
+        assert_eq!(super::auftraggeber_rolle(&serde_json::json!({})), None);
+        assert_eq!(
+            super::auftraggeber_rolle(&serde_json::json!({ "marktrole": "BIKO" })),
+            None
+        );
     }
 
     #[test]

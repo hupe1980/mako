@@ -82,12 +82,12 @@ DVGW adopted the BDEW CONTRL/APERAK pattern. Those are BDEW formats, specified
 in `edi-energy` profiles and **not** reimplemented in `dvgw-edi`. See
 "Ergänzungsblatt zur APERAK und CONTRL für die Nutzung in GaBi Prozessen".
 
-The CONTRL Empfangsbestätigung obligation (CONTRL AHB 1.0 §2.3.1) is keyed on
+The CONTRL Empfangsbestätigung obligation (CONTRL AHB 1.0 Kap. 2.3.1) is keyed on
 Sparte, so it applies to a DVGW interchange unconditionally — the DVGW formats
 *are* the gas transport layer. `makod` discharges it from the DVGW ingest path;
 the AS4 `eb:Receipt` is a protocol acknowledgement and does not.
 
-The window is six wall-clock hours, except for the one process §2.3.1 singles
+The window is six wall-clock hours, except for the one process Kap. 2.3.1 singles
 out: „beim Prozess der ALOCAT-Übermittlung vom NB an den MGV nach GABi Gas muss
 binnen **45 Minuten** … die zugehörige CONTRL versendet werden." The ingest
 report carries the `BGM` DE 1001 document code of every message it read, so an
@@ -95,7 +95,7 @@ interchange holding an ALOCAT takes the shorter window.
 
 ### 2.4 Test interchanges
 
-`UNB` DE 0035 = `1` marks a test interchange. Allgemeine Festlegungen V6.1d §3
+`UNB` DE 0035 = `1` marks a test interchange. Allgemeine Festlegungen V6.1d Kap. 3
 forbids processing one as production, and DVGW rides the same `UNB` envelope, so
 `makod` refuses a flagged DVGW interchange at the ingest boundary and records a
 dead-letter entry — the same treatment both BDEW doors give it. Without that,

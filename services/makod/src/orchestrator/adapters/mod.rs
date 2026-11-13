@@ -96,6 +96,9 @@ pub(crate) fn lf_vorgangsdaten(
         lfn_mp_id: first
             .and_then(|t| t.party(edi_energy::utilmd_codes::nad::ZUGEHOERIGE_PARTEI))
             .and_then(|p| p.nad.party_id.clone()),
+        // `DTM+206` — the Geräteausbauzeitpunkt a Stilllegung 55007 names and
+        // the LF's 55008 restates (Bedingung `[79]`).
+        geraeteausbaudatum: prozesstag(sg4_dtm(first, dtm::GERAETEAUSBAUDATUM), utilmd_sparte(u))?,
     })
 }
 
@@ -348,7 +351,7 @@ pub(crate) fn ahb_pruefung(msg: &AnyMessage) -> Option<edi_energy::EdiEnergyRepo
 
 /// The findings of `report` that are AHB-Fehler of their class, each with its
 /// [`Fehlerklasse`]: every error but an element „not part of the
-/// Prüfschablone", which § 2.1.2 (S. 11) has the receiver ignore
+/// Prüfschablone", which Kap. 2.1.2 (S. 11) has the receiver ignore
 /// („Informationen, die gemäß des Prüfidentifikators nicht enthalten sein
 /// sollten"), and every Formatbedingung finding, which the validator raises as
 /// a warning.
@@ -377,7 +380,7 @@ pub(crate) fn ahb_findings(
     })
 }
 
-/// What the Verarbeitbarkeitsprüfung's AHB step (APERAK AHB 1.1 § 2.1.2)
+/// What the Verarbeitbarkeitsprüfung's AHB step (APERAK AHB 1.1 Kap. 2.1.2)
 /// found in a message, as far as an APERAK can say it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AhbBefund {
@@ -385,7 +388,7 @@ pub(crate) enum AhbBefund {
     /// rule broken.
     Verarbeitbar,
     /// The AHB-Fehler the APERAK has a code for (Kap. 4.3), every one of them
-    /// (§ 2.1.1, S. 10: „Es sind alle AHB-Fehler anzugeben"), in the order
+    /// (Kap. 2.1.1, S. 10: „Es sind alle AHB-Fehler anzugeben"), in the order
     /// found. Never empty.
     Fehler(Vec<AhbFehler>),
     /// Errors the APERAK names no code for here (a MIG or semantic finding):
@@ -403,7 +406,7 @@ pub(crate) struct AhbFehler {
     /// The rule-id family the finding came from.
     pub(crate) klasse: crate::ingest_dispatcher::Fehlerklasse,
     /// The MIG name of the faulty segment — the obligatory Ortsangabe
-    /// (§ 2.1.2.1).
+    /// (Kap. 2.1.2.1).
     pub(crate) ortsangabe: Option<String>,
     /// The finding, for `FTX+ABO`.
     pub(crate) reason: String,
@@ -1076,6 +1079,7 @@ coverage_table! {
     esa_wertebestellung_registry,
     gabi_gas_allocation_registry,
     gabi_gas_mehr_mindermengen_registry,
+    gabi_gas_mmma_registry,
     gabi_gas_comdis_registry,
     gabi_gas_invoic_registry,
     gabi_gas_nomination_registry,
@@ -1118,6 +1122,7 @@ coverage_table! {
     gpke_lf_anmeldung_registry,
     gpke_lf_neuanlage_antwort_registry,
     gpke_messwerte_registry,
+    gpke_nb_lieferende_antwort_registry(time::OffsetDateTime::UNIX_EPOCH),
     gpke_neuanlage_registry,
     gpke_partin_registry,
     gpke_registry,
@@ -1136,10 +1141,11 @@ coverage_table! {
     mabis_listenabgleich_registry,
     mabis_listenabgleich_korrektur_registry,
     mabis_profil_registry,
+    mabis_profil_reklamation_registry,
     mabis_registry,
-    mabis_summenzeitreihe_registry(time::OffsetDateTime::UNIX_EPOCH),
+    mabis_summenzeitreihe_registry(time::OffsetDateTime::UNIX_EPOCH, None),
     mabis_zp_lifecycle_antwort_registry,
-    mabis_zp_lifecycle_registry,
+    mabis_zp_lifecycle_registry(None),
     wim_geraeteubernahme_registry(time::OffsetDateTime::UNIX_EPOCH, mako_engine::types::Sparte::Strom),
     wim_insrpt_registry(time::OffsetDateTime::UNIX_EPOCH, mako_engine::types::Sparte::Strom, mako_fristen::antwort::Messtechnik::RlmOderImsMsHs),
     wim_invoic_comdis_registry,
@@ -1172,6 +1178,8 @@ coverage_table! {
 /// | Place | Qualifier | `Rechnung` field |
 /// |---|---|---|
 /// | 00004 `BGM` | DE 1004; DE 1001 `457`/`Z25` | `rechnungsnummer`; `ist_storno` |
+/// | 00022/00023 `NAD+MS`, `SG3 RFF` | C080, C059, 3164, 3251, 3207; `VA` / `FC` | `rechnungsersteller` — name, `adresse`, `umsatzsteuer_id`, Steuernummer as [`STEUERNUMMER_ATTRIBUT`] |
+/// | 00026/00027 `NAD+MR`, `SG3 RFF` | as above | `rechnungsempfaenger` |
 /// | 00005 `DTM` | `137` (Rechnungsdatum) | `rechnungsdatum` |
 /// | 00007/00008 `DTM` | `155`/`156`, or `Z42`/`Z43` on an Abschlag | `rechnungsperiode` |
 /// | 00014 `IMD` | DE 7081 | `netznutzungrechnungstyp` |
@@ -1181,6 +1189,13 @@ coverage_table! {
 /// | 00034–00044 | `LIN`, `QTY+47`/`+136`/`+Z17`, `DTM+155`/`156`, `MOA+203`, `PRI+CAL`, `TAX` | `rechnungspositionen` — the price times the Korrekturfaktor |
 /// | 00052 / 00053 / 00057 `MOA` | `77` / `113` / `9` | `gesamtbrutto` / `vorauszahlungen` / `zu_zahlen` |
 /// | 00058/00061/00062 | `TAX`, `MOA+125`, `MOA+161` per rate | `steuerbetraege`; their sums `gesamtnetto` / `gesamtsteuer` |
+///
+/// BO4E has no field for the `RFF+FC` Steuernummer nor for the `TAX` DE 5305
+/// Steuerkategorie, and both are § 14 Abs. 4 UStG facts the recipient's
+/// invoice check reads (Nr. 2; Nr. 8 and the Umsatzsteuersatz of
+/// `E_0264` Prüfschritt 330). They ride as `ZusatzAttribut`e under
+/// [`STEUERNUMMER_ATTRIBUT`] and [`STEUERKATEGORIE_ATTRIBUT`], the names
+/// `invoic_checker::ustg` reads.
 ///
 /// A period's `DTM` bounds are instants at 00:00 gesetzlicher Zeit, the Ende
 /// exclusive (MIG 2.8e 00007/00008); BO4E's `Zeitraum` is inclusive on both
@@ -1280,6 +1295,8 @@ pub(crate) fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
             .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("OI"))
             .and_then(|s| s.component_str(0, 1))
             .map(str::to_owned),
+        rechnungsersteller: partei(header, "MS"),
+        rechnungsempfaenger: partei(header, "MR"),
         marktlokation: header
             .iter()
             .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))
@@ -1300,6 +1317,83 @@ pub(crate) fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
         rechnungspositionen: (!rechnungspositionen.is_empty()).then_some(rechnungspositionen),
         ..Default::default()
     }
+}
+
+/// The `ZusatzAttribut` name of the `SG3 RFF+FC` Steuernummer on a
+/// `Geschaeftspartner` — `invoic_checker::ustg::STEUERNUMMER_ATTRIBUT`.
+pub(crate) const STEUERNUMMER_ATTRIBUT: &str = "mako:steuernummer";
+
+/// The `ZusatzAttribut` name of the `TAX` DE 5305 Steuerkategorie on a
+/// `Steuerbetrag` — `invoic_checker::ustg::STEUERKATEGORIE_ATTRIBUT`.
+pub(crate) const STEUERKATEGORIE_ATTRIBUT: &str = "mako:steuerkategorie";
+
+fn attribut(name: &str, wert: &str) -> bo4e::ZusatzAttribut {
+    bo4e::ZusatzAttribut {
+        name: Some(name.to_owned()),
+        wert: Some(serde_json::Value::from(wert)),
+        ..Default::default()
+    }
+}
+
+/// `SG2 NAD+<qualifier>` and the `SG3 RFF`s right after it, as the party it
+/// names (MIG 2.8e 00022/00023, 00026/00027; Allgemeine Festlegungen 6.1d
+/// Kap. 2.16/2.17 for C080 and C059).
+///
+/// - C080: under `Z01` the first DE 3036 is the Familienname and the second
+///   the Vorname; otherwise the first two are the Firmenbezeichnung, Teil 1
+///   and Teil 2.
+/// - C059: `Postfach` in the first DE 3042 makes the second the
+///   Postfachnummer; otherwise the first two are the Straßenname, the third
+///   the Hausnummer, the fourth the Ortsteil.
+fn partei(header: &[OwnedSegment], qualifier: &str) -> Option<Box<bo4e::Geschaeftspartner>> {
+    let i = header
+        .iter()
+        .position(|s| s.tag == "NAD" && s.component_str(0, 0) == Some(qualifier))?;
+    let nad = &header[i];
+    let wert = |e: usize, c: usize| {
+        nad.component_str(e, c)
+            .filter(|v| !v.trim().is_empty())
+            .map(str::to_owned)
+    };
+    let teile = |e: usize| {
+        Some(
+            [nad.component_str(e, 0), nad.component_str(e, 1)]
+                .into_iter()
+                .flatten()
+                .collect::<String>(),
+        )
+        .filter(|v| !v.trim().is_empty())
+    };
+    let person = nad.component_str(3, 5) == Some("Z01");
+    let postfach = nad.component_str(4, 0) == Some("Postfach");
+    let landescode = wert(8, 0).and_then(|l| serde_json::from_value(l.into()).ok());
+    let sg3 = header[i + 1..].iter().take_while(|s| s.tag == "RFF");
+    let rff = |q: &str| {
+        sg3.clone()
+            .find(|s| s.component_str(0, 0) == Some(q))
+            .and_then(|s| s.component_str(0, 1))
+            .filter(|v| !v.trim().is_empty())
+            .map(str::to_owned)
+    };
+    let steuernummer = rff("FC");
+    Some(Box::new(bo4e::Geschaeftspartner {
+        organisationsname: if person { None } else { teile(3) },
+        nachname: if person { wert(3, 0) } else { None },
+        vorname: if person { wert(3, 1) } else { None },
+        adresse: Some(bo4e::Adresse {
+            strasse: if postfach { None } else { teile(4) },
+            hausnummer: if postfach { None } else { wert(4, 2) },
+            ortsteil: if postfach { None } else { wert(4, 3) },
+            postfach: if postfach { wert(4, 1) } else { None },
+            ort: wert(5, 0),
+            postleitzahl: wert(7, 0),
+            landescode,
+            ..Default::default()
+        }),
+        umsatzsteuer_id: rff("VA"),
+        zusatz_attribute: steuernummer.map(|nr| vec![attribut(STEUERNUMMER_ATTRIBUT, &nr)]),
+        ..Default::default()
+    }))
 }
 
 /// `IMD` DE 7081 as the BO4E Rechnungstyp it names (MIG 2.8e 00014).
@@ -1332,10 +1426,11 @@ fn build_steuerbetraege(summary: &[OwnedSegment]) -> Vec<bo4e::Steuerbetrag> {
             .iter()
             .position(|s| s.tag == "TAX")
             .unwrap_or(rest.len())];
-        let (steuerart, steuersatz) = tax(seg);
+        let (steuerart, steuersatz, kategorie) = tax(seg);
         out.push(bo4e::Steuerbetrag {
             steuerart: Some(steuerart),
             steuersatz,
+            zusatz_attribute: kategorie,
             basiswert: moa(group, "125").and_then(|b| b.wert),
             steuerwert: moa(group, "161").and_then(|b| b.wert),
             ..Default::default()
@@ -1344,18 +1439,27 @@ fn build_steuerbetraege(summary: &[OwnedSegment]) -> Vec<bo4e::Steuerbetrag> {
     out
 }
 
-/// `TAX` C243 DE 5278 (the rate) and DE 5305 (`AE` reverse charge).
-fn tax(seg: &OwnedSegment) -> (bo4e::Steuerart, Option<Decimal>) {
+/// `TAX` C243 DE 5278 (the rate) and DE 5305, the Steuerkategorie — `S`,
+/// `O` or `AE` (reverse charge) — as [`STEUERKATEGORIE_ATTRIBUT`].
+fn tax(
+    seg: &OwnedSegment,
+) -> (
+    bo4e::Steuerart,
+    Option<Decimal>,
+    Option<Vec<bo4e::ZusatzAttribut>>,
+) {
     let satz = seg.component_str(4, 3).and_then(decimal);
-    let art = if seg
-        .component_str(5, 0)
-        .is_some_and(|k| k.eq_ignore_ascii_case("AE"))
-    {
+    let kategorie = seg.component_str(5, 0).filter(|k| !k.is_empty());
+    let art = if kategorie.is_some_and(|k| k.eq_ignore_ascii_case("AE")) {
         bo4e::Steuerart::Rcv
     } else {
         bo4e::Steuerart::Ust
     };
-    (art, satz)
+    (
+        art,
+        satz,
+        kategorie.map(|k| vec![attribut(STEUERKATEGORIE_ATTRIBUT, k)]),
+    )
 }
 
 /// One `SG26`, `LIN` up to the next `LIN` or `UNS`.
@@ -1408,10 +1512,11 @@ fn build_position(group: &[OwnedSegment]) -> bo4e::Rechnungsposition {
             }),
         gesamtpreis: moa(group, "203"),
         steuerbetrag: group.iter().find(|s| s.tag == "TAX").map(|s| {
-            let (steuerart, steuersatz) = tax(s);
+            let (steuerart, steuersatz, kategorie) = tax(s);
             bo4e::Steuerbetrag {
                 steuerart: Some(steuerart),
                 steuersatz,
+                zusatz_attribute: kategorie,
                 ..Default::default()
             }
         }),
@@ -1537,7 +1642,7 @@ fn rff_ace(segs: &[OwnedSegment]) -> Option<String> {
 /// Technik.
 ///
 /// **One PID, five Use-Cases.** The recipient's Marktrolle narrows 31009 to at
-/// most two (§2.13 gives every Marktrolle its own MP-ID); this element picks
+/// most two (Kap. 2.13 gives every Marktrolle its own MP-ID); this element picks
 /// between those. `TEC` is a Leistung of the MSB's Preisblatt B and resolves to
 /// `E_0273`/`E_0270`, where `MSB` resolves to `E_0566`/`E_0210` — trees whose
 /// codes mean something else. See `mako_pruefung::codes::rechnungspruefung`.
@@ -1574,7 +1679,7 @@ fn edifact_date_to_date(yyyymmdd: &str) -> Option<time::Date> {
 //   QTY+Z08:{value} — Abrechnungsbrennwert (kWh/m³)
 //   QTY+Z10:{value} — Zustandszahl (dimensionless compressibility factor)
 //
-// Source: Allgemeine Festlegungen V6.1d §6 / MSCONS AHB Gas 1.x.
+// Source: Allgemeine Festlegungen V6.1d Kap. 6 / MSCONS AHB Gas 1.x.
 
 /// Extract Abrechnungsbrennwert from `QTY+Z08` in a Gas MSCONS.
 ///
@@ -2526,6 +2631,95 @@ mod fernsteuerbarkeit_tests {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod rechnung_ustg_tests {
+    use super::*;
+
+    fn segments(nachricht: &str) -> Vec<OwnedSegment> {
+        edifact_rs::from_bytes(nachricht.as_bytes())
+            .map(|s| s.map(edifact_rs::Segment::into_owned))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("the message parses")
+    }
+
+    /// An INVOIC 31009 stating every § 14 Abs. 4 UStG Angabe, the
+    /// Steuernummer as `RFF+FC` (MIG 2.8e S. 30: the Rechnungssteller chooses
+    /// `FC` or `VA`).
+    const INVOIC: &str = "BGM+380+RE-2026-0001'\
+        DTM+137:202604010000?+00:303'\
+        DTM+155:202602282300?+00:303'\
+        DTM+156:202603312200?+00:303'\
+        NAD+MS+9900000000003::293++Messstellenbetrieb GmbH:::::Z02+Hauptstraße::1+Köln++50667+DE'\
+        RFF+FC:123/456/78901'\
+        NAD+MR+9900000000010::293++Energieservice AG:::::Z02+Postfach:4711+Bonn++53111+DE'\
+        LIN+1++9990001100002:Z01'\
+        QTY+47:31:DAY'\
+        MOA+203:13.95'\
+        PRI+CAL:0.45'\
+        TAX+7+VAT+++:::19+S'\
+        UNS+S'\
+        MOA+77:16.60'\
+        TAX+7+VAT+++:::19+S'\
+        MOA+125:13.95'\
+        MOA+161:2.65'";
+
+    /// The adapter writes the Steuernummer and the Steuerkategorie under the
+    /// names `invoic_checker::ustg` reads, so the recipient's Prüfschritt 10
+    /// finds every Angabe the message states and 330 can read the category.
+    #[test]
+    fn the_inbound_rechnung_carries_every_pflichtangabe_the_checker_reads() {
+        assert_eq!(
+            STEUERNUMMER_ATTRIBUT,
+            invoic_checker::ustg::STEUERNUMMER_ATTRIBUT
+        );
+        assert_eq!(
+            STEUERKATEGORIE_ATTRIBUT,
+            invoic_checker::ustg::STEUERKATEGORIE_ATTRIBUT
+        );
+        let r = build_rechnung(&segments(INVOIC));
+        assert_eq!(
+            invoic_checker::ustg::ustg_14_4_maengel(&r),
+            Vec::<String>::new(),
+            "{r:#?}"
+        );
+        let ersteller = r.rechnungsersteller.as_deref().expect("NAD+MS");
+        assert_eq!(
+            ersteller.organisationsname.as_deref(),
+            Some("Messstellenbetrieb GmbH")
+        );
+        let adresse = ersteller.adresse.as_ref().expect("Anschrift");
+        assert_eq!(adresse.strasse.as_deref(), Some("Hauptstraße"));
+        assert_eq!(adresse.hausnummer.as_deref(), Some("1"));
+        let empfaenger = r.rechnungsempfaenger.as_deref().expect("NAD+MR");
+        assert_eq!(
+            empfaenger.organisationsname.as_deref(),
+            Some("Energieservice AG")
+        );
+        assert_eq!(
+            empfaenger
+                .adresse
+                .as_ref()
+                .and_then(|a| a.postfach.as_deref()),
+            Some("4711")
+        );
+        let position = &r.rechnungspositionen.as_deref().expect("SG26")[0];
+        let steuer = position.steuerbetrag.as_ref().expect("SG34 TAX");
+        assert_eq!(
+            invoic_checker::ustg::steuerkategorie(steuer).as_deref(),
+            Some("S")
+        );
+    }
+
+    /// Without the `SG3 RFF` the leistende Unternehmer states neither number,
+    /// and the check names § 14 Abs. 4 Nr. 2.
+    #[test]
+    fn an_invoice_without_steuernummer_or_ust_id_lacks_nr_2() {
+        let r = build_rechnung(&segments(&INVOIC.replace("RFF+FC:123/456/78901'", "")));
+        let m = invoic_checker::ustg::ustg_14_4_maengel(&r);
+        assert!(m.iter().any(|m| m.starts_with("Nr. 2")), "{m:?}");
+    }
+}
 
 #[cfg(test)]
 mod coverage_table_tests {

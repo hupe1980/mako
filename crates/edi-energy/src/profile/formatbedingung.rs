@@ -152,7 +152,7 @@ pub fn evaluate(id: &str, value: &str) -> FormatVerdict {
 
         // ── Identifiers ───────────────────────────────────────────────────
         // BDEW Anwendungshilfe „Identifikatoren in der Marktkommunikation"
-        // v1.2, which `rubo4e::identifiers` implements including the § 8.2
+        // v1.2, which `rubo4e::identifiers` implements including the Kap. 8.2
         // check-digit procedure. Delegating rather than restating it is what
         // keeps one scheme from being spelled twice.
         "922" => id_shape::<rubo4e::identifiers::TrId>(value, "a TR-ID"),

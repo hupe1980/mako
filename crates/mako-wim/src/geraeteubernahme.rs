@@ -52,7 +52,7 @@
 //! ORDERS and ORDRSP are Sparte-neutral AHBs: 17001, 17009 and the answers
 //! 19001/19002/19015/19016 carry the Strom **and** the Gas Use-Case. Nothing in
 //! the message body says which — the Sparte is the Sparte of the interchange
-//! recipient's MP-ID (BDEW Allgemeine Festlegungen §2.13) and it decides the
+//! recipient's MP-ID (BDEW Allgemeine Festlegungen Kap. 2.13) and it decides the
 //! Entscheidungsbaum, hence the Codeliste `SG2 AJT` DE 1082 must name:
 //!
 //! | Leg | Strom tree | Strom DE 1082 | Gas tree | Gas DE 1082 |
@@ -498,6 +498,31 @@ pub struct Ansprechpartner {
     pub name: String,
     /// One `COM` each; at least one, and each code at most once (`[1P0..1]`).
     pub kommunikation: Vec<Kommunikationsweg>,
+}
+
+impl Ansprechpartner {
+    /// The `CTA`/`COM` group as the outbound payload carries it.
+    #[must_use]
+    pub fn to_payload(&self) -> mako_engine::payload::Ansprechpartner {
+        mako_engine::payload::Ansprechpartner {
+            name: self.name.clone(),
+            kommunikation: self
+                .kommunikation
+                .iter()
+                .map(|k| mako_engine::payload::Kommunikationsweg {
+                    art: match k {
+                        Kommunikationsweg::Email(_) => "email",
+                        Kommunikationsweg::Telefon(_) => "telefon",
+                        Kommunikationsweg::Telefax(_) => "telefax",
+                        Kommunikationsweg::WeiteresTelefon(_) => "weiteres_telefon",
+                        Kommunikationsweg::Handy(_) => "handy",
+                    }
+                    .to_owned(),
+                    adresse: k.adresse().to_owned(),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// A `COM` channel: DE 3155 the code, DE 3148 the address.
@@ -972,29 +997,22 @@ fn ordrsp_antwort(
         WorkflowError::rejected(format!("{tree} {} names no Codeliste", code.code))
     })?;
 
-    let mut payload = serde_json::json!({
-        "pid":               antwort_pid,
-        "sender":            data.msba.as_str(),
-        "receiver":          data.msbn.as_str(),
-        "melo":              data.melo_id.as_str(),
-        "antwort_code":      code.code,
-        "antwort_codeliste": codeliste,
-        "antwort_tree":      tree,
-        "order_reference":   data.orders_nummer,
-    });
-    if let Some(dokumentcode) = ordrsp_dokumentcode(antwort_pid) {
-        payload["document_code"] = serde_json::Value::String(dokumentcode.to_owned());
-    }
-    if let Some(ref t) = data.termin {
-        payload["termin"] = serde_json::Value::String(t.clone());
-    }
-    if let Some(text) = bemerkung {
-        payload["bemerkung"] = serde_json::Value::String(text.to_owned());
-    }
+    // No column of ORDRSP AHB 1.1b Kap. 4.9.2 / 4.10 carries a free text
+    // beside `AJT`, so the Bemerkung a code requires stays in the process.
+    let mut payload = mako_engine::payload::OrdrspPayload {
+        pid: Some(antwort_pid),
+        sender: Some(data.msba.as_str().to_owned()),
+        receiver: Some(data.msbn.as_str().to_owned()),
+        antwort_code: Some(code.code.to_owned()),
+        antwort_codeliste: Some(codeliste.to_owned()),
+        order_reference: Some(data.orders_nummer.clone()),
+        document_code: ordrsp_dokumentcode(antwort_pid).map(str::to_owned),
+        ..Default::default()
+    };
     angaben_payload(&mut payload, data, antwort_pid, code.code, angaben)?;
 
     let abgelehnt = ist_ablehnung(antwort_pid);
-    let mut outbox = vec![PendingOutbox::new("ORDRSP", data.msbn.as_str(), payload).caused_by(0)];
+    let mut outbox = vec![PendingOutbox::typed(data.msbn.as_str(), &payload).caused_by(0)];
     // A refusal ends the process here, and the code is the verdict a reader
     // of the process wants beside it — worded within the Codeliste the
     // ORDRSP names, never by a code alone.
@@ -1041,7 +1059,7 @@ fn ordrsp_antwort(
 /// * **19015 with `ZB5`** — `SG3 NAD+Z22` Lieferadresse für Altgeräte (`[41]`).
 /// * **19016 with `Z07`** — `SG3 NAD+VY` with the Eigentümer's MP-ID (`[42]`).
 fn angaben_payload(
-    payload: &mut serde_json::Value,
+    payload: &mut mako_engine::payload::OrdrspPayload,
     data: &GeraeteubernahmeData,
     antwort_pid: u32,
     code: &str,
@@ -1065,7 +1083,9 @@ fn angaben_payload(
         (true, Some(a)) if a.kommunikation.is_empty() => {
             return refuse("SG6 COM ist Muss — der Ansprechpartner nennt keinen Kommunikationsweg");
         }
-        (true, Some(a)) => payload["ansprechpartner"] = serde_json::json!(a),
+        (true, Some(a)) => {
+            payload.ansprechpartner = Some(a.to_payload());
+        }
         (false, Some(_)) => {
             return refuse("SG6 CTA/COM steht nur auf 19001/19002");
         }
@@ -1075,11 +1095,19 @@ fn angaben_payload(
         let Some(termin) = &data.termin else {
             return refuse("DTM+203 Ausführungsdatum ist Muss, und die ORDERS 17001 nannte keines");
         };
-        payload["ausfuehrungsdatum"] = serde_json::Value::String(termin.clone());
-        payload["sparte"] = serde_json::json!(data.sparte);
+        payload.ausfuehrungsdatum = Some(termin.clone());
+        payload.sparte = Some(data.sparte);
     }
     match (code, &angaben.lieferadresse) {
-        ("ZB5", Some(a)) => payload["lieferadresse"] = serde_json::json!(a),
+        ("ZB5", Some(a)) => {
+            payload.lieferadresse = Some(mako_engine::payload::Lieferadresse {
+                name: a.name.clone(),
+                strasse: a.strasse.clone(),
+                ort: a.ort.clone(),
+                postleitzahl: a.postleitzahl.clone(),
+                land: a.land.clone(),
+            });
+        }
         ("ZB5", None) => {
             return refuse("SG3 NAD+Z22 Lieferadresse für Altgeräte ist Muss [41] und fehlt");
         }
@@ -1088,7 +1116,7 @@ fn angaben_payload(
     }
     match (code, &angaben.eigentuemer) {
         ("Z07", Some(mp)) => {
-            payload["eigentuemer"] = serde_json::Value::String(mp.as_str().to_owned());
+            payload.eigentuemer = Some(mp.as_str().to_owned());
         }
         ("Z07", None) => {
             return refuse("SG3 NAD+VY mit der MP-ID des Eigentümers ist Muss [42] und fehlt");
@@ -1120,7 +1148,7 @@ fn aperak(
             r,
         ),
         // Gas has no Anerkennungsmeldung: a processable message is acknowledged
-        // by the Frist lapsing in silence (APERAK AHB 1.1 §2.3). The decision is
+        // by the Frist lapsing in silence (APERAK AHB 1.1 Kap. 2.3). The decision is
         // still recorded for the ERP; it never reaches the wire.
         None if !mako_fristen::aperak_hat_anerkennungsmeldung(sparte == Sparte::Gas) => {
             AperakPayload::anerkennung(from.as_str(), to.as_str(), orders_ref).off_the_wire()
@@ -1559,7 +1587,17 @@ mod tests {
         assert_eq!(out.outbox[0].payload["pid"], 19_001);
         assert_eq!(out.outbox[0].payload["antwort_code"], "Z13");
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "S_0067");
-        assert_eq!(out.outbox[0].payload["antwort_tree"], "E_0247");
+        assert_eq!(
+            out.events[0].antwort().and_then(|a| a.codeliste).as_deref(),
+            Some("E_0247")
+        );
+        // The entry reads back as the ORDRSP's typed payload, naming the
+        // ORDERS it answers in `SG1 RFF+ON`.
+        use mako_engine::payload::OutboundPayload as _;
+        let typed = mako_engine::payload::OrdrspPayload::from_payload(&out.outbox[0].payload)
+            .expect("an ORDRSP payload");
+        assert!(typed.order_reference.is_some());
+        assert_eq!(typed.ausfuehrungsdatum.as_deref(), Some("20260401"));
     }
 
     /// The cluster picks the PID. `Z32` is an Ablehnung, so it rides 19002 —
@@ -1596,7 +1634,11 @@ mod tests {
                 },
             )
             .expect("Z13");
-            assert_eq!(out.outbox[0].payload["antwort_tree"], ebd, "{sparte}");
+            assert_eq!(
+                out.events[0].antwort().and_then(|a| a.codeliste).as_deref(),
+                Some(ebd),
+                "{sparte}"
+            );
             assert_eq!(out.outbox[0].payload["antwort_codeliste"], codeliste);
         }
     }
@@ -1683,7 +1725,7 @@ mod tests {
     }
 
     /// Gas has no Anerkennungsmeldung: a processable Gas ORDERS is acknowledged
-    /// by the APERAK Frist lapsing in silence (APERAK AHB 1.1 §2.3). The
+    /// by the APERAK Frist lapsing in silence (APERAK AHB 1.1 Kap. 2.3). The
     /// decision is still recorded; `suppress_wire` keeps it off the wire.
     #[test]
     fn gas_suppresses_the_positive_aperak() {

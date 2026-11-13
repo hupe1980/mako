@@ -49,7 +49,10 @@ fn command_state(
             makod::cedar_authz::CedarAuthorizer::unauthenticated().expect("infallible"),
         ),
         snapshot_store: store.as_snapshot_store(),
-        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new((**store).clone())),
+        malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
+            (**store).clone(),
+            tenant,
+        )),
         maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((**store).clone()),
         store: Arc::clone(store),
         marktd_client: None,
@@ -102,7 +105,7 @@ async fn relay_pending(
         // never ran at all. Acknowledged here so the loopback stays a *wire*
         // relay; the notification contract itself is pinned in `mako-wim`.
         // The Anerkennungsmeldung every processed Strom message is owed
-        // (APERAK AHB 1.1 § 2.4) answers the relay's own messages; it opens no
+        // (APERAK AHB 1.1 Kap. 2.4) answers the relay's own messages; it opens no
         // step of the handshake under test.
         if matches!(&*om.message_type, "ProcessInitiated" | "APERAK") {
             OutboxStore::acknowledge(&**store, om.message_id)
@@ -166,7 +169,7 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
         tenant_esa,
     );
     // No ESA-partner registration is needed: REQOTE 35003 is ESA-specific
-    // (REQOTE AHB 1.2 §4.3, Kommunikation *ESA an MSB*), so the MSB routes it on
+    // (REQOTE AHB 1.2 Kap. 4.3, Kommunikation *ESA an MSB*), so the MSB routes it on
     // the Prüfidentifikator alone — the Preisanfrage family uses
     // 35001/35002/35004/35005 and the two never share a PID.
     let dispatcher_msb = EdifactIngestDispatcher::new(
@@ -205,7 +208,7 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
     //    REQOTE Belegnummer it echoes in `RFF+AAV` (`ZG-T16`).
     // The Angebot is a **priced** offer: UC 4.1.1 has the ESA asking for „die
     // Übermittlung von Werten und die damit verbundenen Kosten", and QUOTES AHB
-    // 1.1a §4.3 makes `SG4 CUX`, the `PIA+Z02` Artikel-IDs, the `SG31 PRI+CAL`
+    // 1.1a Kap. 4.3 makes `SG4 CUX`, the `PIA+Z02` Artikel-IDs, the `SG31 PRI+CAL`
     // prices and the `PIA+5 …:SRW` OBIS-Kennzahlen all Muss. That is also what
     // tells an Angebot from an Ablehnung — `DTM+273` is Muss on both.
     dispatch_command(

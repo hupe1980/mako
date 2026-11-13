@@ -12,42 +12,30 @@
 
 use super::*;
 
-/// Render an INSRPT status/inspection message from domain-intent JSON.
+/// Render an INSRPT status/inspection message from its [`InsrptPayload`].
 ///
-/// | Field           | Required | Description                                      |
-/// |-----------------|----------|--------------------------------------------------|
-/// | `pid`           | yes      | Prüfidentifikator → `BGM` DE1004 and `RFF+Z13`   |
-/// | `melo`          | yes      | Addressed Messlokation → SG8 `LOC+172`           |
-/// | `sender`        | no       | Sender MP-ID (falls back to the primary MP-ID)   |
-/// | `receiver`      | no       | Receiver MP-ID (falls back to `msg.recipient`)   |
-/// | `doc_reference` | no       | SG3 `DOC` Referenz (default qualifier `Z41`)     |
-/// | `status_code`   | no       | SG7 `STS` Statuscode (default `Z01`)             |
-/// | `position`      | no       | SG7 `LIN` Positionsnummer (default `1`)          |
-/// | `document_date` | no       | `DTM+137` date (defaults to today at dispatch)   |
-/// | `message_ref`   | no       | Derived from `causation_event_id` when absent    |
+/// [`InsrptPayload`]: mako_engine::payload::InsrptPayload
 pub(super) fn render_insrpt(
     p: &serde_json::Value,
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
 ) -> Result<RenderedInterchange, RenderError> {
     let mt = "INSRPT";
+    let p: mako_engine::payload::InsrptPayload = super::typed_payload(p)?;
 
-    let pid = require_u32(p, mt, "pid")?;
-    let melo = require_str(p, mt, "melo")?;
-    let sender = p
-        .get("sender")
-        .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_mp_id());
-    let receiver = p
-        .get("receiver")
-        .and_then(|v| v.as_str())
-        .unwrap_or(msg.recipient.as_ref());
+    let pid = checked_pid(Some(p.pid), mt)?.unwrap_or(p.pid);
+    if p.melo.is_empty() {
+        return Err(RenderError::MissingField {
+            message_type: mt.into(),
+            field: "melo".into(),
+        });
+    }
+    let sender = text(&p.sender).unwrap_or_else(|| registry.primary_mp_id());
+    let receiver = text(&p.receiver).unwrap_or(msg.recipient.as_ref());
 
     let release = release_for(msg, MessageType::Insrpt, ReleaseTrack::Short)?;
 
-    let message_ref = p
-        .get("message_ref")
-        .and_then(|v| v.as_str())
+    let message_ref = text(&p.message_ref)
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
@@ -62,51 +50,26 @@ pub(super) fn render_insrpt(
         .document_code("4")
         .document_id(document_id)
         .pruefidentifikator(pid)
-        .position(
-            p.get("position")
-                .and_then(|v| v.as_str())
-                .unwrap_or("1")
-                .to_owned(),
-        )
+        .position(text(&p.position).unwrap_or("1").to_owned())
         // `SG7 STS+Z06` Gerätestatus: `Z11` gestört (the Störungsmeldung's
         // own state), `Z12` the other one the column admits.
-        .status(
-            p.get("status_code")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Z11")
-                .to_owned(),
-        )
+        .status(text(&p.status_code).unwrap_or("Z11").to_owned())
         // `SG5 NAD+MS` + `CTA`/`COM` — the sender's Ansprechpartner, Muss.
         .contact(
-            p.get("contact")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Service"),
-            p.get("contact_comm")
-                .and_then(|v| v.as_str())
-                .unwrap_or(sender),
+            text(&p.contact).unwrap_or("Service"),
+            text(&p.contact_comm).unwrap_or(sender),
         )
-        .location("172", melo);
+        .location("172", &p.melo);
 
-    // `DOC` is mandatory; default its reference to the process' own PID so a
-    // caller that has no external Förderreferenz still produces a valid message.
-    // `SG3 DOC` — DE 1001 `21` is the one code the column admits.
-    let (doc_qualifier, doc_id) = match p.get("doc_reference") {
-        Some(serde_json::Value::String(id)) => ("21".to_owned(), id.clone()),
-        Some(serde_json::Value::Object(o)) => (
-            o.get("qualifier")
-                .and_then(|v| v.as_str())
-                .unwrap_or("21")
-                .to_owned(),
-            o.get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&pid.to_string())
-                .to_owned(),
-        ),
-        _ => ("21".to_owned(), pid.to_string()),
-    };
-    builder = builder.doc_reference(doc_qualifier, doc_id);
+    // `SG3 DOC` is mandatory and DE 1001 `21` the one code the column admits;
+    // its reference defaults to the process' own PID so a caller with no
+    // external Förderreferenz still produces a valid message.
+    builder = builder.doc_reference(
+        "21".to_owned(),
+        text(&p.doc_reference).map_or_else(|| pid.to_string(), str::to_owned),
+    );
 
-    if let Some(d) = p.get("document_date").and_then(|v| v.as_str()) {
+    if let Some(d) = text(&p.document_date) {
         builder = builder.document_date(dokumentdatum_303("INSRPT", d)?);
     }
 

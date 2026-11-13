@@ -47,10 +47,13 @@ export const FREIGABE = {
 const fixture = (name: string): unknown =>
   JSON.parse(readFileSync(resolve(FIXTURES, name), "utf8"));
 const PROBE = fixture("probe-44004-abgelehnt.json");
+/** agentd's answer to the Einrichtung's pre-fill run (desk/fixtures/, held to agentd). */
+export const VORBELEGT = fixture("vorbelegen.json");
 
 // What each typed tool answers, by name; any other read is a process's Verlauf, empty.
 const ANTWORTEN: Record<string, unknown> = {
   einrichtung_checkliste: fixture("einrichtung-checkliste.json"),
+  einrichtung_vorschlag: fixture("einrichtung-vorschlag.json"),
   list_pending_approvals: { freigaben: [FREIGABE], count: 1, saturated: false },
   list_disputes: { disputes: [], count: 0, saturated: false },
   list_review_queue: { records: [], count: 0, saturated: false },
@@ -102,6 +105,25 @@ export async function aufnehmen(context: BrowserContext, run: string): Promise<v
       if (pathname.startsWith("/svc/makod/api/v1/probe/")) return route.fulfill(json(PROBE));
       if (pathname === "/svc/agentd/api/v1/agents/catalog")
         return route.fulfill({ contentType: "application/json", body: katalog });
+      if (
+        pathname === "/svc/agentd/api/v1/runs" &&
+        req.method() === "POST" &&
+        JSON.parse(req.postData() ?? "{}").agent === "einrichtung-assistent"
+      )
+        return route.fulfill(
+          json(
+            [
+              {
+                agent_name: "einrichtung-assistent",
+                run_id: "vorbelegen",
+                fresh: true,
+                retryable: false,
+              },
+            ],
+            202,
+          ),
+        );
+      if (pathname.endsWith("/vorbelegen/antwort")) return route.fulfill(json(VORBELEGT));
       if (pathname === "/svc/agentd/api/v1/runs" && req.method() === "POST")
         return route.fulfill(
           json([{ agent_name: "desk-assistant", run_id: run, fresh: true, retryable: false }], 202),

@@ -64,7 +64,6 @@ fn summed_series_payload(pid: u32) -> serde_json::Value {
         "pid": pid,
         "sender_mp_id": "9900357000004",
         "receiver_mp_id": "9900077000006",
-        "bilanzierungsgebiet_id": "DE0011YAPG4",
         "mabis_zp_id": "DE0004030099000000000000000012345",
         "obis_code": "1-1:1.29.0",
         "balancing_period": "202606",
@@ -97,7 +96,7 @@ fn arbeit_payload(pid: u32, with_maxima: bool) -> serde_json::Value {
         "sender_mp_id": "9900357000004",
         "receiver_mp_id": "9900077000006",
         "malo_id": "51238696781",
-        "order_reference": "BESTELLUNG-2026-1",
+        "korrelation_ref": "BESTELLUNG-2026-1",
         "arbeit": {
             "quantity": "184500.000",
             "from": "202512312300+00",

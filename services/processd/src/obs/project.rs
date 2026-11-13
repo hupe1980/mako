@@ -288,7 +288,7 @@ pub const FAMILIES: [&str; 10] = [
 /// An explicit `data.sparte` (`STROM` / `GAS`) wins. Otherwise the coding
 /// authority of the counterparty's MP-ID decides: a BDEW-Codenummer (NAD
 /// DE3055 `293`) is a Strom market partner, a DVGW-Codenummer (`332`) a Gas
-/// one (BDEW-AWH Identifikatoren V1.2 §2.2: „Für jede Sparte (Gas bzw. Strom)
+/// one (BDEW-AWH Identifikatoren V1.2 Kap. 2.2: „Für jede Sparte (Gas bzw. Strom)
 /// und jede Rolle hat ein Marktteilnehmer genau eine MP-ID"). A GS1 GLN names
 /// no Sparte, and neither does an absent or malformed MP-ID.
 fn event_sparte(
@@ -392,7 +392,7 @@ fn derive_family(
         31011 => "geli-gas",         // INVOIC AWH Sperrprozesse Gas (GNB→LFG)
         // ── WiM Gas — Messstellenbetrieb Gas (AWH WiM Gas 2.0) ───────────────
         44039..=44053 | 44168 | 44169 | 44183 => "wim-gas",
-        31004 => "invoic-storno", // INVOIC Stornorechnung — Sparte-neutral, cross-process (AHB §3.1.2)
+        31004 => "invoic-storno", // INVOIC Stornorechnung — Sparte-neutral, cross-process (AHB Kap. 3.1.2)
         // ── GaBi Gas — Bilanzierung Gas (BK7-24-01-008) ──────────────────────────
         31007 | 31008 | 31010 => "gabi-gas", // INVOIC MMM-Rechnung / Kapazitätsrechnung
         13013 => "gabi-gas",                 // MSCONS Allokationsliste Gas (MMMA)

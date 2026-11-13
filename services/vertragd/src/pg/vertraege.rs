@@ -36,6 +36,12 @@ pub struct CreateRahmenvertragInput {
 pub struct CreateVersorgungsvertragInput {
     pub rahmenvertrag_id: Option<Uuid>, // B2B: usually set; B2C: None
     pub kundentyp: String,
+    /// § 13 BGB — whether the Kunde concludes this contract as a Verbraucher.
+    /// accountingd charges the § 288 Abs. 2 BGB Verzugszins and the Abs. 5
+    /// Pauschale only on `false`; omitted records nothing, and neither is
+    /// charged.
+    #[serde(default)]
+    pub verbraucher: Option<bool>,
     /// GRUNDVERSORGUNG | ERSATZVERSORGUNG | SONDERVERTRAG. Defaults to
     /// SONDERVERTRAG — the regime with the least statutory privilege, so an
     /// omission cannot silently claim Grundversorgungs-Fristen.
@@ -533,8 +539,9 @@ pub async fn insert_versorgungsvertrag(
          (id,kunden_id,rahmenvertrag_id,tenant,kundentyp,vertragsart,bundle_code,
           vertragsbeginn,vertragsende,kuendigungsfrist_monate,
           preisgarantie_bis,abrechnungszyklus,auto_renewal,renewal_monate,
-          standort_bezeichnung,standort_adresse,zahlungsziel_tage,erp_contract_id,notizen)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          standort_bezeichnung,standort_adresse,zahlungsziel_tage,erp_contract_id,notizen,
+          verbraucher)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
          ON CONFLICT (tenant,erp_contract_id) WHERE erp_contract_id IS NOT NULL
            DO UPDATE SET updated_at=now()
          RETURNING id, vertrags_nr, id = $1 AS is_new_insert",
@@ -564,6 +571,7 @@ pub async fn insert_versorgungsvertrag(
     .bind(input.zahlungsziel_tage)
     .bind(&input.erp_contract_id)
     .bind(&input.notizen)
+    .bind(input.verbraucher)
     .fetch_one(&mut *tx)
     .await?;
 

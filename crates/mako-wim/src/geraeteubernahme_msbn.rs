@@ -28,6 +28,7 @@
 //! devices — `ZB5` the MSBN, to the Lieferadresse in `SG3 NAD+Z22` (`[41]`).
 
 use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
+use mako_engine::payload::OrdersPayload;
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -261,19 +262,15 @@ impl Workflow for WimGeraeteubernahmeMsbnWorkflow {
                         "the MSBN sends 17009 or 17001 here, not {pid}"
                     )));
                 }
-                let mut body = serde_json::json!({
-                    "pid": pid,
-                    "sender": auftrag.msbn.as_str(),
-                    "document_id": auftrag.dokumentennummer,
-                    "orders_ref": auftrag.dokumentennummer,
-                });
-                if let (Some(target), serde_json::Value::Object(extra)) =
-                    (body.as_object_mut(), payload)
-                {
-                    target.extend(extra);
-                }
-                let outbox =
-                    vec![PendingOutbox::new("ORDERS", auftrag.msba.as_str(), body).caused_by(0)];
+                // The column's fields arrive from the caller; a key the ORDERS
+                // does not declare is refused here, at the command.
+                let mut body: OrdersPayload = serde_json::from_value(payload)
+                    .map_err(|e| WorkflowError::rejected(format!("ORDERS {pid}: {e}")))?;
+                body.pid = Some(pid);
+                body.sender = Some(auftrag.msbn.as_str().to_owned());
+                body.document_id = Some(auftrag.dokumentennummer.clone());
+                body.message_ref = Some(auftrag.dokumentennummer.clone());
+                let outbox = vec![PendingOutbox::typed(auftrag.msba.as_str(), &body).caused_by(0)];
                 Ok(WorkflowOutput::with_outbox(
                     vec![MsbnEvent::AuftragGesendet { auftrag }],
                     outbox,
@@ -321,9 +318,33 @@ mod tests {
         .expect("sent");
         assert_eq!(out.outbox[0].payload["document_id"], "GWA-1");
         assert_eq!(out.outbox[0].payload["umfang"], "Z58");
+        // The entry reads back as the ORDERS' typed payload.
+        use mako_engine::payload::OutboundPayload as _;
+        let typed = OrdersPayload::from_payload(&out.outbox[0].payload).expect("an ORDERS payload");
+        assert_eq!(typed.message_ref.as_deref(), Some("GWA-1"));
         out.events
             .iter()
             .fold(MsbnState::New, WimGeraeteubernahmeMsbnWorkflow::apply)
+    }
+
+    /// A column field the ORDERS does not declare is refused at the command —
+    /// it would otherwise reach no segment.
+    #[test]
+    fn an_undeclared_column_field_is_refused_at_the_command() {
+        let err = WimGeraeteubernahmeMsbnWorkflow::handle(
+            &MsbnState::New,
+            MsbnCommand::SendAuftrag {
+                auftrag: MsbnAuftrag {
+                    pid: Pruefidentifikator::new(ABSICHT_PID).expect("pid"),
+                    msbn: MarktpartnerCode::new("9900357000004"),
+                    msba: MarktpartnerCode::new("9900555000005"),
+                    dokumentennummer: "GWA-1".to_owned(),
+                },
+                payload: serde_json::json!({ "umfang": "Z58", "termin": "20260401" }),
+            },
+        )
+        .expect_err("termin is no ORDERS field");
+        assert!(err.to_string().contains("termin"), "{err}");
     }
 
     fn antwort(pid: u32, code: &str, eigentuemer: Option<&str>) -> MsbnCommand {

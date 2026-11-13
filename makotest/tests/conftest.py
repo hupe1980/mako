@@ -20,7 +20,7 @@ MELO = "DE00014559929E00856996N5139699L01"
 MALO = "51238696012"
 #: An EIC Party code for the Bilanzkreis a Zuordnung assigns.
 #:
-#: `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 §5.3) — without a
+#: `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 Kap. 5.3) — without a
 #: Bilanzkreis the NB cannot assign the Marktlokation to the LF — so a fixture
 #: that omitted it would build a message a conformant counterparty refuses.
 BILANZKREIS = "11XBK-EEG------Q"

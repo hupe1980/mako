@@ -60,7 +60,7 @@
 //! certificate can put any Netzbetreiber's Marktpartner-ID in it. The handler
 //! therefore requires the header like the others and refuses the request when
 //! the two disagree — the same rule `edi-energy` enforces between `UNB` and
-//! `NAD+MS` (Allgemeine Festlegungen §2.13), for the same reason: the transport
+//! `NAD+MS` (Allgemeine Festlegungen Kap. 2.13), for the same reason: the transport
 //! authenticates the envelope while the business logic reads the body.
 
 use std::sync::Arc;
@@ -708,7 +708,7 @@ async fn spawn_steuerungsauftrag(
 ///
 /// Not simply the registry's newest: a profile is compiled in as soon as BDEW
 /// publishes it, six months before its Anwendungszeitpunkt (Allgemeine
-/// Festlegungen 6.1d § 2.5). EDIFACT has no Übergangsfrist, so a message
+/// Festlegungen 6.1d Kap. 2.5). EDIFACT has no Übergangsfrist, so a message
 /// stamped with the next release before its Stichtag is refused by the
 /// counterparty — the registry is filtered to `valid_from <= heute()` first.
 fn latest_format_version() -> mako_engine::version::FormatVersion {
@@ -962,6 +962,31 @@ impl ContentSigning {
         }
         Ok(Self { key, cert_der })
     }
+}
+
+/// The verifying key of a PEM X.509 certificate (its first `CERTIFICATE`
+/// block).
+///
+/// # Errors
+///
+/// When the PEM holds no certificate or its key is not P-256.
+pub(crate) fn verifying_key_from_cert_pem(
+    cert_pem: &str,
+) -> Result<energy_api::transport::content_security::ContentVerifyingKey, String> {
+    use base64::Engine as _;
+    let body: String = cert_pem
+        .lines()
+        .map(str::trim)
+        .skip_while(|l| *l != "-----BEGIN CERTIFICATE-----")
+        .skip(1)
+        .take_while(|l| *l != "-----END CERTIFICATE-----")
+        .collect();
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(body)
+        .map_err(|e| format!("not a PEM CERTIFICATE: {e}"))?;
+    verifying_key_from_rfc9440(&energy_api::transport::content_security::cert_header_value(
+        &der,
+    ))
 }
 
 /// The verifying key of the certificate in an RFC 9440 §2.1 header value — the

@@ -23,6 +23,7 @@ use edifact_rs::{GroupDef, GroupDefBuilder, Segment, SegmentPlace, ValidationIss
 
 use crate::registry::PidSource;
 use crate::{MessageType, ProfileError, Pruefidentifikator, Release};
+pub use conditions::{Partei, Parteirollen};
 pub use model::{
     AhbProfile, Anwendungsfall, Element, ElementRule, MigProfile, Operand, Row, SegmentNode,
 };
@@ -154,7 +155,7 @@ impl Profile {
         &self.release
     }
 
-    /// The Anwendungszeitpunkt (Allgemeine Festlegungen 6.1d §2.5).
+    /// The Anwendungszeitpunkt (Allgemeine Festlegungen 6.1d Kap. 2.5).
     #[must_use]
     pub fn valid_from(&self) -> Option<time::Date> {
         self.valid_from
@@ -232,6 +233,18 @@ impl Profile {
         pid: Option<Pruefidentifikator>,
     ) -> Vec<ValidationIssue> {
         validate::validate(self, segments, pid.map(Pruefidentifikator::as_u32))
+    }
+
+    /// [`validate`](Self::validate), deciding the Bedingungen on the Marktrolle
+    /// of sender and receiver from `rollen`.
+    #[must_use]
+    pub fn validate_with_rollen(
+        &self,
+        segments: &[Segment<'_>],
+        pid: Option<Pruefidentifikator>,
+        rollen: &Parteirollen,
+    ) -> Vec<ValidationIssue> {
+        validate::validate_with_rollen(self, segments, pid.map(Pruefidentifikator::as_u32), rollen)
     }
 
     /// Assign every segment of a message to its place in the

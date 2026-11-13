@@ -33,6 +33,19 @@ struct AntwortBody {
     antwortcode: String,
 }
 
+/// Body of `wim.ersteinbau.scheitern-melden`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScheiternBody {
+    /// The Messlokation of the failed Eigenausbau.
+    melo_id: String,
+    /// `SG15 STS` DE 9013 — `Z74` kein Zugang or `Z75` Kommunikationsstörung.
+    grund: String,
+    /// Why, for the audit trail.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
 fn parse_body<T: serde::de::DeserializeOwned>(
     payload: &serde_json::Value,
 ) -> Result<T, DispatchError> {
@@ -168,6 +181,103 @@ async fn dispatch_wim_ersteinbau_vorabinformation(
     .await?;
     drop(occupancy);
     Ok(DispatchOutcome::Spawned { process_id })
+}
+
+pub(super) fn cmd_wim_ersteinbau_scheitern_melden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_ersteinbau_scheitern(s, p))
+}
+
+/// The wMSB reports the Scheitern of its Eigenausbau (WiM Teil 1 Kap. 3.5.2
+/// Nr. 6) to every Marktrolle the process names (IFTSTA AHB 2.1 Kap. 6.4,
+/// S. 24): the gMSB of the Vorgang, and the NB and the LF marktd names for
+/// the Messlokation's one Marktlokation today. A party marktd cannot name is
+/// escalated by the workflow, never skipped.
+async fn dispatch_wim_ersteinbau_scheitern(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let body: ScheiternBody = parse_body(payload)?;
+    let melo_id = melo(&body.melo_id)?;
+    let grund = body.grund.trim().to_owned();
+    if !mako_wim::ersteinbau::SCHEITERN_GRUENDE.contains(&grund.as_str()) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "\"grund\" is one of {:?} (IFTSTA AHB 2.1 Kap. 6.4, S. 25–26), not {grund:?}",
+            mako_wim::ersteinbau::SCHEITERN_GRUENDE
+        )));
+    }
+    let reason = body.reason.unwrap_or_else(|| grund.clone());
+    let (nb, lf) = nb_und_lf(state.marktd_client.as_deref(), melo_id.as_str()).await;
+    dispatch_to_process::<WimErsteinbauWorkflow, _>(
+        state,
+        melo_id.as_str(),
+        mako_wim::ersteinbau::WORKFLOW_NAME,
+        move || ErsteinbauCommand::MeldeScheitern {
+            grund: grund.clone(),
+            reason: reason.clone(),
+            nb: nb.clone(),
+            lf: lf.clone(),
+        },
+    )
+    .await
+}
+
+/// The NB and the LF of the Messlokation's one Marktlokation today, as marktd
+/// holds them; each `None` — and logged with why — when marktd cannot name it.
+async fn nb_und_lf(
+    marktd: Option<&mako_markt::marktd_client::MarktdClient>,
+    melo_id: &str,
+) -> (Option<MarktpartnerCode>, Option<MarktpartnerCode>) {
+    use mako_markt::domain::Lokationstyp;
+    let Some(marktd) = marktd else {
+        tracing::warn!(
+            melo_id,
+            "no [marktd] client — the NB and LF of a Scheitermeldung are unresolved"
+        );
+        return (None, None);
+    };
+    let tag = mako_fristen::heute().to_string();
+    let mut malos: Vec<String> = match marktd.get_lokationen(melo_id, "melo", Some(&tag)).await {
+        Ok(edges) => edges
+            .into_iter()
+            .filter_map(|e| match (e.von_typ, e.nach_typ) {
+                (Lokationstyp::Malo, Lokationstyp::Melo) if e.nach_id == melo_id => Some(e.von_id),
+                (Lokationstyp::Melo, Lokationstyp::Malo) if e.von_id == melo_id => Some(e.nach_id),
+                _ => None,
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(melo_id, error = %e, "marktd: the Marktlokation of a Scheitermeldung is unresolved");
+            return (None, None);
+        }
+    };
+    malos.sort();
+    malos.dedup();
+    let [malo] = malos.as_slice() else {
+        tracing::warn!(
+            melo_id,
+            ?malos,
+            "marktd links the Messlokation to no single Marktlokation — no NB or LF for a Scheitermeldung"
+        );
+        return (None, None);
+    };
+    match marktd.get_versorgung(malo).await {
+        Ok(Some(v)) => (
+            Some(v.nb_mp_id.as_str())
+                .filter(|s| !s.is_empty())
+                .map(MarktpartnerCode::new),
+            v.lf_mp_id().map(MarktpartnerCode::new),
+        ),
+        Ok(None) => (None, None),
+        Err(e) => {
+            tracing::warn!(malo, error = %e, "marktd: the NB and LF of a Scheitermeldung are unresolved");
+            (None, None)
+        }
+    }
 }
 
 /// The wMSB answers an inbound 21029 with its `E_0233` code; the code's

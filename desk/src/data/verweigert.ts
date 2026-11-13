@@ -10,7 +10,7 @@ import { useSyncExternalStore } from "react";
 /** An action the Desk offers, by the service that decides it. */
 export type Handlung =
   | { dienst: "processd"; aktion: "entscheiden" }
-  | { dienst: "invoicd"; aktion: "entscheiden" }
+  | { dienst: "invoicd"; aktion: "entscheiden" | "feststellen" }
   | { dienst: "billingd"; aktion: "freigeben" | "pruefen" }
   // Neu buchen and Verwerfen are one Cedar action (`post-entry`): a refusal
   // of either is a refusal of both.

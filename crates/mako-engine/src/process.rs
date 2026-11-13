@@ -737,7 +737,7 @@ impl<'a, Snap> RunOptions<'a, Snap> {
     ///
     /// The shape of a delivery window owed only when its message is: a Gas
     /// APERAK is sent for a Verarbeitbarkeitsfehler alone (APERAK AHB 1.1
-    /// § 2.3), so a window registered on a processable message would fire on
+    /// Kap. 2.3), so a window registered on a processable message would fire on
     /// the healthy path and report a breach nobody is in. Each must be a
     /// delivery window ([`mako_fristen::is_delivery_window`]).
     pub fn delivery_windows(mut self, windows: &'a [crate::deadline::Deadline]) -> Self {

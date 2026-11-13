@@ -170,6 +170,45 @@ pub async fn put_account(
     }
 }
 
+/// `PUT /api/v1/accounts/{malo_id}/verbraucher` — the § 13 BGB status of the
+/// account, as the vertragd contract records it.
+///
+/// One writer: Cedar `sync-verbraucher` is held to vertragd's service
+/// principal, because the status decides the § 288 Abs. 2 BGB Verzugszins and
+/// the Abs. 5 Pauschale and the contract is its one source. An operator token
+/// cannot set it here, and `PUT /api/v1/accounts/{malo_id}` does not carry it.
+/// Creates the account when it is not there yet.
+pub async fn put_account_verbraucher(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<AccountQuery>,
+    Json(req): Json<crate::pg::SetVerbraucherRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "sync-verbraucher", &cfg.tenant) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
+    if let Err(e) = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
+        tracing::error!(error = %e, %malo_id, "accountingd: account upsert failed");
+        return ApiError::internal(e).into_response();
+    }
+    match crate::pg::set_verbraucher(
+        &pool,
+        &malo_id,
+        &lf_mp_id,
+        &cfg.tenant,
+        req.verbraucher.flatten(),
+    )
+    .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => refusal(e).into_response(),
+    }
+}
+
 /// `GET /api/v1/accounts/{malo_id}/balance`  — current balance in ct (negative = credit)
 pub async fn get_balance(
     claims: Claims,
@@ -459,7 +498,6 @@ pub async fn put_abschlag(
             abschlag_ct: Some(body.abschlag_ct),
             billing_day: None,
             address: Default::default(),
-            verbraucher: None,
         },
     )
     .await
@@ -3925,7 +3963,6 @@ pub async fn settle_jahresabschluss(
                 abschlag_ct: Some(new_abschlag_ct),
                 billing_day: None,
                 address: Default::default(),
-                verbraucher: None,
             },
         )
         .await
@@ -6573,7 +6610,6 @@ pub struct CreateInterestChargeRequest {
     pub lf_mp_id: Option<String>,
     pub invoice_reference: Option<String>,
     pub principal_ct: i64,
-    pub is_b2b: Option<bool>,
     pub period_from: String,
     pub period_to: String,
 }
@@ -6581,7 +6617,9 @@ pub struct CreateInterestChargeRequest {
 /// `POST /api/v1/accounts/{malo_id}/interest-charges` — calculate and book Verzugszinsen.
 ///
 /// Calculates interest per §288 BGB against the §247 BGB Basiszinssatz in force
-/// on `period_from`, read from `ecb_base_rates`. Creates a `VERZUGSZINSEN`
+/// on `period_from`, read from `ecb_base_rates`, at the Absatz the account's
+/// recorded Verbraucher status decides (`accounts.verbraucher`, from the
+/// vertragd contract) — the request does not state it. Creates a `VERZUGSZINSEN`
 /// ledger entry — §275 HGB reports Zinsen on their own line — and records the
 /// charge in `interest_charges` for audit. Fails when no Basiszinssatz is
 /// seeded for the period: the rate is announced, not estimated.
@@ -6627,7 +6665,6 @@ pub async fn post_interest_charge(
         lf_mp_id,
         req.invoice_reference.as_deref(),
         req.principal_ct,
-        req.is_b2b.unwrap_or(false),
         period_from,
         period_to,
     )

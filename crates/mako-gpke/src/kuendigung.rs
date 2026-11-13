@@ -23,7 +23,7 @@
 //! - **BK6-24-174 GPKE Teil 2 Kap. 1.2** — UC/SD Kündigung; the LFA answers by the
 //!   **Ablauf des 1. Werktags nach dem ÜT**
 //! - **EBD 4.3 Kap. 6.2.1** — `E_0614` „Kündigung Vertrag prüfen"
-//! - **APERAK AHB 1.1 § 2.4.1** — the separate 45-minute technical window
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — the separate 45-minute technical window
 
 use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
@@ -56,7 +56,7 @@ pub const KUENDIGUNG_PIDS: &[u32] = &[55016];
 /// `mako_fristen::antwort`.
 ///
 /// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.1
-/// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
+/// Kap. 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
 pub const KUENDIGUNG_ANTWORT_WINDOW_LABEL: &str = "gpke-kuendigung-antwortfrist";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -495,7 +495,7 @@ impl Workflow for GpkeKuendigungWorkflow {
                     events.push(KuendigungEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // APERAK BGM+312 (Anerkennungsmeldung) — APERAK AHB 1.1 §2.4.
+                    // APERAK BGM+312 (Anerkennungsmeldung) — APERAK AHB 1.1 Kap. 2.4.
                     let outbox = vec![
                         // The business notification. `processd`'s LF module
                         // decides this process, and it only ever sees a message
@@ -524,7 +524,7 @@ impl Workflow for GpkeKuendigungWorkflow {
                     events.push(KuendigungEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // APERAK BGM+313 — APERAK AHB 1.1 §2.1.1.
+                    // APERAK BGM+313 — APERAK AHB 1.1 Kap. 2.1.1.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),

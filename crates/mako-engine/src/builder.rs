@@ -1224,8 +1224,8 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                     due_at       = %deadline.due_at(),
                     late_secs    = (now - deadline.due_at()).whole_seconds(),
                     "outbox worker: delivered after its delivery window closed — \
-                     a missed Übertragungsfrist (CONTRL AHB 1.0 §2.3.1/§2.4.1, \
-                     APERAK AHB 1.1 §2.3/§2.4)"
+                     a missed Übertragungsfrist (CONTRL AHB 1.0 Kap. 2.3.1/Kap. 2.4.1, \
+                     APERAK AHB 1.1 Kap. 2.3/Kap. 2.4)"
                 );
             }
             if let Err(e) = self.deadline_store.cancel(deadline.deadline_id()).await {
@@ -1443,8 +1443,8 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
                 let label = deadline.label().to_owned();
 
                 // A delivery window that reaches this point is a regulatory
-                // violation under APERAK AHB 1.1 §2.4.1 (Strom) / §2.3.1 (Gas)
-                // or CONTRL AHB 1.0 §2.3.1: the outbox worker discharges the
+                // violation under APERAK AHB 1.1 Kap. 2.4.1 (Strom) / Kap. 2.3.1 (Gas)
+                // or CONTRL AHB 1.0 Kap. 2.3.1: the outbox worker discharges the
                 // window the moment its message goes out, so one that is still
                 // registered when it comes due was never answered.
                 //
@@ -1463,8 +1463,8 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
                         fired_at    = %now,
                         overdue_secs = (now - deadline.due_at()).whole_seconds(),
                         "delivery window closed with no delivery — regulatory \
-                         violation (APERAK AHB 1.1 §2.4.1 Strom / §2.3.1 Gas, \
-                         CONTRL AHB 1.0 §2.3.1). Counter: makod_delivery_window_missed_total",
+                         violation (APERAK AHB 1.1 Kap. 2.4.1 Strom / Kap. 2.3.1 Gas, \
+                         CONTRL AHB 1.0 Kap. 2.3.1). Counter: makod_delivery_window_missed_total",
                     );
                 }
 
@@ -2034,7 +2034,7 @@ where
                     "EngineBuilder::build: NoopDeadlineStore is active in a \
                      non-testing build. This silently discards all APERAK deadlines, \
                      which is an immediately reportable BNetzA violation \
-                     (APERAK AHB 1.1 §2.4.1, AWH GeLi Gas BK7-24-01-009). \
+                     (APERAK AHB 1.1 Kap. 2.4.1, AWH GeLi Gas BK7-24-01-009). \
                      Call .with_deadline_store(SlateDbStore::as_deadline_store()) \
                      in your production engine assembly. \
                      If this is a test, enable the 'testing' feature."

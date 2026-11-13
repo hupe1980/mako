@@ -1149,9 +1149,22 @@ const E_0406: Option<&'static str> = Some(EBD_NETZNUTZUNGSRECHNUNG);
 /// levels (Kopf, Position, Summe) and 124 codes, and its result is a *set* of
 /// (Positionsnummer, code) pairs rather than one code. The entries here are the
 /// ones an arithmetic invoice check can land on without walking the tree:
-/// the Summen- and Positions-level catch-alls, and the sum check that has an
-/// exact counterpart. Anything else belongs to the full walk.
+/// the Summen- and Positions-level catch-alls, and the Zahlungsziel and sum
+/// checks that have an exact counterpart. Anything else belongs to the full
+/// walk.
 pub const E_0406_CODES: &[AntwortCode] = &[
+    code!(
+        "A10",
+        E_0406,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten (Prüfschritt 31)"
+    ),
+    code!(
+        "A11",
+        E_0406,
+        Ablehnung,
+        "Das Zahlungsziel ist überschritten (Prüfschritt 34)"
+    ),
     code!(
         "A70",
         E_0406,
@@ -1930,6 +1943,81 @@ pub const E_0595_CODES: &[AntwortCode] = &[
     ),
 ];
 
+// ── E_0618 / E_0613 — the NB's Bearbeitungsstand to the ÜNB (IFTSTA 21047) ───
+
+/// `E_0618` „Rückmeldung verarbeiten" — the NB processes the ÜNB's
+/// Qualitätsrückmeldung on the Abrechnungsdaten Bilanzkreisabrechnung (EBD 4.3
+/// Kap. 6.16.4, S. 258; GPKE Teil 2 Kap. 3.1.2.2 Nr. 5/6, S. 76). Prüfschritt
+/// 10 ends without a code when the ÜNB took the data „ohne Anmerkung". IFTSTA
+/// 21047 names it when the NB sends to a ÜNB (IFTSTA AHB 2.1 Kap. 7.7, S. 62,
+/// `[115] ∧ [29]`).
+pub const EBD_RUECKMELDUNG_ABRECHNUNGSDATEN_UENB: &str = "E_0618";
+const E_0618: Option<&'static str> = Some(EBD_RUECKMELDUNG_ABRECHNUNGSDATEN_UENB);
+
+/// `E_0618`.
+pub const E_0618_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0618,
+        AenderungDerDaten,
+        "Der Verantwortliche teilt dem Berechtigten mit, dass er einen erneuten Versand der Stammdaten vornehmen wird (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0618,
+        KeineAenderungDerDaten,
+        "Der Verantwortliche teilt mit, dass er seine Stammdaten für korrekt hält und keine Anpassung vornehmen wird (Prüfschritt 20)"
+    ),
+];
+
+/// `E_0613` „Bestellung prüfen" — the NB's check of the ÜNB's Bestellung einer
+/// Änderung von Abrechnungsdaten zur Bilanzkreisabrechnung (EBD 4.3 Kap.
+/// 6.18.1, S. 265–267; GPKE Teil 2 Kap. 3.1.3.3 Nr. 2, S. 82). IFTSTA 21047
+/// names it towards a ÜNB (IFTSTA AHB 2.1 Kap. 7.7, S. 62, `[115] ∧ [29]`).
+pub const EBD_BESTELLUNG_ABRECHNUNGSDATEN_UENB: &str = "E_0613";
+const E_0613: Option<&'static str> = Some(EBD_BESTELLUNG_ABRECHNUNGSDATEN_UENB);
+
+/// `E_0613` — the same pair of facts as `E_0595`'s Clearing branch: whether the
+/// Berechtigte's data matched, and whether a Stammdatenänderung is sent.
+pub const E_0613_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0613,
+        KeineAenderungDerDaten,
+        "Die vorliegenden Daten stimmen überein; es wurden keine Stammdaten zur Änderung angegeben — eine Stammdatenänderung wird nicht versendet (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0613,
+        AenderungDerDaten,
+        "Die vorliegenden Daten stimmen überein; Änderungen an den Stammdaten werden vorgenommen — eine Stammdatenänderung wird versendet (Prüfschritt 30)"
+    ),
+    code!(
+        "A03",
+        E_0613,
+        KeineAenderungDerDaten,
+        "Die vorliegenden Daten stimmen überein; Änderungen an den Stammdaten werden nicht vorgenommen — eine Stammdatenänderung wird nicht versendet (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0613,
+        AenderungDerDaten,
+        "Die vorliegenden Daten stimmen nicht überein; es wurden keine Stammdaten zur Änderung angegeben — eine Stammdatenänderung wird versendet (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0613,
+        AenderungDerDaten,
+        "Die vorliegenden Daten stimmen nicht überein; Änderungen an den Stammdaten werden vorgenommen — eine Stammdatenänderung wird versendet (Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0613,
+        AenderungDerDaten,
+        "Die vorliegenden Daten stimmen nicht überein; Änderungen an den Stammdaten werden nicht vorgenommen — eine Stammdatenänderung wird versendet (Prüfschritt 50)"
+    ),
+];
+
 // ── E_0441 / E_0443 — Geschäftsdatenanfrage zu Stammdaten (17132 → ORDRSP 19101) ─
 
 /// `E_0441` — „Geschäftsdatenanfrage zu Stammdaten prüfen", the NB's check of
@@ -2390,6 +2478,882 @@ pub const E_0539_CODES: &[AntwortCode] = &[
         E_0539,
         Ablehnung,
         "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 40)",
+        bemerkung
+    ),
+];
+
+// ── GPKE Teil 3 — the remaining Konfiguration and Definition trees ─────────
+/// `E_0523` „Bestellung prüfen" — the NB's check of a Bestellung einer
+/// Konfiguration vom LF (EBD 4.3 Kap. 6.28.1, S. 316–320). ORDRSP 19121 (to
+/// the LF, Änderung Prognosegrundlage) and 19124 (sent by a NB, `[3]`) name it
+/// (ORDRSP AHB 1.1b Kap. 4.4.6 / 4.4.3). `A17` is the Zustimmung: the NB
+/// forwards the Bestellung to the MSB der Marktlokation.
+pub const EBD_KONFIGURATION_BESTELLUNG_NB: &str = "E_0523";
+const E_0523: Option<&'static str> = Some(EBD_KONFIGURATION_BESTELLUNG_NB);
+
+/// `E_0523`.
+pub const E_0523_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0523,
+        Ablehnung,
+        "Kostenpflichtige Konfiguration (Prüfschritt 10)"
+    ),
+    code!(
+        "A02",
+        E_0523,
+        Ablehnung,
+        "Marktlokation nicht in der Messtechnischen Einordnung „iMS“ und nicht vollständig mit Lastgangzählern ausgestattet (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_0523,
+        Ablehnung,
+        "Fristüberschreitung (Prüfschritt 50)"
+    ),
+    code!(
+        "A04",
+        E_0523,
+        Ablehnung,
+        "Erzeugende Marktlokationen mit iMS oder kME/RLM werden immer auf der Prognosegrundlage auf Basis von Werten bilanziert (Prüfschritt 60)"
+    ),
+    code!(
+        "A05",
+        E_0523,
+        Ablehnung,
+        "Zuordnungsermächtigung liegt nicht vor (Prüfschritt 70)"
+    ),
+    code!(
+        "A06",
+        E_0523,
+        Ablehnung,
+        "Keine Volleinspeisung, keine Prognosegrundlage auf Basis von Profilen möglich (Prüfschritt 100)"
+    ),
+    code!(
+        "A18",
+        E_0523,
+        Ablehnung,
+        "Die Änderung der Prognosegrundlage bei einer Marktlokation mit der Messtechnischen Einordnung „iMS“ ist nicht möglich (Prüfschritt 110)"
+    ),
+    code!(
+        "A08",
+        E_0523,
+        Ablehnung,
+        "Änderung zum gewünschten Termin bereits umgesetzt (Prüfschritt 130)"
+    ),
+    code!(
+        "A10",
+        E_0523,
+        Ablehnung,
+        "Bestellungen sind nur für verbrauchende Marktlokationen möglich (Prüfschritt 140)"
+    ),
+    code!(
+        "A11",
+        E_0523,
+        Ablehnung,
+        "Zählzeitdefinition zum Anwendungszeitpunkt nicht bekannt (Prüfschritt 160)"
+    ),
+    code!(
+        "A12",
+        E_0523,
+        Ablehnung,
+        "Zählzeit ist nicht bestellbar (Prüfschritt 170)"
+    ),
+    code!(
+        "A13",
+        E_0523,
+        Ablehnung,
+        "Ausgerollte Zählzeit zur Zählzeitdefinition liegt zum Anwendungszeitpunkt nicht vor (Prüfschritt 180)"
+    ),
+    code!(
+        "A14",
+        E_0523,
+        Ablehnung,
+        "Bestellter Zustand bereits vorhanden (Prüfschritt 190)"
+    ),
+    code!(
+        "A15",
+        E_0523,
+        Ablehnung,
+        "Konfiguration technisch nicht möglich (Prüfschritt 200)"
+    ),
+    code!(
+        "A16",
+        E_0523,
+        Ablehnung,
+        "Fristüberschreitung (Prüfschritt 210)"
+    ),
+    code!(
+        "A99",
+        E_0523,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 220)",
+        bemerkung
+    ),
+    code!(
+        "A17",
+        E_0523,
+        Zustimmung,
+        "Bestellung wird an den MSB der Marktlokation weitergeleitet (Prüfschritt 220)"
+    ),
+];
+
+/// `E_0533` „Bestellung prüfen" — the MSB am Objekt Marktlokation checks a
+/// Bestellung einer Konfiguration vom LF (EBD 4.3 Kap. 6.30.3, S. 332–334).
+/// ORDRSP 19132 to a LF (`[4]`) and 19124 sent by a MSB (`[10]`) name it
+/// (ORDRSP AHB 1.1b Kap. 4.4.2 / 4.4.3).
+pub const EBD_KONFIGURATION_BESTELLUNG_LF_MSB: &str = "E_0533";
+const E_0533: Option<&'static str> = Some(EBD_KONFIGURATION_BESTELLUNG_LF_MSB);
+
+/// `E_0533`.
+pub const E_0533_CODES: &[AntwortCode] = &[
+    code!(
+        "A07",
+        E_0533,
+        Zustimmung,
+        "Die Einrichtung der Konfiguration ist grundsätzlich möglich (Prüfschritt 90)"
+    ),
+    code!(
+        "A01",
+        E_0533,
+        Ablehnung,
+        "Die bestellte Konfiguration liegt bereits vor (Prüfschritt 10)"
+    ),
+    code!(
+        "A08",
+        E_0533,
+        Ablehnung,
+        "Die Vorlauffrist wurde nicht eingehalten (Prüfschritt 25)"
+    ),
+    code!(
+        "A02",
+        E_0533,
+        Ablehnung,
+        "Es besteht an der Lokation bereits eine Konfiguration; die Referenz der bestehenden Konfiguration ist nicht enthalten (Prüfschritt 40)"
+    ),
+    code!(
+        "A04",
+        E_0533,
+        Ablehnung,
+        "Angebot ist nicht mehr gültig (Prüfschritt 60)"
+    ),
+    code!(
+        "A05",
+        E_0533,
+        Ablehnung,
+        "Die vorhandene Gerätetechnik erlaubt die Konfiguration zum bestellten Zeitpunkt nicht (Prüfschritt 70)"
+    ),
+    code!(
+        "A06",
+        E_0533,
+        Ablehnung,
+        "Bestellte Konfiguration ist dem MSB nicht bekannt (Prüfschritt 80)"
+    ),
+    code!(
+        "A99",
+        E_0533,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 90)",
+        bemerkung
+    ),
+];
+
+/// `E_0538` „Bestellung Beendigung prüfen" — Bestellung Beendigung einer
+/// Konfiguration vom NB an MSB (EBD 4.3 Kap. 6.31.1, S. 336). ORDRSP
+/// 19131 to a NB (`[15]`) names it (ORDRSP AHB 1.1b Kap. 4.6).
+pub const EBD_KONFIGURATION_BEENDIGUNG_NB: &str = "E_0538";
+const E_0538: Option<&'static str> = Some(EBD_KONFIGURATION_BEENDIGUNG_NB);
+
+/// `E_0538`.
+pub const E_0538_CODES: &[AntwortCode] = &[
+    code!(
+        "A03",
+        E_0538,
+        Zustimmung,
+        "Bestätigung der Beendigung (Prüfschritt 40)"
+    ),
+    code!(
+        "A04",
+        E_0538,
+        Ablehnung,
+        "Die Vorlauffrist wurde nicht eingehalten (Prüfschritt 15)"
+    ),
+    code!(
+        "A02",
+        E_0538,
+        Ablehnung,
+        "Es handelt sich um eine Bestellung, die nicht beendet werden kann (Prüfschritt 30)"
+    ),
+    code!(
+        "A99",
+        E_0538,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 40)",
+        bemerkung
+    ),
+];
+
+/// `E_0540` „Bestellung Beendigung prüfen" — Bestellung Beendigung einer
+/// Konfiguration vom LF an MSB (EBD 4.3 Kap. 6.32.1, S. 338). ORDRSP
+/// 19131 to a LF (`[4]`) names it (ORDRSP AHB 1.1b Kap. 4.6).
+pub const EBD_KONFIGURATION_BEENDIGUNG_LF: &str = "E_0540";
+const E_0540: Option<&'static str> = Some(EBD_KONFIGURATION_BEENDIGUNG_LF);
+
+/// `E_0540`.
+pub const E_0540_CODES: &[AntwortCode] = &[
+    code!(
+        "A03",
+        E_0540,
+        Zustimmung,
+        "Bestätigung der Beendigung (Prüfschritt 40)"
+    ),
+    code!(
+        "A04",
+        E_0540,
+        Ablehnung,
+        "Die Vorlauffrist wurde nicht eingehalten (Prüfschritt 15)"
+    ),
+    code!(
+        "A02",
+        E_0540,
+        Ablehnung,
+        "Es handelt sich um eine Bestellung, die nicht beendet werden kann (Prüfschritt 30)"
+    ),
+    code!(
+        "A99",
+        E_0540,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 40)",
+        bemerkung
+    ),
+];
+
+/// `E_0552` „Reklamation prüfen" — Reklamation einer Konfiguration vom NB an MSB
+/// (EBD 4.3 Kap. 6.35.1, S. 340–341). ORDRSP 19130 to a NB (`[15]`) names it (ORDRSP AHB 1.1b
+/// Kap. 4.7, S. 38–39); `A04` needs `SG2 FTX+AAP` and `A06` the geplanter
+/// Behebungszeitpunkt `DTM+292`.
+pub const EBD_KONFIGURATION_REKLAMATION_NB: &str = "E_0552";
+const E_0552: Option<&'static str> = Some(EBD_KONFIGURATION_REKLAMATION_NB);
+
+/// `E_0552`.
+pub const E_0552_CODES: &[AntwortCode] = &[
+    code!(
+        "A05",
+        E_0552,
+        Zustimmung,
+        "Konfiguration wurde sofort angepasst (Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0552,
+        Zustimmung,
+        "Konfiguration konnte nicht sofort korrigiert werden — der geplante Behebungszeitpunkt ist anzugeben (Prüfschritt 50)"
+    ),
+    code!(
+        "A02",
+        E_0552,
+        Ablehnung,
+        "Wirkungszeitraum noch nicht eingetreten (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0552,
+        Ablehnung,
+        "Reklamation unbegründet — bestellte Konfiguration ist eingerichtet (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0552,
+        Ablehnung,
+        "Konfiguration kann trotz Bestellung nicht vorgenommen werden — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 40)",
+        bemerkung
+    ),
+];
+
+/// `E_0553` „Reklamation prüfen" — Reklamation einer Konfiguration vom LF an MSB
+/// (EBD 4.3 Kap. 6.36.1, S. 342–343). ORDRSP 19130 to a LF (`[4]`) names it (ORDRSP AHB 1.1b
+/// Kap. 4.7, S. 38–39); `A04` needs `SG2 FTX+AAP` and `A06` the geplanter
+/// Behebungszeitpunkt `DTM+292`.
+pub const EBD_KONFIGURATION_REKLAMATION_LF: &str = "E_0553";
+const E_0553: Option<&'static str> = Some(EBD_KONFIGURATION_REKLAMATION_LF);
+
+/// `E_0553`.
+pub const E_0553_CODES: &[AntwortCode] = &[
+    code!(
+        "A05",
+        E_0553,
+        Zustimmung,
+        "Konfiguration wurde sofort angepasst (Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0553,
+        Zustimmung,
+        "Konfiguration konnte nicht sofort korrigiert werden — der geplante Behebungszeitpunkt ist anzugeben (Prüfschritt 50)"
+    ),
+    code!(
+        "A02",
+        E_0553,
+        Ablehnung,
+        "Wirkungszeitraum noch nicht eingetreten (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0553,
+        Ablehnung,
+        "Reklamation unbegründet — bestellte Konfiguration ist eingerichtet (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0553,
+        Ablehnung,
+        "Konfiguration kann trotz Bestellung nicht vorgenommen werden — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 40)",
+        bemerkung
+    ),
+];
+
+/// `E_0554` „Reklamation prüfen" — Reklamation einer Konfiguration vom MSB
+/// (EBD 4.3 Kap. 6.37.1, S. 344–345). ORDRSP 19130 to a MSB (`[14]`) names it (ORDRSP AHB 1.1b
+/// Kap. 4.7, S. 38–39); `A04` needs `SG2 FTX+AAP` and `A06` the geplanter
+/// Behebungszeitpunkt `DTM+292`.
+pub const EBD_KONFIGURATION_REKLAMATION_MSB: &str = "E_0554";
+const E_0554: Option<&'static str> = Some(EBD_KONFIGURATION_REKLAMATION_MSB);
+
+/// `E_0554`.
+pub const E_0554_CODES: &[AntwortCode] = &[
+    code!(
+        "A05",
+        E_0554,
+        Zustimmung,
+        "Konfiguration wurde sofort angepasst (Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0554,
+        Zustimmung,
+        "Konfiguration konnte nicht sofort korrigiert werden — der geplante Behebungszeitpunkt ist anzugeben (Prüfschritt 50)"
+    ),
+    code!(
+        "A02",
+        E_0554,
+        Ablehnung,
+        "Wirkungszeitraum noch nicht eingetreten (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0554,
+        Ablehnung,
+        "Reklamation unbegründet — bestellte Konfiguration ist eingerichtet (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0554,
+        Ablehnung,
+        "Konfiguration kann trotz Bestellung nicht vorgenommen werden — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 40)",
+        bemerkung
+    ),
+];
+
+/// `E_0544` „Reklamation prüfen" — Reklamation der Übersicht der Definitionen des NB vom LF an NB (EBD 4.3
+/// Kap. 6.38.1, S. 346–347). The tree prints no Cluster: every code refuses the Reklamation on
+/// ORDRSP 19123 (ORDRSP AHB 1.1b Kap. 4.5, S. 33–35).
+pub const EBD_REKLAMATION_UEBERSICHT_NB_VOM_LF: &str = "E_0544";
+const E_0544: Option<&'static str> = Some(EBD_REKLAMATION_UEBERSICHT_NB_VOM_LF);
+
+/// `E_0544`.
+pub const E_0544_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0544,
+        Ablehnung,
+        "Übersicht der Zählzeitdefinition wurde versendet (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0544,
+        Ablehnung,
+        "Übersicht der Schaltzeitdefinitionen wurde versendet (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_0544,
+        Ablehnung,
+        "Übersicht der Leistungskurvendefinitionen wurde versendet (Prüfschritt 60)"
+    ),
+    code!(
+        "A04",
+        E_0544,
+        Ablehnung,
+        "Übersicht der Zählzeitdefinition ist plausibel (Prüfschritt 80)"
+    ),
+    code!(
+        "A05",
+        E_0544,
+        Ablehnung,
+        "Übersicht der Schaltzeitdefinitionen ist plausibel (Prüfschritt 100)"
+    ),
+    code!(
+        "A06",
+        E_0544,
+        Ablehnung,
+        "Übersicht der Leistungskurvendefinitionen ist plausibel (Prüfschritt 110)"
+    ),
+];
+
+/// `E_0545` „Reklamation prüfen" — Reklamation der Übersicht der Definitionen des NB vom MSB an NB (EBD 4.3
+/// Kap. 6.39.1, S. 348–350). The tree prints no Cluster: every code refuses the Reklamation on
+/// ORDRSP 19123 (ORDRSP AHB 1.1b Kap. 4.5, S. 33–35).
+pub const EBD_REKLAMATION_UEBERSICHT_NB_VOM_MSB: &str = "E_0545";
+const E_0545: Option<&'static str> = Some(EBD_REKLAMATION_UEBERSICHT_NB_VOM_MSB);
+
+/// `E_0545`.
+pub const E_0545_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0545,
+        Ablehnung,
+        "Übersicht der Zählzeitdefinition wurde versendet (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0545,
+        Ablehnung,
+        "Übersicht der Schaltzeitdefinitionen wurde versendet (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_0545,
+        Ablehnung,
+        "Übersicht der Leistungskurvendefinitionen wurde versendet (Prüfschritt 60)"
+    ),
+    code!(
+        "A04",
+        E_0545,
+        Ablehnung,
+        "Übersicht der Zählzeitdefinition ist plausibel (Prüfschritt 80)"
+    ),
+    code!(
+        "A05",
+        E_0545,
+        Ablehnung,
+        "Übersicht der Schaltzeitdefinitionen ist plausibel (Prüfschritt 100)"
+    ),
+    code!(
+        "A06",
+        E_0545,
+        Ablehnung,
+        "Übersicht der Leistungskurvendefinitionen ist plausibel (Prüfschritt 110)"
+    ),
+];
+
+/// `E_0546` „Reklamation prüfen" — Reklamation der Übersicht der Definitionen des LF vom NB an LF (EBD 4.3
+/// Kap. 6.40.1, S. 351–352). The tree prints no Cluster: every code refuses the Reklamation on
+/// ORDRSP 19123 (ORDRSP AHB 1.1b Kap. 4.5, S. 33–35).
+pub const EBD_REKLAMATION_UEBERSICHT_LF_VOM_NB: &str = "E_0546";
+const E_0546: Option<&'static str> = Some(EBD_REKLAMATION_UEBERSICHT_LF_VOM_NB);
+
+/// `E_0546`.
+pub const E_0546_CODES: &[AntwortCode] = &[
+    code!(
+        "A02",
+        E_0546,
+        Ablehnung,
+        "Übersicht der Schaltzeitdefinitionen wurde versendet (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_0546,
+        Ablehnung,
+        "Übersicht der Leistungskurvendefinitionen wurde versendet (Prüfschritt 60)"
+    ),
+    code!(
+        "A05",
+        E_0546,
+        Ablehnung,
+        "Übersicht der Schaltzeitdefinitionen ist plausibel (Prüfschritt 100)"
+    ),
+    code!(
+        "A06",
+        E_0546,
+        Ablehnung,
+        "Übersicht der Leistungskurvendefinitionen ist plausibel (Prüfschritt 110)"
+    ),
+];
+
+/// `E_0547` „Reklamation prüfen" — Reklamation der Übersicht der Definitionen des LF vom MSB an LF (EBD 4.3
+/// Kap. 6.41.1, S. 353–354). The tree prints no Cluster: every code refuses the Reklamation on
+/// ORDRSP 19123 (ORDRSP AHB 1.1b Kap. 4.5, S. 33–35).
+pub const EBD_REKLAMATION_UEBERSICHT_LF_VOM_MSB: &str = "E_0547";
+const E_0547: Option<&'static str> = Some(EBD_REKLAMATION_UEBERSICHT_LF_VOM_MSB);
+
+/// `E_0547`.
+pub const E_0547_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0547,
+        Ablehnung,
+        "Übersicht der Zählzeitdefinition wurde versendet (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0547,
+        Ablehnung,
+        "Übersicht der Schaltzeitdefinitionen wurde versendet (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_0547,
+        Ablehnung,
+        "Übersicht der Leistungskurvendefinitionen wurde versendet (Prüfschritt 60)"
+    ),
+    code!(
+        "A04",
+        E_0547,
+        Ablehnung,
+        "Übersicht der Zählzeitdefinition ist plausibel (Prüfschritt 80)"
+    ),
+    code!(
+        "A05",
+        E_0547,
+        Ablehnung,
+        "Übersicht der Schaltzeitdefinitionen ist plausibel (Prüfschritt 100)"
+    ),
+    code!(
+        "A06",
+        E_0547,
+        Ablehnung,
+        "Übersicht der Leistungskurvendefinitionen ist plausibel (Prüfschritt 110)"
+    ),
+];
+
+/// `E_0548` „Reklamation prüfen" — Reklamation einer Definition des NB vom LF an NB (EBD 4.3
+/// Kap. 6.42.1, S. 355–358). The tree prints no Cluster: every code refuses the Reklamation on
+/// ORDRSP 19123 (ORDRSP AHB 1.1b Kap. 4.5, S. 33–35).
+pub const EBD_REKLAMATION_DEFINITION_NB_VOM_LF: &str = "E_0548";
+const E_0548: Option<&'static str> = Some(EBD_REKLAMATION_DEFINITION_NB_VOM_LF);
+
+/// `E_0548`.
+pub const E_0548_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0548,
+        Ablehnung,
+        "Code der Zählzeitdefinition wird nicht verwendet (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0548,
+        Ablehnung,
+        "Ausgerollte Zählzeitdefinition wurde versendet (Prüfschritt 30)"
+    ),
+    code!(
+        "A03",
+        E_0548,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Zählzeitdefinition mit einer höheren Version versendet (Prüfschritt 50)"
+    ),
+    code!(
+        "A04",
+        E_0548,
+        Ablehnung,
+        "Ausgerollte Zählzeitdefinition ist plausibel (Prüfschritt 60)"
+    ),
+    code!(
+        "A05",
+        E_0548,
+        Ablehnung,
+        "Code der Schaltzeitdefinition wird nicht verwendet (Prüfschritt 80)"
+    ),
+    code!(
+        "A06",
+        E_0548,
+        Ablehnung,
+        "Ausgerollte Schaltzeitdefinition wurde versendet (Prüfschritt 90)"
+    ),
+    code!(
+        "A07",
+        E_0548,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Schaltzeitdefinition mit einer höheren Version versendet (Prüfschritt 110)"
+    ),
+    code!(
+        "A08",
+        E_0548,
+        Ablehnung,
+        "Ausgerollte Schaltzeitdefinition ist plausibel (Prüfschritt 120)"
+    ),
+    code!(
+        "A09",
+        E_0548,
+        Ablehnung,
+        "Code der Leistungskurvendefinition wird nicht verwendet (Prüfschritt 140)"
+    ),
+    code!(
+        "A10",
+        E_0548,
+        Ablehnung,
+        "Ausgerollte Leistungskurvendefinition wurde versendet (Prüfschritt 150)"
+    ),
+    code!(
+        "A11",
+        E_0548,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Leistungskurvendefinition mit einer höheren Version versendet (Prüfschritt 170)"
+    ),
+    code!(
+        "A12",
+        E_0548,
+        Ablehnung,
+        "Ausgerollte Leistungskurvendefinition ist plausibel (Prüfschritt 180)"
+    ),
+    code!(
+        "A99",
+        E_0548,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 200)",
+        bemerkung
+    ),
+];
+
+/// `E_0549` „Reklamation prüfen" — Reklamation einer Definition des NB vom MSB an NB (EBD 4.3
+/// Kap. 6.43.1, S. 359–362). The tree prints no Cluster: every code refuses the Reklamation on
+/// ORDRSP 19123 (ORDRSP AHB 1.1b Kap. 4.5, S. 33–35).
+pub const EBD_REKLAMATION_DEFINITION_NB_VOM_MSB: &str = "E_0549";
+const E_0549: Option<&'static str> = Some(EBD_REKLAMATION_DEFINITION_NB_VOM_MSB);
+
+/// `E_0549`.
+pub const E_0549_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0549,
+        Ablehnung,
+        "Code der Zählzeitdefinition wird nicht verwendet (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0549,
+        Ablehnung,
+        "Ausgerollte Zählzeitdefinition wurde versendet (Prüfschritt 30)"
+    ),
+    code!(
+        "A03",
+        E_0549,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Zählzeitdefinition mit einer höheren Version versendet (Prüfschritt 50)"
+    ),
+    code!(
+        "A04",
+        E_0549,
+        Ablehnung,
+        "Ausgerollte Zählzeitdefinition ist plausibel (Prüfschritt 60)"
+    ),
+    code!(
+        "A05",
+        E_0549,
+        Ablehnung,
+        "Code der Schaltzeitdefinition wird nicht verwendet (Prüfschritt 80)"
+    ),
+    code!(
+        "A06",
+        E_0549,
+        Ablehnung,
+        "Ausgerollte Schaltzeitdefinition wurde versendet (Prüfschritt 90)"
+    ),
+    code!(
+        "A07",
+        E_0549,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Schaltzeitdefinition mit einer höheren Version versendet (Prüfschritt 110)"
+    ),
+    code!(
+        "A08",
+        E_0549,
+        Ablehnung,
+        "Ausgerollte Schaltzeitdefinition ist plausibel (Prüfschritt 120)"
+    ),
+    code!(
+        "A09",
+        E_0549,
+        Ablehnung,
+        "Code der Leistungskurvendefinition wird nicht verwendet (Prüfschritt 140)"
+    ),
+    code!(
+        "A10",
+        E_0549,
+        Ablehnung,
+        "Ausgerollte Leistungskurvendefinition wurde versendet (Prüfschritt 150)"
+    ),
+    code!(
+        "A11",
+        E_0549,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Leistungskurvendefinition mit einer höheren Version versendet (Prüfschritt 170)"
+    ),
+    code!(
+        "A12",
+        E_0549,
+        Ablehnung,
+        "Ausgerollte Leistungskurvendefinition ist plausibel (Prüfschritt 180)"
+    ),
+    code!(
+        "A99",
+        E_0549,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 200)",
+        bemerkung
+    ),
+];
+
+/// `E_0550` „Reklamation prüfen" — Reklamation einer Definition des LF vom NB an LF (EBD 4.3
+/// Kap. 6.44.1, S. 363–365). The tree prints no Cluster: every code refuses the Reklamation on
+/// ORDRSP 19123 (ORDRSP AHB 1.1b Kap. 4.5, S. 33–35).
+pub const EBD_REKLAMATION_DEFINITION_LF_VOM_NB: &str = "E_0550";
+const E_0550: Option<&'static str> = Some(EBD_REKLAMATION_DEFINITION_LF_VOM_NB);
+
+/// `E_0550`.
+pub const E_0550_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0550,
+        Ablehnung,
+        "Code der Schaltzeitdefinition wird nicht verwendet (Prüfschritt 30)"
+    ),
+    code!(
+        "A02",
+        E_0550,
+        Ablehnung,
+        "Ausgerollte Schaltzeitdefinition wurde versendet (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_0550,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Schaltzeitdefinition mit einer höheren Version versendet (Prüfschritt 60)"
+    ),
+    code!(
+        "A04",
+        E_0550,
+        Ablehnung,
+        "Ausgerollte Schaltzeitdefinition ist plausibel (Prüfschritt 70)"
+    ),
+    code!(
+        "A05",
+        E_0550,
+        Ablehnung,
+        "Code der Leistungskurvendefinition wird nicht verwendet (Prüfschritt 120)"
+    ),
+    code!(
+        "A06",
+        E_0550,
+        Ablehnung,
+        "Ausgerollte Leistungskurvendefinition wurde versendet (Prüfschritt 130)"
+    ),
+    code!(
+        "A07",
+        E_0550,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Leistungskurvendefinition mit einer höheren Version versendet (Prüfschritt 150)"
+    ),
+    code!(
+        "A08",
+        E_0550,
+        Ablehnung,
+        "Ausgerollte Leistungskurvendefinition ist plausibel (Prüfschritt 160)"
+    ),
+    code!(
+        "A99",
+        E_0550,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 200)",
+        bemerkung
+    ),
+];
+
+/// `E_0551` „Reklamation prüfen" — Reklamation einer Definition des LF vom MSB an LF (EBD 4.3
+/// Kap. 6.45.1, S. 366–369). The tree prints no Cluster: every code refuses the Reklamation on
+/// ORDRSP 19123 (ORDRSP AHB 1.1b Kap. 4.5, S. 33–35).
+pub const EBD_REKLAMATION_DEFINITION_LF_VOM_MSB: &str = "E_0551";
+const E_0551: Option<&'static str> = Some(EBD_REKLAMATION_DEFINITION_LF_VOM_MSB);
+
+/// `E_0551`.
+pub const E_0551_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0551,
+        Ablehnung,
+        "Code der Zählzeitdefinition wird nicht verwendet (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0551,
+        Ablehnung,
+        "Ausgerollte Zählzeitdefinition wurde versendet (Prüfschritt 30)"
+    ),
+    code!(
+        "A03",
+        E_0551,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Zählzeitdefinition mit einer höheren Version versendet (Prüfschritt 50)"
+    ),
+    code!(
+        "A04",
+        E_0551,
+        Ablehnung,
+        "Ausgerollte Zählzeitdefinition ist plausibel (Prüfschritt 60)"
+    ),
+    code!(
+        "A05",
+        E_0551,
+        Ablehnung,
+        "Code der Schaltzeitdefinition wird nicht verwendet (Prüfschritt 80)"
+    ),
+    code!(
+        "A06",
+        E_0551,
+        Ablehnung,
+        "Ausgerollte Schaltzeitdefinition wurde versendet (Prüfschritt 90)"
+    ),
+    code!(
+        "A07",
+        E_0551,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Schaltzeitdefinition mit einer höheren Version versendet (Prüfschritt 110)"
+    ),
+    code!(
+        "A08",
+        E_0551,
+        Ablehnung,
+        "Ausgerollte Schaltzeitdefinition ist plausibel (Prüfschritt 120)"
+    ),
+    code!(
+        "A09",
+        E_0551,
+        Ablehnung,
+        "Code der Leistungskurvendefinition wird nicht verwendet (Prüfschritt 140)"
+    ),
+    code!(
+        "A10",
+        E_0551,
+        Ablehnung,
+        "Ausgerollte Leistungskurvendefinition wurde versendet (Prüfschritt 150)"
+    ),
+    code!(
+        "A11",
+        E_0551,
+        Ablehnung,
+        "Es wurde bereits eine ausgerollte Leistungskurvendefinition mit einer höheren Version versendet (Prüfschritt 170)"
+    ),
+    code!(
+        "A12",
+        E_0551,
+        Ablehnung,
+        "Ausgerollte Leistungskurvendefinition ist plausibel (Prüfschritt 180)"
+    ),
+    code!(
+        "A99",
+        E_0551,
+        Ablehnung,
+        "Sonstiges — das identifizierte Problem ist in der Antwort zu benennen (Prüfschritt 200)",
         bemerkung
     ),
 ];
@@ -4107,7 +5071,7 @@ pub const E_0283_CODES: &[AntwortCode] = &[
 /// Gescheitert.
 ///
 /// `E_0284`, `E_0285` and `E_0287` are the same tree under three more numbers:
-/// EBD 4.3 §§ 8.6.2, 8.7.2 and 9.2.3 each say „Es ist das EBD E_0286 zu
+/// EBD 4.3 Kap. 8.6.2, 8.7.2 and 9.2.3 each say „Es ist das EBD E_0286 zu
 /// nutzen". [`EBD_TECHNIK_DURCHFUEHRUNG_ALIASES`] records that so a caller
 /// holding one of the three resolves to a real Codeliste instead of an empty
 /// one.
@@ -4766,7 +5730,7 @@ pub const E_2019_CODES: &[AntwortCode] = &[
 //
 // The three trees whose prüfende Rolle is the **MSB serving an ESA**. All
 // three answer with an ORDRSP, so the code rides `SG2 AJT` DE 4465 and the
-// tree id DE 1082 — not `STS+E01`. ORDRSP AHB 1.1b §4.15 conditions [17]/[18]
+// tree id DE 1082 — not `STS+E01`. ORDRSP AHB 1.1b Kap. 4.15 conditions [17]/[18]
 // say the code „muss im EBD dem Cluster Zustimmung / Ablehnung zugeordnet
 // sein", which is precisely what [`Cluster`] decides here.
 //
@@ -4980,8 +5944,8 @@ pub const E_0254_CODES: &[AntwortCode] = &[
 // code) triples rather than one code — which is exactly the shape REMADV
 // 33003 („Abweisung Kopf und Summe") and 33004 („Abweisung Position") carry.
 // `E_0267` answers with a single code and rides 33002, and it is the only one
-// of the three that REMADV AHB 1.0a §3.1.1 admits in the `SG7 AJT` DE 1082 of
-// the plain Abweisung; §3.1.2 admits `E_0264` and `E_0266` on 33003/33004.
+// of the three that REMADV AHB 1.0a Kap. 3.1.1 admits in the `SG7 AJT` DE 1082 of
+// the plain Abweisung; Kap. 3.1.2 admits `E_0264` and `E_0266` on 33003/33004.
 // Sending an `E_0264` code on a 33002 is therefore a non-conformant answer,
 // not merely a mislabelled one.
 
@@ -5793,7 +6757,7 @@ const E_0264: Option<&'static str> = Some(EBD_ESA_RECHNUNG);
 ///
 /// **Ablehnungscodes only.** The tree's positive exit at Prüfschritt 560 reads
 /// „Zahlung der Rechnung avisieren und im Zahlungslauf berücksichtigen" — a
-/// REMADV 33001, which carries no `AJT` at all (REMADV AHB 1.0a §3.1.1). The
+/// REMADV 33001, which carries no `AJT` at all (REMADV AHB 1.0a Kap. 3.1.1). The
 /// agreement is the Zahlungsavis itself.
 pub const E_0264_CODES: &[AntwortCode] = &[
     // ── Kopfebene (Prüfschritte 10–90) ──
@@ -6143,9 +7107,9 @@ const E_0267: Option<&'static str> = Some(EBD_ESA_STORNO_RECHNUNG);
 /// is that three-way outcome; collapsing it into accept/reject sends a REMADV
 /// the MSB does not expect.
 ///
-/// This is the one tree of the family REMADV AHB 1.0a §3.1.1 admits in the
+/// This is the one tree of the family REMADV AHB 1.0a Kap. 3.1.1 admits in the
 /// `SG7 AJT` DE 1082 of the plain Abweisung **33002** — `E_0264`/`E_0266`
-/// belong to the itemised 33003/33004 of §3.1.2.
+/// belong to the itemised 33003/33004 of Kap. 3.1.2.
 pub const E_0267_CODES: &[AntwortCode] = &[
     code!(
         "A01",
@@ -6237,6 +7201,8 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     ("E_0605", E_0605_CODES),
     ("E_0606", E_0606_CODES),
     (EBD_BESTELLUNG, E_0595_CODES),
+    (EBD_RUECKMELDUNG_ABRECHNUNGSDATEN_UENB, E_0618_CODES),
+    (EBD_BESTELLUNG_ABRECHNUNGSDATEN_UENB, E_0613_CODES),
     (EBD_GDA_STAMMDATEN_LF, E_0441_CODES),
     (EBD_GDA_STAMMDATEN_MSB, E_0443_CODES),
     (CODELISTE_GDA_STAMMDATEN_LF_GAS, G_0049_CODES),
@@ -6257,6 +7223,21 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_KONFIGURATION_BESTELLUNG, E_0526_CODES),
     (EBD_KONFIGURATION_BESTELLUNG_WEITERER_MSB, E_0527_CODES),
     (EBD_KONFIGURATION_BEENDIGUNG_WEITERER_MSB, E_0539_CODES),
+    (EBD_KONFIGURATION_BESTELLUNG_NB, E_0523_CODES),
+    (EBD_KONFIGURATION_BESTELLUNG_LF_MSB, E_0533_CODES),
+    (EBD_KONFIGURATION_BEENDIGUNG_NB, E_0538_CODES),
+    (EBD_KONFIGURATION_BEENDIGUNG_LF, E_0540_CODES),
+    (EBD_KONFIGURATION_REKLAMATION_NB, E_0552_CODES),
+    (EBD_KONFIGURATION_REKLAMATION_LF, E_0553_CODES),
+    (EBD_KONFIGURATION_REKLAMATION_MSB, E_0554_CODES),
+    (EBD_REKLAMATION_UEBERSICHT_NB_VOM_LF, E_0544_CODES),
+    (EBD_REKLAMATION_UEBERSICHT_NB_VOM_MSB, E_0545_CODES),
+    (EBD_REKLAMATION_UEBERSICHT_LF_VOM_NB, E_0546_CODES),
+    (EBD_REKLAMATION_UEBERSICHT_LF_VOM_MSB, E_0547_CODES),
+    (EBD_REKLAMATION_DEFINITION_NB_VOM_LF, E_0548_CODES),
+    (EBD_REKLAMATION_DEFINITION_NB_VOM_MSB, E_0549_CODES),
+    (EBD_REKLAMATION_DEFINITION_LF_VOM_NB, E_0550_CODES),
+    (EBD_REKLAMATION_DEFINITION_LF_VOM_MSB, E_0551_CODES),
     (EBD_ABONNEMENT_ALLOKATIONSLISTE, E_0803_CODES),
     (EBD_NETZNUTZUNGSRECHNUNG, E_0406_CODES),
     // WiM Strom — Messstellenbetrieb.
@@ -6351,6 +7332,46 @@ pub const VORPRUEFUNG_TREES: &[(&str, &str)] = &[
 /// to the consequence: such a tree must publish no Zustimmungscode.
 pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
     (
+        EBD_REKLAMATION_UEBERSICHT_NB_VOM_LF,
+        "ORDRSP: every code refuses the Reklamation on 19123; a granted one is answered \
+         by resending the Definition (EBD 4.3 Kap. 6.38.1)",
+    ),
+    (
+        EBD_REKLAMATION_UEBERSICHT_NB_VOM_MSB,
+        "ORDRSP: every code refuses the Reklamation on 19123; a granted one is answered \
+         by resending the Definition (EBD 4.3 Kap. 6.39.1)",
+    ),
+    (
+        EBD_REKLAMATION_UEBERSICHT_LF_VOM_NB,
+        "ORDRSP: every code refuses the Reklamation on 19123; a granted one is answered \
+         by resending the Definition (EBD 4.3 Kap. 6.40.1)",
+    ),
+    (
+        EBD_REKLAMATION_UEBERSICHT_LF_VOM_MSB,
+        "ORDRSP: every code refuses the Reklamation on 19123; a granted one is answered \
+         by resending the Definition (EBD 4.3 Kap. 6.41.1)",
+    ),
+    (
+        EBD_REKLAMATION_DEFINITION_NB_VOM_LF,
+        "ORDRSP: every code refuses the Reklamation on 19123; a granted one is answered \
+         by resending the Definition (EBD 4.3 Kap. 6.42.1)",
+    ),
+    (
+        EBD_REKLAMATION_DEFINITION_NB_VOM_MSB,
+        "ORDRSP: every code refuses the Reklamation on 19123; a granted one is answered \
+         by resending the Definition (EBD 4.3 Kap. 6.43.1)",
+    ),
+    (
+        EBD_REKLAMATION_DEFINITION_LF_VOM_NB,
+        "ORDRSP: every code refuses the Reklamation on 19123; a granted one is answered \
+         by resending the Definition (EBD 4.3 Kap. 6.44.1)",
+    ),
+    (
+        EBD_REKLAMATION_DEFINITION_LF_VOM_MSB,
+        "ORDRSP: every code refuses the Reklamation on 19123; a granted one is answered \
+         by resending the Definition (EBD 4.3 Kap. 6.45.1)",
+    ),
+    (
         EBD_GDA_WERTE_MSB,
         "ORDRSP: the positive exit is „Werte versenden\u{201c} — MSCONS, no code; only \
          the Ablehnung rides ORDRSP 19102 (EBD 4.3 Kap. 6.25.2)",
@@ -6438,7 +7459,7 @@ pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
     (
         EBD_ESA_ANFRAGE,
         "QUOTES: the 15003 Angebot carries no AJT at all — the priced offer is \
-         the agreement (QUOTES AHB 1.1a §4.3)",
+         the agreement (QUOTES AHB 1.1a Kap. 4.3)",
     ),
     (
         EBD_RECHNUNGSABWICKLUNG_ANGEBOT,
@@ -6512,27 +7533,27 @@ pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
     (
         EBD_ESA_RECHNUNG,
         "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
-         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+         which carries no AJT at all (REMADV AHB 1.0a Kap. 3.1.1)",
     ),
     (
         EBD_PREISBLATT_B_RECHNUNG_LF,
         "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
-         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+         which carries no AJT at all (REMADV AHB 1.0a Kap. 3.1.1)",
     ),
     (
         EBD_PREISBLATT_B_RECHNUNG_NB,
         "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
-         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+         which carries no AJT at all (REMADV AHB 1.0a Kap. 3.1.1)",
     ),
     (
         EBD_PREISBLATT_B_RECHNUNG_ERNEUT_LF,
         "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
-         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+         which carries no AJT at all (REMADV AHB 1.0a Kap. 3.1.1)",
     ),
     (
         EBD_PREISBLATT_B_RECHNUNG_ERNEUT_NB,
         "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
-         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+         which carries no AJT at all (REMADV AHB 1.0a Kap. 3.1.1)",
     ),
     (
         EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_LF,
@@ -6559,22 +7580,22 @@ pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
     (
         EBD_ESA_RECHNUNG_ERNEUT,
         "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
-         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+         which carries no AJT at all (REMADV AHB 1.0a Kap. 3.1.1)",
     ),
     (
         EBD_MSB_RECHNUNG_LF,
         "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
-         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+         which carries no AJT at all (REMADV AHB 1.0a Kap. 3.1.1)",
     ),
     (
         EBD_MSB_RECHNUNG_NB,
         "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
-         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+         which carries no AJT at all (REMADV AHB 1.0a Kap. 3.1.1)",
     ),
     (
         EBD_MSB_RECHNUNG_ERNEUT_NB,
         "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
-         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+         which carries no AJT at all (REMADV AHB 1.0a Kap. 3.1.1)",
     ),
     (
         EBD_MSB_NICHT_ZAHLUNGSAVIS_NB,
@@ -6728,7 +7749,7 @@ pub enum MsbRechnungsgegenstand {
 ///
 /// PID 31009 alone carries **five** Use-Cases with five different quartets, and
 /// the message body says which one nowhere. Two facts together identify it:
-/// BDEW Allgemeine Festlegungen §2.13 gives every Marktrolle its own MP-ID, so
+/// BDEW Allgemeine Festlegungen Kap. 2.13 gives every Marktrolle its own MP-ID, so
 /// the recipient narrows it to at most two, and
 /// [`MsbRechnungsgegenstand`] picks between those.
 ///

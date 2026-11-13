@@ -11,6 +11,7 @@ impl EdifactIngestDispatcher {
     /// `gpke-sperrung-lf`
     /// `gpke-supplier-change`
     /// `gpke-lf-abmeldung`
+    /// `gpke-nb-lieferende`
     /// `gpke-lf-anmeldung`
     /// `gpke-allokationsliste`
     /// `gpke-abrechnung`
@@ -48,7 +49,7 @@ impl EdifactIngestDispatcher {
                     let malo_id = extract_malo_from_msg(msg);
                     // Business answer Frist: „spätester ÜT ist der 1. WT nach
                     // dem ÜT" for the ORDRSP 19116/19117 (GPKE Teil 2
-                    // §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2) — a Werktag
+                    // Kap. 3.5.1.2 / 3.5.2.2 Prozessschritt 2) — a Werktag
                     // deadline, not 24 wall-clock hours. The APERAK window is
                     // a separate clock, opened by `dispatch` for every message.
                     let received = received_at;
@@ -192,25 +193,103 @@ impl EdifactIngestDispatcher {
             "gpke-lf-abmeldung" => match pid {
                 55007 => {
                     let cmd = adapters::gpke_lf_abmeldung_registry().dispatch(raw, &fv)?;
+                    let AnyMessage::Utilmd(u) = msg else {
+                        return Ok(IngestOutcome::Skipped {
+                            workflow_name: "gpke-lf-abmeldung",
+                            reason: "pid_not_in_spawn_table",
+                        });
+                    };
+                    let first = u.transactions().first();
+                    // Nr. 3, the NB's Beendigung (`BGM+Z90`), resumes the
+                    // Ankündigung its `SG6 RFF+TN` names — never a spawn: it
+                    // ends a Vorgang, it does not open one.
+                    if let mako_gpke::LfAbmeldungCommand::ReceiveBeendigung {
+                        referenz_vorgangsnummer,
+                        ..
+                    } = &cmd
+                    {
+                        let key = if referenz_vorgangsnummer.is_empty() {
+                            String::new()
+                        } else {
+                            mako_gpke::lf_abmeldung::vorgang_key(referenz_vorgangsnummer)
+                        };
+                        return self
+                            .resume_by_key::<GpkeLfAbmeldungWorkflow>(
+                                inbound,
+                                &key,
+                                "gpke-lf-abmeldung",
+                                cmd,
+                            )
+                            .await;
+                    }
                     let malo_id = extract_malo_from_msg(msg);
                     let received = received_at;
                     // 05:00 Uhr des 1. WT nach dem ÜT (GPKE Teil 2, SD
                     // Lieferende von NB an LF Prozessschritt 2).
                     let process_due_at = antwort_due_at(pid, received);
-                    self.spawn_or_resume_guarded::<GpkeLfAbmeldungWorkflow>(
+                    // Indexed under its own `SG4 IDE+24` as well, the key the
+                    // NB's Nr. 3 restates in `SG6 RFF+TN`.
+                    let vorgang = first
+                        .and_then(|t| t.vorgangsnummer())
+                        .map(mako_gpke::lf_abmeldung::vorgang_key);
+                    let extra: Vec<&str> = vorgang.iter().map(String::as_str).collect();
+                    self.spawn_or_resume_keyed::<GpkeLfAbmeldungWorkflow>(
                         inbound,
                         malo_id.as_str(),
                         "gpke-lf-abmeldung",
                         cmd,
                         &fv,
                         &[(mako_gpke::LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, process_due_at)],
-                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                        &extra,
+                        Some(mako_engine::workflow::OccupiesBusinessKey::occupies_business_key),
                     )
                     .await
                 }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "gpke-lf-abmeldung",
                     reason: "pid_not_in_spawn_table",
+                }),
+            },
+            // PIDs 55008/55009 — the LF's answer to the NB's own 55007 (GPKE
+            // Teil 2 Kap. 2.5.2.2 Nr. 2). Resumes the process
+            // `gpke.nb-lieferende.ankuendigen` spawned, under the Ankündigung's
+            // Vorgangsnummer its `SG6 RFF+TN` names: neither answer carries an
+            // `SG5` Lokation. Never a spawn — an answer with no Ankündigung
+            // behind it has nothing to answer.
+            "gpke-nb-lieferende" => match pid {
+                55008 | 55009 => {
+                    let cmd = adapters::gpke_nb_lieferende_antwort_registry(received_at)
+                        .dispatch(raw, &fv)?;
+                    let referenz = match msg {
+                        AnyMessage::Utilmd(u) => u
+                            .transactions()
+                            .first()
+                            .and_then(|t| {
+                                t.references.iter().find(|r| {
+                                    r.qualifier
+                                        == edi_energy::utilmd_codes::rff::REFERENZ_VORGANGSNUMMER
+                                })
+                            })
+                            .and_then(|r| r.reference.as_deref())
+                            .unwrap_or_default(),
+                        _ => "",
+                    };
+                    let key = if referenz.is_empty() {
+                        String::new()
+                    } else {
+                        mako_gpke::nb_lieferende::nb_vorgang_key(referenz)
+                    };
+                    self.resume_by_key::<mako_gpke::GpkeNbLieferendeWorkflow>(
+                        inbound,
+                        &key,
+                        "gpke-nb-lieferende",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-nb-lieferende",
+                    reason: "pid_not_in_resume_table",
                 }),
             },
             // PID 55010 (Anfrage zur Beendigung der Zuordnung, NB → LFA) — GPKE
@@ -261,7 +340,7 @@ impl EdifactIngestDispatcher {
                 }),
             },
             // PIDs 55036/55037/55038 (Zuordnungs-Meldungen, NB → LFN/LFA/LFZ)
-            // — GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13.
+            // — GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13.
             //
             // **No business deadline is registered.** There is no
             // Antwortnachricht, so nothing can be late on the receiving side;
@@ -299,7 +378,7 @@ impl EdifactIngestDispatcher {
                     })
                 }
             }
-            // PID 55016 (Kündigung, LFN → LFA) — GPKE Teil 2 § 1.2. Its own
+            // PID 55016 (Kündigung, LFN → LFA) — GPKE Teil 2 Kap. 1.2. Its own
             // workflow rather than `gpke-supplier-change`: both are keyed by
             // Marktlokation, and an integrated NB+LF deployment runs the NB's
             // Anmeldung on the same MaLo.
@@ -479,10 +558,9 @@ impl EdifactIngestDispatcher {
             //
             // Note: ORDERS 17110 (LF → NB) and 17114 (NB → ÜNB, published by
             // ORDERS fv20260401 and dropped by fv20261001) are this side's own
-            // Anforderungen. They are registered in the PID router for
-            // completeness but have no inbound dispatch handler here — the
-            // receivers (NB for 17110, ÜNB for 17114) are listed in
-            // `SEND_ONLY_PIDS`.
+            // Anforderungen. An inbound 17110 reaches the GNB's
+            // `gabi-gas-mmma`; 17114 is registered without an inbound handler,
+            // its receiver (the ÜNB) listed in `SEND_ONLY_PIDS`.
             "gpke-allokationsliste" => match pid {
                 19110 | 19115 => {
                     let cmd =
@@ -518,7 +596,7 @@ impl EdifactIngestDispatcher {
             // The NB (invoicer) sends an INVOIC to the LF (payer).  `makod`
             // acting as the LF receives the INVOIC and spawns a new billing
             // process.  The settlement window is the invoice's own Zahlungsziel
-            // (`SG8 DTM+265`) — BK6-24-174 GPKE Teil 2 § 3.3.2 and GeLi Gas 3.0
+            // (`SG8 DTM+265`) — BK6-24-174 GPKE Teil 2 Kap. 3.3.2 and GeLi Gas 3.0
             // Kap. 4.5 both answer „zum Zahlungsziel", never in 24 wall-clock
             // hours.  After spawning, the `ProcessInitiated` outbox
             // message notifies `invoicd`, which runs automated plausibility
@@ -631,7 +709,7 @@ impl EdifactIngestDispatcher {
                         adapters::gpke_ankuendigung_zuordnung_lf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // Business answer Frist: „spätester ÜZ ist 15:00 Uhr am ÜT"
-                    // (GPKE Teil 2 § 2.4.2.2 Nr. 2). Missing it is not a lapsed
+                    // (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2). Missing it is not a lapsed
                     // obligation — Prozessschritt 3 has the NB assign the LFN
                     // without an answer.
                     let received = received_at;
@@ -661,7 +739,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_neuanlage_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // Business answer Frist: „spätester ÜZ ist 00:00 Uhr des
-                    // 61. WT nach dem ÜT" (GPKE Teil 2 § 2.2.2 Prozessschritte
+                    // 61. WT nach dem ÜT" (GPKE Teil 2 Kap. 2.2.2 Prozessschritte
                     // 2/3) — `E_0608` Prüfschritte 110/590 give the NB 60
                     // Werktage of *daily* re-identification before it may refuse
                     // a newly commissioned Marktlokation.
@@ -686,12 +764,13 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
-            // ── GPKE Abrechnungsdaten (PIDs 55156/55220/55673) ────────────────
+            // ── GPKE Abrechnungsdaten (PIDs 55156/55220/55673 from the LF,
+            // 55614/55675 from the ÜNB) ───────────────────────────────────────
             "gpke-abrechnungsdaten" => match pid {
-                55156 | 55220 | 55673 => {
+                55156 | 55220 | 55673 | 55614 | 55675 => {
                     let cmd = adapters::gpke_abrechnungsdaten_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // „2. Werktag nach dem ÜT" (GPKE Teil 2 §§ 3.1.1.2 /
+                    // „2. Werktag nach dem ÜT" (GPKE Teil 2 Kap. 3.1.1.2 /
                     // 3.1.2.2 / 3.1.3.2) — a business Frist, longer than the
                     // APERAK window that runs beside it.
                     let received = received_at;
@@ -779,7 +858,7 @@ impl EdifactIngestDispatcher {
                     // stored either way, and a delivery for which this
                     // deployment holds no ESA process is simply not ours to
                     // mark. `SG1 RFF+AGI` names the ORDERS the ESA indexed its
-                    // process under (MSCONS AHB 3.2 §11.2 hint [574]).
+                    // process under (MSCONS AHB 3.2 Kap. 11.2 hint [574]).
                     if pid == 13027 {
                         let key = esa_korrelation_key(msg, pid);
                         if !key.is_empty() {

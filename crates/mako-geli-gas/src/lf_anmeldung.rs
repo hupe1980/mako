@@ -51,7 +51,7 @@
 //! Both emit a `ProcessInitiated` CloudEvent on spawn.
 
 use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
-use mako_engine::payload::Stammdaten;
+use mako_engine::payload::{Stammdaten, UtilmdPayload};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -529,27 +529,23 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                 // Enqueue the outbound UTILMD G as a PendingOutbox entry.
                 // The renderer derives document_date and message_ref at dispatch
                 // time.
-                let mut utilmd = serde_json::json!({
-                    "pid":               pid.as_u32(),
-                    "sender":            sender.as_str(),
-                    "receiver":          receiver.as_str(),
-                    "malo":              malo_id.as_str(),
-                    "process_date":      process_date,
+                let utilmd = UtilmdPayload {
+                    pid: pid.as_u32(),
+                    sender: sender.as_str().to_owned(),
+                    receiver: Some(receiver.as_str().to_owned()),
+                    malo: Some(malo_id.as_str().to_owned()),
+                    process_date: Some(process_date.clone()),
                     // SG4 STS Transaktionsgrund (DE 9013).
-                    "transaktionsgrund": transaktionsgrund,
+                    transaktionsgrund,
                     // `SG10 CCI+Z19` DE 7037 — the Gas shape of the
                     // Bilanzkreis; GeLi Gas has no Produktpaket.
-                    "bilanzkreis":       bilanzkreis,
-                });
-                if let Some(q) = dtm_qualifier {
-                    utilmd["dtm_qualifier"] = q.into();
-                }
-                if !stammdaten.is_empty() {
-                    utilmd["stammdaten"] = serde_json::to_value(&stammdaten)
-                        .map_err(|e| WorkflowError::rejected(e.to_string()))?;
-                }
+                    bilanzkreis,
+                    dtm_qualifier: dtm_qualifier.map(str::to_owned),
+                    stammdaten,
+                    ..Default::default()
+                };
                 let outbox = vec![
-                    PendingOutbox::new("UTILMD", receiver.as_str(), utilmd),
+                    PendingOutbox::typed(receiver.as_str(), &utilmd),
                     // ProcessInitiated CE — notifies marktd → processd/invoicd/edmd.
                     PendingOutbox::new(
                         "ProcessInitiated",

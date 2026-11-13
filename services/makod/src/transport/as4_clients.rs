@@ -12,7 +12,7 @@
 //! [`As4Clients::build`] runs `As4::builder(..).build()` for every MP-ID,
 //! which is the startup check of the key material — `--check` runs it too.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -37,6 +37,9 @@ pub struct As4Setup {
     pub partners: PartnerDirectory,
     /// `[policy.as4] unbekannte_absender`.
     pub unbekannte_absender: UnbekannteAbsender,
+    /// `[[as4.partner]] de0004_ausnahme`: per authenticated partner, the
+    /// further MP-IDs it may name in `UNB` DE 0004.
+    pub de0004_ausnahmen: BTreeMap<String, BTreeSet<String>>,
 }
 
 fn read(field: &str, path: &Path) -> anyhow::Result<Vec<u8>> {
@@ -134,7 +137,10 @@ impl As4Setup {
             let at = |what: &str| format!("[party.as4] of {}: {what}", party.mp_id);
             identities.push(LocalIdentity {
                 mp_id: party.mp_id.clone(),
-                agency: registry.agency_for_mp_id(&party.mp_id).to_owned(),
+                agency: registry
+                    .agency_for_mp_id(&party.mp_id)
+                    .ok_or_else(|| anyhow::anyhow!("[[party]] {} is no MP-ID", party.mp_id))?
+                    .to_owned(),
                 signer: key_pair(
                     &at("signing"),
                     &keys.signing_cert_pem_file,
@@ -145,11 +151,13 @@ impl As4Setup {
                     &keys.encryption_cert_pem_file,
                     &keys.encryption_key_pem_file,
                 )?,
+                retired_decrypters: Vec::new(),
                 tls: key_pair(&at("tls"), &keys.tls_cert_pem_file, &keys.tls_key_pem_file)?,
             });
         }
 
         let mut partners = PartnerDirectory::default();
+        let mut de0004_ausnahmen = BTreeMap::new();
         for p in &as4.partner {
             let at = |what: &str| format!("[[as4.partner]] {}: {what}", p.mp_id);
             anyhow::ensure!(
@@ -175,15 +183,46 @@ impl As4Setup {
                 .collect::<Result<Vec<_>, _>>()?;
             partners.insert(PartnerEntry {
                 mp_id: p.mp_id.clone(),
-                agency: p
-                    .agency
-                    .clone()
-                    .unwrap_or_else(|| registry.agency_for_mp_id(&p.mp_id).to_owned()),
+                agency: match &p.agency {
+                    Some(a) => a.clone(),
+                    None => registry
+                        .agency_for_mp_id(&p.mp_id)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "[[as4.partner]] {} is no MP-ID: the AS4 PartyId is a \
+                                 BDEW-/DVGW-Codenummer or GLN (BDEW AS4-Profil 1.2 §2.3.1.1, \
+                                 S. 13–14), all 13 digits",
+                                p.mp_id
+                            )
+                        })?
+                        .to_owned(),
+                },
                 endpoint: p.endpoint.clone(),
                 encryption_cert,
                 signing_certs,
                 quirks,
             })?;
+            for vertreten in &p.de0004_ausnahme {
+                anyhow::ensure!(
+                    vertreten.len() == 13 && vertreten.bytes().all(|b| b.is_ascii_digit()),
+                    "[[as4.partner]] {}: de0004_ausnahme {vertreten:?} is not an MP-ID — UNB \
+                     DE 0004 carries a 13-digit BDEW-/DVGW-Codenummer or GLN (Allgemeine \
+                     Festlegungen 6.1d Kap. 2.13, S. 17)",
+                    p.mp_id
+                );
+                anyhow::ensure!(
+                    *vertreten != p.mp_id && !registry.is_own_mp_id(vertreten),
+                    "[[as4.partner]] {}: de0004_ausnahme {vertreten:?} names the partner itself \
+                     or one of this deployment's own MP-IDs",
+                    p.mp_id
+                );
+            }
+            if !p.de0004_ausnahme.is_empty() {
+                de0004_ausnahmen.insert(
+                    p.mp_id.clone(),
+                    p.de0004_ausnahme.iter().cloned().collect::<BTreeSet<_>>(),
+                );
+            }
         }
 
         Ok(Some(Self {
@@ -193,20 +232,63 @@ impl As4Setup {
             identities,
             partners,
             unbekannte_absender,
+            de0004_ausnahmen,
         }))
     }
 }
 
-/// The built AS4 clients, by local MP-ID. Cheap to clone.
-#[derive(Debug, Clone)]
-pub struct As4Clients(Arc<Inner>);
+/// The built AS4 clients, by local MP-ID. Cheap to clone; every clone sees a
+/// [`Self::rotate`] at once.
+#[derive(Clone)]
+pub struct As4Clients(Arc<Shared>);
+
+type Configure = dyn Fn(asx::Builder<asx::as4::As4>) -> asx::Builder<asx::as4::As4> + Send + Sync;
+
+struct Shared {
+    current: std::sync::RwLock<Arc<Inner>>,
+    generation: std::sync::atomic::AtomicU64,
+    configure: Box<Configure>,
+}
+
+impl std::fmt::Debug for As4Clients {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("As4Clients")
+            .field("generation", &self.generation())
+            .field("mp_ids", &self.mp_ids())
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Debug)]
 struct Inner {
     clients: BTreeMap<String, asx::as4::As4>,
+    identities: Vec<LocalIdentity>,
+    /// What a rotation compares: the identities' certificates and the
+    /// partner directory.
+    fingerprint: String,
     partners: PartnerDirectory,
     domain: MessageIdDomain,
     unbekannte_absender: UnbekannteAbsender,
+    de0004_ausnahmen: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// The certificates of `setup`'s identities and its partner directory, as one
+/// comparable value.
+fn fingerprint(setup: &As4Setup) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for id in &setup.identities {
+        for kp in [&id.signer, &id.decrypter, &id.tls] {
+            let _ = write!(
+                out,
+                "{}:{:?};",
+                id.mp_id,
+                asx::Decrypter::certificate(kp).der()
+            );
+        }
+    }
+    let _ = write!(out, "{:?}", setup.partners);
+    out
 }
 
 impl As4Clients {
@@ -218,7 +300,7 @@ impl As4Clients {
     /// (naming the setting and the profile section), or two of its uses
     /// sharing a key pair.
     pub fn build(setup: As4Setup) -> anyhow::Result<Self> {
-        Self::build_with(setup, |b| b)
+        Self::build_with(setup, Box::new(|b| b))
     }
 
     /// Build with `http` carrying every request — partner deliveries and CRL
@@ -231,17 +313,24 @@ impl As4Clients {
         dead_code,
         reason = "the integration tests build over a loopback through the library target"
     )]
-    pub fn build_with_http<H: asx::HttpClient + Clone>(
+    pub fn build_with_http<H: asx::HttpClient + Clone + Send + Sync + 'static>(
         setup: As4Setup,
         http: H,
     ) -> anyhow::Result<Self> {
-        Self::build_with(setup, move |b| b.http_client(http.clone()))
+        Self::build_with(setup, Box::new(move |b| b.http_client(http.clone())))
     }
 
-    fn build_with(
-        setup: As4Setup,
-        configure: impl Fn(asx::Builder<asx::as4::As4>) -> asx::Builder<asx::as4::As4>,
-    ) -> anyhow::Result<Self> {
+    fn build_with(setup: As4Setup, configure: Box<Configure>) -> anyhow::Result<Self> {
+        let inner = Self::inner_from(setup, &configure)?;
+        Ok(Self(Arc::new(Shared {
+            current: std::sync::RwLock::new(Arc::new(inner)),
+            generation: std::sync::atomic::AtomicU64::new(0),
+            configure,
+        })))
+    }
+
+    fn inner_from(setup: As4Setup, configure: &Configure) -> anyhow::Result<Inner> {
+        let fingerprint = fingerprint(&setup);
         let mut clients = BTreeMap::new();
         for identity in &setup.identities {
             let builder = mako_as4::client_builder(
@@ -258,44 +347,171 @@ impl As4Clients {
             })?;
             clients.insert(identity.mp_id.clone(), client);
         }
-        Ok(Self(Arc::new(Inner {
+        Ok(Inner {
             clients,
+            identities: setup.identities,
+            fingerprint,
             partners: setup.partners,
             domain: setup.domain,
             unbekannte_absender: setup.unbekannte_absender,
-        })))
+            de0004_ausnahmen: setup.de0004_ausnahmen,
+        })
     }
 
-    /// The client of local MP-ID `mp_id`.
+    fn inner(&self) -> Arc<Inner> {
+        Arc::clone(
+            &self
+                .0
+                .current
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// How many rotations these clients have been through.
     #[must_use]
-    pub fn client(&self, mp_id: &str) -> Option<&asx::as4::As4> {
-        self.0.clients.get(mp_id)
+    pub fn generation(&self) -> u64 {
+        self.0.generation.load(std::sync::atomic::Ordering::Acquire)
     }
 
-    /// Every local MP-ID with its client.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &asx::as4::As4)> {
-        self.0.clients.iter().map(|(id, c)| (id.as_str(), c))
+    /// Replace the clients with those `setup` builds, without a restart, when
+    /// its key material or partners differ from the running ones; `Ok(false)`
+    /// when nothing changed.
+    ///
+    /// The new signing key signs at once: the signing certificate travels in
+    /// every message (Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.3,
+    /// S. 6: „Der öffentliche Schlüssel zum Signieren … darf daher vom
+    /// Absender einer AS4-Nachricht sofort verwendet werden"). A replaced
+    /// encryption key pair keeps decrypting until its certificate expires,
+    /// because a partner may still encrypt to it inside the overlap of at least
+    /// 10 Werktage the same chapter sets.
+    ///
+    /// # Errors
+    ///
+    /// An identity of `setup` that does not build — the running clients stay.
+    pub fn rotate(&self, mut setup: As4Setup, now: time::OffsetDateTime) -> anyhow::Result<bool> {
+        let old = self.inner();
+        if fingerprint(&setup) == old.fingerprint {
+            return Ok(false);
+        }
+        for identity in &mut setup.identities {
+            let Some(previous) = old.identities.iter().find(|i| i.mp_id == identity.mp_id) else {
+                continue;
+            };
+            let current = asx::Decrypter::certificate(&identity.decrypter).clone();
+            for kp in std::iter::once(&previous.decrypter).chain(&previous.retired_decrypters) {
+                let cert = asx::Decrypter::certificate(kp);
+                let valid =
+                    crate::einrichtung::gueltig_bis(cert.der()).is_some_and(|bis| bis > now);
+                let known = mako_as4::keys::same_public_key(cert, &current)
+                    || identity.retired_decrypters.iter().any(|r| {
+                        mako_as4::keys::same_public_key(asx::Decrypter::certificate(r), cert)
+                    });
+                if valid && !known {
+                    identity.retired_decrypters.push(kp.clone());
+                }
+            }
+        }
+        let inner = Self::inner_from(setup, &self.0.configure)?;
+        *self
+            .0
+            .current
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(inner);
+        self.0
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Ok(true)
+    }
+
+    /// The client of local MP-ID `mp_id`, as it stands now.
+    #[must_use]
+    pub fn client(&self, mp_id: &str) -> Option<asx::as4::As4> {
+        self.inner().clients.get(mp_id).cloned()
+    }
+
+    /// Every local MP-ID.
+    #[must_use]
+    pub fn mp_ids(&self) -> Vec<String> {
+        self.inner().clients.keys().cloned().collect()
     }
 
     /// The partner directory.
     #[must_use]
-    pub fn partners(&self) -> &PartnerDirectory {
-        &self.0.partners
+    pub fn partners(&self) -> PartnerDirectory {
+        self.inner().partners.clone()
     }
 
     /// The `eb:MessageId` of outbox entry `outbox_id`.
     #[must_use]
     pub fn message_id(&self, outbox_id: impl std::fmt::Display) -> String {
-        self.0.domain.message_id(outbox_id)
+        self.inner().domain.message_id(outbox_id)
     }
 
     /// Whether a message from `sender` may be acted on under
     /// `[policy.as4] unbekannte_absender`.
     #[must_use]
     pub fn admits_sender(&self, sender: &str) -> bool {
-        match self.0.unbekannte_absender {
-            UnbekannteAbsender::NurKonfigurierte => self.0.partners.contains(sender),
+        let inner = self.inner();
+        match inner.unbekannte_absender {
+            UnbekannteAbsender::NurKonfigurierte => inner.partners.contains(sender),
             UnbekannteAbsender::BdewOuZulassen => true,
         }
     }
+
+    /// Whether an interchange whose `UNB` DE 0004 names `de0004` may be acted
+    /// on when it arrived from the authenticated partner `from`.
+    ///
+    /// The MP-ID in DE 0004 is the sender's own (Allgemeine Festlegungen 6.1d
+    /// Kap. 2.13, S. 17: „Die im UNB- und NAD-Segment für den Absender /
+    /// Empfänger verwendeten MP-ID sind identisch."), and the AS4 sender is
+    /// bound to the MP-ID in its certificate (BDEW AS4-Profil 1.2 Kap.
+    /// 2.3.4.4, S. 17). So DE 0004 is `from`, unless `[[as4.partner]]
+    /// de0004_ausnahme` names `de0004` for `from`.
+    #[must_use]
+    pub fn binds_interchange_sender(&self, from: &str, de0004: &str) -> bool {
+        from == de0004
+            || self
+                .inner()
+                .de0004_ausnahmen
+                .get(from)
+                .is_some_and(|vertreten| vertreten.contains(de0004))
+    }
+}
+
+/// How often [`spawn_rotation`] re-reads the AS4 key material.
+pub const ROTATION_PRUEFINTERVALL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Re-read the configuration with `reload` every [`ROTATION_PRUEFINTERVALL`]
+/// and [`As4Clients::rotate`] onto it, until `shutdown`. A configuration that
+/// does not read or build is logged and the running clients stay.
+pub fn spawn_rotation(
+    clients: As4Clients,
+    reload: impl Fn() -> anyhow::Result<Option<As4Setup>> + Send + 'static,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut takt = tokio::time::interval(ROTATION_PRUEFINTERVALL);
+        takt.tick().await;
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => break,
+                _ = takt.tick() => {
+                    let setup = match reload() {
+                        Ok(Some(setup)) => setup,
+                        Ok(None) => continue,
+                        Err(e) => {
+                            tracing::error!(error = %e, "AS4 rotation: the configuration does not read — the running clients stay");
+                            continue;
+                        }
+                    };
+                    match clients.rotate(setup, time::OffsetDateTime::now_utc()) {
+                        Ok(true) => tracing::info!(generation = clients.generation(), "AS4 rotation: new key material in use"),
+                        Ok(false) => {}
+                        Err(e) => tracing::error!(error = %e, "AS4 rotation: the new key material does not build — the running clients stay"),
+                    }
+                }
+            }
+        }
+    })
 }

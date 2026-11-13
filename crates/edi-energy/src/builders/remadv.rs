@@ -49,7 +49,7 @@ pub struct Positionsfehler {
 
 /// `SG5` — the invoice this REMADV answers, and the two amounts it states.
 ///
-/// **Muss** on every REMADV use case (REMADV AHB 1.0a § 3.1.1 / § 3.1.2,
+/// **Muss** on every REMADV use case (REMADV AHB 1.0a Kap. 3.1.1 / Kap. 3.1.2,
 /// segments 00012–00015). Without it the answer names no invoice: the issuer
 /// correlates on `SG5 DOC` DE 1004, which is the BGM DE 1004 of the INVOIC
 /// being confirmed (`[515]`) or refused (`[511]`).
@@ -344,7 +344,7 @@ impl<S, R> RemadvBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
@@ -352,7 +352,7 @@ impl<S, R> RemadvBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
         // `SG4 CUX` — DE 6347 `2` Referenzwährung, DE 6343 `11`

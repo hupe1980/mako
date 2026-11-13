@@ -23,12 +23,12 @@
 //!
 //! # Why the Prüfmitteilung carries no deadline
 //!
-//! BK6-24-174 § 13.8 publishes no Prüfmitteilung deadline, and neither does
+//! MaBiS (BK6-24-174 Anlage 3) Kap. 13.8 publishes no Prüfmitteilung deadline, and neither does
 //! any other chapter: Kap. 9.8.2 Nr. 1 leaves the Frist cell empty and says the
 //! receiving party „kann" answer, while Kap. 13.8.2 defines no answer at all —
 //! its two rows are the BIKO's own dispatch dates (18. WT vorläufig, 42. WT
 //! endgültig). What bounds a Prüfmitteilung is the clearing window of Tabelle 2,
-//! and that is what this test exercises. A one-Werktag deadline cited to § 13.8
+//! and that is what this test exercises. A one-Werktag deadline cited to Kap. 13.8
 //! is the plausible-looking claim this test exists to refuse.
 
 use mako_engine::process::RunOptions;

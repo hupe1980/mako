@@ -600,7 +600,7 @@ fn lf_antwort_window_label_names_the_process_not_a_duration() {
     assert!(
         !SPERRUNG_LF_ANTWORT_WINDOW_LABEL.contains("24h"),
         "the Sperrung window is „der 1. WT nach dem ÜT\" (BK6-24-174 GPKE Teil 2 \
-         § 3.5.1.2), not 24 wall-clock hours: {SPERRUNG_LF_ANTWORT_WINDOW_LABEL}",
+         Kap. 3.5.1.2), not 24 wall-clock hours: {SPERRUNG_LF_ANTWORT_WINDOW_LABEL}",
     );
 }
 
@@ -616,4 +616,42 @@ fn nb_window_label_names_the_process_not_a_duration() {
         "the window is 1 WT for 17115/17117/39000 and 3 WT for 17116, not \
          24 wall-clock hours: {SPERRUNG_WINDOW_LABEL}",
     );
+}
+
+/// The Sperrauftrag and its Stornierung read back as their typed payloads:
+/// the ORDERS names the Marktlokation in `location` (its `SG2 LOC+172`) and
+/// its Sparte, and the ORDCHG names the ORDERS it cancels by its `BGM` DE
+/// 1004 (`SG1 RFF+ON`).
+#[test]
+fn the_sperrauftrag_and_its_stornierung_read_back_typed() {
+    use mako_engine::payload::{OrdchgPayload, OrdersPayload, OutboundPayload as _};
+    use mako_engine::workflow::Workflow as _;
+    let out = GpkeSperrungLfWorkflow::handle(
+        &SperrungLfState::New,
+        SperrungLfCommand::InitiateSperrung {
+            pid: pid(17115),
+            nb_mp_id: nb_mp_id(),
+            location_id: malo(),
+            message_ref: msg("LF-SPERR-T"),
+        },
+    )
+    .expect("initiated");
+    let orders = OrdersPayload::from_payload(&out.outbox[0].payload).expect("typed ORDERS");
+    assert_eq!(orders.location.as_deref(), Some(malo().as_str()));
+    assert_eq!(orders.document_id.as_deref(), Some("LF-SPERR-T"));
+    assert_eq!(orders.sparte, Some(mako_engine::types::Sparte::Strom));
+    let state = out
+        .events
+        .iter()
+        .fold(SperrungLfState::New, GpkeSperrungLfWorkflow::apply);
+    let out = GpkeSperrungLfWorkflow::handle(
+        &state,
+        SperrungLfCommand::SendStornierung {
+            message_ref: msg("LF-STORNO-T"),
+        },
+    )
+    .expect("storniert");
+    let ordchg = OrdchgPayload::from_payload(&out.outbox[0].payload).expect("typed ORDCHG");
+    assert_eq!(ordchg.pid, Some(39000));
+    assert_eq!(ordchg.order_reference.as_deref(), Some("LF-SPERR-T"));
 }

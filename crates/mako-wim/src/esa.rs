@@ -18,7 +18,7 @@
 //!
 //! # Why the catalogue is data, not a free-form string
 //!
-//! REQOTE AHB 1.2 §4.3 condition `[41]` and ORDERS AHB 1.1b §4.15 restrict
+//! REQOTE AHB 1.2 Kap. 4.3 condition `[41]` and ORDERS AHB 1.1b Kap. 4.15 restrict
 //! `SG27 PIA+5 DE7140` to the codes of *Codeliste der Konfigurationen* Kapitel
 //! 4.6.1/4.6.2. A Messprodukt-Code is therefore a closed set, and the level it
 //! is defined for (`Marktlokation`, `Messlokation`, `Netzlokation`, `Tranche`)
@@ -33,7 +33,7 @@ use time::{Date, macros::date};
 ///
 /// UC 4.1.1 requires the request to reach the MSB assigned to *that exact*
 /// location, and the identifier differs per level. `LOC+172` DE 3225 is
-/// polymorphic across all four (REQOTE AHB 1.2 §4.3, hints `[502]`–`[510]`).
+/// polymorphic across all four (REQOTE AHB 1.2 Kap. 4.3, hints `[502]`–`[510]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Lokationsebene {
@@ -69,7 +69,7 @@ impl Lokationsebene {
 /// interchangeable: 4.6.1 delivers MSCONS 13027 over AS4 from the MSB
 /// back-end, 4.6.2 delivers XML straight from the iMS over SM-PKI and needs
 /// the `SG27 FTX+Z17/Z23/Z24` target address and certificate body in the
-/// Werteanfrage (REQOTE AHB 1.2 §4.3, condition `[512]`).
+/// Werteanfrage (REQOTE AHB 1.2 Kap. 4.3, condition `[512]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Uebertragungsweg {
@@ -84,7 +84,7 @@ impl Uebertragungsweg {
     ///
     /// `Z67` = „Erforderliches Messprodukt für Werte nach Typ 2 aus Backend“,
     /// `Z68` = „Erforderliches Produkt Konfigurationserlaubnis für Werte nach
-    /// Typ 2 aus SMGW“ (REQOTE AHB 1.2 §4.3).
+    /// Typ 2 aus SMGW“ (REQOTE AHB 1.2 Kap. 4.3).
     #[must_use]
     pub const fn lin_code(self) -> &'static str {
         match self {
@@ -251,7 +251,7 @@ pub struct Messprodukt {
     pub nutzbar_ab: Date,
     /// `true` when the product's Auslöser is „Bei Schwellwertunter- /
     /// -überschreitung“, which makes `SG28 CCI+Z60` mandatory in the
-    /// Werteanfrage (REQOTE AHB 1.2 §4.3, conditions `[43]`/`[2066]`).
+    /// Werteanfrage (REQOTE AHB 1.2 Kap. 4.3, conditions `[43]`/`[2066]`).
     pub schwellwertgesteuert: bool,
 }
 
@@ -512,7 +512,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
 /// Ordering any of these makes the `SG27 FTX+Z17` Zieladresse (IPv4 *and*
 /// IPv6) and the `FTX+Z23`/`FTX+Z24` certificate bodies mandatory in the
 /// Werteanfrage; the Schwellwert-triggered ones additionally require
-/// `SG28 CCI+Z60` (REQOTE AHB 1.2 §4.3).
+/// `SG28 CCI+Z60` (REQOTE AHB 1.2 Kap. 4.3).
 pub const SMGW_PRODUKTE: &[Messprodukt] = &[
     produkt!(
         "9991000000432",
@@ -720,7 +720,7 @@ pub fn pflichtprodukte() -> impl Iterator<Item = &'static Messprodukt> {
 
 /// The [`Lokationsebene`] a Messprodukt-Code is defined for.
 ///
-/// **The product decides the level, not the identifier.** REQOTE AHB 1.2 §4.3
+/// **The product decides the level, not the identifier.** REQOTE AHB 1.2 Kap. 4.3
 /// gives `LOC+172` DE 3225 four permitted shapes and lets the Marktlokations-ID
 /// format (`[950]`) serve *both* the Marktlokation (`[502]`) and the Tranche
 /// (`[504]`) — so an 11-digit identifier is provably ambiguous and no amount of
@@ -812,7 +812,7 @@ impl std::error::Error for ProduktFehler {}
 /// Whether the order starts, ends or forgoes a running series.
 ///
 /// `IMD+7081` is **Muss** on ORDERS 17007/17008 and on ORDRSP 19011/19012
-/// (ORDERS AHB 1.1b §4.15, ORDRSP AHB 1.1b §4.15). It is also what decides
+/// (ORDERS AHB 1.1b Kap. 4.15, ORDRSP AHB 1.1b Kap. 4.15). It is also what decides
 /// which EBD the answer cites and which of the two termination paths applies:
 /// a one-shot ([`Self::OhneAbo`]) is stopped with the Stornierung, a running
 /// series ([`Self::StartAbo`]) with the Abbestellung.
@@ -877,7 +877,7 @@ pub struct Schwellwert {
 /// Where the iMS delivers, and under which certificates.
 ///
 /// Mandatory content of the Werteanfrage for every Kapitel 4.6.2 product
-/// (REQOTE AHB 1.2 §4.3, `SG27 FTX+Z17/Z24/Z23`, condition `[512]`). Both an
+/// (REQOTE AHB 1.2 Kap. 4.3, `SG27 FTX+Z17/Z24/Z23`, condition `[512]`). Both an
 /// IPv4 and an IPv6 URI are required — the AHB lists two `FTX+Z17` DE 4440
 /// occurrences with hints `[515]` and `[516]`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1160,7 +1160,7 @@ pub fn business_key(lokations_id: &str, messprodukt: &str) -> String {
 
 /// What an ORDRSP actually said — the published Antwortcode and its tree.
 ///
-/// `SG2 AJT` is **Muss** on all four ESA answer PIDs (ORDRSP AHB 1.1b §4.15),
+/// `SG2 AJT` is **Muss** on all four ESA answer PIDs (ORDRSP AHB 1.1b Kap. 4.15),
 /// DE 4465 carrying the Code des Prüfschritts and DE 1082 the EBD that
 /// publishes it. Those four use cases have **no free-text `FTX` segment at
 /// all** — the only `FTX` a conformant 19011 may carry is `SG27 FTX+Z27`, the
@@ -1244,7 +1244,7 @@ impl Antwort {
 
 /// One `SG31 PRI+CAL` price of the MSB's Angebot.
 ///
-/// QUOTES AHB 1.1a §4.3: `SG31` is **Muss** and repeats once per `PIA+Z02`
+/// QUOTES AHB 1.1a Kap. 4.3: `SG31` is **Muss** and repeats once per `PIA+Z02`
 /// Artikel-ID in the same `SG27 LIN`, up to three times. The Artikel-ID's last
 /// two digits pick the price type — `01` Einrichtung, `02` Betrieb, `03`
 /// Transaktion — which is what conditions `[83]`–`[85]` say.
@@ -1353,7 +1353,7 @@ impl Angebot {
 
 /// Where the MSB will push SM-PKI values **from** (ORDRSP 19011, `SG27`).
 ///
-/// ORDRSP AHB 1.1b §4.15: when the confirmed order named a Kapitel-4.6.2
+/// ORDRSP AHB 1.1b Kap. 4.15: when the confirmed order named a Kapitel-4.6.2
 /// product, the Bestätigung must carry either `FTX+Z27` (a single IP address,
 /// condition `[77]`) or `FTX+Z28` (a range, condition `[76]`). The ESA has to
 /// admit that source before the iMS can reach it, so dropping it left a
@@ -1432,7 +1432,7 @@ pub const fn korrelation(pid: u32) -> Option<Korrelation> {
         17007 => Some(Korrelation::AngebotsNummer),
         19011 | 19012 | 39002 => Some(Korrelation::AuftragsNummer),
         17008 | 19013 | 19014 => Some(Korrelation::VorherigeNachricht),
-        // MSCONS AHB 3.2 §11.2 hint `[574]`: „Wert aus BGM DE1004 der ORDERS
+        // MSCONS AHB 3.2 Kap. 11.2 hint `[574]`: „Wert aus BGM DE1004 der ORDERS
         // mit der die Bestellung der Werte nach Typ 2 erfolgt ist" — the same
         // `RFF+AGI` qualifier as the IFTSTA (in `SG1` rather than `SG15`), and
         // the only thing on a value delivery that names the subscription it
@@ -1742,7 +1742,7 @@ mod tests {
     }
 
     /// The product, never the identifier, decides the level: REQOTE AHB 1.2
-    /// §4.3 gives the Marktlokation (`[502]`) and the Tranche (`[504]`) the
+    /// Kap. 4.3 gives the Marktlokation (`[502]`) and the Tranche (`[504]`) the
     /// *same* `[950]` Marktlokations-ID format, so length inference cannot tell
     /// them apart — and the Tranche carries a Pflichtprodukt.
     #[test]

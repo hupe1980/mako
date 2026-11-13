@@ -69,7 +69,7 @@ names `sync-regulatories` mirrored. Give the predecessor its `valid_until`
 (the day before).
 
 When the Mitteilung gives the release a publication date off the Allgemeine
-Festlegungen 6.1d § 2.5 timetable, add `"publikation_quelle"` naming it —
+Festlegungen 6.1d Kap. 2.5 timetable, add `"publikation_quelle"` naming it —
 `"BNetzA Mitteilung Nr. <n> (<Datum>)"` or the Mitteilung's
 bundesnetzagentur.de URL. `validate-profiles` refuses an off-timetable date
 without it, and a `publikation_quelle` that names no Mitteilung.
@@ -298,7 +298,7 @@ See [Transition Window Handling](@/docs/compliance/release-lifecycle.md#transiti
 
 ### Publikationsdatum is not the Anwendungszeitpunkt
 
-Allgemeine Festlegungen 6.1d §2.5.1/§2.5.2 give the cycle three instants. For the
+Allgemeine Festlegungen 6.1d Kap. 2.5.1/Kap. 2.5.2 give the cycle three instants. For the
 October changeover: consultation documents 01.02., **Veröffentlichung der
 konsultierten Dokumente 01.04.**, **Anwendungszeitpunkt 01.10.** The April
 changeover mirrors it — published 01.10., applies 01.04. of the next year. The
@@ -323,14 +323,14 @@ Anwendungszeitpunkt; the latest consolidated version is the one to implement.
 cargo xtask validate-profiles          # prints gaps and overlaps
 ```
 
-The six-month gap is § 2.5's own timetable, so `publikationsdatum` is entailed
+The six-month gap is Kap. 2.5's own timetable, so `publikationsdatum` is entailed
 by `valid_from` rather than looked up, and `validate-profiles` refuses a regular
 Anwendungszeitpunkt whose profile states no date or one that disagrees. A date
 off the timetable is admitted only with a `publikation_quelle` that names the
 BNetzA Mitteilung — „Mitteilung Nr. <n>“ or its bundesnetzagentur.de page — and
 no publication may fall on or after its own `valid_from`. `contrl`/`insrpt` run
 on an ausserordentliche Veröffentlichung (applies 2026-01-01), which neither
-§ 2.5.1 nor § 2.5.2 covers; those profiles state no `publikationsdatum`, which
+Kap. 2.5.1 nor Kap. 2.5.2 covers; those profiles state no `publikationsdatum`, which
 the rule admits off the timetable.
 
 ### Date or wire code?

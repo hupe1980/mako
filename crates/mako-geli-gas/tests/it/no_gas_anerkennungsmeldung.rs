@@ -1,6 +1,6 @@
 //! No Gas-Sparte workflow enqueues an APERAK Anerkennungsmeldung.
 //!
-//! APERAK AHB 1.1 §2.3 (S. 21 f.): „In der Sparte Gas wird dem Absender eines
+//! APERAK AHB 1.1 Kap. 2.3 (S. 21 f.): „In der Sparte Gas wird dem Absender eines
 //! Geschäftsvorfalls vom Empfänger dieses Geschäftsvorfalls nur eines der beiden
 //! Ergebnisse der mit diesem Geschäftsvorfall durchgeführten
 //! Verarbeitbarkeitsprüfung via APERAK mitgeteilt: Das Ergebnis, dass der
@@ -65,7 +65,7 @@ fn no_gas_workflow_enqueues_an_anerkennungsmeldung() {
     assert!(
         offences.is_empty(),
         "a Gas-Sparte workflow enqueues APERAK 29002 (BGM+312), which APERAK AHB 1.1 \
-         §2.3 does not allow:\n{}",
+         Kap. 2.3 does not allow:\n{}",
         offences.join("\n")
     );
 }

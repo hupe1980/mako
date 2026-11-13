@@ -75,7 +75,8 @@ Commands:
                         (state, command), re-run on retry and re-folded on every replay
   check-event-payloads   Refuse `deny_unknown_fields` on a workflow event payload — an
                         event is read back years later, so a removed field must not make
-                        a § 147 AO record unfoldable
+                        a § 147 AO record unfoldable — and a rendered message type queued
+                        by hand instead of through `PendingOutbox::typed`
   check-as4-controls     Refuse an AS4 control that is unreachable — the declared sign-and-encrypt
                         floor with no call site, or the unpinned base session reaching the
                         inbound pipeline (which refuses every signed message)
@@ -128,7 +129,11 @@ Commands:
                         function that collects `Befund`s — every finding is reported, with its path
   setup               The deployment checklist: every dev/config daemon's --check-config --json
                         folded across daemons (--url <makod> [--token-env VAR] asks a running
-                        makod's /admin/einrichtung/deployment instead); non-zero while not ready
+                        makod's /admin/einrichtung/deployment instead); non-zero while not ready.
+                        --tabelle prints one line per daemon; --vorschlag <answers.toml|json>
+                        prints the configuration the setup interview's answers propose
+  erstlauf            The first run, timed: an empty makod, the fixture interview's proposal
+                        applied, a green check and a passing Probelauf — under 30 minutes
   check-thin-main     Refuse a services/*/src/main.rs that is more than
                         `mako_service::run::<D>().await` — the daemon lives in the library
   check-desk          The Desk's npm licences are within deny.toml's allow list,
@@ -219,6 +224,7 @@ mod check_workflow_purity;
 mod dep_age;
 #[cfg(test)]
 mod dev_configs;
+mod erstlauf;
 mod evidence_pack;
 mod import_profiles;
 mod index_sources;
@@ -313,6 +319,7 @@ fn main() {
         Some("check-thin-main") => root_task(check_thin_main::run),
         Some("check-config-findings") => root_task(check_config_findings::run),
         Some("setup") => root_task(setup::run),
+        Some("erstlauf") => root_task(erstlauf::run),
         Some("check-sts-codes") => root_task(check_sts_codes::run),
         Some("check-desk") => root_task(check_desk::run),
         Some("check-error-tuples") => root_task(check_error_tuples::run),

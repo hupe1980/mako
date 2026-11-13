@@ -27382,20 +27382,17 @@
             {
               "code": "ZG5",
               "operand": "X"
-            }
-          ]
-        },
-        {
-          "de": "2014",
-          "nr": "00036",
-          "operands": [
+            },
             {
+              "code": "ZG9",
               "operand": "X"
             },
             {
+              "code": "ZH0",
               "operand": "X"
             },
             {
+              "code": "ZH1",
               "operand": "X"
             }
           ]
@@ -28000,14 +27997,9 @@
             {
               "code": "ZC8",
               "operand": "X"
-            }
-          ]
-        },
-        {
-          "de": "2014",
-          "nr": "00036",
-          "operands": [
+            },
             {
+              "code": "ZH1",
               "operand": "X"
             }
           ]

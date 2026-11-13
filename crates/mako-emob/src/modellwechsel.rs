@@ -57,6 +57,7 @@ use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
+    payload::UtilmdPayload,
     types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -516,53 +517,54 @@ fn apply(state: ModellwechselState, event: &ModellwechselEvent) -> Modellwechsel
     }
 }
 
+/// The UTILMD columns both a request and an answer on `leg` carry.
+///
+/// AHB Bedingung [317]: the Bilanzierungs-date carries the same value as the
+/// Vertrags-date. One date in the domain, two segments on the wire.
+fn leg_payload(leg: LegWire, data: &Modellwechseldaten, pid: u32) -> UtilmdPayload {
+    let mut payload = UtilmdPayload {
+        pid,
+        malo: Some(data.malo.as_str().to_owned()),
+        process_date: Some(data.process_date.clone()),
+        document_code: Some(leg.bgm.to_owned()),
+        dtm_qualifier: Some(leg.dtm.to_owned()),
+        ..Default::default()
+    };
+    if leg.bilanzierung_key == "bilanzierungsbeginn" {
+        payload.bilanzierungsbeginn = Some(data.process_date.clone());
+    } else {
+        payload.bilanzierungsende = Some(data.process_date.clone());
+    }
+    payload
+}
+
 /// The `PendingOutbox` for a request on `leg`.
 fn anfrage_outbox(leg: LegWire, data: &Modellwechseldaten) -> PendingOutbox {
-    let mut payload = serde_json::json!({
-        "pid":            leg.anfrage_pid,
-        "sender":         data.sender.as_str(),
-        "receiver":       data.receiver.as_str(),
-        "malo":           data.malo.as_str(),
-        "process_date":   data.process_date,
-        "document_code":  leg.bgm,
-        "dtm_qualifier":  leg.dtm,
-    });
-    // AHB Bedingung [317]: the Bilanzierungs-date carries the same value as
-    // the Vertrags-date. One date in the domain, two segments on the wire.
-    payload[leg.bilanzierung_key] = serde_json::Value::String(data.process_date.clone());
-    if let Some(vn) = &data.vorgangsnummer {
-        payload["vorgangsnummer"] = serde_json::Value::String(vn.clone());
-    }
-    PendingOutbox::new("UTILMD", data.receiver.as_str(), payload)
+    let payload = UtilmdPayload {
+        sender: data.sender.as_str().to_owned(),
+        receiver: Some(data.receiver.as_str().to_owned()),
+        vorgangsnummer: data.vorgangsnummer.clone(),
+        ..leg_payload(leg, data, leg.anfrage_pid)
+    };
+    PendingOutbox::typed(data.receiver.as_str(), &payload)
 }
 
 /// The `PendingOutbox` for an answer on `leg`.
 ///
 /// The parties swap: the request's receiver is the answer's sender.
 fn antwort_outbox(leg: LegWire, data: &Modellwechseldaten, antwort: &EmobAntwort) -> PendingOutbox {
-    let mut payload = serde_json::json!({
-        "pid":            leg.antwort_pid,
-        "sender":         data.receiver.as_str(),
-        "receiver":       data.sender.as_str(),
-        "malo":           data.malo.as_str(),
-        "process_date":   data.process_date,
-        "document_code":  leg.bgm,
-        "dtm_qualifier":  leg.dtm,
-        "antwort_code":   antwort.antwort_code,
+    let payload = UtilmdPayload {
+        sender: data.receiver.as_str().to_owned(),
+        receiver: Some(data.sender.as_str().to_owned()),
+        antwort_code: Some(antwort.antwort_code.clone()),
         // DE 1131. The one payload key for it — see the renderer's field table.
-        "antwort_codeliste": antwort.codeliste,
-    });
-    payload[leg.bilanzierung_key] = serde_json::Value::String(data.process_date.clone());
-    if let Some(text) = &antwort.bemerkung {
-        payload["bemerkung"] = serde_json::Value::String(text.clone());
-    }
-    if let Some(zp) = &antwort.zp_ngz {
-        payload["mabis_zaehlpunkt"] = serde_json::Value::String(zp.clone());
-    }
-    if let Some(vn) = &data.vorgangsnummer {
-        payload["referenz_vorgangsnummer"] = serde_json::Value::String(vn.clone());
-    }
-    PendingOutbox::new("UTILMD", data.sender.as_str(), payload)
+        antwort_codeliste: Some(antwort.codeliste.clone()),
+        bemerkung: antwort.bemerkung.clone(),
+        mabis_zaehlpunkt: antwort.zp_ngz.clone(),
+        referenz_vorgangsnummer: data.vorgangsnummer.clone(),
+        ..leg_payload(leg, data, leg.antwort_pid)
+    };
+    PendingOutbox::typed(data.sender.as_str(), &payload)
 }
 
 fn handle(

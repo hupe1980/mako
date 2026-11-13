@@ -171,7 +171,8 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/webhook` | Inbound CloudEvents (billingd, einsd, invoicd), Standard Webhooks signature |
-| `GET/PUT` | `/api/v1/accounts/{malo_id}` | Account master data (IBAN, Abschlag, `billing_day`, `verbraucher`) |
+| `GET/PUT` | `/api/v1/accounts/{malo_id}` | Account master data (IBAN, Abschlag, `billing_day`) |
+| `PUT` | `/api/v1/accounts/{malo_id}/verbraucher` | The § 13 BGB status, `{"verbraucher": true\|false\|null}` — vertragd's contract command only (Cedar `sync-verbraucher`, held to the principal `vertragd`) |
 | `GET` | `/api/v1/accounts/{malo_id}/balance` | Balance in ct; `overdue` / `credit` / `settled` |
 | `GET` | `/api/v1/accounts/{malo_id}/ledger` | Movements, newest first, with `opening_ct` |
 | `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Statement for portald; `?from=&to=` returns `eroeffnungssaldo_ct` / `bewegung_ct` / `schlusssaldo_ct` |
@@ -450,16 +451,23 @@ curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/interest-charg
   -d '{
     "invoice_reference": "R2026-05-001",
     "principal_ct":      50000,
-    "is_b2b":            false,
     "period_from":       "2026-06-15",
     "period_to":         "2026-07-15"
   }'
 ```
 
-| Customer | Rate | Basis |
+The rate follows the account's `verbraucher` (§ 13 BGB), which vertragd
+writes from the contract and nothing else can: Cedar `sync-verbraucher` is
+granted only to the principal `vertragd` — name vertragd's
+`[[oidc.service_keys]]` entry so — and an operator token is refused. Without
+authentication (`allow_insecure_no_auth`) the caller is `dev-admin`, so the
+status stays unrecorded there.
+
+| `verbraucher` | Rate | Basis |
 |---|---|---|
-| B2C | Basiszinssatz + 5 pp | § 288 Abs. 1 BGB |
-| B2B | Basiszinssatz + 9 pp | § 288 Abs. 2 BGB |
+| `true` | Basiszinssatz + 5 pp | § 288 Abs. 1 BGB |
+| `false` | Basiszinssatz + 9 pp | § 288 Abs. 2 BGB |
+| not recorded | Basiszinssatz + 5 pp | § 288 Abs. 1 BGB — Abs. 2 needs a Rechtsgeschäft „an denen ein Verbraucher nicht beteiligt ist" |
 
 The Basiszinssatz (§ 247 BGB, announced by the Deutsche Bundesbank on 1 January
 and 1 July) is read from `ecb_base_rates`, seeded through 01.07.2026 (1.27 %
@@ -470,8 +478,8 @@ rates by SQL. A period without a seeded rate **refuses the request**.
 
 ### Pauschale (§ 288 Abs. 5 BGB)
 
-Every dunning step on an account with `verbraucher = false` (§ 13 BGB, set
-through `PUT /api/v1/accounts/{malo_id}`) claims one Pauschale of 40 EUR per
+Every dunning step on an account with `verbraucher = false` (§ 13 BGB, from
+the vertragd contract) claims one Pauschale of 40 EUR per
 open Entgeltforderung — a `RECHNUNG` or an `ABSCHLAG` — keyed on the receivable,
 so a second Mahnung for the same claim books none. A Verbraucher owes none, and
 an account whose status is not recorded is charged none.

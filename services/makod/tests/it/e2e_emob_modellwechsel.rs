@@ -107,7 +107,7 @@ async fn an_answer_pid_resumes_and_never_spawns() {
 /// Which of the two outcomes it takes depends on the day. The Modell-2
 /// Prüfidentifikatoren exist only in the **FV2026-10-01** profile, and a
 /// format applies six months after publication rather than on it (Allgemeine
-/// Festlegungen 6.1d §2.5) — so before 01.10.2026 the AHB layer refuses every
+/// Festlegungen 6.1d Kap. 2.5) — so before 01.10.2026 the AHB layer refuses every
 /// 55238, the process reaches `Rejected`, and a resend legitimately opens a
 /// fresh one. From 01.10.2026 the first process stays open and the resend
 /// resumes it.

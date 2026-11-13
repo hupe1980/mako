@@ -9,7 +9,7 @@ An inbound message starts **two independent clocks**:
 
 | Clock | Window | Source |
 |---|---|---|
-| **Technical acknowledgement** (APERAK) | **45 Minuten** for a UTILMD or ORDERS; Sonntag 12:00 for a Saturday arrival; nächster Werktag 12:00 for every other message type | APERAK AHB 1.1 § 2.4.1 |
+| **Technical acknowledgement** (APERAK) | **45 Minuten** for a UTILMD or ORDERS; Sonntag 12:00 for a Saturday arrival; nächster Werktag 12:00 for every other message type | APERAK AHB 1.1 Kap. 2.4.1 |
 | **Business answer** | per Prüfidentifikator — a clock time, an end-of-Werktag, or a Werktag count | the Festlegung for that process |
 
 A queue sized by the looser of the two reports a lapsed Frist as still
@@ -95,12 +95,12 @@ answers for:
 
 | Message | Discharges | Obligation |
 |---|---|---|
-| `APERAK` | `aperak-strom-45min-window`, `aperak-gas-folgeprozess-…`, `aperak-gas-initialprozess-…` | APERAK AHB 1.1 §2.4.1 / §2.3.1 |
-| `CONTRL` | `contrl-delivery-window` | CONTRL AHB 1.0 §2.3.1 / §2.4.1 |
+| `APERAK` | `aperak-strom-45min-window`, `aperak-gas-folgeprozess-…`, `aperak-gas-initialprozess-…` | APERAK AHB 1.1 Kap. 2.4.1 / Kap. 2.3.1 |
+| `CONTRL` | `contrl-delivery-window` | CONTRL AHB 1.0 Kap. 2.3.1 / Kap. 2.4.1 |
 
 A delivery window is registered only on a path that enqueues its message. In
 der Sparte Gas the APERAK is a Verarbeitbarkeitsfehlermeldung only (APERAK AHB
-1.1 §2.3), so a processable Gas message arms no APERAK window.
+1.1 Kap. 2.3), so a processable Gas message arms no APERAK window.
 
 A delivery discharges only its own windows — an acknowledged CONTRL says nothing
 about the APERAK. A delivery window that survives to its due time is an

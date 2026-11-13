@@ -127,6 +127,19 @@
       "bilanz": null
     },
     {
+      "name": "einrichtung-assistent",
+      "titel": "Einrichtung vorbelegen",
+      "zweck": "Liest aus einem Satz über das Deployment die Antworten der Einrichtung vor — Rollen, MP-IDs, Bilanzkreise —, jede zur Bestätigung durch eine Person.",
+      "version": "1.0.0",
+      "digest": "291d75c8f1fa22139bf8cc60f48051777addb642eac7df3771895594eca02cf2",
+      "ausloeser": [],
+      "modell": "anthropic/claude-haiku-4-5",
+      "liest": [],
+      "nur_lesend": true,
+      "mit_freigabe": 0,
+      "bilanz": null
+    },
+    {
       "name": "billing-agent",
       "titel": "Rechnungseinwände",
       "zweck": "Prüft eine bestrittene Rechnung gegen die Zahlungsavise und schlägt die Korrektur der Abrechnung vor.",
@@ -824,7 +837,7 @@
       "titel": "Sperraufträge",
       "zweck": "Verfolgt Sperr- und Entsperraufträge und meldet, was über dem gewünschten Termin liegt.",
       "version": "2.0.0",
-      "digest": "e92a908db03806e2aaf8dd7156c233943ed1585ac8bcfc388de7b3b955cea8ab",
+      "digest": "90fcf11c1a39e9777f9a8e577b56cf81b7e75376888ad6b7bd88971f429460b5",
       "ausloeser": [
         "de.accounting.sperrauftrag",
         "de.sperr.*",
@@ -976,7 +989,7 @@
       "titel": "Bilanzierung (MaBiS)",
       "zweck": "Überwacht die Summenzeitreihen und ihre Clearingfenster und erklärt fehlgeschlagene Lieferungen.",
       "version": "3.0.0",
-      "digest": "9e44d39dda77c15305959a84fb6a43c43cf25ae729e6203a365235e666aefb68",
+      "digest": "c5066dfd34cefb63b40d694148718d08e4bf7095a22fb008ea11b43a7d4e96f0",
       "ausloeser": [
         "de.mabis.submission.failed",
         "de.mabis.korrekturbedarf.opened",
@@ -994,7 +1007,7 @@
         },
         {
           "werkzeug": "netzbilanzd/list_korrekturbedarf",
-          "wozu": "Every open § 9.8.1 correction obligation."
+          "wozu": "Every open Kap. 9.8.1 correction obligation."
         },
         {
           "werkzeug": "netzbilanzd/list_failed_submissions",

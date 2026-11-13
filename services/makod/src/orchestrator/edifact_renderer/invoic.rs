@@ -30,11 +30,25 @@ pub(super) fn render_invoic(
     msg: &OutboxMessage,
     _registry: &MpIdRegistry,
 ) -> Result<RenderedInterchange, RenderError> {
-    let mt = "INVOIC";
-    let nachricht = require_str(p, mt, "nachricht")?;
-    let sender = require_str(p, mt, "sender")?;
-    let receiver = require_str(p, mt, "receiver")?;
-    finish_interchange(Ok(nachricht.as_bytes().to_vec()), sender, receiver, msg)
+    let p: mako_engine::payload::InvoicPayload = super::typed_payload(p)?;
+    for (field, value) in [
+        ("nachricht", &p.nachricht),
+        ("sender", &p.sender),
+        ("receiver", &p.receiver),
+    ] {
+        if value.is_empty() {
+            return Err(RenderError::MissingField {
+                message_type: "INVOIC".into(),
+                field: field.into(),
+            });
+        }
+    }
+    finish_interchange(
+        Ok(p.nachricht.as_bytes().to_vec()),
+        &p.sender,
+        &p.receiver,
+        msg,
+    )
 }
 
 // ── REMADV ────────────────────────────────────────────────────────────────────
@@ -81,25 +95,16 @@ pub(super) fn render_remadv(
     registry: &MpIdRegistry,
 ) -> Result<RenderedInterchange, RenderError> {
     let mt = "REMADV";
+    let p: mako_engine::payload::RemadvPayload = super::typed_payload(p)?;
 
-    let sender = p
-        .get("sender")
-        .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_mp_id());
-    let receiver = p
-        .get("receiver")
-        .and_then(|v| v.as_str())
-        .unwrap_or(msg.recipient.as_ref());
-    let document_id = p.get("document_id").and_then(|v| v.as_str());
-    let document_code = p.get("document_code").and_then(|v| v.as_str());
-    let doc_date = p
-        .get("document_date")
-        .and_then(|v| v.as_str())
+    let sender = text(&p.sender).unwrap_or_else(|| registry.primary_mp_id());
+    let receiver = text(&p.receiver).unwrap_or(msg.recipient.as_ref());
+    let document_id = text(&p.document_id);
+    let document_code = text(&p.document_code);
+    let doc_date = text(&p.document_date)
         .map(|d| dokumentdatum_303(mt, d))
         .transpose()?;
-    let message_ref = p
-        .get("message_ref")
-        .and_then(|v| v.as_str())
+    let message_ref = text(&p.message_ref)
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
@@ -120,38 +125,37 @@ pub(super) fn render_remadv(
         builder = builder.document_date(d);
     }
     // `RFF+Z13` — the Prüfidentifikator the receiving system routes on.
-    if let Some(pid) = p.get("pid").and_then(serde_json::Value::as_u64) {
+    if let Some(pid) = checked_pid(p.pid, mt)? {
         builder = builder.pruefidentifikator(pid.to_string());
     }
-    if let Some(w) = p.get("waehrung").and_then(|v| v.as_str()) {
+    if let Some(w) = text(&p.waehrung) {
         builder = builder.waehrung(w);
     }
     // `SG5` — DOC, MOA+9, MOA+12, DTM+137. All Muss.
-    if let Some(r) = p.get("rechnungsbezug").filter(|v| v.is_object()) {
-        let field = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    if let Some(r) = &p.rechnungsbezug {
         builder = builder.rechnungsbezug(builders::Rechnungsbezug {
-            dokumentenart: field("dokumentenart"),
-            rechnungsnummer: field("rechnungsnummer"),
-            faelliger_betrag: field("faelliger_betrag"),
-            ueberweisungsbetrag: field("ueberweisungsbetrag"),
+            dokumentenart: r.dokumentenart.clone(),
+            rechnungsnummer: r.rechnungsnummer.clone(),
+            faelliger_betrag: r.faelliger_betrag.clone(),
+            ueberweisungsbetrag: r.ueberweisungsbetrag.clone(),
             // `SG5 DTM+137` is `303`: the invoice's own document date, a
             // calendar date becoming the instant that German day begins.
-            rechnungsdatum: dokumentdatum_303(mt, &field("rechnungsdatum"))?,
+            rechnungsdatum: dokumentdatum_303(mt, &r.rechnungsdatum)?,
         });
     }
     // `SG10 DLI` + `SG12 AJT` — the Positionsebene. `invoicd` puts every
     // Befund of the walk in `antwort_befunde` with its Ebene and, on a
     // position-level one, its Positionsnummer; `SG10` is Muss on 33004 and is
     // repeated „bis alle Fehler der Positionsebene genannt sind".
-    let ebd = p.get("antwort_codeliste").and_then(|v| v.as_str());
-    let positionsfehler = position_level_befunde(p, ebd);
+    let ebd = text(&p.antwort_codeliste);
+    let positionsfehler = position_level_befunde(&p.antwort_befunde, ebd);
     if !positionsfehler.is_empty() {
         builder = builder.positionsfehler(positionsfehler);
     }
     // `SG7 AJT` — the Abweichungsgrund. An Abweisung without one gives the
     // invoice sender nothing to correct; `invoicd` computes the reason and it
     // must reach the wire.
-    if let Some(code) = p.get("antwort_code").and_then(|v| v.as_str()) {
+    if let Some(code) = text(&p.antwort_code) {
         let grund = match ebd {
             Some(ebd) => builders::Abweichungsgrund::new(code, ebd),
             None => builders::Abweichungsgrund {
@@ -162,7 +166,7 @@ pub(super) fn render_remadv(
         };
         // `SG7 FTX+ABO` — the explanation the EBD asks for (`[548]`); invoicd
         // states it in German and within `an..512`.
-        let grund = match p.get("ablehnungsgrund").and_then(|v| v.as_str()) {
+        let grund = match text(&p.ablehnungsgrund) {
             Some(text) if !text.trim().is_empty() => grund.mit_erlaeuterung(text),
             _ => grund,
         };
@@ -178,24 +182,15 @@ pub(super) fn render_remadv(
 /// which the caller emits once. Only a Befund that names a Positionsnummer
 /// belongs in `SG10`/`SG12`.
 fn position_level_befunde(
-    p: &serde_json::Value,
+    befunde: &[mako_engine::payload::RemadvBefund],
     ebd: Option<&str>,
 ) -> Vec<builders::Positionsfehler> {
     let mut out: Vec<builders::Positionsfehler> = Vec::new();
-    for b in p
-        .get("antwort_befunde")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let (Some(code), Some(nr)) = (
-            b.get("code").and_then(|v| v.as_str()),
-            b.get("positionsnummer")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|n| u16::try_from(n).ok()),
-        ) else {
+    for b in befunde {
+        let Some(nr) = b.positionsnummer else {
             continue;
         };
+        let code = b.code.as_str();
         let grund = match ebd {
             Some(ebd) => builders::Abweichungsgrund::new(code, ebd),
             None => builders::Abweichungsgrund {
@@ -204,7 +199,7 @@ fn position_level_befunde(
                 erlaeuterung: None,
             },
         };
-        let detail = b.get("detail").and_then(|v| v.as_str()).map(str::to_owned);
+        let detail = b.detail.clone();
         match out.iter_mut().find(|pf| pf.positionsnummer == nr) {
             Some(pf) => {
                 pf.gruende.push(grund);

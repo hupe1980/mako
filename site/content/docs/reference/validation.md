@@ -77,13 +77,13 @@ because a message that fails them has no coherent identity to validate:
 |---|---|
 | Interchange control reference | `UNZ` DE 0020 must equal `UNB` DE 0020 (EDIFACT syntax) |
 | Declared counts | `UNT` DE 0074 = segments in the message (`UNH` and `UNT` included); `UNZ` DE 0036 = messages in the interchange — ISO 9735-1 Annex C.3.4 |
-| **Interchange party identity** | The `NAD+MS` / `NAD+MR` MP-IDs must equal `UNB` DE 0004 / DE 0010 — **Allgemeine Festlegungen V6.1d §2.13** |
+| **Interchange party identity** | The `NAD+MS` / `NAD+MR` MP-IDs must equal `UNB` DE 0004 / DE 0010 — **Allgemeine Festlegungen V6.1d Kap. 2.13** |
 
 A wrong count is refused here, before any rule runs — the same answer a
 receiver gives it, a CONTRL rejection.
 
 > "Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten MP-ID
-> sind identisch." — §2.13
+> sind identisch." — Kap. 2.13
 
 The party check is an authorisation boundary rather than a formatting rule. AS4
 authenticates the **envelope** sender, while consuming services read `NAD+MS`

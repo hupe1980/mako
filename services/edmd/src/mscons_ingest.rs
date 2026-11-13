@@ -179,7 +179,7 @@ pub(crate) async fn ingest(
 
     // ── ESA "Werte nach Typ 2" (PID 13027) fork ───────────────────────────
     // These are non-authoritative (Codeliste 1.4 Kap. 4.6 · WiM Teil 2
-    // §4). They must never enter `meter_reads` — a billing query would
+    // Kap. 4). They must never enter `meter_reads` — a billing query would
     // sum them by omission. Route them to the separate Typ-2 store, with
     // no validation/substitution machinery: a Typ-2 value is stored as
     // delivered and never reconciled or corrected.
@@ -198,7 +198,7 @@ pub(crate) async fn ingest(
             warn!(
                 process_id = %process_id, pid, malo_id = %malo_id,
                 "edmd: ESA Typ-2 delivery without SG1 RFF+AGI — the subscription it \
-                 belongs to cannot be named (MSCONS AHB 3.2 §11.2 hint [574])"
+                 belongs to cannot be named (MSCONS AHB 3.2 Kap. 11.2 hint [574])"
             );
         }
         let typ2: Vec<Typ2Read> = decoded

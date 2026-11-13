@@ -271,6 +271,99 @@ async fn dispatch_gpke_datenabruf_ablehnung(
     .await
 }
 
+/// Body of `gpke.datenabruf.werte-senden`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DatenabrufWerteBody {
+    /// MP-ID of the Anfragender — the ORDERS' `NAD+MS`.
+    anfragender_mp_id: String,
+    /// The ORDERS' `BGM` DE 1004.
+    dokumentennummer: String,
+    /// A Lastgang Anfrage's interval values, each with `quantity_kwh`,
+    /// `dtm_from`, `dtm_to` (`CCYYMMDDHHMM+00`), `obis_code` and, for a
+    /// substitute value, `ersatzwert`.
+    #[serde(default)]
+    werte: Vec<mako_engine::payload::MsconsRead>,
+    /// A Zählerstand Anfrage's Stände (MSCONS 13017), each with `obis_code`,
+    /// `quantity`, `gueltig` (the day), optionally `ablesedatum`, and for a
+    /// substitute value `ersatzwert` with `ersatzwert_verfahren` and
+    /// `ersatzwert_grund`.
+    #[serde(default)]
+    zaehlerstaende: Vec<mako_engine::payload::MsconsZaehlerstand>,
+    /// 13017: the Zähler (`SG7 RFF+MG`).
+    #[serde(default)]
+    geraetenummer: Option<String>,
+    /// 13017: the iMS Konfigurations-ID (`SG7 RFF+AGK`), instead of the Zähler.
+    #[serde(default)]
+    konfigurations_id: Option<String>,
+}
+
+pub(super) fn cmd_gpke_datenabruf_werte_senden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_datenabruf_werte(s, p))
+}
+
+/// The MSB answers an Anfrage von Werten 17102 with the Lastgang it asked
+/// for, on the MSCONS `datenabruf_msb::werte_pid` names, or with the
+/// Zählerstände on MSCONS 13017; the rendered MSCONS passes the gate before
+/// anything is written.
+async fn dispatch_gpke_datenabruf_werte(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_gpke::datenabruf_msb::{
+        DatenabrufMsbCommand, GpkeDatenabrufMsbWorkflow, WORKFLOW_NAME, anfrage_key,
+    };
+    let body: DatenabrufWerteBody = parse_body(payload)?;
+    let key = anfrage_key(
+        required(&body.anfragender_mp_id, "anfragender_mp_id")?,
+        required(&body.dokumentennummer, "dokumentennummer")?,
+    );
+    let message_ref = MessageRef::new(uuid::Uuid::new_v4().simple().to_string());
+    let cmd = if body.zaehlerstaende.is_empty() {
+        if body.geraetenummer.is_some() || body.konfigurations_id.is_some() {
+            return Err(DispatchError::InvalidPayload(
+                "\"geraetenummer\" / \"konfigurations_id\" belong to \"zaehlerstaende\"".into(),
+            ));
+        }
+        DatenabrufMsbCommand::SendWerte {
+            werte: body.werte,
+            message_ref,
+        }
+    } else {
+        if !body.werte.is_empty() {
+            return Err(DispatchError::InvalidPayload(
+                "a body carries \"werte\" (Lastgang) or \"zaehlerstaende\" (MSCONS 13017), \
+                 not both"
+                    .into(),
+            ));
+        }
+        DatenabrufMsbCommand::SendZaehlerstaende {
+            geraetenummer: body.geraetenummer,
+            konfigurations_id: body.konfigurations_id,
+            staende: body.zaehlerstaende,
+            message_ref,
+        }
+    };
+    dispatch_to_process_in_version::<GpkeDatenabrufMsbWorkflow, _>(
+        state,
+        &key,
+        WORKFLOW_NAME,
+        move |current, fv| {
+            use mako_engine::workflow::Workflow as _;
+            let out = GpkeDatenabrufMsbWorkflow::handle(current, cmd.clone())
+                .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, fv, &out.outbox)?;
+            Ok(cmd)
+        },
+    )
+    .await
+}
+
 // ── GPKE Teil 3 Konfiguration — the recipient's ORDRSP ───────────────────────
 
 /// Body of `gpke.konfiguration.beantworten`.
@@ -281,11 +374,11 @@ struct KonfigurationAntwortBody {
     absender_mp_id: String,
     /// The ORDERS' `BGM` DE 1004.
     dokumentennummer: String,
-    /// The tree (`E_0526`, `E_0527`, `E_0539`) the answer's column admits.
+    /// The tree the answer's column admits for the party answered.
     codeliste: String,
     /// The code.
     antwortcode: String,
-    /// `SG2 FTX+AAP` — Muss beside `A99`.
+    /// `SG2 FTX+AAP` — Muss where the code needs the problem named.
     #[serde(default)]
     freitext: Option<String>,
 }
@@ -299,9 +392,9 @@ pub(super) fn cmd_gpke_konfiguration_beantworten<'a>(
     Box::pin(dispatch_gpke_konfiguration_antwort(s, p))
 }
 
-/// The MSB answers a received GPKE Teil 3 ORDERS — 17130 with 19132, 17121
-/// with 19120, 17118 with 19127, 17129 with 19131 (ORDRSP AHB 1.1b Kap. 4.4,
-/// 4.6).
+/// The recipient answers a received GPKE Teil 3 ORDERS on the ORDRSP its
+/// column pairs with it — `mako_gpke::konfiguration_aenderung::antwort_auf`
+/// (ORDRSP AHB 1.1b Kap. 4.4–4.7).
 async fn dispatch_gpke_konfiguration_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -419,6 +512,153 @@ async fn dispatch_gpke_datenabruf_anforderung(
         &state.store,
         state.tenant_id,
         WorkflowId::new(DATENABRUF_WORKFLOW_NAME, latest_format_version()),
+        command,
+        &[],
+        &[nummer.as_str()],
+    )
+    .await?;
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+// ── Requesting side: the Änderung der Technik (ORDERS 17011 `Z12`) ───────────
+
+/// Body of `wim.technik-aenderung.bestellen`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TechnikAenderungBestellungBody {
+    /// `NB` or `LF` — the Marktrolle ordering, which bounds the Produkte.
+    besteller: String,
+    /// MP-ID of the MSB of the Messlokation.
+    msb_mp_id: String,
+    /// The Messlokation — `SG2 LOC+172` (`[522]`).
+    melo_id: String,
+    /// `DTM+203` — the day the change is wanted (`YYYY-MM-DD`).
+    ausfuehrungsdatum: String,
+    /// The Produkt-Codes, one `SG29 LIN+Z19` each (Codeliste der
+    /// Konfigurationen Kap. 7, Ebene Messlokation).
+    produkte: Vec<String>,
+    /// `SG3 RFF+Z18` — the Marktlokation, with „weitere Energieflussrichtung".
+    #[serde(default)]
+    marktlokation: Option<String>,
+    /// `SG2 NAD+DEB` — the MSB der Marktlokation, with „weitere
+    /// Energieflussrichtung".
+    #[serde(default)]
+    msb_marktlokation: Option<String>,
+    /// `BGM` DE 1004 (`an..35`), which the MSB's ORDRSP echoes in `SG1
+    /// RFF+ON`; generated when absent.
+    #[serde(default)]
+    dokumentennummer: Option<String>,
+}
+
+pub(super) fn cmd_wim_technik_aenderung_bestellen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_technik_aenderung_bestellung(s, p))
+}
+
+/// The NB or LF orders an Änderung der Technik of a Messlokation (ORDERS
+/// 17011 `BGM+Z12`, ORDERS AHB 1.1b Kap. 4.12) and opens the process the
+/// MSB's ORDRSP 19005 / 19006 resumes by its `RFF+ON`.
+///
+/// A Lieferant may order only the Produkte the Codeliste der Konfigurationen
+/// 1.4 Kap. 7 (S. 58) marks LF-bestellbar (Bedingung `[157]`); a code off the
+/// Messlokation list is refused (`[153]`).
+async fn dispatch_wim_technik_aenderung_bestellung(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_wim::WimTechnikAenderungWorkflow;
+    use mako_wim::technik_aenderung::{
+        MESSLOKATION_PRODUKTE, TechnikAenderungCommand, WORKFLOW_NAME,
+    };
+    let body: TechnikAenderungBestellungBody = parse_body(payload)?;
+    let nummer = match body.dokumentennummer.as_deref() {
+        Some(raw) => {
+            let n = required(raw, "dokumentennummer")?;
+            if n.chars().count() > 35 {
+                return Err(DispatchError::InvalidPayload(format!(
+                    "\"dokumentennummer\" {n:?} exceeds BGM DE 1004's an..35"
+                )));
+            }
+            n.to_owned()
+        }
+        None => format!("TA{}", uuid::Uuid::new_v4().simple()),
+    };
+    if body.produkte.is_empty() {
+        return Err(DispatchError::InvalidPayload(
+            "\"produkte\" names no Produkt — the 17011 carries one SG29 per Produkt".to_owned(),
+        ));
+    }
+    let als_lf = match body.besteller.as_str() {
+        "LF" => true,
+        "NB" => false,
+        other => {
+            return Err(DispatchError::InvalidPayload(format!(
+                "\"besteller\" must be NB or LF; got {other:?}"
+            )));
+        }
+    };
+    if !state
+        .configured_marktrollen
+        .iter()
+        .any(|r| r == &body.besteller)
+    {
+        return Err(DispatchError::InvalidPayload(format!(
+            "this deployment does not play the Besteller role {}",
+            body.besteller
+        )));
+    }
+    for code in &body.produkte {
+        let Some((_, bezeichnung, lf_bestellbar)) =
+            MESSLOKATION_PRODUKTE.iter().find(|(c, _, _)| c == code)
+        else {
+            return Err(DispatchError::InvalidPayload(format!(
+                "Produkt {code:?} is not a Messlokation product of Codeliste der \
+                 Konfigurationen Kap. 7"
+            )));
+        };
+        if als_lf && !lf_bestellbar {
+            return Err(DispatchError::InvalidPayload(format!(
+                "a Lieferant cannot order {bezeichnung:?} ({code}) from the MSB"
+            )));
+        }
+    }
+    let command = TechnikAenderungCommand::SendAuftrag {
+        orders_pid: Pruefidentifikator::const_new(17_011),
+        recipient: MarktpartnerCode::new(required(&body.msb_mp_id, "msb_mp_id")?),
+        location_id: Some(required(&body.melo_id, "melo_id")?.to_owned()),
+        message_ref: MessageRef::new(nummer.clone()),
+        payload: serde_json::to_value(mako_engine::payload::OrdersPayload {
+            sender: Some(state.sender_party_id.clone()),
+            sparte: Some(mako_engine::types::Sparte::Strom),
+            ausfuehrungsdatum: Some(
+                required(&body.ausfuehrungsdatum, "ausfuehrungsdatum")?.to_owned(),
+            ),
+            produkte: body.produkte,
+            marktlokation: body.marktlokation,
+            msb_marktlokation: body.msb_marktlokation,
+            ..Default::default()
+        })
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?,
+        gesendet_am: time::OffsetDateTime::now_utc(),
+    };
+    {
+        use mako_engine::workflow::Workflow as _;
+        let out = WimTechnikAenderungWorkflow::handle(&Default::default(), command.clone())
+            .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(
+            state,
+            &latest_format_version(),
+            &out.outbox,
+        )?;
+    }
+    let process_id = spawn_process::<WimTechnikAenderungWorkflow>(
+        &state.store,
+        state.tenant_id,
+        WorkflowId::new(WORKFLOW_NAME, latest_format_version()),
         command,
         &[],
         &[nummer.as_str()],

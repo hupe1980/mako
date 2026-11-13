@@ -36,7 +36,7 @@ pub struct InterchangeHeader {
     pub syntax_version: u8,
     /// Test indicator from UNB DE 0035.
     ///
-    /// `true` when DE 0035 is `"1"`. Per Allgemeine Festlegungen V6.1d §3,
+    /// `true` when DE 0035 is `"1"`. Per Allgemeine Festlegungen V6.1d Kap. 3,
     /// interchanges with the test flag **must not** be processed as production
     /// messages. Reject at the ingest boundary and record a dead-letter entry.
     pub test_indicator: bool,

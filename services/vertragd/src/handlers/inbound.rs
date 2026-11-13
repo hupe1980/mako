@@ -153,10 +153,27 @@ async fn apply_outcome(
             )
             .await
             .map_err(ApiError::Internal)?;
+            // The § 13 BGB status is the contract's; accountingd reads its
+            // § 288 BGB rate and Pauschale from what this command carries.
+            let verbraucher: Option<bool> = sqlx::query_scalar(
+                "SELECT verbraucher FROM versorgungsvertraege WHERE id = $1 AND tenant = $2",
+            )
+            .bind(k.vertrag_id)
+            .bind(ctx.tenant())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| ApiError::Internal(e.into()))?;
             outbound::enqueue(
                 &mut *tx,
                 ctx.tenant(),
                 &outbound::abrechnungskonto(k.id, malo_id, &ctx.cfg.lf_mp_id),
+            )
+            .await
+            .map_err(ApiError::Internal)?;
+            outbound::enqueue(
+                &mut *tx,
+                ctx.tenant(),
+                &outbound::verbraucher(k.id, malo_id, &ctx.cfg.lf_mp_id, verbraucher),
             )
             .await
             .map_err(ApiError::Internal)?;
@@ -336,6 +353,9 @@ pub async fn angebot(
         let vv_input = pg::CreateVersorgungsvertragInput {
             rahmenvertrag_id: Some(rahmenvertrag_id),
             kundentyp: "B2B_RLM".to_owned(),
+            // The Angebot does not state the § 13 BGB status, and a segment
+            // label is not that fact.
+            verbraucher: None,
             vertragsart: Some(Vertragsart::Sondervertrag.as_db().to_owned()),
             bundle_code: None,
             vertragsbeginn: lieferbeginn,

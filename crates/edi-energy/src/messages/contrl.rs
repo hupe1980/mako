@@ -179,7 +179,11 @@ impl EdiEnergyMessage for ContrlMessage {
     fn segments(&self) -> &[edifact_rs::OwnedSegment] {
         &self.core.segments
     }
-    fn validate_on_date(&self, reference_date: time::Date) -> Result<EdiEnergyReport, Error> {
+    fn validate_on_date_with_rollen(
+        &self,
+        reference_date: time::Date,
+        rollen: &crate::profile::Parteirollen,
+    ) -> Result<EdiEnergyReport, Error> {
         let release = self.core.detect_release()?;
         self.core
             .validate_against_with_semantic_and_registry_on_date(
@@ -187,6 +191,7 @@ impl EdiEnergyMessage for ContrlMessage {
                 Some(contrl_semantic_pack()),
                 crate::registry::ReleaseRegistry::global(),
                 Some(reference_date),
+                rollen,
             )
     }
 }

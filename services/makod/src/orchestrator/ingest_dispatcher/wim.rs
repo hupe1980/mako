@@ -382,7 +382,7 @@ impl EdifactIngestDispatcher {
                 {
                     let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
                     // A conformant ORDERS 17007/17008 carries **no LOC** —
-                    // ORDERS AHB 1.1b §4.15 lists no Meldepunkt segment for
+                    // ORDERS AHB 1.1b Kap. 4.15 lists no Meldepunkt segment for
                     // either PID. It correlates by the reference the PID's own
                     // Zuordnungsschlüssel names: `RFF+AAG` (our QUOTES
                     // Angebotsnummer, `ZG-T24`) on the Bestellung, `RFF+ACW`
@@ -522,7 +522,7 @@ impl EdifactIngestDispatcher {
             // it) and 17006 (Beendigung, either direction) spawn; ORDRSP
             // 19009/19010 answer a Beendigung *mako* sent and resume that
             // process by MaLo. Directions per BDEW PID overview 4.0 / AWH
-            // Aktivitätsdiagramme WiM V1.3 §§2.8–2.11 (EBDs E_0206/E_0209).
+            // Aktivitätsdiagramme WiM V1.3 Kap. 2.8–2.11 (EBDs E_0206/E_0209).
             "wim-rechnungsabwicklung" => {
                 if mako_wim::RECHNUNGSABWICKLUNG_ORDERS_PIDS.contains(&pid) {
                     let cmd = adapters::wim_rechnungsabwicklung_registry().dispatch(raw, &fv)?;

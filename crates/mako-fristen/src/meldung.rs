@@ -207,7 +207,7 @@ pub const GPKE: &[Meldepflicht] = &[
             at: at(7),
         }),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 2 — „Unverzüglich, jedoch \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 2 — „Unverzüglich, jedoch \
                  spätester ÜZ ist 07:00 Uhr des 1. WT nach dem ÜT von Nr. 1\"; „Hierbei teilt \
                  der NB dem LFN insbesondere die Identität des LFA an der Marktlokation bzw. \
                  Tranche … mit\". Die Information ist auch dann zu versenden, sofern LFA und \
@@ -225,7 +225,7 @@ pub const GPKE: &[Meldepflicht] = &[
             at: at(12),
         }),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 10 — „Unverzüglich nach dem \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 10 — „Unverzüglich nach dem \
                  ÜZ von Nr. 5, jedoch spätester ÜZ ist 12:00 Uhr des 1. WT nach dem ÜT von \
                  Nr. 1\"",
     },
@@ -241,7 +241,7 @@ pub const GPKE: &[Meldepflicht] = &[
             at: at(12),
         }),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 13 — „Unverzüglich nach dem \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 13 — „Unverzüglich nach dem \
                  ÜZ von Nr. 5, jedoch spätester ÜZ ist 12:00 Uhr des 1. WT nach dem ÜT von \
                  Nr. 1\". Enthält die Anmeldung des LFN ein Zuordnungsende, ist die Zuordnung \
                  des LFZ nur aufzuheben, wenn der Zuordnungsbeginn des LFZ kleiner dem \
@@ -374,7 +374,7 @@ pub const GPKE_LIEFERENDE: &[Meldepflicht] = &[
             at: at(7),
         }),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 2 § 2.5.2 SD Lieferende von NB an LF Nr. 11 und Nr. 13 — \
+        source: "BK6-24-174 GPKE Teil 2 Kap. 2.5.2 SD Lieferende von NB an LF Nr. 11 und Nr. 13 — \
                  \"Unverzüglich nach dem ÜZ von Nr. 2, sofern es sich um eine Zustimmung handelt, \
                  bzw. nach dem ÜZ von Nr. 3, jedoch spätester ÜZ ist 07:00 Uhr des 1. WT nach dem \
                  ÜT von Nr. 1\". Nr. 11 beendet die Zuordnung des MSB (STS+7++ZC8), Nr. 13 hebt \
@@ -487,6 +487,24 @@ pub fn bei_ausbleibender_antwort(unanswered_pid: u32) -> Option<&'static Ausblei
     AUSBLEIBENDE_ANTWORTEN
         .iter()
         .find(|a| a.unanswered == unanswered_pid)
+}
+
+/// Whether `m` is the row `pid` of the lookup for `trigger_pid` — the one a
+/// caller reads and deliberately leaves undecided, for `grund`.
+///
+/// A row a caller cannot decide (whether it is owed is no fact it holds) is
+/// still returned by [`meldepflichten_for`]; skipping it silently would read as
+/// consulting it. Naming the skip here, with its reason, is what
+/// `check-controls-consulted` counts as unread.
+#[must_use]
+pub fn nicht_entschieden(
+    m: &Meldepflicht,
+    trigger_pid: u32,
+    pid: u32,
+    grund: &'static str,
+) -> bool {
+    debug_assert!(!grund.is_empty(), "a skipped Meldepflicht states why");
+    m.pid == pid && m.triggered_by.contains(&trigger_pid)
 }
 
 /// Every catalogued Meldepflicht, across all families.

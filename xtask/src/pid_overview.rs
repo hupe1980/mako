@@ -78,7 +78,7 @@ pub struct Overview {
     ///
     /// `V` puts the check into the Verarbeitbarkeitsprüfung, so a failed
     /// assignment is answered with an APERAK (`Z33`); `E` puts it into the
-    /// Entscheidungsbaum (APERAK AHB 1.1 § 2.1.3, S. 14). Only the rows that
+    /// Entscheidungsbaum (APERAK AHB 1.1 Kap. 2.1.3, S. 14). Only the rows that
     /// name a Geschäftsvorfall tuple count.
     #[serde(default)]
     pub zuordnung: BTreeMap<String, Zuordnung>,

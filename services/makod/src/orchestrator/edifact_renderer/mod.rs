@@ -76,7 +76,7 @@ pub enum RenderError {
     BuilderError(String),
     /// The message should be silently suppressed — no wire EDIFACT should be sent.
     ///
-    /// Used for Gas positive APERAKs: per APERAK AHB 1.1 §2.3, silence = acceptance
+    /// Used for Gas positive APERAKs: per APERAK AHB 1.1 Kap. 2.3, silence = acceptance
     /// for Gas processes. The domain outbox entry exists for ERP webhook delivery,
     /// but no wire EDIFACT is emitted over AS4.
     Suppressed { reason: Box<str> },
@@ -148,7 +148,7 @@ pub fn is_insufficient_payload(err: &RenderError) -> bool {
 
 /// Returns `true` when the message should be suppressed — no wire EDIFACT sent.
 ///
-/// Used for Gas positive APERAKs (silence = acceptance per APERAK AHB 1.1 §2.3).
+/// Used for Gas positive APERAKs (silence = acceptance per APERAK AHB 1.1 Kap. 2.3).
 /// The AS4 sender acknowledges the outbox entry without transmitting.
 /// The ERP webhook sender delivers the domain JSON payload instead.
 pub fn is_suppressed(err: &RenderError) -> bool {
@@ -218,7 +218,7 @@ pub struct RenderedInterchange {
     /// UNB DE0010 — identical to the message's `NAD+MR` MP-ID.
     pub receiver_mp_id: Box<str>,
     /// UNB DE0020 Datenaustauschreferenz — repeated in UNZ DE0036 and used
-    /// as the DAR component of the §2.12 Content-Disposition filename.
+    /// as the DAR component of the Kap. 2.12 Content-Disposition filename.
     /// Derived from the outbox message id, so retries reuse the same DAR.
     pub dar: Box<str>,
 }
@@ -346,7 +346,7 @@ fn finish_interchange(
 
 /// [`finish_interchange`] that also sets the UNB **Anwendungsreferenz**
 /// (DE 0026), where the AHB fixes one — `TL` on the MSCONS Werte-nach-Typ-2
-/// interchange (MSCONS AHB 3.2 §11.2).
+/// interchange (MSCONS AHB 3.2 Kap. 11.2).
 fn finish_interchange_with_app_ref(
     serialized: Result<Vec<u8>, edi_energy::Error>,
     sender: &str,
@@ -396,6 +396,8 @@ mod invoic;
 mod mscons;
 mod orders;
 mod utilmd;
+#[cfg(test)]
+mod wim_answer_columns_tests;
 #[cfg(test)]
 mod wim_geraetewechsel_antwort_tests;
 
@@ -497,28 +499,39 @@ fn require_u32(
         })
 }
 
-/// Read the optional `pid` field as a five-digit Prüfidentifikator.
-///
-/// `None` when the payload states none. A number that is not one — outside
-/// `u32`, or outside [`edi_energy::Pruefidentifikator`]'s `10000..=99999` — is
-/// refused rather than narrowed with `as u32` or defaulted to `0`, either of
-/// which puts a Prüfidentifikator on the wire that the caller did not state.
-fn optional_pid(
-    p: &serde_json::Value,
+/// A stated, non-empty text field.
+fn text(v: &Option<String>) -> Option<&str> {
+    v.as_deref().filter(|s| !s.is_empty())
+}
+
+/// A stated, non-empty text field, or the [`RenderError::MissingField`] naming
+/// it.
+fn required<'a>(
+    v: &'a Option<String>,
     message_type: &'static str,
-) -> Result<Option<u32>, RenderError> {
-    let Some(raw) = p.get("pid").and_then(serde_json::Value::as_u64) else {
-        return Ok(None);
-    };
-    let pid = u32::try_from(raw)
-        .ok()
-        .filter(|n| edi_energy::Pruefidentifikator::new(*n).is_ok())
-        .ok_or_else(|| {
-            RenderError::BuilderError(format!(
-                "[{message_type}] {raw} is not a Prüfidentifikator (10000..=99999)"
-            ))
-        })?;
-    Ok(Some(pid))
+    field: &'static str,
+) -> Result<&'a str, RenderError> {
+    text(v).ok_or_else(|| RenderError::MissingField {
+        message_type: message_type.into(),
+        field: field.into(),
+    })
+}
+
+/// Check a typed payload's optional `pid` is a five-digit Prüfidentifikator.
+///
+/// `None` when the payload states none. A number outside
+/// [`edi_energy::Pruefidentifikator`]'s `10000..=99999` is refused rather than
+/// defaulted, which would put a Prüfidentifikator on the wire that the caller
+/// did not state.
+fn checked_pid(pid: Option<u32>, message_type: &'static str) -> Result<Option<u32>, RenderError> {
+    match pid {
+        Some(n) if edi_energy::Pruefidentifikator::new(n).is_err() => {
+            Err(RenderError::BuilderError(format!(
+                "[{message_type}] {n} is not a Prüfidentifikator (10000..=99999)"
+            )))
+        }
+        other => Ok(other),
+    }
 }
 
 /// Normalise a date string: accepts both ISO-8601 (`2026-01-01`) and
@@ -844,7 +857,7 @@ mod tests {
     }
 
     /// A Zahlungsavis carries **no** `AJT` — agreement needs no Antwortcode
-    /// (REMADV AHB 1.0a § 3.1.1) — and its BGM code is `481`, not `239`.
+    /// (REMADV AHB 1.0a Kap. 3.1.1) — and its BGM code is `481`, not `239`.
     #[test]
     fn a_zahlungsavis_states_no_antwortcode() {
         let msg = fake_msg(
@@ -1432,7 +1445,7 @@ mod tests {
 
     /// `SG4 STS+Z35` — the LFA's own Ablehnungsgrund, restated by the NB.
     ///
-    /// GPKE Teil 2 § 2.1.2 Nr. 6: „Der NB gibt zusätzlich den Grund der
+    /// GPKE Teil 2 Kap. 2.1.2 Nr. 6: „Der NB gibt zusätzlich den Grund der
     /// Ablehnung des LFA an, sofern dieser in Prozessschritt 4 die Anfrage
     /// abgelehnt hat." Without it the LFN learns that its Anmeldung failed and
     /// not why the incumbent would not release the Marktlokation — the one fact
@@ -1693,6 +1706,32 @@ mod tests {
         assert!(text.contains("CAV+ZV4:::11XBK-STD------Y"), "{text}");
     }
 
+    /// A 55007 with `STS+7++Z33` Auszug wegen Stilllegung carries `SG4
+    /// DTM+206` Geräteausbaudatum beside `DTM+93`, the German day's beginning
+    /// in UTC (UTILMD AHB Strom 2.2 Kap. 8.10, S. 189, Bedingung `[79]`).
+    #[test]
+    fn a_stilllegung_55007_carries_its_geraeteausbaudatum() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 55007_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "20261201",
+                "transaktionsgrund": "Z33",
+                "geraeteausbaudatum": "20261130",
+            }),
+        );
+        let wire =
+            render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("55007 renders");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(text.contains("DTM+93:202611302300?+00:303"), "{text}");
+        assert!(text.contains("DTM+206:202611292300?+00:303"), "{text}");
+        assert!(text.contains("STS+7++Z33"), "{text}");
+    }
+
     #[test]
     fn render_mscons_without_the_identifying_tuple_is_a_missing_field() {
         // A Summenzeitreihe is keyed by (MaBiS-ZP, Bilanzierungsmonat, Version).
@@ -1705,7 +1744,6 @@ mod tests {
                 "pid": 13003_u32,
                 "mabis_zp_id": "DE0004030099000000000000000012345",
                 "obis_code": "1-1:1.29.0",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
             }),
         );
         let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
@@ -1728,7 +1766,7 @@ mod tests {
                 "sender_mp_id": "9900357000004",
                 "receiver_mp_id": "9900987654321",
                 "malo_id": "51238696781",
-                "order_reference": "BESTELLUNG-2026-1",
+                "korrelation_ref": "BESTELLUNG-2026-1",
                 "arbeit": {
                     "quantity": "184500.000",
                     "from": "202601010000+00",
@@ -1850,18 +1888,17 @@ mod tests {
 
     #[test]
     fn render_orders_esa_17007_17008_are_mig_conformant() {
-        // ORDERS AHB 1.1b §4.15. The Bestellung references the QUOTES Angebot
+        // ORDERS AHB 1.1b Kap. 4.15. The Bestellung references the QUOTES Angebot
         // in `RFF+AAG` (`ZG-T24`), the Abbestellung the ORDERS in `RFF+ACW`
         // (`ZG-T41`); both carry `BGM+Z57`, `DTM+203` and `IMD++<7081>`, and
-        // **neither carries a LOC** — §4.15 lists no Meldepunkt segment.
+        // **neither carries a LOC** — Kap. 4.15 lists no Meldepunkt segment.
         for (pid, qualifier, abo) in [(17007_u32, "AAG", "Z01"), (17008_u32, "ACW", "Z02")] {
             let msg = fake_msg(
                 "ORDERS",
                 "9900357000004",
                 serde_json::json!({
                     "pid": pid,
-                    "sender_mp_id": "9900555000005",
-                    "receiver_mp_id": "9900357000004",
+                    "sender": "9900555000005",
                     // A payload that still names a location must not put one on
                     // the wire for these PIDs.
                     "location": "51238696781",
@@ -1889,7 +1926,7 @@ mod tests {
             );
             assert!(
                 !wire.contains("LOC+"),
-                "ORDERS {pid} carries no LOC (ORDERS AHB 1.1b §4.15): {wire}"
+                "ORDERS {pid} carries no LOC (ORDERS AHB 1.1b Kap. 4.15): {wire}"
             );
             edi_energy::EdiEnergyMessage::validate(
                 &edi_energy::parse(wire.as_bytes()).expect("parse"),
@@ -1902,7 +1939,7 @@ mod tests {
 
     #[test]
     fn render_ordrsp_esa_answers_are_mig_conformant() {
-        // ORDRSP AHB 1.1b §4.15. `SG2 AJT` is Muss on all four and carries the
+        // ORDRSP AHB 1.1b Kap. 4.15. `SG2 AJT` is Muss on all four and carries the
         // Prüfschritt code with the EBD that publishes it; the correlation
         // qualifier differs per PID (`ON` → the ORDERS, `ACW` → the ORDCHG).
         for (pid, qualifier, ebd, code) in [
@@ -1977,6 +2014,54 @@ mod tests {
         assert!(format!("{err:?}").contains("antwort_code"), "{err:?}");
     }
 
+    /// The answers the gabi-gas-mmma and Konfigurationsänderung doors send
+    /// carry their `SG2 AJT` (ORDRSP AHB 1.1b Kap. 4); the 19130 with `A06`
+    /// names the geplanter Behebungszeitpunkt in `DTM+292` (Kap. 4.7, S. 37,
+    /// `[46]`–`[48]`), and the 19123 the Vorgang in `SG1 RFF+TN` beside
+    /// `RFF+ACW` (Kap. 4.5, S. 33–35).
+    #[test]
+    fn the_newer_ordrsp_answers_carry_their_ajt_and_their_references() {
+        for pid in [19_110_u32, 19_121, 19_124, 19_130] {
+            let msg = fake_msg(
+                "ORDRSP",
+                "9900555000005",
+                serde_json::json!({ "pid": pid, "sender": "9900357000004" }),
+            );
+            let err = render_to_wire_bytes(&msg, &test_registry("9900357000004")).unwrap_err();
+            assert!(
+                format!("{err:?}").contains("antwort_code"),
+                "{pid}: {err:?}"
+            );
+        }
+        let msg = fake_msg(
+            "ORDRSP",
+            "9900555000005",
+            serde_json::json!({
+                "pid": 19_130_u32, "sender": "9900357000004",
+                "order_reference": "BEST-1",
+                "antwort_code": "A06", "antwort_codeliste": "E_0552",
+                "behebungszeitpunkt": "202612011000",
+            }),
+        );
+        let wire = render_to_wire_bytes(&msg, &test_registry("9900357000004")).expect("19130");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(text.contains("DTM+292:202612011000?+00:303"), "{text}");
+        assert!(text.contains("AJT+A06+E_0552"), "{text}");
+        let msg = fake_msg(
+            "ORDRSP",
+            "9900555000005",
+            serde_json::json!({
+                "pid": 19_123_u32, "sender": "9900357000004",
+                "order_reference": "REKL-1", "korrelation_ref": "UTILTS-7",
+                "referenz_vorgangsnummer": "VG-3",
+            }),
+        );
+        let wire = render_to_wire_bytes(&msg, &test_registry("9900357000004")).expect("19123");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(text.contains("RFF+ACW:UTILTS-7"), "{text}");
+        assert!(text.contains("RFF+TN:VG-3"), "{text}");
+    }
+
     #[test]
     fn render_iftsta_21042_beendigung_is_mig_conformant() {
         // UC 4.4 „Beendigung durch MSB": the MSB → ESA IFTSTA 21042 now renders
@@ -2031,12 +2116,12 @@ mod tests {
             (
                 "ORDRSP",
                 19011_u32,
-                serde_json::json!({"antwort_codeliste": "E_0256", "antwort_code": "A11"}),
+                serde_json::json!({"antwort_codeliste": "E_0256", "antwort_code": "A11", "receiver": "9900555000005"}),
             ),
             (
                 "ORDRSP",
                 19013_u32,
-                serde_json::json!({"antwort_codeliste": "E_0257", "antwort_code": "A04"}),
+                serde_json::json!({"antwort_codeliste": "E_0257", "antwort_code": "A04", "receiver": "9900555000005"}),
             ),
             ("ORDCHG", 39002_u32, serde_json::json!({})),
             (
@@ -2053,7 +2138,6 @@ mod tests {
             let mut payload = serde_json::json!({
                 "pid": pid,
                 "sender": "9900357000004",
-                "receiver": "9900555000005",
                 "korrelation_ref": "ORD-ABC-1",
             });
             if let Some(extra) = payload_extra.as_object() {
@@ -2081,7 +2165,6 @@ mod tests {
             serde_json::json!({
                 "pid": 39002_u32,
                 "sender": "9900555000005",
-                "receiver": "9900357000004",
                 // `SG1 RFF+ON` — the Bestellung being cancelled, Muss.
                 "order_reference": "BESTELLUNG-2026-1",
             }),
@@ -2145,7 +2228,7 @@ mod tests {
             });
     }
 
-    /// `PIA+5 DE7140` accepts only Kapitel-4.6 codes (REQOTE AHB 1.2 §4.3
+    /// `PIA+5 DE7140` accepts only Kapitel-4.6 codes (REQOTE AHB 1.2 Kap. 4.3
     /// condition `[41]`), so a Typ-1 Standard-Messprodukt is not orderable here.
     #[test]
     fn a_reqote_35003_without_a_catalogue_messprodukt_is_refused() {
@@ -2264,7 +2347,7 @@ mod tests {
 
         // Angebot — a **priced** position block. UC 4.1.1 has the ESA asking
         // for „die Übermittlung von Werten und die damit verbundenen Kosten",
-        // and QUOTES AHB 1.1a §4.3 makes `SG4 CUX`, the `PIA+Z02` Artikel-IDs,
+        // and QUOTES AHB 1.1a Kap. 4.3 makes `SG4 CUX`, the `PIA+Z02` Artikel-IDs,
         // the `SG31 PRI+CAL` prices and the `PIA+5 …:SRW` OBIS-Kennzahlen all
         // Muss. That, not the Bindungsfrist, is what tells an offer from a
         // refusal — `DTM+273` is Muss on the only published 15003 use case, so
@@ -2326,7 +2409,6 @@ mod tests {
                 "sender_mp_id": "9900357000004",
                 "receiver_mp_id": esa,
                 "malo_id": "51238696781",
-                "order_reference": "BESTELLUNG-2026-1",
                 "korrelation_ref": "ORDERDOC0001",
                 "reads": [
                     { "dtm_from": "202603100000+00", "dtm_to": "202603100015+00",
@@ -2344,7 +2426,7 @@ mod tests {
         assert!(wire.contains(&format!("NAD+MR+{esa}")), "{wire}");
         // PID 13027 travels in RFF+Z13; DE 1004 is a Dokumentennummer.
         assert!(wire.contains("RFF+Z13:13027"), "{wire}");
-        // MSCONS AHB 3.2 §11.2: BGM 1001 = Z83 „Werte nach Typ 2", UNB DE 0026
+        // MSCONS AHB 3.2 Kap. 11.2: BGM 1001 = Z83 „Werte nach Typ 2", UNB DE 0026
         // = TL, DTM+137 in format 303, and RFF+AGI naming the ORDERS that
         // ordered the values (hint [574]).
         assert!(wire.contains("BGM+Z83+"), "BGM 1001 = Z83: {wire}");
@@ -2377,7 +2459,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13015_u32,
                 "malo_id": "51238696781",
-                "order_reference": "BESTELLUNG-2026-1",
+                "korrelation_ref": "BESTELLUNG-2026-1",
                 "arbeit": { "quantity": "1", "from": "202601010000+00", "to": "202602010000+00" },
                 "leistungsmaxima": [
                     { "quantity": "1", "period": "202601" },
@@ -2410,7 +2492,6 @@ mod tests {
                     "pid": pid,
                     "mabis_zp_id": "DE0004030099000000000000000012345",
                 "obis_code": "1-1:1.29.0",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                     "balancing_period": "202606",
                     "version": "20260714050000+00",
                     "intervals": [
@@ -2421,7 +2502,7 @@ mod tests {
                 serde_json::json!({
                     "pid": pid,
                     "malo_id": "51238696781",
-                "order_reference": "BESTELLUNG-2026-1",
+                    "korrelation_ref": "BESTELLUNG-2026-1",
                     "arbeit": {
                         "quantity": "1",
                         "from": "202601010000+00",
@@ -2450,7 +2531,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13019_u32,
                 "malo_id": "51238696781",
-                "order_reference": "BESTELLUNG-2026-1",
+                "korrelation_ref": "BESTELLUNG-2026-1",
                 "arbeit": { "quantity": "1", "from": "202601010000+00", "to": "202602010000+00" },
                 "leistungsmaxima": [{ "quantity": "5", "period": "202601" }],
             }),
@@ -2472,7 +2553,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13015_u32,
                 "malo_id": "51238696781",
-                "order_reference": "BESTELLUNG-2026-1",
+                "korrelation_ref": "BESTELLUNG-2026-1",
                 "arbeit": {
                     "quantity": "1",
                     "from": "202601010000+00",
@@ -2500,7 +2581,6 @@ mod tests {
                 "pid": 13021_u32,
                 "mabis_zp_id": "DE0004030099000000000000000012345",
                 "obis_code": "1-1:1.29.0",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
                 "intervals": [
@@ -2526,7 +2606,6 @@ mod tests {
                 "pid": 13023_u32,
                 "mabis_zp_id": "DE0004030099000000000000000012345",
                 "obis_code": "1-1:1.29.0",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
                 "intervals": [
@@ -2553,7 +2632,6 @@ mod tests {
                 "receiver_mp_id": "9900077000006",
                 "mabis_zp_id": "DE0004030099000000000000000012345",
                 "obis_code": "1-1:1.29.0",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
                 "intervals": [
@@ -2765,11 +2843,13 @@ mod envelope_tests {
             "receiver": "9900987654321",
             "pid": pid,
             "korrelation_ref": "ANFRAGE-REF-1",
-            "abonnement": "Z01",
-            "bindungsfrist_tage": 14,
-            "messprodukt": "9991000003056",
         });
+        if message_type == "QUOTES" {
+            payload["bindungsfrist_tage"] = 14.into();
+            payload["messprodukt"] = "9991000003056".into();
+        }
         if message_type == "ORDRSP" {
+            payload["abonnement"] = "Z01".into();
             let (ebd, code) = if pid >= 19013 {
                 ("E_0257", "A04")
             } else {

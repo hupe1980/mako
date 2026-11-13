@@ -138,10 +138,10 @@ pub struct BdewAs4IngestHandler {
     evidence: Option<As4Evidence>,
     /// CONTRL emitter — Empfangsbestätigung and Syntaxfehlermeldung.
     ///
-    /// Per CONTRL AHB 1.0 §2.3.1 and APERAK AHB 1.1 §2.3 (Gas rules), a CONTRL
+    /// Per CONTRL AHB 1.0 Kap. 2.3.1 and APERAK AHB 1.1 Kap. 2.3 (Gas rules), a CONTRL
     /// Empfangsbestätigung is owed for every inbound Gas interchange except
     /// CONTRL-on-CONTRL. The Syntaxfehlermeldung is owed in **both** Sparten
-    /// (§2.4: in Strom the CONTRL has no other use), which is why `startup`
+    /// (Kap. 2.4: in Strom the CONTRL has no other use), which is why `startup`
     /// wires the service unconditionally rather than behind a Sparte: the
     /// service decides per interchange which of the two it owes. The AS4-level
     /// `eb:Receipt` is a separate protocol acknowledgement and satisfies
@@ -174,7 +174,7 @@ impl BdewAs4IngestHandler {
     }
 
     /// Wire a `ContrlAckService` to emit Gas CONTRL Empfangsbestätigungen
-    /// on every inbound Gas interchange (CONTRL AHB 1.0 §2.3.1).
+    /// on every inbound Gas interchange (CONTRL AHB 1.0 Kap. 2.3.1).
     #[must_use]
     pub fn with_contrl_ack(mut self, svc: Arc<crate::contrl_ack::ContrlAckService>) -> Self {
         self.contrl_ack = Some(svc);
@@ -261,7 +261,7 @@ impl BdewAs4IngestHandler {
             payload_bytes  = payload.len(),
             "AS4 inbound: message received",
         );
-        self.handle_first_seen(&msg_id, &payload).await
+        self.handle_first_seen(&msg_id, &from, &payload).await
     }
 }
 
@@ -277,14 +277,91 @@ pub fn router(
     handler_for: impl Fn(&str) -> Arc<BdewAs4IngestHandler>,
 ) -> Router {
     let mut router = Router::new();
-    for (mp_id, client) in clients.iter() {
+    for mp_id in clients.mp_ids() {
         let service = tower_http::timeout::RequestBodyTimeout::new(
-            inbound(client, dedup.clone(), handler_for(mp_id)),
+            RotatingInbound::new(clients.clone(), &mp_id, dedup.clone(), handler_for(&mp_id)),
             REQUEST_BODY_TIMEOUT,
         );
-        router = router.route_service(&inbox_path(mp_id), service);
+        router = router.route_service(&inbox_path(&mp_id), service);
     }
     router
+}
+
+/// The inbox of one local MP-ID that follows [`As4Clients::rotate`]: each
+/// request is served by the `asx::Inbound` of the client as it stands, rebuilt
+/// once per rotation, so new key material takes effect without a restart.
+#[derive(Clone)]
+pub struct RotatingInbound<D> {
+    clients: As4Clients,
+    mp_id: Arc<str>,
+    dedup: D,
+    handler: Arc<BdewAs4IngestHandler>,
+    current: Arc<std::sync::Mutex<Option<(u64, asx::Inbound)>>>,
+}
+
+impl<D: DedupStore + Clone> RotatingInbound<D> {
+    /// The inbox of `mp_id` over `clients`.
+    #[must_use]
+    pub fn new(
+        clients: As4Clients,
+        mp_id: &str,
+        dedup: D,
+        handler: Arc<BdewAs4IngestHandler>,
+    ) -> Self {
+        Self {
+            clients,
+            mp_id: mp_id.into(),
+            dedup,
+            handler,
+            current: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    fn inbound(&self) -> Option<asx::Inbound> {
+        let generation = self.clients.generation();
+        let mut current = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((g, inbound)) = current.as_ref()
+            && *g == generation
+        {
+            return Some(inbound.clone());
+        }
+        let client = self.clients.client(&self.mp_id)?;
+        let fresh = inbound(&client, self.dedup.clone(), Arc::clone(&self.handler));
+        *current = Some((generation, fresh.clone()));
+        Some(fresh)
+    }
+}
+
+impl<D, B> tower_service::Service<axum::http::Request<B>> for RotatingInbound<D>
+where
+    D: DedupStore + Clone,
+    B: http_body::Body + Send + 'static,
+    B::Data: Send,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    type Response = axum::http::Response<http_body_util::Full<axum::body::Bytes>>;
+    type Error = std::convert::Infallible;
+    type Future = asx::BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(
+        &mut self,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: axum::http::Request<B>) -> Self::Future {
+        match self.inbound() {
+            Some(mut inbound) => tower_service::Service::call(&mut inbound, request),
+            None => Box::pin(std::future::ready(Ok(axum::http::Response::builder()
+                .status(axum::http::StatusCode::NOT_FOUND)
+                .body(http_body_util::Full::new(axum::body::Bytes::new()))
+                .unwrap_or_default()))),
+        }
+    }
 }
 
 /// The `asx-rs` inbox of `client` (one local MP-ID), dispatching through
@@ -547,7 +624,7 @@ pub async fn rate_limit_middleware(
 
 /// Whether a DVGW interchange carried a GABi-Gas ALOCAT.
 ///
-/// CONTRL AHB 1.0 §2.3.1 shortens that interchange's CONTRL window to 45
+/// CONTRL AHB 1.0 Kap. 2.3.1 shortens that interchange's CONTRL window to 45
 /// minutes; every other DVGW format keeps the 6 hours.
 #[cfg(test)]
 mod sender_extract_tests {
@@ -659,7 +736,12 @@ impl BdewAs4IngestHandler {
     /// the `?` on its `await` — a retryable [`Reject::new`], so the message
     /// comes round again rather than vanishing. `check-as4-controls` keeps
     /// every permanent refusal behind an awaited dead letter.
-    async fn handle_first_seen(&self, msg_id: &str, edifact: &[u8]) -> Result<(), Reject> {
+    async fn handle_first_seen(
+        &self,
+        msg_id: &str,
+        from: &str,
+        edifact: &[u8],
+    ) -> Result<(), Reject> {
         let msg_id = msg_id.to_owned();
         // The ÜZ: the instant this door took the message, which the receipt
         // returned on this same request confirms. Every arrival-anchored Frist
@@ -771,7 +853,7 @@ impl BdewAs4IngestHandler {
         }
 
         // The `UNB` alone, not a full parse. A full parse errs on a
-        // § 2.13 party mismatch, a UNZ count mismatch, too many messages,
+        // Kap. 2.13 party mismatch, a UNZ count mismatch, too many messages,
         // or any single unparseable message — and the guards below would
         // then be skipped on exactly the interchange least worth
         // trusting, letting a test-flagged or misaddressed one reach
@@ -779,7 +861,7 @@ impl BdewAs4IngestHandler {
         // malformed.
         let unb = self.ingest.platform.parse_interchange_header(edifact).ok();
 
-        // ── Recipient guard (Allgemeine Festlegungen V6.1d § 2.13) ────
+        // ── Recipient guard (Allgemeine Festlegungen V6.1d Kap. 2.13) ────
         //
         // `UNB` DE0010 names who the interchange is addressed to. An
         // authenticated counterparty is still not entitled to hand us an
@@ -823,7 +905,48 @@ impl BdewAs4IngestHandler {
             ));
         }
 
-        // ── Test-indicator guard (§AF §3 / Allgemeine Festlegungen V6.1d §3) ──
+        // ── Sender binding (Allgemeine Festlegungen 6.1d Kap. 2.13) ────
+        //
+        // `UNB` DE 0004 names who sent the interchange, and the AS4 layer has
+        // authenticated `from` by the MP-ID in its signing certificate (BDEW
+        // AS4-Profil 1.2 Kap. 2.3.4.4). A partner presenting an interchange
+        // under another MP-ID would have it processed — and answered — as
+        // that market participant's. DE 0004 must be `from`, unless
+        // `[[as4.partner]] de0004_ausnahme` names it for `from`.
+        if let Some(header) = unb.as_ref()
+            && !self
+                .clients
+                .binds_interchange_sender(from, &header.sender_id)
+        {
+            use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+            self.ingest
+                .dl_sink
+                .reject(&DeadLetterReason::ProcessingError {
+                    message: format!(
+                        "interchange sender is not the AS4 sender: UNB DE0004 = {}, eb:From = {from}",
+                        header.sender_id
+                    ),
+                    context: AuditContext::from_interchange(
+                        &header.sender_id,
+                        &header.receiver_id,
+                        &header.control_ref,
+                    ),
+                })
+                .await?;
+            tracing::warn!(
+                as4_message_id = %msg_id,
+                from_party = %from,
+                sender = %header.sender_id,
+                control_ref = %header.control_ref,
+                "AS4 ingest: UNB DE0004 is not the authenticated AS4 sender and no \
+                 de0004_ausnahme names it — refused",
+            );
+            return Err(Reject::permanent(
+                "UNB DE0004 is not the authenticated AS4 sender",
+            ));
+        }
+
+        // ── Test-indicator guard (§AF Kap. 3 / Allgemeine Festlegungen V6.1d Kap. 3) ──
         // Reject before dispatching any messages.
         if let Some(header) = unb.as_ref()
             && header.test_indicator
@@ -844,7 +967,7 @@ impl BdewAs4IngestHandler {
                 receiver = %header.receiver_id,
                 control_ref = %header.control_ref,
                 "AS4 ingest: test interchange (DE0035=1) rejected — \
-                 must not process test messages on production endpoint (§AF §3)",
+                 must not process test messages on production endpoint (§AF Kap. 3)",
             );
             // The sender is owed the reason. `UNB` DE 0035 is a value the
             // production endpoint does not support, which is exactly
@@ -900,7 +1023,7 @@ impl BdewAs4IngestHandler {
                     "AS4 ingest: DVGW interchange dispatched",
                 );
                 // The EDIFACT-level CONTRL Empfangsbestätigung (CONTRL
-                // AHB 1.0 §2.3.1) is owed within six wall-clock hours for
+                // AHB 1.0 Kap. 2.3.1) is owed within six wall-clock hours for
                 // every inbound *Gas* interchange, and a DVGW interchange
                 // is Gas by definition. The AS4 `eb:Receipt` below is a
                 // *protocol* acknowledgement and does not discharge it.
@@ -939,7 +1062,7 @@ impl BdewAs4IngestHandler {
 
         // ── EDIFACT dispatch ──────────────────────────────────────────
         // Collect parsed messages so they can be passed to ContrlAckService
-        // after the dispatch loop (CONTRL AHB 1.0 §2.3.1 Gas obligation).
+        // after the dispatch loop (CONTRL AHB 1.0 Kap. 2.3.1 Gas obligation).
         // The recipient MP-ID (UNB DE0010) drives Sparte detection and the
         // CONTRL sender MP-ID.
         let (interchange_ref, recipient_mp_id): (String, String) =
@@ -1157,10 +1280,10 @@ impl BdewAs4IngestHandler {
         if accepted == 0 && rejected > 0 {
             // Not one message in the Übertragungsdatei could be read, so
             // the file is not processed further — which is exactly what
-            // a Syntaxfehlermeldung states (CONTRL AHB 1.0 §2.3.2 /
-            // §2.4.2). It is owed in **both** Sparten: §2.4 uses the
+            // a Syntaxfehlermeldung states (CONTRL AHB 1.0 Kap. 2.3.2 /
+            // Kap. 2.4.2). It is owed in **both** Sparten: Kap. 2.4 uses the
             // CONTRL in Strom for nothing else. The `UNB` parsed, or
-            // `interchange_ref` would be the AS4 message id — §2.2.2.1
+            // `interchange_ref` would be the AS4 message id — Kap. 2.2.2.1
             // makes a CONTRL impossible in that case and the dead letter
             // above is the record instead.
             if let Some(contrl_svc) = self.contrl_ack.as_deref()
@@ -1193,7 +1316,7 @@ impl BdewAs4IngestHandler {
         }
 
         // ── Gas CONTRL Empfangsbestätigung ────────────────────────────
-        // CONTRL AHB 1.0 §2.3.1: for every inbound Gas interchange
+        // CONTRL AHB 1.0 Kap. 2.3.1: for every inbound Gas interchange
         // (except CONTRL-on-CONTRL) the receiver must send a CONTRL
         // Empfangsbestätigung within 6 wall-clock hours.
         // The AS4 eb:Receipt above is a *protocol* acknowledgement and

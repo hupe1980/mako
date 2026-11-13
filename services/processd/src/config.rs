@@ -237,7 +237,7 @@ pub struct IdentityConfig {
     pub tenant: String,
     /// The MP-IDs of the Lieferanten belonging to the operator's vertically
     /// integrated undertaking — each Marktrolle has its own MP-ID
-    /// (Identifikatoren AWH V1.2 § 2.1), so an affiliated Lieferant is never
+    /// (Identifikatoren AWH V1.2 Kap. 2.1), so an affiliated Lieferant is never
     /// `own_mp_id`. An Anmeldung from one of them is the affiliate the § 7a
     /// Abs. 5 EnWG Gleichbehandlung evidence compares, and the NB module and
     /// the process read model both read this list.
@@ -601,7 +601,7 @@ mako_service::policy_choice! {
 /// Bilanzierungsgebiet.
 ///
 /// A Lieferant is never in a single Bilanzkreis, and which ones it may use is
-/// not its own decision alone: MaBiS (BK6-24-174 § 10.2.1) has the BKV grant
+/// not its own decision alone: MaBiS (BK6-24-174 Anlage 3) Kap. 10.2.1 has the BKV grant
 /// the Zuordnungsermächtigung „je **ZRT, BG, BK und LF**", so the admissible
 /// set is keyed on the **Bilanzierungsgebiet** — finer than the Regelzone, and
 /// the key `marktd` records on the Marktlokation.
@@ -742,7 +742,7 @@ pub struct LfConfig {
     /// The Bilanzkreise this supplier may assign generation to, by
     /// Bilanzierungsgebiet and regime.
     ///
-    /// A UTILMD 55607 Zustimmung must name one (GPKE Teil 2 § 2.4.2.2 Nr. 2),
+    /// A UTILMD 55607 Zustimmung must name one (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2),
     /// and which ones are admissible is the BKV's grant, not the supplier's
     /// choice alone: MaBiS Kap. 10.2.1 issues the Zuordnungsermächtigung „je ZRT,
     /// BG, BK und LF".

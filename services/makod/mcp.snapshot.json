@@ -569,6 +569,827 @@
     }
   },
   {
+    "name": "einrichtung_vorschlag",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Antworten": {
+          "description": "The setup interview's answers. Every question is optional: an unanswered\none is a gap in the proposal, never a default.",
+          "type": "object",
+          "properties": {
+            "rollen": {
+              "description": "The Rollen the deployment plays, each with its MP-ID.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RolleAntwort"
+              }
+            },
+            "primaer": {
+              "description": "The MP-ID that is the storage key, where several are named.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bilanzkreise": {
+              "description": "A Lieferant's Bilanzkreise per Sparte.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/BilanzkreisAntwort"
+              }
+            },
+            "verbundene_lieferanten": {
+              "description": "The MP-IDs of the operator's affiliated Lieferanten; `[]` for none.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "as4": {
+              "description": "AS4 key material; unanswered, each `[[party]]` carries a gap.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/As4Antwort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "dienste": {
+              "description": "The deployment's other daemons, for the checklist.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DienstAntwort"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "RolleAntwort": {
+          "description": "One Rolle the deployment plays and the MP-ID it plays it under.",
+          "type": "object",
+          "properties": {
+            "rolle": {
+              "description": "The Rolle.",
+              "$ref": "#/$defs/Rolle"
+            },
+            "mp_id": {
+              "description": "Its MP-ID: a 13-digit BDEW- (`99…`, Strom) or DVGW-Codenummer (`98…`,\nGas), a GS1 GLN, or a 16-character EIC. Unanswered, it is a gap.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "rolle"
+          ]
+        },
+        "Rolle": {
+          "description": "A Rolle a deployment plays, spelled as makod's `[deployment] rollen`.",
+          "oneOf": [
+            {
+              "description": "Lieferant Strom.",
+              "type": "string",
+              "const": "lf-strom"
+            },
+            {
+              "description": "Lieferant Gas.",
+              "type": "string",
+              "const": "lf-gas"
+            },
+            {
+              "description": "Netzbetreiber Strom.",
+              "type": "string",
+              "const": "nb-strom"
+            },
+            {
+              "description": "Gasnetzbetreiber.",
+              "type": "string",
+              "const": "nb-gas"
+            },
+            {
+              "description": "Messstellenbetreiber Strom.",
+              "type": "string",
+              "const": "msb-strom"
+            },
+            {
+              "description": "Messstellenbetreiber Gas.",
+              "type": "string",
+              "const": "msb-gas"
+            },
+            {
+              "description": "Energieserviceanbieter, Strom only.",
+              "type": "string",
+              "const": "esa-strom"
+            }
+          ]
+        },
+        "BilanzkreisAntwort": {
+          "description": "The Bilanzkreise a Lieferant assigns to in one Sparte.",
+          "type": "object",
+          "properties": {
+            "sparte": {
+              "description": "The Sparte.",
+              "$ref": "#/$defs/Sparte"
+            },
+            "standard": {
+              "description": "The ordinary Bilanzkreise, as the BKV's grant names them.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "sparte"
+          ]
+        },
+        "Sparte": {
+          "description": "A Sparte.",
+          "oneOf": [
+            {
+              "description": "Strom.",
+              "type": "string",
+              "const": "strom"
+            },
+            {
+              "description": "Gas.",
+              "type": "string",
+              "const": "gas"
+            }
+          ]
+        },
+        "As4Antwort": {
+          "description": "AS4: the deployment-wide settings and each MP-ID's key material.",
+          "type": "object",
+          "properties": {
+            "message_id_domain": {
+              "description": "The domain every `eb:MessageId` ends in.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trust_anchor_pem_file": {
+              "description": "Path of the SM-PKI root certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "crl_signer_pem_file": {
+              "description": "Path of the CRL signer's certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schluessel": {
+              "description": "Per MP-ID, the paths of its key pairs.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/As4Schluessel"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "As4Schluessel": {
+          "description": "One MP-ID's AS4 key material, by the path each file lives at.",
+          "type": "object",
+          "properties": {
+            "mp_id": {
+              "description": "The MP-ID these files belong to.",
+              "type": "string"
+            },
+            "signing_cert_pem_file": {
+              "description": "Path of the signing certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "signing_key_pem_file": {
+              "description": "Path of the signing key.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "encryption_cert_pem_file": {
+              "description": "Path of the encryption certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "encryption_key_pem_file": {
+              "description": "Path of the encryption key.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tls_cert_pem_file": {
+              "description": "Path of the TLS certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tls_key_pem_file": {
+              "description": "Path of the TLS key.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mp_id"
+          ]
+        },
+        "DienstAntwort": {
+          "description": "Another daemon of the deployment and where it runs.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "Its name (`processd`, `edmd`, …).",
+              "type": "string"
+            },
+            "url": {
+              "description": "Its base URL.",
+              "type": "string"
+            },
+            "api_key_file": {
+              "description": "Path of the file holding the key its `read-config` admits.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "url"
+          ]
+        }
+      },
+      "required": [
+        "antworten"
+      ],
+      "type": "object",
+      "properties": {
+        "antworten": {
+          "description": "The setup interview's answers; every question is optional and an\nunanswered one is a gap in the proposal.",
+          "$ref": "#/$defs/Antworten"
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Datei": {
+          "description": "One daemon's proposed file.",
+          "type": "object",
+          "properties": {
+            "dienst": {
+              "description": "The daemon.",
+              "type": "string"
+            },
+            "datei": {
+              "description": "Its configuration file.",
+              "type": "string"
+            },
+            "abgeglichen": {
+              "description": "The daemon reports the facts the file sets, so [`Art::Gleich`] and\n[`Art::Weg`] are known; otherwise every line is [`Art::Neu`].",
+              "type": "boolean"
+            },
+            "zeilen": {
+              "description": "Every line, in file order.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Zeile"
+              }
+            },
+            "toml": {
+              "description": "The file to paste: each line under its `# Quelle:`, a removed line as\n`# ENTFÄLLT:`, a gap as `# FEHLT:`.",
+              "type": "string"
+            },
+            "diff": {
+              "description": "The change as a diff: `+` new, `-` removed, ` ` unchanged.",
+              "type": "string"
+            },
+            "aenderungen": {
+              "description": "Lines to add or remove.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "luecken": {
+              "description": "Gaps.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "dienst",
+            "datei",
+            "abgeglichen",
+            "zeilen",
+            "toml",
+            "diff",
+            "aenderungen",
+            "luecken"
+          ]
+        },
+        "Zeile": {
+          "description": "One line of a proposed file.",
+          "type": "object",
+          "properties": {
+            "art": {
+              "description": "What it does.",
+              "$ref": "#/$defs/Art"
+            },
+            "text": {
+              "description": "The TOML line, or for a gap the comment.",
+              "type": "string"
+            },
+            "quelle": {
+              "description": "The rule or document the line satisfies; absent only on a header.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "frage": {
+              "description": "The interview question the line answers (`rollen.lf-gas`,\n`bilanzkreise.gas`, `as4`, …), so a gap leads to its question.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "art",
+            "text"
+          ]
+        },
+        "Art": {
+          "description": "What a proposed line does to the loaded configuration.",
+          "oneOf": [
+            {
+              "description": "A table header (`[deployment]`, `[[party]]`).",
+              "type": "string",
+              "const": "abschnitt"
+            },
+            {
+              "description": "Loaded already, as proposed.",
+              "type": "string",
+              "const": "gleich"
+            },
+            {
+              "description": "To add.",
+              "type": "string",
+              "const": "neu"
+            },
+            {
+              "description": "Loaded, and to remove.",
+              "type": "string",
+              "const": "weg"
+            },
+            {
+              "description": "A fact nobody gave: a `# FEHLT: …` comment.",
+              "type": "string",
+              "const": "fehlt"
+            }
+          ]
+        },
+        "Befund": {
+          "description": "One finding about a daemon's configuration.",
+          "type": "object",
+          "properties": {
+            "schwere": {
+              "description": "Whether it refuses the boot.",
+              "$ref": "#/$defs/Schwere"
+            },
+            "bereich": {
+              "description": "The checklist area it belongs to.",
+              "$ref": "#/$defs/Bereich",
+              "default": "konfiguration"
+            },
+            "text": {
+              "description": "What is wrong, in the daemon's own words.",
+              "type": "string"
+            },
+            "pfad": {
+              "description": "The setting's path in the configuration file, dotted as the loader\nnames it (`lf.bilanzkreise[1].sparte`, `party[0].mp_id`); empty for a\nfinding about the file as a whole.",
+              "type": "string"
+            },
+            "referenz": {
+              "description": "The setting's operator-policy reference entry\n(`@/docs/services/<svc>.md#policy-<key>`), for a [`PolicyChoice`].",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "quelle": {
+              "description": "The document and chapter the rule rests on, where a document fixes it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "schwere",
+            "bereich",
+            "text",
+            "pfad"
+          ]
+        },
+        "Schwere": {
+          "description": "Whether a finding refuses the boot.",
+          "oneOf": [
+            {
+              "description": "The daemon refuses to start on it.",
+              "type": "string",
+              "const": "blockiert"
+            },
+            {
+              "description": "The daemon starts and warns at every boot.",
+              "type": "string",
+              "const": "warnung"
+            }
+          ]
+        },
+        "Bereich": {
+          "description": "Which readiness question of the deployment-wide checklist a finding\nbelongs to.",
+          "oneOf": [
+            {
+              "description": "MP-IDs per Rolle and Sparte and the agency code each implies.",
+              "type": "string",
+              "const": "identitaeten"
+            },
+            {
+              "description": "AS4 and API-Webdienste certificates, key material and their expiry.",
+              "type": "string",
+              "const": "zertifikate"
+            },
+            {
+              "description": "Bilanzkreise per Sparte.",
+              "type": "string",
+              "const": "bilanzierung"
+            },
+            {
+              "description": "Authentication, Cedar policies, the posture of every door.",
+              "type": "string",
+              "const": "zugriff"
+            },
+            {
+              "description": "The services and endpoints a daemon depends on.",
+              "type": "string",
+              "const": "erreichbarkeit"
+            },
+            {
+              "description": "Profiles and adapters per format version in force.",
+              "type": "string",
+              "const": "formatabdeckung"
+            },
+            {
+              "description": "Everything else a configuration states.",
+              "type": "string",
+              "const": "konfiguration"
+            }
+          ]
+        },
+        "Antworten": {
+          "description": "The setup interview's answers. Every question is optional: an unanswered\none is a gap in the proposal, never a default.",
+          "type": "object",
+          "properties": {
+            "rollen": {
+              "description": "The Rollen the deployment plays, each with its MP-ID.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RolleAntwort"
+              }
+            },
+            "primaer": {
+              "description": "The MP-ID that is the storage key, where several are named.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bilanzkreise": {
+              "description": "A Lieferant's Bilanzkreise per Sparte.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/BilanzkreisAntwort"
+              }
+            },
+            "verbundene_lieferanten": {
+              "description": "The MP-IDs of the operator's affiliated Lieferanten; `[]` for none.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "as4": {
+              "description": "AS4 key material; unanswered, each `[[party]]` carries a gap.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/As4Antwort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "dienste": {
+              "description": "The deployment's other daemons, for the checklist.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DienstAntwort"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "RolleAntwort": {
+          "description": "One Rolle the deployment plays and the MP-ID it plays it under.",
+          "type": "object",
+          "properties": {
+            "rolle": {
+              "description": "The Rolle.",
+              "$ref": "#/$defs/Rolle"
+            },
+            "mp_id": {
+              "description": "Its MP-ID: a 13-digit BDEW- (`99…`, Strom) or DVGW-Codenummer (`98…`,\nGas), a GS1 GLN, or a 16-character EIC. Unanswered, it is a gap.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "rolle"
+          ]
+        },
+        "Rolle": {
+          "description": "A Rolle a deployment plays, spelled as makod's `[deployment] rollen`.",
+          "oneOf": [
+            {
+              "description": "Lieferant Strom.",
+              "type": "string",
+              "const": "lf-strom"
+            },
+            {
+              "description": "Lieferant Gas.",
+              "type": "string",
+              "const": "lf-gas"
+            },
+            {
+              "description": "Netzbetreiber Strom.",
+              "type": "string",
+              "const": "nb-strom"
+            },
+            {
+              "description": "Gasnetzbetreiber.",
+              "type": "string",
+              "const": "nb-gas"
+            },
+            {
+              "description": "Messstellenbetreiber Strom.",
+              "type": "string",
+              "const": "msb-strom"
+            },
+            {
+              "description": "Messstellenbetreiber Gas.",
+              "type": "string",
+              "const": "msb-gas"
+            },
+            {
+              "description": "Energieserviceanbieter, Strom only.",
+              "type": "string",
+              "const": "esa-strom"
+            }
+          ]
+        },
+        "BilanzkreisAntwort": {
+          "description": "The Bilanzkreise a Lieferant assigns to in one Sparte.",
+          "type": "object",
+          "properties": {
+            "sparte": {
+              "description": "The Sparte.",
+              "$ref": "#/$defs/Sparte"
+            },
+            "standard": {
+              "description": "The ordinary Bilanzkreise, as the BKV's grant names them.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "sparte"
+          ]
+        },
+        "Sparte": {
+          "description": "A Sparte.",
+          "oneOf": [
+            {
+              "description": "Strom.",
+              "type": "string",
+              "const": "strom"
+            },
+            {
+              "description": "Gas.",
+              "type": "string",
+              "const": "gas"
+            }
+          ]
+        },
+        "As4Antwort": {
+          "description": "AS4: the deployment-wide settings and each MP-ID's key material.",
+          "type": "object",
+          "properties": {
+            "message_id_domain": {
+              "description": "The domain every `eb:MessageId` ends in.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trust_anchor_pem_file": {
+              "description": "Path of the SM-PKI root certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "crl_signer_pem_file": {
+              "description": "Path of the CRL signer's certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schluessel": {
+              "description": "Per MP-ID, the paths of its key pairs.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/As4Schluessel"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "As4Schluessel": {
+          "description": "One MP-ID's AS4 key material, by the path each file lives at.",
+          "type": "object",
+          "properties": {
+            "mp_id": {
+              "description": "The MP-ID these files belong to.",
+              "type": "string"
+            },
+            "signing_cert_pem_file": {
+              "description": "Path of the signing certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "signing_key_pem_file": {
+              "description": "Path of the signing key.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "encryption_cert_pem_file": {
+              "description": "Path of the encryption certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "encryption_key_pem_file": {
+              "description": "Path of the encryption key.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tls_cert_pem_file": {
+              "description": "Path of the TLS certificate.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tls_key_pem_file": {
+              "description": "Path of the TLS key.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mp_id"
+          ]
+        },
+        "DienstAntwort": {
+          "description": "Another daemon of the deployment and where it runs.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "Its name (`processd`, `edmd`, …).",
+              "type": "string"
+            },
+            "url": {
+              "description": "Its base URL.",
+              "type": "string"
+            },
+            "api_key_file": {
+              "description": "Path of the file holding the key its `read-config` admits.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "url"
+          ]
+        }
+      },
+      "required": [
+        "dateien",
+        "abgelehnt",
+        "luecken",
+        "vollstaendig",
+        "vorbelegt"
+      ],
+      "type": "object",
+      "properties": {
+        "dateien": {
+          "description": "One file per daemon the answers configure.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Datei"
+          }
+        },
+        "abgelehnt": {
+          "description": "Every answer refused, at its path in the answers (`rollen[1].mp_id`),\nwith the rule it breaks.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Befund"
+          }
+        },
+        "luecken": {
+          "description": "Gaps across all files.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "vollstaendig": {
+          "description": "No gap and no refused answer.",
+          "type": "boolean"
+        },
+        "vorbelegt": {
+          "description": "The answers the loaded configuration already gives — where an\ninterview starts.",
+          "$ref": "#/$defs/Antworten"
+        }
+      }
+    }
+  },
+  {
     "name": "get_format_version_coverage",
     "annotations": {
       "readOnlyHint": true,

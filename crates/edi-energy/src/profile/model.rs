@@ -23,7 +23,7 @@ pub struct MigProfile {
     /// `Strom` or `Gas` for UTILMD, whose two MIGs share one message type.
     #[serde(default)]
     pub track: Option<String>,
-    /// The Anwendungszeitpunkt (Allgemeine Festlegungen 6.1d §2.5).
+    /// The Anwendungszeitpunkt (Allgemeine Festlegungen 6.1d Kap. 2.5).
     pub valid_from: String,
     /// The last day in force; absent while open-ended.
     #[serde(default)]

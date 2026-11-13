@@ -109,7 +109,7 @@ const WIM_GAS_NB_ID: &str = "9807317000007";
 
 /// Date on which G1.1 is the valid release for UTILMD Gas (first day of FV2025-10-01).
 // UTILMD AHB Gas 1.1 (G1.1) was published 01.10.2025; its Anwendungszeitpunkt is
-// the April changeover (Allgemeine Festlegungen 6.1d §2.5.2).
+// the April changeover (Allgemeine Festlegungen 6.1d Kap. 2.5.2).
 const GAS_VALIDATION_DATE: time::Date = date!(2026 - 04 - 01);
 
 // ── Fixture bytes (loaded from test fixtures at compile time) ─────────────────
@@ -612,7 +612,7 @@ const INVOIC_MSB_ID: &str = "4012345000023";
 /// GLN of the NB recipient in the INVOIC 31001 fixture (NAD+MR / UNB receiver).
 const INVOIC_NB_ID: &str = "9900357000004";
 /// BDEW Formatversion for INVOIC AHB 1.0a — published 01.10.2025, and so the
-/// Anwendungszeitpunkt is the April changeover (Allgemeine Festlegungen §2.5.2).
+/// Anwendungszeitpunkt is the April changeover (Allgemeine Festlegungen Kap. 2.5.2).
 const INVOIC_FV_2026: &str = "FV2026-04-01";
 /// Validation date: first day of FV2026-04-01.
 const INVOIC_VALIDATION_DATE: time::Date = date!(2026 - 04 - 01);

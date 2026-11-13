@@ -27,7 +27,7 @@
 //!   17117 at all, and the Gas twins are governed by the BDEW AWH
 //!   „Unterbrechung / Wiederherstellung der Anschlussnutzung" (EBD `E_1000` /
 //!   `E_1004`, against Strom's `E_0470` / `E_0497`).
-//! - **APERAK AHB 1.1 § 2.4.1** — 45 Minuten for an ORDERS (Sonntag 12:00 on a Saturday). A
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — 45 Minuten for an ORDERS (Sonntag 12:00 on a Saturday). A
 //!   separate clock from the business answer below.
 //! - **IFTSTA 21039** — Auftragsstatus dispatched by NB after execution (outbound)
 
@@ -539,8 +539,8 @@ impl Workflow for GpkeSperrungWorkflow {
                     events.push(SperrungEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 §2.4.
-                    // Strom ORDERS: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
+                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 Kap. 2.4.
+                    // Strom ORDERS: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 Kap. 2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_anerkennung(
                             receiver_gln.as_str(),
@@ -555,8 +555,8 @@ impl Workflow for GpkeSperrungWorkflow {
                     events.push(SperrungEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
-                    // Strom ORDERS: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 Kap. 2.1.1.
+                    // Strom ORDERS: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 Kap. 2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),

@@ -17,7 +17,7 @@
 //!
 //! | Module | Binds |
 //! |---|---|
-//! | [`identifiers`] | `rubo4e::identifiers` — MaLo, MeLo, MP-ID, EIC, §8.2 resource IDs |
+//! | [`identifiers`] | `rubo4e::identifiers` — MaLo, MeLo, MP-ID, EIC, Kap. 8.2 resource IDs |
 //! | [`fristen`] | `mako-fristen` — Werktag calendar, ack clocks, the answer-Frist table |
 //! | [`pids`] | `edi-energy` registry — PID introspection, releases, the AHB answer pairs |
 //! | [`antwortcodes`] | `mako-pruefung` — the Entscheidungsbaum Codelisten a counterparty may answer with |

@@ -57,10 +57,10 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK6-24-174 GPKE Teil 2** § 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13 and
-//!   § 2.5.2 SD Lieferende von NB an LF Nr. 11 / 13
+//! - **BK6-24-174 GPKE Teil 2** Kap. 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13 and
+//!   Kap. 2.5.2 SD Lieferende von NB an LF Nr. 11 / 13
 //! - **UTILMD AHB Strom 2.1 / 2.2** Kap. 8.11
-//! - **APERAK AHB 1.1 § 2.4.1** — 45 Minuten (Sonntag 12:00 on a Saturday), a separate clock
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — 45 Minuten (Sonntag 12:00 on a Saturday), a separate clock
 
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
@@ -159,7 +159,7 @@ pub enum Zuordnungsmeldung {
     /// is cancelled.
     ///
     /// A different Sequenzdiagramm from the other three: „Lieferende von NB an
-    /// LF" (§ 2.5.2 Nr. 11 and Nr. 13), which the NB opens itself with a 55007
+    /// LF" (Kap. 2.5.2 Nr. 11 and Nr. 13), which the NB opens itself with a 55007
     /// rather than answering an inbound Anmeldung. Two things follow from that
     /// and from the MSB being assigned to the **Messlokation**:
     ///
@@ -592,10 +592,9 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
 
                 let pid = Pruefidentifikator::new(meldung.pid())
                     .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                let outbox = vec![PendingOutbox::new(
-                    "UTILMD",
+                let outbox = vec![PendingOutbox::typed(
                     receiver.as_str(),
-                    meldung_payload(
+                    &meldung_payload(
                         meldung,
                         &sender,
                         &receiver,
@@ -642,7 +641,7 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
                 }
                 // The APERAK is the only thing that goes back — the business
                 // answer channel does not exist for these PIDs. Strom owes one
-                // either way (APERAK AHB 1.1 § 2.4): `312` Anerkennung on a
+                // either way (APERAK AHB 1.1 Kap. 2.4): `312` Anerkennung on a
                 // clean message, `313` Verarbeitbarkeitsfehler otherwise.
                 let aperak = if validation_passed {
                     PendingOutbox::aperak_anerkennung(
@@ -696,7 +695,7 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
     clippy::too_many_arguments,
     reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
 )]
-fn meldung_payload(
+pub(crate) fn meldung_payload(
     meldung: Zuordnungsmeldung,
     sender: &MarktpartnerCode,
     receiver: &MarktpartnerCode,
@@ -706,42 +705,29 @@ fn meldung_payload(
     process_date: Option<&str>,
     beteiligte: &[MarktpartnerCode],
     referenz_vorgangsnummer: Option<&str>,
-) -> serde_json::Value {
-    let mut payload = serde_json::json!({
-        "pid":               meldung.pid(),
-        "sender":            sender.as_str(),
-        "receiver":          receiver.as_str(),
-        "malo":              location_id.as_str(),
-        "document_code":     meldung.bgm_document_code(),
-        "transaktionsgrund": transaktionsgrund,
+) -> mako_engine::payload::UtilmdPayload {
+    mako_engine::payload::UtilmdPayload {
+        pid: meldung.pid(),
+        sender: sender.as_str().to_owned(),
+        receiver: Some(receiver.as_str().to_owned()),
+        malo: Some(location_id.as_str().to_owned()),
+        document_code: Some(meldung.bgm_document_code().to_owned()),
+        transaktionsgrund: Some(transaktionsgrund.to_owned()),
         // On a 55611 the `SG4 DTM` qualifier follows the Grund, not the PID, so
         // the workflow resolves it here rather than leaving the renderer to
         // guess from a PID that admits both.
-        "dtm_qualifier":     meldung.dtm_qualifier(transaktionsgrund),
+        dtm_qualifier: meldung.dtm_qualifier(transaktionsgrund).map(str::to_owned),
         // `SG5 LOC+Z21` when the Vorgang is about a Tranche. Both carry a
         // MaLo-ID in DE 3225 (Bedingung [950]), so the qualifier is the only
         // thing that says which object it is.
-        "lokationstyp":      lokationstyp.unwrap_or(LOC_MARKTLOKATION),
-    });
-    let obj = payload.as_object_mut().expect("json! built an object");
-    if let Some(date) = process_date {
-        obj.insert("process_date".into(), date.into());
+        lokationstyp: Some(lokationstyp.unwrap_or(LOC_MARKTLOKATION).to_owned()),
+        process_date: process_date.map(str::to_owned),
+        referenz_vorgangsnummer: referenz_vorgangsnummer
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned),
+        beteiligte_marktpartner: beteiligte.iter().map(|m| m.as_str().to_owned()).collect(),
+        ..Default::default()
     }
-    if let Some(vorgang) = referenz_vorgangsnummer.filter(|v| !v.is_empty()) {
-        obj.insert("referenz_vorgangsnummer".into(), vorgang.into());
-    }
-    if !beteiligte.is_empty() {
-        obj.insert(
-            "beteiligte_marktpartner".into(),
-            serde_json::Value::Array(
-                beteiligte
-                    .iter()
-                    .map(|m| serde_json::Value::String(m.as_str().to_owned()))
-                    .collect(),
-            ),
-        );
-    }
-    payload
 }
 
 #[cfg(test)]

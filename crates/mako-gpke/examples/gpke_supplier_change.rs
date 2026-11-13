@@ -37,9 +37,7 @@ use mako_engine::{
     workflow::CommandContext,
 };
 use mako_fristen as fristen;
-use mako_gpke::{
-    GpkeSupplierChangeWorkflow, SupplierChangeCommand, SupplierChangeProjection, post_acceptance,
-};
+use mako_gpke::{GpkeSupplierChangeWorkflow, SupplierChangeCommand, SupplierChangeProjection};
 
 // ── EDIFACT fixture ───────────────────────────────────────────────────────────
 
@@ -292,15 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .run(
             SupplierChangeCommand::SendAntwort {
                 antwort: nb_antwort(true, None),
-                // Build GPKE Teil 3/4 post-acceptance obligations via the
-                // domain helper (MSCONS 13015; ORDERS 17134 omitted — no MSB
-                // GLN available in this example).
-                obligations: post_acceptance::lieferbeginn_obligations(
-                    pid.as_u32(),
-                    &location,
-                    &sender,
-                    None,
-                ),
+                obligations: Vec::new(),
                 lfa_lieferende: None,
             },
             RunOptions::new().context(antwort_ctx),

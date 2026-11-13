@@ -25,7 +25,7 @@
 //!
 //! - **PID 55555**: Anfrage Daten der individuellen Bestellung (LFN → NB, GPKE Teil 4)
 //! - **BK6-22-024 Anlage 1d** — GPKE Teil 4
-//! - **APERAK Frist**: 45 minutes, Sonntag 12:00 for a Saturday arrival (APERAK AHB 1.1 §2.4.1)
+//! - **APERAK Frist**: 45 minutes, Sonntag 12:00 for a Saturday arrival (APERAK AHB 1.1 Kap. 2.4.1)
 //! - STS DE 9015 `E07` = Anfrage für aktiven/bestätigten Vorgang
 //! - STS DE 9015 `E08` = Anfrage für noch nicht bestätigten Vorgang
 //!

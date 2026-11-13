@@ -469,7 +469,7 @@ CREATE TABLE lf_zuordnung (
                           CHECK (prozent > 0 AND prozent <= 100),
     -- Tranchen-ID (`SG5 LOC+Z21`); NULL for an untranchierte Marktlokation.
     tranche_id        TEXT,
-    -- GPKE Teil 1 § 3.2.1.5: „Eine Tranche umfasst folglich stets weniger als
+    -- GPKE Teil 1 Kap. 3.2.1.5: „Eine Tranche umfasst folglich stets weniger als
     -- 100 % der aus einer Marktlokation eingespeisten Energiemenge. Der
     -- Prozentsatz einer Tranche ist immer größer 0% und kleiner als 100%."
     -- A named Tranche at 100 % is Geschäftsvorfall 1 wearing a Tranchen-ID, and
@@ -1002,7 +1002,7 @@ CREATE INDEX versorgungsstatus_history_version
 -- ── Netz-Element-Lokation (NeLo) — Redispatch 2.0 ────────────────────────────
 --
 -- Stores network element locations used in BDEW Redispatch 2.0 processes.
--- NeLo-ID: 16-char EIC code (ENTSO-E agency, DE3055 = ZEW) or 13-digit BDEW
+-- NeLo-ID: 16-char EIC code (ENTSO-E) or 13-digit BDEW
 -- Codenummer.  One row per (nelo_id, tenant).
 --
 -- Source: BDEW Redispatch 2.0 Implementierungsleitfaden v2.x.
@@ -1077,7 +1077,8 @@ CREATE INDEX tranche_tenant ON tranche (tenant);
 -- Redispatch 2.0 DELORD/DELRES, iMS E-mobility Steuerungsauftrag routing, and
 -- MSB Stammdaten hierarchy queries.
 --
--- Source: BO4E Lokationszuordnung; BK6-24-174 §6 (iMS); Redispatch 2.0 BDEW.
+-- Source: BO4E Lokationszuordnung; GPKE Teil 1 (BK6-24-174 Anlage 1a) Kap. 3.2–3.7
+-- (Lokationen and Lokationsbündel, S. 13–22); Redispatch 2.0 BDEW.
 
 CREATE TABLE lokationszuordnungen (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1294,7 +1295,8 @@ CREATE INDEX geraete_konfigurationen_gin ON geraete USING GIN (geraet_konfigurat
 -- Redispatch 2.0 flexibility registration.
 --
 -- tr_id: TrId format (Technische-Ressource-ID per rubo4e::identifiers::TrId).
--- Source: BK6-24-174 §6 (iMS); Redispatch 2.0 BDEW Implementierungsleitfaden.
+-- Source: GPKE Teil 1 (BK6-24-174 Anlage 1a) Kap. 3.4 Technische Ressource (S. 17);
+-- Redispatch 2.0 BDEW Implementierungsleitfaden.
 
 CREATE TABLE technische_ressourcen (
     tr_id             TEXT        NOT NULL,
@@ -1700,7 +1702,7 @@ COMMENT ON TABLE esa_framework_agreements IS
 -- leaves the Entgelt for a Zusatzleistung to be agreed per request, which is
 -- what the Universalbestellprozess is for. UC 4.1.1 has the ESA asking for „die
 -- Übermittlung von Werten **und die damit verbundenen Kosten**"; QUOTES AHB
--- 1.1a §4.3 makes `SG4 CUX` and one `SG31 PRI+CAL` per `SG27 PIA+Z02`
+-- 1.1a Kap. 4.3 makes `SG4 CUX` and one `SG31 PRI+CAL` per `SG27 PIA+Z02`
 -- Artikel-ID Muss; and the offer carries a Bindungsfrist precisely because it
 -- binds. So the accepted Angebot *is* the agreement, and the invoice names the
 -- same Artikel-IDs back (`SG26 LIN` DE 7143 `Z09`).

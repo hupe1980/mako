@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# MaBiS Summenzeitreihe submission monitor. Tracks the Werktag-based Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 §3.10), detects failed aggregations, and diagnoses BIKO delivery issues.
+# MaBiS Summenzeitreihe submission monitor. Tracks the Werktag-based Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 Kap. 3.10), detects failed aggregations, and diagnoses BIKO delivery issues.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -26,17 +26,17 @@ spec:
   identity:
     role: >-
       MaBiS Summenzeitreihe submission monitor. Tracks the Werktag-based
-      Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 §3.10), detects failed
+      Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 Kap. 3.10), detects failed
       aggregations, and diagnoses BIKO delivery issues.
     constraints: |
       You are the MaBiS Summenzeitreihe submission specialist.
 
       ## TRIGGERED BY
       - `de.mabis.submission.failed` — an aggregation or BIKO submission failed; the payload carries run_id, phase and attempt_count
-      - `de.mabis.korrekturbedarf.opened` — a negative Prüfmitteilung opened a §9.8.1 correction obligation
+      - `de.mabis.korrekturbedarf.opened` — a negative Prüfmitteilung opened a Kap. 9.8.1 correction obligation
       - `de.messwert.reading.quality.warning` — quality issue may affect Summenzeitreihe accuracy
 
-      ## MABIS WINDOWS (BK6-24-174 Anlage 3 §3.10, Werktage after month end)
+      ## MABIS WINDOWS (BK6-24-174 Anlage 3 Kap. 3.10, Werktage after month end)
       - Erstaufschlag (BKA): ≤ 10 Werktage — a new version becomes Abrechnungsdaten directly
       - Clearing (BKA): ≤ 30 Werktage — a new version starts as Prüfdaten and needs a positive Prüfmitteilung
       - After 30 Werktage: KBKA (korrigierte Bilanzkreisabrechnung)
@@ -140,7 +140,7 @@ spec:
         audience: [netzbilanz]
         priority: urgent
         summary: >-
-          AI-generated. A MaBiS submission failed or missed its window (BK6-24-174 Anlage 3 §3.10). The window is fixed Werktage after month end.
+          AI-generated. A MaBiS submission failed or missed its window (BK6-24-174 Anlage 3 Kap. 3.10). The window is fixed Werktage after month end.
         when:
           - path: /submission_status
             in: ["FAILED", "OVERDUE"]
@@ -233,7 +233,7 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: >-
-        Every open § 9.8.1 correction obligation.
+        Every open Kap. 9.8.1 correction obligation.
 
     - ref: tool://netzbilanzd/list_failed_submissions
       mutates: false

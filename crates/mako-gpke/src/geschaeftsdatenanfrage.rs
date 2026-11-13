@@ -77,7 +77,7 @@
 //!   by [`mako_fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE`].
 //! - **Anwendungsübersicht der Prüfidentifikatoren 4.0** lfd. Nr. 25540–25640
 //!   (S. 55).
-//! - **APERAK AHB 1.1 § 2.4.1** — 45 Minuten for a Strom ORDERS.
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — 45 Minuten for a Strom ORDERS.
 
 use mako_engine::envelope::{Antwortcode, Richtung, Verlauf};
 pub use mako_engine::payload::Stammdaten;
@@ -514,16 +514,16 @@ impl CommandPayload for GdaCommand {}
 /// with the Anfrage-Nummer in DE 1004, `SG2 NAD+DP` and `LOC+172` the Markt-
 /// or Messlokation.
 fn anfrage_outbox(anfrage: &GdaAnfrage) -> PendingOutbox {
-    PendingOutbox::new(
-        "ORDERS",
+    PendingOutbox::typed(
         anfrage.netzbetreiber.as_str(),
-        serde_json::json!({
-            "pid": ANFRAGE_PID.as_u32(),
-            "sender": anfrage.anfragender.as_str(),
-            "document_code": BGM_ANFRAGE_STAMMDATEN,
-            "document_id": anfrage.anfrage_nummer.as_str(),
-            "location": anfrage.lokation_id,
-        }),
+        &mako_engine::payload::OrdersPayload {
+            pid: Some(ANFRAGE_PID.as_u32()),
+            sender: Some(anfrage.anfragender.as_str().to_owned()),
+            document_code: Some(BGM_ANFRAGE_STAMMDATEN.to_owned()),
+            document_id: Some(anfrage.anfrage_nummer.as_str().to_owned()),
+            location: Some(anfrage.lokation_id.clone()),
+            ..Default::default()
+        },
     )
 }
 
@@ -561,20 +561,20 @@ fn ablehnung_outbox(
     antwortcode: &str,
     message_ref: &MessageRef,
 ) -> PendingOutbox {
-    PendingOutbox::new(
-        "ORDRSP",
+    PendingOutbox::typed(
         anfrage.anfragender.as_str(),
-        serde_json::json!({
-            "pid": ABLEHNUNG_PID.as_u32(),
-            "sender": anfrage.netzbetreiber.as_str(),
-            "receiver": anfrage.anfragender.as_str(),
-            "message_ref": message_ref.as_str(),
-            "document_code": BGM_ANFRAGE_STAMMDATEN,
-            "document_id": message_ref.as_str(),
-            "order_reference": anfrage.anfrage_nummer.as_str(),
-            "antwort_code": antwortcode,
-            "antwort_codeliste": anfragender.codeliste(),
-        }),
+        &mako_engine::payload::OrdrspPayload {
+            pid: Some(ABLEHNUNG_PID.as_u32()),
+            sender: Some(anfrage.netzbetreiber.as_str().to_owned()),
+            receiver: Some(anfrage.anfragender.as_str().to_owned()),
+            message_ref: Some(message_ref.as_str().to_owned()),
+            document_code: Some(BGM_ANFRAGE_STAMMDATEN.to_owned()),
+            document_id: Some(message_ref.as_str().to_owned()),
+            order_reference: Some(anfrage.anfrage_nummer.as_str().to_owned()),
+            antwort_code: Some(antwortcode.to_owned()),
+            antwort_codeliste: Some(anfragender.codeliste().to_owned()),
+            ..Default::default()
+        },
     )
 }
 
@@ -1056,6 +1056,9 @@ mod tests {
             assert_eq!(entry.payload["order_reference"], "GDA-0001");
             assert_eq!(entry.payload["antwort_code"], code);
             assert_eq!(entry.payload["antwort_codeliste"], codeliste);
+            let typed = <mako_engine::payload::OrdrspPayload as mako_engine::payload::OutboundPayload>::from_payload(&entry.payload)
+                .expect("the ORDRSP reads back as its typed payload");
+            assert_eq!(typed.document_code.as_deref(), Some(BGM_ANFRAGE_STAMMDATEN));
             let after = out
                 .iter()
                 .fold(state.clone(), GpkeGeschaeftsdatenanfrageWorkflow::apply);

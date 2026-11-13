@@ -236,7 +236,7 @@ impl<S, R> InsrptBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", super::agency_for(self.inner.receiver_agency, id)]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)?]
             );
         }
         if let Some(id) = &self.inner.sender_id {
@@ -244,7 +244,7 @@ impl<S, R> InsrptBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
         }
         // MIG order: SG3 DOC → SG4 RFF → SG7 LIN → STS → SG8 LOC.
@@ -261,7 +261,7 @@ impl<S, R> InsrptBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
+                [id, "", super::agency_for(self.inner.sender_agency, id)?]
             );
             emit_comp!(w, "CTA", ["IC"], ["", name]);
             emit_comp!(w, "COM", [comm, "EM"]);

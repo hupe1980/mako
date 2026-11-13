@@ -157,6 +157,9 @@ pub struct VersorgungsvertragRow {
     /// tacit extension, § 309 Nr. 9 lit. b BGB).
     pub vertragsende: Option<Date>,
     pub kundentyp: String,
+    /// § 13 BGB — whether the Kunde concludes this contract as a Verbraucher;
+    /// `None` = not recorded.
+    pub verbraucher: Option<bool>,
     pub preisgarantie_bis: Option<Date>,
     pub kuendigungsfrist_monate: i32,
     /// §40b EnWG billing cadence: MONATLICH / VIERTELJAEHRLICH /

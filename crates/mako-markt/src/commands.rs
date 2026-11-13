@@ -47,6 +47,11 @@ pub const GPKE_NB_LIEFERENDE_BESTAETIGEN: &str = "gpke.nb-lieferende.bestaetigen
 /// LF: reject an NB-initiated Lieferende — inbound 55007, answered
 /// UTILMD 55009 (EBD `E_0609`).
 pub const GPKE_NB_LIEFERENDE_ABLEHNEN: &str = "gpke.nb-lieferende.ablehnen";
+/// NB → LF: UTILMD 55007 „Ankündigung der Beendigung der Zuordnung" — the
+/// NB ends a Lieferant's Zuordnung of its own accord (GPKE Teil 2 Kap.
+/// 2.5.2.2 Nr. 1). The LF answers 55008 / 55009 by 05:00 Uhr des 1. WT nach
+/// dem ÜT; on silence the NB ends the Zuordnung with a second 55007 (Nr. 3).
+pub const GPKE_NB_LIEFERENDE_ANKUENDIGEN: &str = "gpke.nb-lieferende.ankuendigen";
 /// LFA: confirm an NB `Anfrage zur Beendigung der Zuordnung` (UTILMD 55011).
 ///
 /// The inbound PID is 55010 and the EBD is **`E_0624`** ("Anfrage zur Beendigung
@@ -58,7 +63,7 @@ pub const GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN: &str = "gpke.beendigung-zuordnung.
 
 /// NB → LFA: UTILMD 55010 `Anfrage zur Beendigung der Zuordnung`.
 ///
-/// GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 3, „parallel zu Nr. 2": whenever an
+/// GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 3, „parallel zu Nr. 2": whenever an
 /// Anmeldung lands on a Marktlokation that is already assigned at the
 /// Zuordnungsbeginn, the NB must ask the incumbent LFA to release it before it
 /// may confirm. The LFA answers by **09:00 Uhr des 1. WT**, and silence counts
@@ -73,7 +78,7 @@ pub const GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN: &str = "gpke.beendigung-zuordnung.
 ///
 /// One of the three **Meldepflichten** around the Lieferbeginn — messages the
 /// Festlegung obliges the NB to send with no answer expected back. GPKE Teil 2
-/// § 2.1.2 SD Lieferbeginn Nr. 2: owed whenever the Marktlokation is already
+/// Kap. 2.1.2 SD Lieferbeginn Nr. 2: owed whenever the Marktlokation is already
 /// assigned at the Zuordnungsbeginn, „auch dann …, sofern LFA und LFN identisch
 /// sind", and it is what tells the LFN **die Identität des LFA**.
 pub const GPKE_ZUORDNUNG_INFORMIEREN: &str = "gpke.zuordnung.informieren";
@@ -85,7 +90,7 @@ pub const GPKE_ZUORDNUNG_AUFHEBEN: &str = "gpke.zuordnung.aufheben";
 /// NB → `MSB` / `MSBZ`: UTILMD 55611 „Beendigung der Zuordnung des `MSB` zur
 /// `MaLo` / `MeLo`".
 ///
-/// A Meldepflicht of the SD **Lieferende von NB an LF** (§ 2.5.2 Nr. 11 and
+/// A Meldepflicht of the SD **Lieferende von NB an LF** (Kap. 2.5.2 Nr. 11 and
 /// Nr. 13), not of the Lieferbeginn: the NB opens that process itself with a
 /// 55007, and this tells the `MSB` — or, on `ZH1`, the `MSBZ` — that its own
 /// Zuordnung ends. It is the one message in the family that may address a
@@ -185,7 +190,7 @@ pub const ESA_ABBESTELLUNG_BEAUFTRAGEN: &str = "esa.abbestellung.beauftragen";
 /// Tranche — inbound 55607, answered UTILMD 55608 (EBDs `E_0603`–`E_0606`).
 ///
 /// The Zustimmung names the Bilanzkreis; without an answer by 15:00 Uhr am ÜT
-/// the NB assigns the LFN anyway (GPKE Teil 2 § 2.4.2.2 Nr. 3).
+/// the NB assigns the LFN anyway (GPKE Teil 2 Kap. 2.4.2.2 Nr. 3).
 pub const GPKE_ZUORDNUNG_LF_BESTAETIGEN: &str = "gpke.zuordnung-lf.bestaetigen";
 /// LFN: refuse an announced Zuordnung — inbound 55607, answered UTILMD 55609.
 pub const GPKE_ZUORDNUNG_LF_ABLEHNEN: &str = "gpke.zuordnung-lf.ablehnen";
@@ -248,9 +253,12 @@ pub const WIM_RECHNUNG_ABLEHNEN: &str = "wim.rechnung.ablehnen";
 pub const GABI_RECHNUNG_ANNEHMEN: &str = "gabi.rechnung.annehmen";
 /// Dispute one.
 pub const GABI_RECHNUNG_ABLEHNEN: &str = "gabi.rechnung.ablehnen";
+/// GNB: refuse a received Anforderung der Allokationsliste Gas (ORDERS 17110,
+/// Start Abo) with ORDRSP 19110 out of `E_0803` / `G_0001`.
+pub const GABI_ALLOKATIONSLISTE_ABLEHNEN: &str = "gabi.allokationsliste.ablehnen";
 
 /// Settle an inbound Stornorechnung (PID 31004) — Sparte-neutral and
-/// cross-process (INVOIC AHB § 3.1.2), so it cancels an invoice from any family.
+/// cross-process (INVOIC AHB Kap. 3.1.2), so it cancels an invoice from any family.
 pub const INVOIC_STORNORECHNUNG_ANNEHMEN: &str = "invoic.stornorechnung.annehmen";
 /// Dispute one.
 pub const INVOIC_STORNORECHNUNG_ABLEHNEN: &str = "invoic.stornorechnung.ablehnen";
@@ -294,11 +302,18 @@ pub const WIM_TECHNIK_AENDERUNG_BEANTWORTEN: &str = "wim.technik-aenderung.beant
 /// MSB: refuse an Anfrage / Anforderung / Reklamation von Werten (ORDERS
 /// 17102 / 17004 / 17113) with ORDRSP 19102 / 19007 / 19114.
 pub const GPKE_DATENABRUF_ABLEHNEN: &str = "gpke.datenabruf.ablehnen";
-/// MSB: answer a received GPKE Teil 3 ORDERS (17130, 17121, 17118, 17129) with
-/// ORDRSP 19132 / 19120 / 19127 / 19131.
+/// MSB: answer a received Anfrage von Werten (ORDERS 17102) with the
+/// Lastgang it asked for on MSCONS 13018 / 13025.
+pub const GPKE_DATENABRUF_WERTE_SENDEN: &str = "gpke.datenabruf.werte-senden";
+/// MSB / NB: answer a received GPKE Teil 3 ORDERS (17130, 17121, 17118,
+/// 17129, 17128, 17120, 17123) with ORDRSP 19132 / 19120 / 19127 / 19131 /
+/// 19130 / 19121 / 19124.
 pub const GPKE_KONFIGURATION_BEANTWORTEN: &str = "gpke.konfiguration.beantworten";
 /// LF / NB / MSB: send an Anforderung von Werten (ORDERS 17004) to the MSB.
 pub const GPKE_DATENABRUF_ANFORDERN: &str = "gpke.datenabruf.anfordern";
+/// NB / LF: order an Änderung der Technik of a Messlokation (ORDERS 17011,
+/// `BGM+Z12`) from the MSB.
+pub const WIM_TECHNIK_AENDERUNG_BESTELLEN: &str = "wim.technik-aenderung.bestellen";
 /// MSBN: announce a Gerätewechselabsicht (ORDERS 17009) to the MSBA.
 pub const WIM_GERAETEWECHSELABSICHT_ANZEIGEN: &str = "wim.geraetewechselabsicht.anzeigen";
 /// MSBN: order the offered devices (ORDERS 17001) from the MSBA.
@@ -344,6 +359,7 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_KUENDIGUNG_ANMELDEN,
     GPKE_LIEFERENDE_BESTAETIGEN,
     GPKE_LIEFERENDE_ABLEHNEN,
+    GPKE_NB_LIEFERENDE_ANKUENDIGEN,
     GPKE_NB_LIEFERENDE_BESTAETIGEN,
     GPKE_NB_LIEFERENDE_ABLEHNEN,
     GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
@@ -387,6 +403,7 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     WIM_RECHNUNG_ABLEHNEN,
     GABI_RECHNUNG_ANNEHMEN,
     GABI_RECHNUNG_ABLEHNEN,
+    GABI_ALLOKATIONSLISTE_ABLEHNEN,
     INVOIC_STORNORECHNUNG_ANNEHMEN,
     INVOIC_STORNORECHNUNG_ABLEHNEN,
     INVOIC_SONSTIGE_LEISTUNG_ANNEHMEN,
@@ -416,8 +433,10 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GELI_ANFRAGE_SPERRUNG_BEANTWORTEN,
     WIM_TECHNIK_AENDERUNG_BEANTWORTEN,
     GPKE_DATENABRUF_ABLEHNEN,
+    GPKE_DATENABRUF_WERTE_SENDEN,
     GPKE_KONFIGURATION_BEANTWORTEN,
     GPKE_DATENABRUF_ANFORDERN,
+    WIM_TECHNIK_AENDERUNG_BESTELLEN,
     WIM_GERAETEWECHSELABSICHT_ANZEIGEN,
     WIM_GERAETEUEBERNAHME_BESTELLEN,
 ];
@@ -454,6 +473,50 @@ pub struct GpkeEogAnmelden {
     pub process_date: String,
     /// `SG4 STS+7` DE 9013 Transaktionsgrund.
     pub transaktionsgrund: String,
+}
+
+/// The `payload` of [`GPKE_NB_LIEFERENDE_ANKUENDIGEN`] — the NB's 55007.
+/// See [`GpkeEogAnmelden`] for why it is shared.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpkeNbLieferendeAnkuendigen {
+    /// The Marktlokation, or the MaLo-ID of the Tranche.
+    pub malo_id: String,
+    /// MP-ID of the Lieferant whose Zuordnung ends.
+    pub lf_mp_id: String,
+    /// `SG4 DTM+93` Zuordnungsende, `YYYY-MM-DD` or `YYYYMMDD`.
+    pub zuordnungsende: String,
+    /// `SG4 STS+7` DE 9013 Transaktionsgrund — `Z33` Auszug wegen
+    /// Stilllegung, `ZQ7` or `ZT0`.
+    pub transaktionsgrund: String,
+    /// `SG4 STS+7` Transaktionsgrundergänzung — `ZW3` erzeugende, `ZW4`
+    /// verbrauchende, `ZW5` Tranche, `ZAP` ruhende Marktlokation.
+    pub transaktionsgrund_ergaenzung: String,
+    /// `SG4 DTM+206` Geräteausbauzeitpunkt, `YYYY-MM-DD` or `YYYYMMDD` — Muss
+    /// under `Z33`, refused under any other Grund.
+    #[serde(default)]
+    pub geraeteausbaudatum: Option<String>,
+    /// The MSB whose Zuordnung a Stilllegung ends (55611 `ZC8`) — Muss under
+    /// `Z33`.
+    #[serde(default)]
+    pub msb_mp_id: Option<String>,
+    /// A MSBZ whose future Zuordnung a Stilllegung cancels (55611 `ZH1`).
+    #[serde(default)]
+    pub msbz: Option<ZukuenftigeZuordnung>,
+    /// A LFZ whose future Zuordnung a Stilllegung cancels (55038 `ZH1`).
+    #[serde(default)]
+    pub lfz: Option<ZukuenftigeZuordnung>,
+}
+
+/// A Zuordnung that has not begun — the LFZ's or the MSBZ's a Stilllegung
+/// cancels.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZukuenftigeZuordnung {
+    /// Its holder.
+    pub mp_id: String,
+    /// The Zuordnungsbeginn the NB confirmed, `YYYY-MM-DD` or `YYYYMMDD`.
+    pub zuordnungsbeginn: String,
 }
 
 /// The `payload` of [`GELI_EOG_ANMELDEN`] — the GNB's Anmeldung `EoG` 44013.

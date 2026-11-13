@@ -8,6 +8,7 @@ import {
   TextField,
 } from "react-aria-components";
 import {
+  aktionen as aktionenVon,
   type Entscheidbar,
   perTaste,
   aktion as registriert,
@@ -16,11 +17,12 @@ import {
   useHalten,
 } from "../app/aktionen";
 import { DIENST, nichtErreichbar } from "../app/dienste";
+import { FaktFelder } from "../app/FaktFelder";
 import { FREIGEBEN, UEBERNEHMEN, UNDO } from "../app/keys";
 import type { Vorschlag } from "../data/agent";
 import type { Pruefposten } from "../data/gen/billingd";
-import type { Disput } from "../data/gen/invoicd";
-import { Abgelehnt, SchonErledigt } from "../data/rechnung";
+import type { Disput, GehalteneRechnung } from "../data/gen/invoicd";
+import { Abgelehnt, offeneSchritte, SchonErledigt } from "../data/rechnung";
 import { useVerweigert, Verweigert } from "../data/verweigert";
 import { Icon } from "../design/Icon";
 import { Notice, Panel } from "../design/Panel";
@@ -323,6 +325,141 @@ export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: 
             {a && <p className="m-0 flex-1 text-caption text-text-2">{a.was}</p>}
             <AriaButton onPress={senden} aria-keyshortcuts="A" className={PRIMAER}>
               {gehaltenBand ? k.freigeben : k.geprueft}
+            </AriaButton>
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * The decision on a held invoice: state what its Entscheidungsbaum could not
+ * read — per open Prüfschritt, with a reason — or record the Leistungsnachweis
+ * of its order. invoicd walks the invoice again at once; a walk that reaches a
+ * result is answered as an automatic one would be. Held for undo like every
+ * decision; nothing is asked twice.
+ */
+export function GehaltenEntscheiden({ g, onDone }: { g: GehalteneRechnung; onDone: () => void }) {
+  const t = useT();
+  const k = t.rechnungen;
+  const ding: Entscheidbar = { art: "gehalten", g };
+  const angebot = aktionenVon(ding);
+  const verweigert = useVerweigert({ dienst: "invoicd", aktion: "feststellen" });
+  const [wahl, setWahl] = useState<string | null>(angebot[0]?.id ?? null);
+  const [werte, setWerte] = useState<Record<string, Record<string, string>>>({});
+  const [text, setText] = useState<Record<string, string>>({});
+  const [gehalten, setGehalten] = useState(false);
+  const halte = useHalten();
+  const fehler = useFehlschlag(schluessel(ding))?.error ?? null;
+  const a = wahl ? registriert(ding, wahl) : undefined;
+  const w = { code: null, text: (wahl && text[wahl]) ?? "", fakten: (wahl && werte[wahl]) || {} };
+  const bereit = a ? a.bereit(w) : false;
+  const feststellbar = new Set(
+    (registriert(ding, "feststellen")?.fakten ?? []).map((f) => f.bezeichnung),
+  );
+
+  function senden() {
+    if (!a || !bereit) return;
+    setGehalten(true);
+    halte(ding, a, w, {
+      gesendet: onDone,
+      zurueck: () => setGehalten(false),
+      fehlgeschlagen: () => setGehalten(false),
+    });
+  }
+
+  useEffect(() => {
+    if (verweigert || gehalten) return;
+    const onKey = (e: KeyboardEvent) => {
+      const gewaehlt = perTaste(ding, e);
+      if (!gewaehlt) return;
+      e.preventDefault();
+      setWahl(gewaehlt.id);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  const schritte = offeneSchritte(g.offen);
+  const festgestellt = registriert(ding, "feststellen");
+  return (
+    <Panel className="flex flex-col gap-4 p-5">
+      <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
+      <p className="m-0 text-caption text-text-2">{k.gehaltenText}</p>
+      {schritte.length > 0 && (
+        <ul aria-label={k.offeneSchritte} className="m-0 flex list-none flex-col gap-1.5 p-0">
+          {schritte.map((s) => {
+            const name = t.aktionen.gehalten.schritt(
+              `${s.pruefschritt}`,
+              s.position === null ? null : `${s.position}`,
+              s.detail,
+            );
+            return (
+              <li key={name} className="flex flex-col gap-0.5">
+                <span className="text-body text-text">{name}</span>
+                {festgestellt && !feststellbar.has(name) && (
+                  <span className="text-caption text-text-2">{k.nichtFeststellbar}</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {verweigert ? (
+        <Notice tone="refusal" title={k.gehaltenVerweigert}>
+          {verweigert}
+        </Notice>
+      ) : gehalten && a ? (
+        <Gehalten text={a.gehalten} />
+      ) : (
+        <>
+          {angebot.length > 1 && (
+            <RadioGroup
+              aria-label={t.entscheidung.titel}
+              value={wahl}
+              onChange={setWahl}
+              orientation="horizontal"
+              className="flex gap-2"
+            >
+              {angebot.map((x) => (
+                <Radio key={x.id} value={x.id} className={WAHL}>
+                  {x.verb}
+                </Radio>
+              ))}
+            </RadioGroup>
+          )}
+          {a && (
+            <>
+              <FaktFelder
+                fakten={a.fakten ?? []}
+                werte={w.fakten}
+                onChange={(feld, wert) =>
+                  setWerte((alt) => ({ ...alt, [a.id]: { ...alt[a.id], [feld]: wert } }))
+                }
+              />
+              {a.feld && (
+                <TextField
+                  value={w.text}
+                  onChange={(v) => setText((alt) => ({ ...alt, [a.id]: v }))}
+                  isRequired={a.feld.pflicht}
+                  className="flex flex-col gap-1"
+                >
+                  <Label className="text-caption text-text-2">{a.feld.label}</Label>
+                  <TextArea
+                    rows={2}
+                    maxLength={512}
+                    className="focus-ring rounded-control border border-separator bg-surface px-3 py-2 text-body text-text outline-none"
+                  />
+                </TextField>
+              )}
+            </>
+          )}
+          <Fehler error={fehler} dienst="invoicd" />
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {a && <p className="m-0 flex-1 text-caption text-text-2">{a.was}</p>}
+            <AriaButton isDisabled={!bereit} onPress={senden} className={PRIMAER}>
+              {a?.verb}
             </AriaButton>
           </div>
         </>

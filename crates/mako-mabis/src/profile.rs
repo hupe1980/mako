@@ -190,6 +190,35 @@ pub struct ProfilData {
     pub version: u32,
     /// EDIFACT message reference.
     pub message_ref: MessageRef,
+    /// `BGM` DE 1004 of the delivery — what a Reklamation names in `SG1
+    /// RFF+ACW`.
+    #[serde(default)]
+    pub dokumentennummer: String,
+}
+
+/// A Reklamation as the NB received it (ORDERS 17211, ORDERS AHB 1.1b Kap.
+/// 5.5, S. 126–127).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReklamationEingang {
+    /// The Lieferant — `SG2 NAD+MS`.
+    pub lf: MarktpartnerCode,
+    /// The Netzbetreiber — `SG2 NAD+MR`.
+    pub nb: MarktpartnerCode,
+    /// The 17211's `BGM` DE 1004.
+    pub dokumentennummer: String,
+    /// `SG1 RFF+ACW` — the reclaimed MSCONS' `BGM` DE 1004 (`[525]`).
+    pub reklamierte_nachricht: String,
+    /// `FTX+AFH` DE 4441 — the `E_0100` code.
+    pub antwortcode: String,
+    /// Interchange reference of the inbound ORDERS.
+    pub message_ref: MessageRef,
+}
+
+/// The key the NB's record of a Reklamation is filed under: the sender and
+/// the 17211's `BGM` DE 1004 — the ORDERS names no Lokation.
+#[must_use]
+pub fn reklamation_key(lf: &str, dokumentennummer: &str) -> String {
+    format!("{WORKFLOW_NAME}:reklamation:{lf}:{dokumentennummer}")
 }
 
 // ── Domain events ────────────────────────────────────────────────────────────
@@ -214,6 +243,9 @@ pub enum ProfilEvent {
         version: u32,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `BGM` DE 1004 of the delivery.
+        #[serde(default)]
+        dokumentennummer: String,
     },
     /// Checked and accepted; nothing owed back (terminal).
     Erfasst {
@@ -238,6 +270,11 @@ pub enum ProfilEvent {
         /// Human-readable summary of validation errors.
         reason: String,
     },
+    /// The NB received a Reklamation (ORDERS 17211).
+    ReklamationErhalten {
+        /// The Reklamation.
+        reklamation: Box<ReklamationEingang>,
+    },
 }
 
 impl EventPayload for ProfilEvent {
@@ -247,6 +284,7 @@ impl EventPayload for ProfilEvent {
             Self::Erfasst { .. } => "MabisProfileErfasst",
             Self::ReklamationGesendet { .. } => "MabisProfilReklamationGesendet",
             Self::ValidationFailed { .. } => "MabisProfilValidationFailed",
+            Self::ReklamationErhalten { .. } => "MabisProfilReklamationErhalten",
         }
     }
 
@@ -270,12 +308,21 @@ impl EventPayload for ProfilEvent {
                 pid: Some(pruefidentifikator.as_u32()),
                 message_ref: Some(message_ref.as_str().to_owned()),
             }),
+            Self::ReklamationErhalten { reklamation } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(REKLAMATION_PID),
+                message_ref: Some(reklamation.message_ref.as_str().to_owned()),
+            }),
             Self::Erfasst { .. } | Self::ValidationFailed { .. } => None,
         }
     }
 
     fn antwort(&self) -> Option<Antwortcode> {
         match self {
+            Self::ReklamationErhalten { reklamation } => Some(Antwortcode::new(
+                reklamation.antwortcode.clone(),
+                Some(REKLAMATION_EBD),
+            )),
             Self::ReklamationGesendet { antwortcode, .. } => {
                 Some(Antwortcode::new(antwortcode.clone(), Some(REKLAMATION_EBD)))
             }
@@ -309,6 +356,11 @@ pub enum ProfilState {
         /// Validation error summary.
         reason: String,
     },
+    /// The NB holds a Reklamation. Nothing is answered on the wire: „Bei einer
+    /// erforderlichen Anpassung erfolgt dies unverzüglich über eine Korrektur
+    /// durch den NB" (BK6-24-174 Anlage 3 Kap. 6.5.2 Nr. 2, S. 69) — a new
+    /// version of the profile, which stays valid meanwhile.
+    ReklamationErhalten(Box<ReklamationEingang>),
 }
 
 impl mako_engine::workflow::OccupiesBusinessKey for ProfilState {
@@ -330,6 +382,7 @@ impl ProfilState {
             Self::Erfasst(_) => "Erfasst",
             Self::Reklamiert { .. } => "Reklamiert",
             Self::ValidationFailed { .. } => "ValidationFailed",
+            Self::ReklamationErhalten(_) => "ReklamationErhalten",
         }
     }
 
@@ -338,7 +391,7 @@ impl ProfilState {
     pub fn data(&self) -> Option<&ProfilData> {
         match self {
             Self::Erhalten(d) | Self::Erfasst(d) | Self::Reklamiert { data: d, .. } => Some(d),
-            Self::New | Self::ValidationFailed { .. } => None,
+            Self::New | Self::ValidationFailed { .. } | Self::ReklamationErhalten(_) => None,
         }
     }
 
@@ -373,6 +426,8 @@ pub enum ProfilCommand {
         version: u32,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `BGM` DE 1004 of the delivery.
+        dokumentennummer: String,
         /// `true` if AHB profile validation passed.
         validation_passed: bool,
         /// Validation errors collected by the AHB validator.
@@ -380,6 +435,15 @@ pub enum ProfilCommand {
     },
     /// Record the delivery as accepted without a Reklamation.
     Akzeptieren,
+    /// The NB receives a Reklamation (ORDERS 17211).
+    ReceiveReklamation {
+        /// The Reklamation.
+        reklamation: ReklamationEingang,
+        /// `true` if AHB profile validation passed.
+        validation_passed: bool,
+        /// Validation errors collected by the AHB validator.
+        validation_errors: Vec<String>,
+    },
     /// Send a Reklamation to the NB (ORDERS 17211).
     ///
     /// „Unverzüglich nach Feststellung eines Fehlers" (Kap. 6.5.2 Nr. 2) — no
@@ -422,6 +486,7 @@ impl Workflow for MabisProfilWorkflow {
                 bilanzierungsmonat,
                 version,
                 message_ref,
+                dokumentennummer,
             } => ProfilState::Erhalten(Box::new(ProfilData {
                 pruefidentifikator: *pruefidentifikator,
                 art: *art,
@@ -430,6 +495,7 @@ impl Workflow for MabisProfilWorkflow {
                 bilanzierungsmonat: bilanzierungsmonat.clone(),
                 version: *version,
                 message_ref: message_ref.clone(),
+                dokumentennummer: dokumentennummer.clone(),
             })),
 
             ProfilEvent::Erfasst { .. } => match state {
@@ -448,6 +514,10 @@ impl Workflow for MabisProfilWorkflow {
             ProfilEvent::ValidationFailed { reason } => ProfilState::ValidationFailed {
                 reason: reason.clone(),
             },
+
+            ProfilEvent::ReklamationErhalten { reklamation } => {
+                ProfilState::ReklamationErhalten(reklamation.clone())
+            }
         }
     }
 
@@ -463,6 +533,7 @@ impl Workflow for MabisProfilWorkflow {
                 bilanzierungsmonat,
                 version,
                 message_ref,
+                dokumentennummer,
                 validation_passed,
                 validation_errors,
             } => {
@@ -490,6 +561,27 @@ impl Workflow for MabisProfilWorkflow {
                     bilanzierungsmonat,
                     version,
                     message_ref,
+                    dokumentennummer,
+                }]
+                .into())
+            }
+
+            ProfilCommand::ReceiveReklamation {
+                reklamation,
+                validation_passed,
+                validation_errors,
+            } => {
+                if !matches!(state, ProfilState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.label()));
+                }
+                if !validation_passed {
+                    return Ok(vec![ProfilEvent::ValidationFailed {
+                        reason: validation_errors.join("; "),
+                    }]
+                    .into());
+                }
+                Ok(vec![ProfilEvent::ReklamationErhalten {
+                    reklamation: Box::new(reklamation),
                 }]
                 .into())
             }
@@ -540,19 +632,28 @@ impl Workflow for MabisProfilWorkflow {
                 let pid = Pruefidentifikator::new(REKLAMATION_PID).map_err(|e| {
                     WorkflowError::rejected(format!("invalid PID {REKLAMATION_PID}: {e}"))
                 })?;
-                let outbox = PendingOutbox::new(
-                    "ORDERS",
+                // ORDERS AHB 1.1b Kap. 5.5 (S. 126–127): `BGM+Z58`, `FTX+AFH`
+                // the `E_0100` code and `SG1 RFF+ACW` the reclaimed MSCONS'
+                // `BGM` DE 1004 (`[525]`). The Mängel are the process's record;
+                // the column carries no free text.
+                if data.dokumentennummer.is_empty() {
+                    return Err(WorkflowError::rejected(
+                        "die Reklamation nennt die reklamierte MSCONS mit ihrer BGM-\
+                         Dokumentennummer (SG1 RFF+ACW), und keine wurde mit der \
+                         Lieferung erfasst",
+                    ));
+                }
+                let outbox = PendingOutbox::typed(
                     data.sender.as_str(),
-                    serde_json::json!({
-                        "pid": REKLAMATION_PID,
-                        "ebd": REKLAMATION_EBD,
-                        "antwortcode": code.code,
-                        "bedeutung": code.bedeutung,
-                        "profilart": data.art,
-                        "bilanzierungsmonat": data.bilanzierungsmonat.as_str(),
-                        "version": data.version,
-                        "maengel": maengel,
-                    }),
+                    &mako_engine::payload::OrdersPayload {
+                        pid: Some(REKLAMATION_PID),
+                        sender: Some(data.receiver.as_str().to_owned()),
+                        message_ref: Some(message_ref.as_str().to_owned()),
+                        document_id: Some(message_ref.as_str().to_owned()),
+                        reklamation_code: Some(code.code.to_owned()),
+                        referenz_nachricht: Some(data.dokumentennummer.clone()),
+                        ..Default::default()
+                    },
                 );
                 Ok(WorkflowOutput {
                     events: vec![ProfilEvent::ReklamationGesendet {
@@ -594,6 +695,7 @@ mod tests {
             bilanzierungsmonat: BillingPeriod::new("2026-01"),
             version: 3,
             message_ref: MessageRef::new("MSCONS-PROFIL-1"),
+            dokumentennummer: "PROFIL-DOK-1".to_owned(),
             validation_passed: true,
             validation_errors: vec![],
         }
@@ -693,8 +795,16 @@ mod tests {
         )
         .expect("ok");
         assert_eq!(out.outbox[0].payload["pid"], REKLAMATION_PID);
-        assert_eq!(out.outbox[0].payload["ebd"], REKLAMATION_EBD);
-        assert_eq!(out.outbox[0].payload["antwortcode"], "A01");
+        let orders = <mako_engine::payload::OrdersPayload as mako_engine::payload::OutboundPayload>::from_payload(&out.outbox[0].payload)
+            .expect("the ORDERS reads back as its typed payload");
+        // ORDERS AHB 1.1b Kap. 5.5: `FTX+AFH` the code, `RFF+ACW` the
+        // reclaimed MSCONS' `BGM`.
+        assert_eq!(orders.reklamation_code.as_deref(), Some("A01"));
+        assert_eq!(orders.referenz_nachricht.as_deref(), Some("PROFIL-DOK-1"));
+        assert!(matches!(
+            &out.events[0],
+            ProfilEvent::ReklamationGesendet { antwortcode, .. } if antwortcode == "A01"
+        ));
         assert_eq!(
             out.outbox[0].recipient.as_ref(),
             "9900123456789",
@@ -804,6 +914,7 @@ mod tests {
             bilanzierungsmonat: BillingPeriod::new("2026-01"),
             version: 3,
             message_ref: MessageRef::new("MSCONS-PROFIL-1"),
+            dokumentennummer: "PROFIL-DOK-1".to_owned(),
             validation_passed: false,
             validation_errors: vec!["SG6 LOC fehlt".into()],
         };

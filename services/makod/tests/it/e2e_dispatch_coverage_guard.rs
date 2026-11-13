@@ -67,11 +67,6 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
     // the LF and the MSB receive the normierte Profile and may answer with an
     // ORDERS 17211 Reklamation, which is what `mabis-profile` exists for.
     // ── MMM Allokationsliste Anforderungen ───────────────────────────────────
-    (
-        17110,
-        "gpke-allokationsliste",
-        "Anforderung Allokationsliste (LF → NB) — NB receiver not implemented",
-    ),
     // ORDERS fv20260401 (AHB 1.1a Kap. 4.2.2, S. 28, NB an ÜNB) publishes it;
     // fv20261001 (AHB 1.1b, 01.10.2026) drops it — `RETIRED_PIDS` in xtask
     // names that release. It stays registered while a process created under
@@ -131,7 +126,7 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
 
 /// The most entries [`SEND_ONLY_PIDS`] may hold. Lower it with every entry a
 /// receiver removes; it never rises.
-const SEND_ONLY_CEILING: usize = 21;
+const SEND_ONLY_CEILING: usize = 20;
 
 #[test]
 fn send_only_pids_do_not_grow() {
@@ -408,5 +403,220 @@ async fn dispatch_coverage_is_not_silently_shrinking() {
          to dispatch — the coverage guard is running near-empty. Add fixtures \
          under crates/edi-energy/tests/fixtures/<type>/valid/pid_<pid>.edi",
         pairs.len()
+    );
+}
+
+/// The routed PIDs whose own profile skeleton an adapter refuses, each with
+/// why. An adapter that requires a segment its column does not define refuses
+/// every conformant message of that PID — 13003 required an `SG10 CCI` its
+/// column lacks — and that shows up here as a new entry. The list only
+/// shrinks: a fixed refusal fails the test until its entry goes.
+const KNOWN_REFUSALS: &[(u32, &str, &str)] = &[
+    // State, not shape: a version or a Deaktivierung names its series through
+    // the MaBiS-ZP's activation, which a fresh store does not hold.
+    (
+        13003,
+        "mabis-billing",
+        "no recorded Aktivierung of the MaBiS-ZP",
+    ),
+    (
+        13020,
+        "mabis-billing",
+        "no recorded Aktivierung of the MaBiS-ZP",
+    ),
+    (
+        55063,
+        "mabis-zp-lifecycle",
+        "no recorded Aktivierung of the MaBiS-ZP",
+    ),
+    // Skeleton values, not adapter requirements.
+    (
+        21002,
+        "mabis-billing",
+        "an Abweisung resumes a settlement a fresh store does not hold",
+    ),
+    (
+        21003,
+        "mabis-billing",
+        "skeleton STS+Z04 DE 4405 placeholder is no Datenstatus code",
+    ),
+    (
+        21004,
+        "mabis-billing",
+        "skeleton STS+Z04 DE 4405 placeholder is no Datenstatus code",
+    ),
+    (
+        55064,
+        "mabis-zp-lifecycle",
+        "skeleton STS code placeholder is no E_0009 code",
+    ),
+    (
+        55204,
+        "mabis-zp-lifecycle",
+        "skeleton STS code placeholder is no E_0071 code",
+    ),
+    (
+        55207,
+        "mabis-zp-lifecycle",
+        "skeleton STS code placeholder is no E_0072 code",
+    ),
+    (
+        55210,
+        "mabis-zp-lifecycle",
+        "skeleton STS code placeholder is no E_0078 code",
+    ),
+    (
+        55213,
+        "mabis-zp-lifecycle",
+        "skeleton STS code placeholder is no E_0079 code",
+    ),
+    (
+        55237,
+        "mabis-zp-lifecycle",
+        "skeleton STS code placeholder is no E_0102 code",
+    ),
+    (
+        29001,
+        "gabi-gas-invoic",
+        "the newest profile carrying 29001 is not COMDIS",
+    ),
+    (
+        29001,
+        "gpke-abrechnung",
+        "the newest profile carrying 29001 is not COMDIS",
+    ),
+    (
+        29001,
+        "wim-invoic",
+        "the newest profile carrying 29001 is not COMDIS",
+    ),
+    // No requester side: an answer with no open Anfrage to resume.
+    (
+        44138,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44142,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44151,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44152,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44157,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44163,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44167,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44181,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44182,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    // An answer to an Anfrage or Änderungsmeldung mako does not send.
+    (
+        44021,
+        "geli-gas-supplier-change",
+        "answers a 44020 mako does not send",
+    ),
+    (
+        44145,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44146,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44149,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+    (
+        44164,
+        "geli-gas-stammdatenaenderung",
+        "Stammdatenanfrage answer, no requester side",
+    ),
+];
+
+/// Every routed PID's profile skeleton is accepted by its adapter, or its
+/// refusal is a [`KNOWN_REFUSALS`] entry — in both directions.
+#[tokio::test]
+async fn every_conformant_skeleton_is_accepted_or_its_refusal_named() {
+    let mut refused: Vec<(u32, String, String)> = Vec::new();
+    for (pid, wf) in registered_pairs() {
+        let Some(edi) = fixture(pid) else { continue };
+        let Ok(msg) = edi_energy::parse(edi.as_bytes()) else {
+            continue;
+        };
+        let dispatcher = make_dispatcher().await;
+        if let Err(e) = dispatcher
+            .dispatch(&msg, &wf, pid, time::OffsetDateTime::now_utc())
+            .await
+        {
+            refused.push((pid, wf, e.to_string()));
+        }
+    }
+    let known: std::collections::BTreeSet<(u32, &str)> =
+        KNOWN_REFUSALS.iter().map(|(p, w, _)| (*p, *w)).collect();
+    let neu: Vec<String> = refused
+        .iter()
+        .filter(|(p, w, _)| !known.contains(&(*p, w.as_str())))
+        .map(|(p, w, e)| format!("  {p} → {w}: {e}"))
+        .collect();
+    assert!(
+        neu.is_empty(),
+        "an adapter refuses a conformant message — does it require a segment its \
+         column does not define?\n{}",
+        neu.join("\n")
+    );
+    // A state refusal must name the missing activation — not a segment the
+    // column lacks, which is what 13003's `SG10 CCI` requirement looked like.
+    for (pid, wf, e) in &refused {
+        let Some((_, _, grund)) = KNOWN_REFUSALS.iter().find(|(p, w, _)| p == pid && w == wf)
+        else {
+            continue;
+        };
+        if grund.starts_with("no recorded Aktivierung") {
+            assert!(
+                e.contains("Aktivierung"),
+                "{pid} → {wf} is refused for something other than its activation: {e}"
+            );
+        }
+    }
+    let behoben: Vec<String> = KNOWN_REFUSALS
+        .iter()
+        .filter(|(p, w, _)| !refused.iter().any(|(rp, rw, _)| rp == p && rw == w))
+        .map(|(p, w, _)| format!("  {p} → {w}"))
+        .collect();
+    assert!(
+        behoben.is_empty(),
+        "these skeletons are accepted now — remove their KNOWN_REFUSALS entry:\n{}",
+        behoben.join("\n")
     );
 }

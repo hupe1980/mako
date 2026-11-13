@@ -43,6 +43,73 @@ unreachable daemon is neither ready nor failing. Two daemons naming different
 MP-IDs for one Rolle and Sparte is a finding of its own, which no single daemon
 can make.
 
+`just doctor` prints the same reports as one line per daemon — ready or
+blocked, and how many findings block or warn.
+
+## The proposal
+
+The setup interview asks only what changes the configuration: the Rollen and
+the MP-ID each plays under, the primary MP-ID where there are several, a
+Lieferant's Bilanzkreise per Sparte, the affiliated Lieferanten, the AS4 key
+material as paths, and where the other daemons run. From the answers
+`mako_service::einrichtung::vorschlag` proposes one file per daemon:
+
+- every line marked against what the daemons report as loaded — new,
+  unchanged, or to remove — and naming the rule or document it satisfies
+  (`# Quelle:` in the file);
+- every fact nobody gave a `# FEHLT:` gap, so the file still parses and the
+  daemon still refuses until the gap is filled;
+- no secret: a certificate, a key or an API key is named by its path, and an
+  answer that is key material is refused;
+- an answer that breaks a rule refused with its source — a Gas Rolle under a
+  `99…` code, a Strom Rolle under `98…` (Identifikatoren AWH V1.2, Kap. 2.2),
+  one Codenummer for both Sparten (Allgemeine Festlegungen V6.1d, Kap. 2.13).
+
+The same function answers the Desk's **Vorschlag**, makod's
+`POST /admin/einrichtung/vorschlag` and MCP `einrichtung_vorschlag`, and the
+terminal:
+
+```bash
+just setup --vorschlag antworten.toml                 # the diff per daemon
+just setup --vorschlag antworten.toml --schreiben out # and the files in out/
+```
+
+```toml
+# antworten.toml
+primaer = "9900357000004"
+verbundene_lieferanten = []
+
+[[rollen]]
+rolle = "lf-strom"
+mp_id = "9900357000004"
+
+[[rollen]]
+rolle = "lf-gas"
+mp_id = "9800357000005"
+
+[[bilanzkreise]]
+sparte   = "strom"
+standard = ["11XBK-STD------Y"]
+```
+
+It exits non-zero while the proposal has a gap or a refused answer. Nothing is
+written to a server: the operator applies each file. In the Desk one sentence
+can pre-fill the interview; agentd keeps an MP-ID or Bilanzkreis it proposes
+only where the sentence contains it, and each answer waits for the person to
+take it.
+
+## The first run
+
+```bash
+just erstlauf
+```
+
+starts from makod's operating frame alone — refused, no Rolle and no
+identity — answers the interview for a Lieferant Strom und Gas, appends the
+proposed `makod.toml`, checks it ready, boots makod, puts the sample
+Marktlokation into its cache and rehearses the Strom Anmeldung. Each step is
+timed; the run fails on any step, or over 30 minutes.
+
 ## One daemon
 
 | Command | Prints |

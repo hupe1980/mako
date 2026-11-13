@@ -357,7 +357,7 @@ pub(super) async fn dispatch_lf_anmeldung(
     // `execution_time_until` (i.e. the currently active NB).
     let malo_record = state
         .malo_cache
-        .get(&state.tenant_id.to_string(), malo_id.as_str())
+        .get(malo_id.as_str())
         .await
         .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
         .ok_or_else(|| DispatchError::MaloNotFound(malo_id.to_string()))?;
@@ -883,7 +883,7 @@ pub(super) async fn dispatch_kuendigung_antwort(
 /// The LF receives PID 55007 Ankündigung via AS4 (auto-spawned by the ingest
 /// dispatcher). After review, the ERP operator calls this command to send the
 /// formal response. The APERAK is its own 45-minute clock (APERAK AHB 1.1
-/// §2.4.1); the business answer is due inside 55007's published Antwortfrist.
+/// Kap. 2.4.1); the business answer is due inside 55007's published Antwortfrist.
 ///
 /// ## Required payload fields
 ///
@@ -948,10 +948,10 @@ pub(super) async fn dispatch_gpke_beendigung_zuordnung_antwort(
 ///
 /// The LFN receives PID 55607 Ankündigung via AS4 (auto-spawned by the ingest
 /// dispatcher); `processd`'s LF module or an operator answers it. The business
-/// Frist is **15:00 Uhr am ÜT** (GPKE Teil 2 § 2.4.2.2 Nr. 2) — and missing it
+/// Frist is **15:00 Uhr am ÜT** (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2) — and missing it
 /// is not a lapsed obligation: Prozessschritt 3 has the NB assign the LFN to the
 /// Marktlokation anyway, using whichever Bilanzkreis the LFN last communicated.
-/// The separate APERAK clock is 45 minutes (APERAK AHB 1.1 § 2.4.1).
+/// The separate APERAK clock is 45 minutes (APERAK AHB 1.1 Kap. 2.4.1).
 ///
 /// ## Payload fields
 ///
@@ -1482,18 +1482,25 @@ fn neuanlage_antwort(
     })
 }
 
-/// Dispatch the NB's Bearbeitungsstand on Abrechnungsdaten (`E_0595`).
+/// Dispatch the NB's Bearbeitungsstand on Abrechnungsdaten.
 ///
-/// Called for `gpke.abrechnungsdaten.bearbeitungsstand`. `E_0595` is not on the
-/// Zustimmung/Ablehnung axis — its clusters say whether a Stammdatenänderung
-/// follows — so there is one command and one answer PID (IFTSTA 21047), and the
-/// cluster is read from the catalogue rather than taken from the caller. Only
-/// the tree's UTILMD Stammdaten-Clearing branch answers these three PIDs.
+/// Called for `gpke.abrechnungsdaten.bearbeitungsstand`. The trees are not on
+/// the Zustimmung/Ablehnung axis — their clusters say whether a
+/// Stammdatenänderung follows — so there is one command and one answer PID
+/// (IFTSTA 21047), and the cluster is read from the catalogue rather than taken
+/// from the caller. `codeliste` names the tree: `E_0595` (the default, to a LF —
+/// only its UTILMD Stammdaten-Clearing branch), or `E_0618` / `E_0613` to a ÜNB
+/// (IFTSTA AHB 2.1 Kap. 7.7, S. 62); the workflow admits it for the PID.
 pub(super) async fn dispatch_abrechnungsdaten_bearbeitungsstand(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let ebd = mako_pruefung::codes::EBD_BESTELLUNG;
+    let ebd = payload
+        .get("codeliste")
+        .and_then(|v| v.as_str())
+        .unwrap_or(mako_pruefung::codes::EBD_BESTELLUNG)
+        .to_owned();
+    let ebd = ebd.as_str();
     let antwort_code = payload
         .get("antwort_code")
         .and_then(|v| v.as_str())
@@ -1506,7 +1513,9 @@ pub(super) async fn dispatch_abrechnungsdaten_bearbeitungsstand(
     // Prüfschritt 10 splits `E_0595`: the ORDERS branch answers PID 55555, the
     // UTILMD Stammdaten-Clearing branch these three. Only the latter's codes may
     // ride the IFTSTA 21047 this command sends.
-    if !mako_pruefung::codes::E_0595_CLEARING_CODES.contains(&antwort_code.as_str()) {
+    if ebd == mako_pruefung::codes::EBD_BESTELLUNG
+        && !mako_pruefung::codes::E_0595_CLEARING_CODES.contains(&antwort_code.as_str())
+    {
         return Err(DispatchError::InvalidPayload(format!(
             "Antwortcode {antwort_code:?} is not in the {ebd} Stammdaten-Clearing branch \
              (Prüfschritt 210 ff.), which is what 55156/55220/55673 are answered from"
@@ -1534,15 +1543,24 @@ pub(super) async fn dispatch_abrechnungsdaten_bearbeitungsstand(
         )));
     }
     let malo_id = extract_malo_id(payload)?;
+    let codeliste = ebd.to_owned();
 
-    dispatch_to_process::<mako_gpke::GpkeAbrechnungsdatenWorkflow, _>(
+    let cmd = mako_gpke::AbrechnungsdatenCommand::SendBearbeitungsstand {
+        antwort_code,
+        codeliste,
+        sendet_stammdatenaenderung,
+        bemerkung,
+    };
+    dispatch_to_process_in_version::<mako_gpke::GpkeAbrechnungsdatenWorkflow, _>(
         state,
         malo_id.as_str(),
         mako_gpke::abrechnungsdaten::WORKFLOW_NAME,
-        move || mako_gpke::AbrechnungsdatenCommand::SendBearbeitungsstand {
-            antwort_code: antwort_code.clone(),
-            sendet_stammdatenaenderung,
-            bemerkung: bemerkung.clone(),
+        move |current, fv| {
+            use mako_engine::workflow::Workflow as _;
+            let out = mako_gpke::GpkeAbrechnungsdatenWorkflow::handle(current, cmd.clone())
+                .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+            super::eog_stammdaten::refuse_what_the_gate_refuses(state, fv, &out.outbox)?;
+            Ok(cmd)
         },
     )
     .await
@@ -1581,7 +1599,7 @@ pub(super) async fn dispatch_lf_activate(
 /// Business key = `malo_id`; the inbound ORDERS 17115/17117 spawned the process
 /// and registered the correlation.
 ///
-/// Regulatory basis: GPKE Teil 2 § 3.5 — the NB must dispatch IFTSTA 21039 after
+/// Regulatory basis: GPKE Teil 2 Kap. 3.5 — the NB must dispatch IFTSTA 21039 after
 /// physical execution. `durchgefuehrt = false` reports a failed execution with a
 /// reason (meter access denied, safety block, …) so the LF is not left waiting.
 pub(super) async fn dispatch_gpke_sperrung_ausfuehrung(
@@ -1626,7 +1644,7 @@ pub(super) async fn dispatch_gpke_sperrung_ausfuehrung(
 /// later reports execution via IFTSTA 21039 — both routed back to this process
 /// by `PidRouter`.
 ///
-/// Deadline: the ORDRSP window GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2
+/// Deadline: the ORDRSP window GPKE Teil 2 Kap. 3.5.1.2 / 3.5.2.2 Prozessschritt 2
 /// publishes — „spätester ÜT ist der 1. WT nach dem ÜT" — resolved through
 /// [`mako_fristen::antwort::operator_window`]. The AHBs themselves state no
 /// deadline for 17115/17117; the Festlegung does, and it is a Werktag, not 24
@@ -1647,7 +1665,7 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
     // Resolve the NB MP-ID from the MaLo cache — the LF addresses its own grid operator.
     let malo_record = state
         .malo_cache
-        .get(&state.tenant_id.to_string(), malo_id.as_str())
+        .get(malo_id.as_str())
         .await
         .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
         .ok_or_else(|| DispatchError::MaloNotFound(malo_id.to_string()))?;
@@ -1700,7 +1718,7 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
 
     // The NB's ORDRSP window is a Werktag deadline, not 24 wall-clock hours:
     // „Unverzüglich, jedoch spätester ÜT ist der 1. WT nach dem ÜT" (GPKE Teil 2
-    // §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2). A flat 24 h expires on a Saturday
+    // Kap. 3.5.1.2 / 3.5.2.2 Prozessschritt 2). A flat 24 h expires on a Saturday
     // for a Friday Sperrauftrag and leaves a Monday-evening one unflagged until
     // Tuesday night.
     let sent_at = time::OffsetDateTime::now_utc();
@@ -1878,7 +1896,7 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
 
     // ── Spawn process ─────────────────────────────────────────────────────────
     let workflow_id = WorkflowId::new(mako_gpke::EOG_WORKFLOW_NAME, latest_format_version());
-    // The E/G's published answer window (GPKE Teil 2 § 2.3.2.2 Nr. 2): 15:00 Uhr
+    // The E/G's published answer window (GPKE Teil 2 Kap. 2.3.2.2 Nr. 2): 15:00 Uhr
     // am ÜT, the tighter of the two the Festlegung states. On expiry the NB
     // assigns anyway with the pre-deposited default Bilanzkreis (Nr. 3) — which
     // is a reason to answer in time, not to track a looser clock.
@@ -2195,13 +2213,64 @@ async fn dispatch_gpke_zuordnungsmeldung(
             .map(ToOwned::to_owned),
     };
 
-    spawn_meldung_process::<mako_gpke::GpkeZuordnungsmeldungWorkflow>(
+    let outcome = spawn_meldung_process::<mako_gpke::GpkeZuordnungsmeldungWorkflow>(
         state,
         mako_gpke::ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
         &malo_id,
         domain_cmd,
     )
-    .await
+    .await?;
+    // The Information (55036) and the Beendigung (55037) discharge the window
+    // the Abmeldeanfrage on the same Marktlokation carries for them. After
+    // the Meldung's own write: a discharge that fails leaves the window to
+    // fire on a Meldung already sent — a false alarm, never a silent miss.
+    if matches!(
+        meldung,
+        mako_gpke::Zuordnungsmeldung::Information | mako_gpke::Zuordnungsmeldung::Beendigung
+    ) {
+        meldepflicht_erfuellt(state, malo_id.as_str(), meldung.pid()).await;
+    }
+    Ok(outcome)
+}
+
+/// Record on every NB-side Abmeldeanfrage of `malo_id` that the Meldung `pid`
+/// went out. Each process decides whether it owed it; one that did not
+/// records nothing.
+async fn meldepflicht_erfuellt(state: &CommandsApiState, malo_id: &str, pid: u32) {
+    let identities = match state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, malo_id)
+        .await
+    {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!(%e, malo_id, pid, "Meldepflicht discharge: lookup failed");
+            return;
+        }
+    };
+    for identity in identities
+        .into_iter()
+        .filter(|id| id.workflow_id.name.as_ref() == mako_gpke::BEENDIGUNG_ZUORDNUNG_WORKFLOW_NAME)
+    {
+        let process_id = identity.process_id;
+        let process = mako_engine::process::Process::<
+            GpkeBeendigungZuordnungWorkflow,
+            Arc<mako_engine::store_slatedb::SlateDbStore>,
+        >::from_identity(Arc::clone(&state.store), identity);
+        if let Err(e) = process
+            .run(
+                mako_gpke::BeendigungZuordnungCommand::MeldungGesendet { pid },
+                RunOptions::new().snapshot(&state.snapshot_store, state.snapshot_interval),
+            )
+            .await
+        {
+            tracing::warn!(
+                %e, malo_id, pid, %process_id,
+                "Meldepflicht discharge failed; its window will fire on a Meldung already sent"
+            );
+        }
+    }
 }
 
 // ── GPKE Anfrage zur Beendigung der Zuordnung (55010, NB → LFA) ───────────────
@@ -2219,7 +2288,7 @@ pub(super) fn cmd_gpke_beendigung_zuordnung_anfragen<'a>(
 ///
 /// Issued by the `processd` NB module when `mako_pruefung` answers
 /// [`NbEntscheidung::AnfrageErforderlich`](mako_pruefung::NbEntscheidung::AnfrageErforderlich)
-/// — GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4.
+/// — GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4.
 ///
 /// ## Payload fields
 ///
@@ -2230,6 +2299,7 @@ pub(super) fn cmd_gpke_beendigung_zuordnung_anfragen<'a>(
 /// | `process_date` | string | The Zuordnungsende requested — the LFN's Zuordnungsbeginn |
 /// | `anmeldung_process_id` | string | The Anmeldung to resume once the answer lands |
 /// | `tranche` | bool (opt.) | `SG5 LOC+Z21` instead of `LOC+Z16` |
+/// | `anmeldung_eingang` | string | RFC 3339 — the instant the Anmeldung arrived (its ÜT), which the LFA's 09:00 window and the Meldepflichten count from |
 /// | `kunde_name` | string (opt.) | `SG12 NAD+Z09`, Muss on `ZW4`/`ZAP` (Bedingung `[279]`) |
 /// | `lfn_mp_id` | string (opt.) | `SG12 NAD+VY`, the Neulieferant (`[567]`) |
 ///
@@ -2244,6 +2314,16 @@ async fn dispatch_gpke_beendigung_zuordnung_anfragen(
     let lfa_mp_id = require_payload_str(payload, "lfa_mp_id")?;
     let process_date = require_payload_str(payload, "process_date")?;
     let anmeldung_process_id = require_payload_str(payload, "anmeldung_process_id")?;
+    let eingang = time::OffsetDateTime::parse(
+        &require_payload_str(payload, "anmeldung_eingang")?,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .map_err(|e| {
+        DispatchError::InvalidPayload(format!(
+            "\"anmeldung_eingang\" is not an RFC 3339 instant: {e}"
+        ))
+    })?;
+    let zuordnungsbeginn = super::eog_stammdaten::stichtag(&process_date)?;
 
     let domain_cmd = mako_gpke::BeendigungZuordnungCommand::Anfragen {
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
@@ -2275,14 +2355,39 @@ async fn dispatch_gpke_beendigung_zuordnung_anfragen(
     // 09:00 Uhr des 1. WT nach dem ÜT der Anmeldung — `mako_fristen::antwort`
     // resolves it from the trigger PID, the same table `makod` sizes every
     // other process window from.
-    let deadlines: Vec<(&'static str, time::OffsetDateTime)> =
+    let mut deadlines: Vec<(&'static str, time::OffsetDateTime)> =
         mako_fristen::antwort::antwort_deadline(
             mako_gpke::beendigung_zuordnung::ANFRAGE_PID,
-            time::OffsetDateTime::now_utc(),
+            eingang,
         )
         .map(|due_at| (mako_gpke::NB_ANFRAGE_WINDOW_LABEL, due_at))
         .into_iter()
         .collect();
+    // The Meldepflichten this Anfrage shares its condition with — Nr. 2 the
+    // Information to the LFN, Nr. 10 the Beendigung to the LFA (GPKE Teil 2
+    // Kap. 2.1.2, S. 19–23) — on the windows the catalogue states for the
+    // Anmeldung's Eingang. 55001 and 55077 open the same rows. The third row,
+    // 55038 to a LFZ (Nr. 13), is left undecided by name.
+    for m in mako_fristen::meldung::meldepflichten_for(55_001) {
+        if mako_fristen::meldung::nicht_entschieden(
+            m,
+            55_001,
+            55_038,
+            "whether a LFZ is displaced is no fact this Anfrage or processd's decision holds",
+        ) {
+            continue;
+        }
+        if let Some(label) = mako_gpke::beendigung_zuordnung::meldepflicht_label(m.pid) {
+            deadlines.push((
+                label,
+                m.due_at(
+                    eingang,
+                    zuordnungsbeginn,
+                    mako_fristen::HolidayCalendar::BdewMaKo,
+                ),
+            ));
+        }
+    }
     let process_id = spawn_process::<GpkeBeendigungZuordnungWorkflow>(
         &state.store,
         state.tenant_id,
@@ -2290,6 +2395,184 @@ async fn dispatch_gpke_beendigung_zuordnung_anfragen(
         domain_cmd,
         &deadlines,
         &[malo_id.as_str()],
+    )
+    .await?;
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+// ── GPKE Lieferende von NB an LF (55007, NB → LF) ─────────────────────────────
+
+pub(super) fn cmd_gpke_nb_lieferende_ankuendigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_nb_lieferende_ankuendigen(s, p))
+}
+
+/// Dispatch the NB's Ankündigung der Beendigung der Zuordnung (UTILMD 55007).
+///
+/// GPKE Teil 2 Kap. 2.5.2.2 Nr. 1 (S. 60 f.). The spawned process carries both
+/// bounds of Nr. 3 — `mako_fristen::meldung::GPKE_LIEFERENDE_OHNE_ANTWORT`,
+/// 05:00 and 06:00 Uhr des 1. WT nach dem ÜT — so a silent LF's Zuordnung is
+/// ended in that window, and the LF's 55008 / 55009 resume it under its `SG4
+/// IDE+24`, the only key the answer carries.
+///
+/// Before the spawn both the Ankündigung and the Beendigung it may lead to are
+/// rendered and held against their AHB profile, the check the pre-send gate
+/// runs: the Beendigung goes out from a fired deadline, where nobody is left to
+/// refuse it.
+///
+/// ## Payload — [`mako_markt::commands::GpkeNbLieferendeAnkuendigen`]
+///
+/// | Field | Type | Notes |
+/// |---|---|---|
+/// | `malo_id` | string | Marktlokations-ID, or the MaLo-ID of the Tranche |
+/// | `lf_mp_id` | string | The Lieferant whose Zuordnung ends |
+/// | `zuordnungsende` | string | `SG4 DTM+93`, `YYYY-MM-DD` or `YYYYMMDD` |
+/// | `transaktionsgrund` | string | `ZQ7` / `ZT0` |
+/// | `transaktionsgrund_ergaenzung` | string | `ZW3` / `ZW4` / `ZW5` / `ZAP` |
+///
+/// Any other key is refused.
+async fn dispatch_gpke_nb_lieferende_ankuendigen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_engine::workflow::Workflow as _;
+    use mako_gpke::nb_lieferende;
+
+    let body: mako_markt::commands::GpkeNbLieferendeAnkuendigen =
+        mako_service::json_from_value(payload.clone()).map_err(|e| {
+            DispatchError::InvalidPayload(format!("gpke.nb-lieferende.ankuendigen payload: {e}"))
+        })?;
+    let malo_id = extract_malo_id(&serde_json::json!({ "malo_id": body.malo_id }))?;
+    let tag = |d: &str| -> Result<String, DispatchError> {
+        super::eog_stammdaten::stichtag(d)?
+            .format(time::macros::format_description!("[year][month][day]"))
+            .map_err(|e| DispatchError::InvalidPayload(e.to_string()))
+    };
+    let zuordnungsende = tag(&body.zuordnungsende)?;
+    // The Stilllegung's facts. The workflow refuses them under any other Grund
+    // and refuses a `Z33` without them.
+    let stilllegung = match (body.geraeteausbaudatum, body.msb_mp_id) {
+        (None, None) if body.msbz.is_none() && body.lfz.is_none() => None,
+        (Some(datum), Some(msb)) => {
+            let zukuenftig = |z: mako_markt::commands::ZukuenftigeZuordnung| {
+                Ok::<_, DispatchError>(nb_lieferende::ZukuenftigeZuordnung {
+                    mp_id: MarktpartnerCode::new(z.mp_id),
+                    zuordnungsbeginn: tag(&z.zuordnungsbeginn)?,
+                })
+            };
+            Some(nb_lieferende::Stilllegung {
+                geraeteausbaudatum: tag(&datum)?,
+                msb: MarktpartnerCode::new(msb),
+                msbz: body.msbz.map(zukuenftig).transpose()?,
+                lfz: body.lfz.map(zukuenftig).transpose()?,
+            })
+        }
+        _ => {
+            return Err(DispatchError::InvalidPayload(
+                "gpke.nb-lieferende.ankuendigen: a Stilllegung (Z33) names both \
+                 \"geraeteausbaudatum\" (SG4 DTM+206, Bedingung [79]) and \"msb_mp_id\" \
+                 (GPKE Teil 2 Kap. 2.5.2.2 Nr. 11)"
+                    .to_owned(),
+            ));
+        }
+    };
+
+    // Both bounds of Nr. 3 from the instant Nr. 1 goes out. The earliest is
+    // where the LF's own answer window closes, so it is the Antwortfrist too.
+    let gesendet = time::OffsetDateTime::now_utc();
+    let (fruehestens, spaetestens) = mako_fristen::meldung::GPKE_LIEFERENDE_OHNE_ANTWORT
+        .window(gesendet, mako_fristen::HolidayCalendar::BdewMaKo);
+    let vorgangsnummer = super::vorgangsnummer::neu("");
+    let vorgang_key = nb_lieferende::nb_vorgang_key(&vorgangsnummer);
+    let domain_cmd = mako_gpke::NbLieferendeCommand::Ankuendigen(Box::new(
+        mako_gpke::NbLieferendeAnkuendigung {
+            sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+            receiver: MarktpartnerCode::new(body.lf_mp_id),
+            location_id: malo_id.clone(),
+            zuordnungsende,
+            transaktionsgrund: body.transaktionsgrund,
+            transaktionsgrund_ergaenzung: body.transaktionsgrund_ergaenzung,
+            vorgangsnummer,
+            beendigung_vorgangsnummer: super::vorgangsnummer::neu(""),
+            antwortfrist: fruehestens,
+            stilllegung: stilllegung.clone(),
+        },
+    ));
+    {
+        let new = mako_gpke::NbLieferendeState::New;
+        let out = mako_gpke::GpkeNbLieferendeWorkflow::handle(&new, domain_cmd.clone())
+            .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+        let angekuendigt = out
+            .events
+            .iter()
+            .fold(new, mako_gpke::GpkeNbLieferendeWorkflow::apply);
+        let beendigung = mako_gpke::GpkeNbLieferendeWorkflow::handle(
+            &angekuendigt,
+            mako_gpke::NbLieferendeCommand::OhneAntwortBeenden {
+                label: nb_lieferende::LF_ANTWORT_WINDOW_LABEL.into(),
+            },
+        )
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+        let mut outbox = out.outbox;
+        outbox.extend(beendigung.outbox);
+        super::eog_stammdaten::refuse_what_the_gate_refuses(
+            state,
+            &latest_format_version(),
+            &outbox,
+        )?;
+    }
+
+    // Only a running Ankündigung on the Marktlokation blocks: a second one
+    // would end the same Zuordnung twice.
+    let occupancy = find_occupying_process::<mako_gpke::GpkeNbLieferendeWorkflow>(
+        state,
+        malo_id.as_str(),
+        mako_gpke::NB_LIEFERENDE_WORKFLOW_NAME,
+    )
+    .await?;
+    if let Some(dup_id) = occupancy.process {
+        return Err(DispatchError::DuplicateProcess {
+            process_id: dup_id,
+            malo_id: malo_id.into(),
+        });
+    }
+
+    let workflow_id = WorkflowId::new(
+        mako_gpke::NB_LIEFERENDE_WORKFLOW_NAME,
+        latest_format_version(),
+    );
+    let mut deadlines = vec![
+        (nb_lieferende::LF_ANTWORT_WINDOW_LABEL, fruehestens),
+        (nb_lieferende::BEENDIGUNG_SPAETESTENS_LABEL, spaetestens),
+    ];
+    // The Meldepflichten the Stilllegung owes — 55611 to the MSB, 55038 to a
+    // LFZ — on the windows the catalogue states for the SD „Lieferende von NB
+    // an LF", anchored on this 55007.
+    if let Some(st) = &stilllegung {
+        let owed = st.meldepflichten();
+        let ende = super::eog_stammdaten::stichtag(&body.zuordnungsende)?;
+        for m in mako_fristen::meldung::meldepflichten_for(55_007) {
+            if let Some(label) = nb_lieferende::meldepflicht_label(m.pid)
+                && owed.contains(&m.pid)
+            {
+                deadlines.push((
+                    label,
+                    m.due_at(gesendet, ende, mako_fristen::HolidayCalendar::BdewMaKo),
+                ));
+            }
+        }
+    }
+    let process_id = spawn_process::<mako_gpke::GpkeNbLieferendeWorkflow>(
+        &state.store,
+        state.tenant_id,
+        workflow_id,
+        domain_cmd,
+        &deadlines,
+        &[malo_id.as_str(), &vorgang_key],
     )
     .await?;
     Ok(DispatchOutcome::Spawned { process_id })

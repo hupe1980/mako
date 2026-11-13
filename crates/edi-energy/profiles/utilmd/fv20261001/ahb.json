@@ -25631,20 +25631,17 @@
             {
               "code": "ZG5",
               "operand": "X [1P0..1]"
-            }
-          ]
-        },
-        {
-          "de": "2014",
-          "nr": "00033",
-          "operands": [
+            },
             {
+              "code": "ZG9",
               "operand": "X [18P0..1]"
             },
             {
+              "code": "ZH0",
               "operand": "X [1P0..1]"
             },
             {
+              "code": "ZH1",
               "operand": "X [1P0..1]"
             }
           ]
@@ -26176,14 +26173,9 @@
             {
               "code": "ZC8",
               "operand": "X"
-            }
-          ]
-        },
-        {
-          "de": "2014",
-          "nr": "00033",
-          "operands": [
+            },
             {
+              "code": "ZH1",
               "operand": "X"
             }
           ]

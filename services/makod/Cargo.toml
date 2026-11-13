@@ -86,10 +86,24 @@ sha2               = "0.10"
 # Decodes a partner signing certificate from PEM to DER so its SHA-256
 # fingerprint can be pinned on the inbound AS4 session.
 base64             = { version = "0.22" }
+# SM-PKI path validation of a counterparty's EMT.API certificate
+# (`transport::sm_pki`): X.509 parsing and ECDSA on the SM-PKI's Brainpool and
+# NIST curves. Pure Rust — OpenSSL is admitted only through asx-rs (deny.toml).
+x509-cert          = { version = "0.2", default-features = false, features = ["std"] }
+der                = { version = "0.7", features = ["std", "oid"] }
+ecdsa              = { version = "0.17", default-features = false, features = ["algorithm", "der"] }
+p256               = { version = "0.14", default-features = false, features = ["ecdsa"] }
+bp256              = { version = "0.14", default-features = false, features = ["ecdsa", "arithmetic"] }
+bp384              = { version = "0.14", default-features = false, features = ["ecdsa", "arithmetic"] }
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
 rmcp = { workspace = true }
 schemars = { version = "1.2.1", features = ["chrono04"] }
 governor = "0.6"
+# The AS4 inbox that follows a key rotation (`as4_ingest::RotatingInbound`)
+# serves each request through the current `asx::Inbound`, a tower Service.
+tower-service  = "0.3"
+http-body      = "1"
+http-body-util = "0.1"
 
 [dev-dependencies]
 # Adds the "testing" feature on top of the production "slatedb" dep,
@@ -107,7 +121,9 @@ serde_json   = { workspace = true }
 time         = { workspace = true }
 # Router-level exercise of the :8090 auth layer (ServiceExt::oneshot).
 tower        = "0.5"
-http-body-util = "0.1"
+# The reader of the INVOIC facts BO4E has no field for: the inbound adapter's
+# `ZusatzAttribut` names are held to its constants.
+invoic-checker = { workspace = true }
 
 [lints]
 workspace = true

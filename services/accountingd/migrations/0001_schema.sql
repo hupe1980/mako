@@ -115,10 +115,13 @@ CREATE TABLE accounts (
     -- facts it depends on, not of the questions asked about it.
     verzug_ct           BIGINT      NOT NULL DEFAULT 0,
 
-    -- § 13 BGB — whether the customer is a Verbraucher. Decides the § 288
+    -- § 13 BGB — whether the customer is a Verbraucher, written from the
+    -- vertragd contract by its Abrechnungskonto command. Decides the § 288
     -- Abs. 5 BGB Pauschale, which only a Schuldner who „kein Verbraucher ist"
-    -- owes. NULL = not recorded, and no Pauschale is claimed on a fact nobody
-    -- has established.
+    -- owes, and the Verzugszins: Abs. 2's nine Prozentpunkte apply „bei
+    -- Rechtsgeschäften, an denen ein Verbraucher nicht beteiligt ist", Abs. 1's
+    -- five otherwise. NULL = not recorded: neither the Pauschale nor the Abs. 2
+    -- rate is charged on a fact nobody has established.
     verbraucher         BOOLEAN,
 
     -- BO4E Vorauszahlung COM: typed advance-payment schedule (§40 EnWG)
@@ -1104,13 +1107,12 @@ CREATE TABLE interest_charges (
     rate_pct        NUMERIC(6,3) NOT NULL,
     -- Basiszinssatz in force when the Verzug began (the audit anchor)
     ecb_base_rate_pct NUMERIC(6,3) NOT NULL,
-    -- B2C or B2B (+5pp vs +9pp above base rate)
-    customer_type   TEXT        NOT NULL CHECK (customer_type IN ('B2C', 'B2B')),
     -- Period for which interest is calculated
     period_from     DATE        NOT NULL,
     period_to       DATE        NOT NULL,
-    -- Legal basis
-    legal_basis     TEXT        NOT NULL DEFAULT '§288 Abs. 1 BGB',
+    -- § 288 Abs. 1 BGB (+ 5 Prozentpunkte) or Abs. 2 (+ 9, only where
+    -- `accounts.verbraucher` records „kein Verbraucher")
+    legal_basis     TEXT        NOT NULL CHECK (legal_basis IN ('§288 Abs. 1 BGB', '§288 Abs. 2 BGB')),
     -- doubleentry EntryId of the MAHNGEBUEHR entry (in the ledger schema; no FK).
     ledger_entry_id UUID,
     -- One object per §247 BGB rate in force during the period:

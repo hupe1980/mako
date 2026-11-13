@@ -50,6 +50,7 @@ Every `/api/v1/*` route needs a JWT and a Cedar action (paths under `/api/v1`):
 | `GET /disputes` | `read-disputes` | any caller in the tenant |
 | `GET /overdue-remadv` | `read-overdue-remadv` | any caller in the tenant |
 | `POST /receipts/{id}/confirm-payment`, `/dispatch-answer`, `/resolve-dispute` | `write-receipt` | **LF role** |
+| `POST /receipts/{id}/feststellungen`, `POST /leistungsnachweise` | `record-feststellung` | **ESA, LF or NB role** — the recipients of a 31009 |
 | `POST /mcp` | `use-mcp` | any caller in the tenant (OIDC or `[mcp]` key) |
 | `GET /api/v1/policy`, `GET /admin/einrichtung` | `read-policy`, `read-config` | any caller in the tenant |
 
@@ -64,6 +65,46 @@ Sends the answer for a receipt whose automatic dispatch failed
 Antwortcode, Entscheidungsbaum and German Ablehnungsgrund, which makod writes
 as the REMADV's `SG7 FTX+ABO`. `409` when already dispatched, `422` without a
 message reference or a recorded answer.
+
+### Deciding a held invoice
+
+A Prüfschritt no INVOIC answers is answered by what a person records, and the
+invoice walks again in place — to a REMADV and a `de.invoic.receipt.*` event
+like any automatic verdict, or still `Offen` with what remains:
+
+- **`POST /api/v1/leistungsnachweise`** — `{rechnungssteller_mp_id,
+  bestellung_ref, artikel_id, von, bis, erbracht, nachweis}`: the MSB performed
+  (or did not perform) the ordered Leistung over the period. It answers
+  Prüfschritt 310 for every position of that MSB's invoices on that order
+  (`SG1 RFF+ACE`) whose period it covers — held ones walk again at once, a
+  later invoice reads it on arrival. Covering statements that disagree answer
+  neither way.
+- **`POST /api/v1/receipts/{id}/feststellungen`** — `{feststellungen:
+  {leistung_erbracht, preis_wie_angebot, steuersatz_korrekt} per
+  Positionsnummer, preisblatt_version_gueltig}, begruendung}` on a held receipt
+  (`409` otherwise): Prüfschritte 310, 320 (where no offer on record prices the
+  Artikel-ID), 330 (where the INVOIC does not settle it) and 80, and in the
+  second round `einwaende_entkraeftet` (Prüfschritt 1). Recorded with
+  the caller and the Begründung; a later statement for a step replaces the
+  earlier one, and it wins over a Leistungsnachweis for that position.
+
+**The second round.** When the MSB answers our refusal with a COMDIS 29001
+(„Die Rechnung wird als korrekt angesehen", `E_0265` Prüfschritt 10), makod
+resumes the invoice's process by the Rechnungsnummer the COMDIS names (`DOC`
+DE 1004) and announces it as a `process.initiated` with PID 29001 for that
+process. invoicd keeps round one's answer and dispatch time
+(`erste_runde_*`), records the `comdis_ref`, and walks the invoice again under
+`E_0266`/`E_0276`/`E_0277` (EBD 4.3 Kap. 8.27.3, S. 634). Its Prüfschritt 1 —
+„Konnte der MSB alle Einwände des Rechnungsempfängers entkräften?" — is a
+judgement of the COMDIS, so the walk holds there until
+`feststellungen.einwaende_entkraeftet` is stated on the receipt: `false`
+refuses with `A25` (`AC1` for Preisblatt B), `true` walks every later step
+again on the facts as they now stand. A COMDIS for an invoice whose answer
+was no refusal that went out is dead-lettered.
+
+MCP `list_held_receipts` lists the held invoices with each open Prüfschritt
+(`offen`: Ebene, Positionsnummer, the missing fact) and the `bestellung_ref` a
+Leistungsnachweis names.
 
 ---
 
@@ -147,7 +188,7 @@ refuse with `A04` where no Bestellung exists. A walked ESA answer outranks the
 setting.
 
 The answer's shape picks the REMADV PID (REMADV AHB 1.0a): one code rides 33002
-(§3.1.1), a set rides 33003 (Kopf/Summe) or 33004 (Position) (§3.1.2).
+(Kap. 3.1.1), a set rides 33003 (Kopf/Summe) or 33004 (Position) (Kap. 3.1.2).
 
 | Family | Walk |
 |---|---|
@@ -157,17 +198,26 @@ The answer's shape picks the REMADV PID (REMADV AHB 1.0a): one code rides 33002
 `E_0264` has three levels with disjoint codes: Kopf 10–90 (`A01`–`A07`, `A90`),
 Position 300–430 (`A09`–`A15`, `A20`, `A99`), Summe 500–550 (`A21`–`A24`, `A96`).
 A Kopf refusal ends the walk; settlement is „ganz oder gar nicht" (WiM Teil 2 UC
-4.5.1). Seven Prüfschritte need facts no INVOIC carries (10, 50, 310, 330, 370,
-`E_0266` 1, and on Preisblatt B 80). A step the walk reaches with no answer —
-those facts, or a missing Leistungszeitraum, Zahlungsziel or Angebot — is
-neither passed nor refused: the walk ends open, the receipt is recorded with
-outcome `Offen`, no REMADV is sent, no `de.invoic.receipt.*` event is
-enqueued, and `dispatch-answer` refuses it. No record answers Prüfschritte 10
-and 330, so every walked invoice is held for a person. A
+4.5.1). The invoice answers two Prüfschritte about itself: 10 (and the
+Storno's 17) checks that every § 14 Abs. 4 UStG Pflichtangabe is stated —
+`NAD+MS`/`NAD+MR` name and Anschrift, `SG3 RFF+FC`/`VA`, `DTM+137`, the `BGM`
+number, each position's Artikel-ID and `QTY`, the period, `SG52 TAX` with
+`MOA+125`/`MOA+161` — and an `A01` names each one missing; 330 holds a position
+of Steuerkategorie `S` to the § 12 Abs. 1 UStG rate of its period (16 % in the
+second half of 2020). Five need facts no INVOIC carries (50, 310, 370,
+`E_0266` 1, and on Preisblatt B 80), and 330 does too for an `O` or `AE`
+position or one whose period crosses a change of the rate. A step the walk
+reaches with no answer — those facts, or a missing Leistungszeitraum,
+Zahlungsziel or Angebot — is neither passed nor refused: the walk ends open, the
+receipt is recorded with outcome `Offen`, no REMADV is sent, no
+`de.invoic.receipt.*` event is enqueued, and `dispatch-answer` refuses it; a
+Leistungsnachweis or a statement on the receipt decides it (see *Deciding a
+held invoice*). A walk that refuses disputes the invoice even where the
+plausibility report is clean: the REMADV carries the tree's codes. A
 `marktd` outage on the order lookup (Prüfschritt 40) answers `503`, so the
 sender redelivers once marktd answers.
 
-**PID 31004** is the universal, Sparte-neutral Storno (INVOIC AHB §3.1.2): the
+**PID 31004** is the universal, Sparte-neutral Storno (INVOIC AHB Kap. 3.1.2): the
 Sparte comes from `Rechnung.sparte`, the check is arithmetic only, and the
 answer is `invoic.stornorechnung.{annehmen,ablehnen}`. Any Rechnung flagged
 `ist_storno` takes the same arithmetic-only check.
@@ -184,7 +234,11 @@ alone; Gas prices are per Marktgebiet (Trading Hub Europe).
 |---|---|---|---|
 | 1 | **Storno reference** — `ist_storno=true` must name `original_rechnungsnummer` | `StorniertWithoutReference` | `Dispute` |
 | 2 | **Billing period validity** — boundaries present and consistent | `PeriodInvalid` | `Dispute` |
-| 3 | **Zahlungsziel** — `faelligkeitsdatum` not before `rechnungsdatum`, and within `max_zahlungsziel_days` | `ZahlungszielInvalid` · `ZahlungszielExceeded` | `Dispute` · `Warn` |
+| 3 | **Zahlungsziel** — not before `rechnungsdatum`; ≥ 10 WT after receipt (31001–31003, 31009; GPKE Teil 2 Kap. 3.3.2 Nr. 1; `A10`); ≥ 10 WT after the Rechnungsdatum (31005, 31007, Gas 31001–31003; INVOIC AHB 1.0b `[24]`); ≤ 10 WT on a Rückerstattung (31001, 31002, 31005, Gas 31003) and on 31006/31008 (`[25]`, `E_0406` Prüfschritt 34; `A11`); the operator's `max_zahlungsziel_days` if set | `ZahlungszielInvalid` · `ZahlungszielUnterschritten` · `ZahlungszielUeberschritten` · `ZahlungszielExceeded` | `Dispute` · `Dispute` · `Dispute` · `Warn` |
+
+The recipient's Sparte — which the Gas-only rows depend on (INVOIC AHB `[493]`) — is read off the
+`NAD+MR` MP-ID: a DVGW-Codenummer (`98…`) is Gas, a BDEW-Codenummer (`99…`) Strom (BDEW-AWH
+Identifikatoren V1.2, Kap. 2.2). A GS1 GLN names no Sparte, and those rows are then not applied.
 | 3a | **WiM 31003 send window** — a Dienstleistungsrechnung dated more than 20 Werktage after the period it bills (WiM Teil 1 Kap. 3.7.2 Nr. 1) | `RechnungZuSpaet` | `Warn` |
 | 4 | **Currency agreement** — every monetary field on one currency | `WaehrungMismatch` | `Dispute` |
 | 5 | **Position arithmetic** — quantity × unit price = line net | `ArithmeticError` | `Dispute` |
@@ -192,7 +246,7 @@ alone; Gas prices are per Marktgebiet (Trading Hub Europe).
 | 7 | **Umsatzsteuer** — the § 14 Abs. 4 Nr. 8 UStG block: a rate and an amount, `gesamtbrutto = gesamtnetto + gesamtsteuer`, and no tax stated on a reverse-charge invoice | `SteuerMissing` · `SteuerMismatch` · `ReverseChargeStatesTax` | `Dispute` |
 | 8 | **Tariff / Angebot** — the unit price against the published Preisblatt, or against the accepted ESA offer | `TariffDeviation` · `TariffNotFound` · `AngebotDeviation` · `AngebotPositionUnknown` | `Warn` or `Dispute` |
 
-Stage 3 is skipped when `max_zahlungsziel_days = 0`; stage 3a runs only on PID
+Stage 3's ceiling runs only when `max_zahlungsziel_days` is set; stage 3a runs only on PID
 31003; stage 8 is skipped for a Stornorechnung. Stage 4 runs before the
 arithmetic so a `CHF` amount is never read as EUR. `RechnungZuSpaet` is never
 escalated by `auto_dispute_threshold_eur`: no REMADV tree publishes a code for
@@ -413,7 +467,8 @@ total_tolerance            = 0.01   # 1 % — Σ line nets = Gesamtnetto
 tariff_tolerance           = 0.03   # 3 % — PRICAT unit price vs INVOIC
 require_tariff             = false  # true → missing tariff escalates to Dispute
 auto_dispute_threshold_eur = "0.00"    # EUR as a string; "0.00" → Warn always auto-approved
-max_zahlungsziel_days      = 30     # 0 = disable; default 30 (§7 Allg. Festlegungen)
+# max_zahlungsziel_days    = 60     # optional ceiling in days, an operator choice — no
+                                    # Festlegung publishes one; unset = none, 0 is refused
 
 [erp]
 # Required for ERP accounts-payable automation.
@@ -448,6 +503,7 @@ hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
 | `get_zahlungsstatus` | Payment status per MaLo-ID (settled / pending / overdue counts) |
 | `summarize_billing_month` | Monthly billing volume + dispute rate per NB counterparty |
 | `list_exceptions` | The two operator queues: undispatched answers, and INVOICs that could not be processed at all |
+| `list_held_receipts` | Receipts held `Offen`, typed (`GehalteneRechnung`), with each open Prüfschritt and the `bestellung_ref` |
 
 ## MCP prompts
 

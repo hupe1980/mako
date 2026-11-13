@@ -638,7 +638,7 @@ fn angebotenes_produktpaket(u: &edi_energy::messages::utilmd::UtilmdMessage) -> 
 /// Build an [`AdapterRegistry`] for [`GpkeAbrechnungsdatenWorkflow`].
 ///
 /// Adapts an inbound UTILMD Rückmeldung / Bestellung Abrechnungsdaten (LF → NB,
-/// GPKE Teil 2 § 3.1) to a [`GpkeAbrechnungsdatenCommand::ReceiveRueckmeldung`].
+/// GPKE Teil 2 Kap. 3.1) to a [`GpkeAbrechnungsdatenCommand::ReceiveRueckmeldung`].
 /// The NB answers with an IFTSTA 21047 via a later `SendBearbeitungsstand`.
 #[must_use]
 pub fn gpke_abrechnungsdaten_registry() -> AdapterRegistry<GpkeAbrechnungsdatenWorkflow> {
@@ -711,6 +711,14 @@ pub fn gpke_abrechnungsdaten_registry() -> AdapterRegistry<GpkeAbrechnungsdatenW
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
+                // `IDE` DE 7402 — what the IFTSTA 21047 answer names in
+                // `SG15 RFF+ACW`.
+                vorgangsnummer: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.vorgangsnummer())
+                    .unwrap_or("")
+                    .to_owned(),
                 validation_passed,
                 validation_errors,
             })
@@ -781,6 +789,52 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                     );
                     validation_passed = false;
                 }
+            }
+
+            // Nr. 3 — the NB's Beendigung aufgrund fehlender Antwort, the same
+            // PID under `BGM+Z90` (UTILMD AHB Strom 2.2 Kap. 8.10, `[713]`).
+            // It ends the process its `SG6 RFF+TN` names and never opens one.
+            if u.bgm().map(|b| b.document_code.as_str())
+                == Some(mako_gpke::lf_abmeldung::BGM_BEENDIGUNG)
+            {
+                let tx = u.transactions();
+                let first = tx.first();
+                return Ok(LfAbmeldungCommand::ReceiveBeendigung {
+                    sender: MarktpartnerCode::new(
+                        u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                    ),
+                    receiver: MarktpartnerCode::new(
+                        u.receiver()
+                            .and_then(|n| n.party_id.as_deref())
+                            .unwrap_or(""),
+                    ),
+                    location_id: MaLo::new(first.and_then(|t| t.lokation()).unwrap_or("")),
+                    document_date: u
+                        .dtm()
+                        .iter()
+                        .find(|d| d.is_document_date())
+                        .and_then(|d| d.value_str())
+                        .unwrap_or("")
+                        .to_owned(),
+                    process_date: super::prozesstag(
+                        super::sg4_dtm(first, edi_energy::utilmd_codes::dtm::ENDE_ZUM),
+                        super::utilmd_sparte(u),
+                    )?
+                    .unwrap_or_default(),
+                    message_ref: MessageRef::new(msg.message_ref()),
+                    vorgang: Box::new(super::lf_vorgangsdaten(u)?),
+                    referenz_vorgangsnummer: first
+                        .and_then(|t| {
+                            t.references.iter().find(|r| {
+                                r.qualifier
+                                    == edi_energy::utilmd_codes::rff::REFERENZ_VORGANGSNUMMER
+                            })
+                        })
+                        .and_then(|r| r.reference.clone())
+                        .unwrap_or_default(),
+                    validation_passed,
+                    validation_errors,
+                });
             }
 
             Ok(LfAbmeldungCommand::ReceiveAnkuendigung {
@@ -1233,7 +1287,7 @@ pub fn gpke_messwerte_registry() -> AdapterRegistry<GpkeMesswerteLieferungWorkfl
                 .and_then(convert_pid)?;
             let (validation_passed, validation_errors) = super::ahb_verdict(msg);
             // `SG6 LOC+172` is where the AHB puts the location — MSCONS AHB
-            // 3.1g §11.2 gives `SG5 NAD` only DE 3035 = `DP`, with the
+            // 3.1g Kap. 11.2 gives `SG5 NAD` only DE 3035 = `DP`, with the
             // identifier in `LOC` DE 3225. Reading `NAD` first worked only
             // because mako's own renderer fills both; a conformant message
             // from a third party carries the MaLo in `LOC` alone, and the
@@ -1281,7 +1335,7 @@ pub fn gpke_messwerte_registry() -> AdapterRegistry<GpkeMesswerteLieferungWorkfl
                 validation_passed,
                 validation_errors,
                 // `SG1 RFF+AGI` — Muss on a 13027 „Werte nach Typ 2" (MSCONS
-                // AHB 3.2 §11.2 hint [574]) and the only thing on the delivery
+                // AHB 3.2 Kap. 11.2 hint [574]) and the only thing on the delivery
                 // that names the ESA subscription it belongs to. Absent on
                 // every other MSCONS PID, which have no subscription.
                 bestellung_ref: msg
@@ -1751,7 +1805,7 @@ pub fn gpke_geschaeftsdatenanfrage_registry() -> AdapterRegistry<GpkeGeschaeftsd
 /// `BGM` DE 1001 is read into the command because the answer repeats it
 /// (Bedingung `[500]`: the category of the cancelled message).
 ///
-/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.1 § 2.4.1).
+/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.1 Kap. 2.4.1).
 #[must_use]
 pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -1838,7 +1892,7 @@ pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
 /// Routes UTILMD Strom messages with PID 55555 (GPKE Teil 4, BK6-22-024 Anlage 1d):
 ///
 /// **Message format**: UTILMD Strom S2.x (`AnyMessage::Utilmd`).
-/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.1 § 2.4.1).
+/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.1 Kap. 2.4.1).
 ///
 /// The key fields extracted from the UTILMD message are:
 /// - `pid` — must be 55555
@@ -2466,6 +2520,60 @@ pub fn gpke_stammdaten_registry(
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
+                received_at,
+            })
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for the **LF's answer** to the NB's own
+/// Ankündigung der Beendigung der Zuordnung (UTILMD 55008 / 55009 on a 55007).
+///
+/// Runs on the **NB** and produces
+/// [`mako_gpke::NbLieferendeCommand::ReceiveAntwort`]. `received_at` decides
+/// whether the answer was „fristgerecht" (GPKE Teil 2 Kap. 2.5.2.2 Nr. 3).
+#[must_use]
+pub fn gpke_nb_lieferende_antwort_registry(
+    received_at: time::OffsetDateTime,
+) -> AdapterRegistry<mako_gpke::GpkeNbLieferendeWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        move |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for the NB-Lieferende answer adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "NB-Lieferende answer adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "NB-Lieferende answer adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let tx = u.transactions();
+            let vorgang = tx.first();
+            Ok(mako_gpke::NbLieferendeCommand::ReceiveAntwort {
+                response_pid: pid,
+                antwort: vorgang.and_then(|t| t.antwort()).map(|a| {
+                    mako_engine::envelope::Antwortcode::new(a.code.clone(), a.codeliste.clone())
+                }),
+                // `FTX+ACB` — „Der Grund der Ablehnung ist anzugeben" (Nr. 2).
+                reason: vorgang.and_then(|t| {
+                    t.ftx
+                        .iter()
+                        .find(|f| f.qualifier == "ACB")
+                        .and_then(|f| f.text.clone())
+                }),
+                response_ref: MessageRef::new(msg.message_ref()),
                 received_at,
             })
         },

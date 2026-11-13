@@ -13,10 +13,10 @@ Cutovers are **staggered per message type**: each format version carries its own
 
 | Event | Timing |
 |---|---|
-| BDEW publishes a new specification | on the Änderungsmanagement schedule, **six months** before its Anwendungszeitpunkt (Allgemeine Festlegungen 6.1d §2.5.1/§2.5.2); a deviating date names the Mitteilung that set it (`publikation_quelle`) |
+| BDEW publishes a new specification | on the Änderungsmanagement schedule, **six months** before its Anwendungszeitpunkt (Allgemeine Festlegungen 6.1d Kap. 2.5.1/Kap. 2.5.2); a deviating date names the Mitteilung that set it (`publikation_quelle`) |
 | The specification becomes **valid** | its own `valid_from` — **January 1**, **April 1** or **October 1** (e.g. `fv20260101`, `fv20260401`, `fv20261001`) |
 | The predecessor **expires** | the day before its successor's `valid_from` |
-| Transition window (both valid) | **none** — EDIFACT changes at a single Anwendungszeitpunkt (Allgemeine Festlegungen 6.1 §2.5) |
+| Transition window (both valid) | **none** — EDIFACT changes at a single Anwendungszeitpunkt (Allgemeine Festlegungen 6.1 Kap. 2.5) |
 
 Each profile's `valid_from` / `valid_until` bound when it is acceptable, and
 the leading edge is hard; see [Transition Window Handling](#transition-window-handling)
@@ -288,8 +288,8 @@ time and read as data:
 ## Transition Window Handling
 
 **The EDIFACT cut-over has no Übergangsfrist** (Allgemeine Festlegungen 6.1
-§2.5): the day the successor applies, the predecessor stops being acceptable.
-The 15-Werktage Übergangszeitraum of § 8.5 is the **XML** rule — it counts
+Kap. 2.5): the day the successor applies, the predecessor stops being acceptable.
+The 15-Werktage Übergangszeitraum of Kap. 8.5 is the **XML** rule — it counts
 Werktage from the Anwendungszeitpunkt and selects by the Erfüllungsdatum in the
 message. `DEFAULT_RECEIVE_TOLERANCE_DAYS` is therefore `0`; an operator who
 accepts late-arriving messages in the superseded format sets an inbound

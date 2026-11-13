@@ -1,7 +1,7 @@
 //! The ESA Werteanfrage must reach the wire with the ESA's own inputs.
 //!
 //! `esa.werteanfrage.stellen` takes a Messprodukt and an Ansprechpartner from
-//! the caller. REQOTE AHB 1.1 §4.3 makes both **Muss** on PID 35003: `SG27 PIA`
+//! the caller. REQOTE AHB 1.1 Kap. 4.3 makes both **Muss** on PID 35003: `SG27 PIA`
 //! carries the Messprodukt (`4347 = 5`, `7143 = Z11`) and `SG14 CTA+IC`/`COM`
 //! the contact. A renderer that substituted a placeholder would send a request
 //! for a product the ESA never ordered — so these are pinned end to end,
@@ -98,7 +98,7 @@ fn a_werteanfrage_without_a_messprodukt_is_refused_rather_than_defaulted() {
     );
 }
 
-/// REQOTE AHB 1.1 §4.3 gives both header dates as DE 2379 `303`
+/// REQOTE AHB 1.1 Kap. 4.3 gives both header dates as DE 2379 `303`
 /// (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to `+00`. A `303`
 /// without its zone is a value mako's own parser rejects.
 #[test]

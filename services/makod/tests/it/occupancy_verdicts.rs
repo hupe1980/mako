@@ -39,6 +39,7 @@ enum Verdict {
 const EXPECTED: &[(&str, Verdict, usize)] = &[
     ("EmobLeg", Verdict::Closure, 3),
     ("GaBiGasInvoicWorkflow", Verdict::OwnReference, 1),
+    ("GaBiGasMmmaWorkflow", Verdict::Closure, 1),
     ("GaBiGasNominationWorkflow", Verdict::Closure, 1),
     (
         "GeliGasSperrprozesseInvoicWorkflow",
@@ -65,7 +66,7 @@ const EXPECTED: &[(&str, Verdict, usize)] = &[
     ("MabisBillingWorkflow", Verdict::Trait, 2),
     ("MabisClearinglisteWorkflow", Verdict::Trait, 1),
     ("MabisListenabgleichWorkflow", Verdict::Trait, 1),
-    ("MabisProfilWorkflow", Verdict::Trait, 1),
+    ("MabisProfilWorkflow", Verdict::Trait, 2),
     ("MabisZpLifecycleWorkflow", Verdict::Trait, 1),
     ("WimDeviceChangeWorkflow", Verdict::Trait, 1),
     ("WimErsteinbauWorkflow", Verdict::Trait, 1),

@@ -27,7 +27,7 @@ pub const GGV: &str = "GGV";
 pub const EIGENVERBRAUCH: &str = "EIGENVERBRAUCH";
 /// After the Förderdauer: the plant is paid the market value.
 pub const POST_EEG_SPOT: &str = "POST_EEG_SPOT";
-/// §7 KWKG 2023 — KWK-Zuschlag.
+/// §7 KWKG — KWK-Zuschlag.
 pub const KWKG_ZUSCHLAG: &str = "KWKG_ZUSCHLAG";
 /// §50b EEG 2023 — Flexibilitätsprämie (Bestandsanlagen), ct/kWh.
 pub const FLEXIBILITAET: &str = "FLEXIBILITAET";

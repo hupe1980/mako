@@ -9,6 +9,248 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.33.0] — 2026-11-13
+
+### Added
+
+- makod: `gpke.nb-lieferende.ankuendigen` (NB) sends the UTILMD 55007 that
+  ends a Lieferant's Zuordnung (GPKE Teil 2 Kap. 2.5.2.2) on the new workflow
+  `gpke-nb-lieferende`. The LF's 55008 / 55009 resume it; an unanswered or late
+  one leads to the Beendigung aufgrund fehlender Antwort (55007 `BGM+Z90`)
+  between 05:00 and 06:00 Uhr des 1. WT. Both endings queue a
+  `ProcessCompleted`: marktd ends the supply, edmd orders the Schlussablesung.
+- makod: `gpke.nb-lieferende.ankuendigen` takes the Stilllegung (`Z33`) with
+  its `geraeteausbaudatum` (`SG4 DTM+206`), the MSB and optionally MSBZ and
+  LFZ; the ending sends the 55611 `ZC8` / `ZH1` and the 55038 `ZH1` (Kap.
+  2.5.2.2 Nr. 8, 11, 13) and registers their 07:00 Uhr Meldepflicht windows.
+- makod: `gpke.datenabruf.werte-senden` (MSB) answers an Anfrage von Werten
+  17102 — Lastgangdaten (`IMD++Z11`) with MSCONS 13018 or 13025 (`BGM+Z48`),
+  Zählerstände (`IMD++Z12`) with 13017 (MSCONS AHB 3.2 Kap. 6.3.1, 7.2.2); an
+  Energiemenge Anfrage is refused by name.
+- makod: `wim.technik-aenderung.bestellen` (NB/LF) sends the ORDERS 17011 `Z12`
+  Bestellung Änderung der Technik (ORDERS AHB 1.1b Kap. 4.12); the MSB's
+  19005 / 19006 resumes it by `RFF+ON`.
+- makod: `wim.ersteinbau.scheitern-melden` (MSB) reports the Scheitern of the
+  wMSB's Eigenausbau (`Z74`/`Z75`): IFTSTA 21027 to gMSB and NB, 21025 to the
+  LF (IFTSTA AHB 2.1 Kap. 6.4); a party marktd cannot name is escalated.
+- makod renders the IFTSTA 21047 Bearbeitungsstandsmeldung (IFTSTA AHB 2.1
+  Kap. 7.7), so the NB's answer to a 55156 / 55220 / 55673 is sent.
+- `gpke-abrechnungsdaten` receives the ÜNB's 55614 / 55675; the NB answers on
+  IFTSTA 21047 out of `E_0618` or `E_0613` within 2 WT.
+- `gpke.konfiguration.beantworten` answers 17120 on 19121, 17123 on 19124,
+  17128 on 19130 and 17130 / 17129 to a LF or NB, out of `E_0523`, `E_0533`,
+  `E_0538`, `E_0540`, `E_0552`–`E_0554`; a NB may send it. The 19123 and a
+  19130 `A06` stay refused by name.
+- mako-gabi-gas: an `nb-gas` deployment receives the ORDERS 17110 Anforderung
+  der Allokationsliste Gas on `gabi-gas-mmma` (MMM AWH V2.1 Kap. 6.2);
+  `gabi.allokationsliste.ablehnen` refuses a Start Abo on ORDRSP 19110 out of
+  `E_0803` / `G_0001`. `mako-gpke` does not register 17110.
+- invoicd decides a held (`Offen`) invoice in place: `POST
+  /api/v1/leistungsnachweise` records an ordered Leistung as performed
+  (Prüfschritt 310) and re-walks the held invoices it covers; `POST
+  /api/v1/receipts/{id}/feststellungen` states 310, 320, 330, 80 or
+  `einwaende_entkraeftet` with a Begründung. Both need the Cedar action
+  `record-feststellung` (ESA, LF, NB); MCP `list_held_receipts` lists them.
+- invoicd runs the second round of the MSB invoice check: an inbound COMDIS
+  29001 re-walks the invoice under `E_0266`/`E_0276`/`E_0277`, Prüfschritt 1
+  holding until `einwaende_entkraeftet` is stated; round one's REMADV stays on
+  record.
+- The setup interview proposes the configuration: `makod.toml` and
+  `processd.toml` with every line under its source, every unanswered fact a
+  `# FEHLT:` gap and no secret. Served at `POST /admin/einrichtung/vorschlag`
+  and MCP `einrichtung_vorschlag` (`AdminEinrichtung`), printed by `just setup
+  --vorschlag <answers>`.
+- Desk: Einrichtung's **Vorschlag** shows the interview beside the proposed
+  files; **Aus einem Satz** pre-fills it through agentd's read-only specialist
+  `einrichtung-assistent`, each answer taken by the person.
+- Desk: received invoices held at an open Prüfschritt are a Heute source for
+  Netz, Lieferant and Energieservice, due by the Zahlungsziel and decided in
+  place, with undo.
+- `just doctor` prints one line per dev daemon; `just erstlauf` runs a first
+  deployment from empty to a passing Probelauf and times each step; `just
+  desk-vergleich` compares the Einrichtung view to its baselines in
+  `desk/vergleich/` (`--bless` after a deliberate change).
+- makod exports `makod_certificate_expiry_days{pfad}` and `GET
+  /admin/einrichtung` reports every AS4 certificate's expiry, re-read while
+  running.
+
+### Changed
+
+- **Breaking:** mako-engine: every rendered message type has a typed outbox
+  payload (`OrdersPayload`, `OrdrspPayload`, `OrdchgPayload`, `IftstaPayload`,
+  `QuotesPayload`, `ReqotePayload`, `InsrptPayload`, `InvoicPayload`,
+  `RemadvPayload`, `MsconsPayload`) that refuses an undeclared key. Keys no
+  renderer read are gone (`antwort_tree`, `orig_message_ref`, `orders_ref`,
+  `type`, `direction`, `invoice_ref` …).
+- **Breaking:** mako-gpke: `post_acceptance` is removed. mako-mabis:
+  `AnforderungCommand::SendAnforderung` takes `sender`, `message_ref` and
+  `AnforderungAngaben`; `ProfilCommand::ReceiveProfile` takes
+  `dokumentennummer`. mako-wim: `ErsteinbauCommand::MeldeScheitern` takes its
+  `grund` (`Z74`/`Z75`).
+- **Breaking:** mako-gpke: `SendBearbeitungsstand` and
+  `BearbeitungsstandGesendet` carry the `codeliste`;
+  `gpke.abrechnungsdaten.bearbeitungsstand` takes an optional `codeliste` and
+  runs the pre-send check.
+- **Breaking:** `wim.rechnungsabwicklung.beenden` requires `ausfuehrungsdatum`
+  and takes `grund` (Muss from the MSB) and `rolle`;
+  `.zustimmen`/`.ablehnen` require `antwort_code` (`E_0206` as LF, `E_0209` as
+  MSB). All three run the pre-send gate.
+- **Breaking:** `mabis.summenzeitreihe.uebermitteln` requires `obis_code`
+  (`SG9 PIA+5`); netzbilanzd sends `1-1:1.29.0`.
+- **Breaking:** `gpke.beendigung-zuordnung.anfragen` requires
+  `anmeldung_eingang`: the Lieferbeginn's Meldepflichten 55036 / 55037 are
+  registered on it, discharged by `gpke.zuordnung.informieren` / `.beenden`,
+  and an unsent one fires as `MeldepflichtVerstrichen`.
+- **Breaking:** the `gpke-nb-lieferende` event and state carry `antwortfrist`
+  as an RFC 3339 string.
+- The NB's ORDERS 17134 is refused by name: no source carries its column's
+  facts (ORDERS AHB 1.1b Kap. 4.17.1).
+- **Breaking:** makod refuses an AS4 interchange whose `UNB` DE0004 is not the
+  authenticated `eb:From` (Allgemeine Festlegungen 6.1d Kap. 2.13), answering
+  `EBMS:0004`; `[[as4.partner]] de0004_ausnahme` lists the MP-IDs a
+  Dienstleister may send for.
+- **Breaking:** mako-as4: `LocalIdentity::retired_decrypters`. makod reloads
+  changed `[party.as4]` / `[[as4.partner]]` key material every five minutes
+  without a restart; a replaced encryption key decrypts until its certificate
+  expires (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.3).
+- **Breaking:** energy-api: `DirectoryServiceClient::get_record` and
+  `DirectoryWsClient::connect` take the provider's EMT.API signature keys and
+  return a record only when its JWS verifies and it names the entry requested;
+  `get_record` follows a `307` itself (`Error::Redirect` is gone, a refusal is
+  `Error::UnverifiedRecord`).
+- **Breaking:** makod requires `[maloid] verzeichnisdienst_trust_anchor_pem_file`
+  with `verzeichnisdienst_signing_certs`, and refuses a pinned EMT.API
+  certificate that does not chain to it, is outside its validity or lacks its
+  MP-ID as OU.
+- **Breaking:** edi-energy: `AgencyCode` is the NAD DE 3055 list of the MIGs —
+  `9`, `293`, `332` (`Etso` is gone). `AgencyCode::for_mp_id` and
+  `unb_qualifier` return `None` for anything but a 13-digit MP-ID, and every
+  builder refuses such a party. makod refuses a `[[party]] agency` off that
+  list and a 16-character EIC as `mp_id` (Identifikatoren AWH V1.2 Kap. 2.1).
+- **Breaking:** edi-energy: `EdiEnergyMessage::validate_on_date_with_rollen`
+  and `ProcessContext::with_rollen` decide the AHB Bedingungen on the
+  Marktrolle of sender or receiver from `profile::Parteirollen`; implementors
+  implement it instead of `validate_on_date`. makod's pre-send and loopback
+  gates pass the deployment's own `[[party]]` roles.
+- **Breaking:** makod refuses `[erp] netzzugang_endpoint_url` /
+  `--netzzugang-endpoint-url` at startup — no § 20b EnWG platform interface is
+  published; § 20b requests go to the ERP webhook only.
+- **Breaking:** invoic-checker: every entry point takes the Eingangsdatum
+  (`check(…, eingangsdatum, …)`, `check_storno`); `CheckConfig` gains
+  `empfaenger_sparte` and `max_zahlungsziel_days` is an `Option`;
+  `EmpfaengerFakten` gains `preis_wie_angebot`;
+  `zahlungsziel_hoechstfrist_gilt` and `ahb_mindestfrist_gilt` are public.
+  `EmpfaengerFakten::ustg_konform` and `StornoEmpfaengerFakten::ustg_konform`
+  are gone; mako-pruefung's `RechnungsFakten`/`StornoFakten` take
+  `ustg_maengel`.
+- **Breaking:** invoic-checker holds a Zahlungsziel to the published bounds:
+  at least 10 WT after receipt on 31001–31003 and 31009 with a fälliger
+  Betrag ≥ 0 (GPKE Teil 2 Kap. 3.3.2 Nr. 1, S. 90; GeLi Gas 3.0 Kap. 4.5; WiM
+  Teil 1 Kap. 3.6.3.8.2 / 3.7.2; WiM Teil 2 Kap. 4.5.2), at least 10 WT after
+  the Rechnungsdatum on 31005 / 31007 and Gas 31001–31003 (INVOIC AHB 1.0b
+  `[24]`), at most 10 WT on a Rückerstattung and every 31006 / 31008 (`[25]`).
+  invoicd answers `E_0406` `A10` / `A11`.
+- **Breaking:** invoicd's `[check] max_zahlungsziel_days` is unset by default
+  and `0` is refused; the 30-day ceiling cited to the Allgemeine Festlegungen
+  is gone — its Kap. 7 sets no payment term.
+- **Breaking:** netzbilanzd requires `zahlungsziel_werktage` (≥ 10): an invoice
+  without `due_date` falls due that many Werktage after its Rechnungsdatum, a
+  Rückerstattung at most 10 WT after it. A Zahlungsziel off the published
+  bounds is a `422` `zahlungsziel_unzulaessig`, and a 31005 drafted below the
+  floor is refused. `POST /api/v1/billing/run` takes `due_date` as optional.
+- **Breaking:** invoic-checker answers Prüfschritt 10 (`E_0264`/`E_0270`/
+  `E_0273`) and 17 (`E_0267`) from the INVOIC: an `A01` / `A07` names every
+  § 14 Abs. 4 UStG Pflichtangabe missing. Prüfschritt 330 holds a position of
+  Steuerkategorie `S` to the § 12 Abs. 1 UStG rate of its period (`A12`).
+- invoicd disputes an invoice whose Entscheidungsbaum refused it even when the
+  plausibility report is clean; the tree's verdict comes first.
+- **Breaking:** invoicd: `invoic_receipts` gains `bestellung_ref`,
+  `rechnungstyp`, `offen`, `runde`, `comdis_ref`, the statement columns and
+  `erste_runde_antwort`/`erste_runde_dispatched_at` (schema edited in place).
+- **Breaking:** accountingd charges § 288 BGB Verzugszinsen by the account's
+  `verbraucher`: nine Prozentpunkte (Abs. 2) only on `false`, five (Abs. 1)
+  otherwise. `POST /accounts/{malo_id}/interest-charges` drops `is_b2b`, `PUT
+  /accounts/{malo_id}` drops `verbraucher`, and `customer_type` is gone from
+  `interest_charges` and `de.accounting.interest.charged`. `PUT
+  /accounts/{malo_id}/verbraucher` (Cedar `sync-verbraucher`) is granted to
+  the principal `vertragd` alone — name vertragd's `[[oidc.service_keys]]`
+  entry so.
+- **Breaking:** vertragd records the § 13 BGB Verbraucher status on the
+  contract (`verbraucher` on `POST /kunden/{id}/vertraege`) and sends it —
+  `null` when unrecorded — to accountingd through a durable outbox command when the NB confirms a
+  component.
+- **Breaking:** mako-redispatch / netzbilanzd: the Abrechnungsvariante of a TR
+  follows BilAReM Kap. 3.2.1 / 3.3 (`Abrechnungsverfahren::admissible` takes
+  `TrMerkmale`): Pauschal ends after 31.12.2028 only for a fluctuating TR
+  erfasst viertelstundenscharf, and without a Spitz Festlegung by the 30.11.
+  the variant is the vereinfachte Spitzabrechnung. `POST /api/v1/redispatch/ausfallarbeit/compute` requires `tr`,
+  and `wetterdaten` on `wind_spitz` / `solar_spitz`; it refuses an unassigned
+  variant, a Maßnahme before 01.07.2026 and Wetterdaten off their Werktag
+  window, and answers `abrechnungsverfahren`.
+- **Breaking:** mako-redispatch: `ausfallarbeit::WETTERDATEN_LIEFERFRIST_WERKTAGE`
+  and `bilarem::MABIS_ANLAGE1_KAP17_ENDE` are gone; read
+  `fristen::WETTERDATEN_WERKTAGE` and `mako_mabis::KAPITEL_17_2_ENDE`.
+- **Breaking:** eeg-billing / einsd name the law „KWKG" (zuletzt geändert durch
+  Art. 24 G v. 18.12.2025, BGBl. 2025 I Nr. 347); a KWK position's
+  `legal_basis` is `§7 KWKG`, and `Paragraph100Rule::KwkgTransition` is gone.
+- **Breaking:** makod: `SlateDbMaloCache::new(store, tenant)` builds the MaLo
+  cache for one tenant.
+- Every chapter of a BK6-24-174 Anlage, GPKE Teil 4, the Allgemeine
+  Festlegungen, an AHB, MIG or EBD and the BDEW Anwendungshilfen is cited as
+  „Kap.", never „§"; `check-known-wrong` rules `bk6-24-174-paragraph` and
+  `bdew-document-paragraph` refuse the paragraph sign. Chapter numbers are
+  unchanged.
+
+### Fixed
+
+- makod renders what the AHB columns require: the MaBiS Anforderungen
+  17201–17208, 17210 and the Profil-Reklamation 17211; the ORDERS 17006 with
+  its Grund; the ORDRSP 19003/19004 (`DTM+Z02`, `RFF+ON`), 19009/19010,
+  19110/19121/19124/19130 (`SG2 AJT`, `DTM+292`, `RFF+TN`); the IFTSTA
+  21027, 21030/21031; the Sperrung ORDERS 17115/17117 (`LOC+172`); the ORDCHG
+  39000 (`RFF+ON`); the REMADV `DTM+137` as its own date.
+- makod: the IFTSTA 21011 reaches the MSBA and the LF beside the MSBN (WiM
+  Teil 1 Kap. 2.3.2 Nr. 14/15).
+- makod: the LF's 55008 / 55009 restates the 55007's `SG4 STS+7` (and
+  `DTM+206` on a `Z33`) and carries no `SG5 LOC` (UTILMD AHB Strom 2.2 Kap.
+  8.10); the LF ends its Abmeldung on the NB's 55007 `BGM+Z90`.
+- makod accepts a valid MSCONS 13003 / 13020 / 13023 and a Deaktivierung
+  55063: the series is the PID's (13023) or the MaBiS-ZP's recorded
+  Aktivierung (BK6-24-174 Anlage 3 Kap. 7.4.1), refused by name without one.
+- makod: the NB receives the Profil-Reklamation 17211 on `mabis-profile`; the
+  GNB receives the LF's 44143 and the gMSB the GNB's 44147 / 44148 as
+  Anfragen (UTILMD AHB Gas 1.2 Kap. 5.12.6). Their answers and the 44021 are
+  refused by name.
+- makod: a MaLo seeded by `PUT /admin/malo` or the marktd fan-out is found by
+  the command doors and the MaLo-ID answer instead of answering
+  `malo_not_found`.
+- makod: a 17004 with `Z46` is refused before it leaves a MSB and accepted
+  from a LF (ORDERS AHB 1.1b Kap. 4.13).
+- processd: a Gas Anmeldung on an assigned Marktlokation sends no Strom 55010;
+  the GNB's Abmeldungsanfrage 44010 (GeLi Gas 3.0 Kap. 3.2.3) has no makod
+  door, so the case goes to the operator queue by name.
+- edmd: a GPKE reading order names the role that ordered it; a completion
+  naming none orders no reading.
+- edi-energy: Bedingungen read segment codes at the MIG's position („IMD+Z01"
+  is DE 7081, ORDERS MIG 1.4c S. 20), and an empty dropped element or a
+  column-wrapped code is read whole.
+- edi-energy: a profile skeleton writes each `DTM` in its own DE 2379 format
+  (`304` with seconds, `602` a year).
+- UTILMD Strom profiles: `ZG9`/`ZH0`/`ZH1` on 55038 and `ZH1` on 55611 sit on
+  their data element again (UTILMD AHB Strom 2.2 S. 195 f.), so those messages
+  pass their pre-send check; `validate-profiles` refuses an element rule under
+  a data element its MIG layout lacks.
+- eeg-billing / einsd: a KWKG Zuschlag for Dauerbetrieb after 31.12.2026 is
+  refused by name unless the plant holds a KWKAusV-Zuschlag or a
+  BImSchG-Genehmigung / verbindliche Bestellung by that day with Dauerbetrieb
+  within four years (§ 6 Abs. 1 Satz 1 Nr. 1 lit. b/c KWKG; new
+  `kwk_bimschg_genehmigung` / `kwk_verbindliche_bestellung`); a plant without
+  a Dauerbetrieb date is refused.
+- Citations that named no published text are re-sourced: the Stornorechnung
+  reference (INVOIC AHB 1.0b Kap. 3.1.2, S. 29), marktd's `produktcode`
+  (Codeliste der Konfigurationen 1.4 Kap. 4.1–4.3), the Lokationszuordnung
+  tables (GPKE Teil 1 Kap. 3.2–3.7).
+
 ## [0.32.0] — 2026-11-10
 
 ### Added

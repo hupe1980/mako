@@ -406,7 +406,7 @@ fn eigenverbrauch_always_zero_eur() {
     assert!(out.positions.is_empty());
 }
 
-// ── §7 KWKG 2023 — KWK-Zuschlag ──────────────────────────────────────────────
+// ── §7 KWKG — KWK-Zuschlag ──────────────────────────────────────────────
 
 #[test]
 fn kwkg_full_period_no_hour_limit() {

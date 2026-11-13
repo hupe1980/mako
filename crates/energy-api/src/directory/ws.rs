@@ -12,6 +12,8 @@ use url::Url;
 use crate::error::Error;
 use crate::models::directory::{DirectoryNotification, SubscriptionRequest};
 
+use super::TrustedSigners;
+
 /// Handle for sending [`SubscriptionRequest`] messages to the server.
 #[derive(Clone, Debug)]
 pub struct SubscriptionSender {
@@ -36,6 +38,11 @@ impl SubscriptionSender {
 /// Connects to `/ws/subscriptions/v1`, sends [`SubscriptionRequest`] messages,
 /// and yields [`DirectoryNotification`] messages from the server.
 ///
+/// Every pushed record is verified by [`super::verify_notification`] — the
+/// check [`super::DirectoryServiceClient::get_record`] applies — against the
+/// signers given to [`Self::connect`]. A record that does not verify is
+/// delivered as an `Err` and never inside a notification.
+///
 /// A pair of background Tokio tasks drive the WebSocket I/O; they exit when
 /// either the connection is closed or `SubscriptionSender` is dropped.
 ///
@@ -50,7 +57,8 @@ impl SubscriptionSender {
 /// use url::Url;
 ///
 /// let ws = Url::parse("wss://verzeichnisdienst.example.de/ws/subscriptions/v1")?;
-/// let (sender, mut rx) = DirectoryWsClient::connect(ws).await?;
+/// let signers = energy_api::directory::TrustedSigners::new(); // per provider MP-ID
+/// let (sender, mut rx) = DirectoryWsClient::connect(ws, signers).await?;
 ///
 /// sender.send(SubscriptionRequest {
 ///     id: "req-1".into(),
@@ -87,6 +95,7 @@ impl DirectoryWsClient {
     /// Returns [`Error::Transport`] if the WebSocket handshake fails.
     pub async fn connect(
         url: Url,
+        signers: TrustedSigners,
     ) -> Result<
         (
             SubscriptionSender,
@@ -124,9 +133,19 @@ impl DirectoryWsClient {
             while let Some(msg) = ws_source.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        let r = serde_json::from_str::<DirectoryNotification>(&text)
-                            .map_err(Error::Json);
-                        if notif_tx2.send(r).await.is_err() {
+                        let (refused, notification) =
+                            match super::verify_notification(&text, &signers) {
+                                Ok((refused, n)) => (refused, Ok(n)),
+                                Err(e) => (Vec::new(), Err(e)),
+                            };
+                        let mut closed = false;
+                        for e in refused.into_iter().map(Err).chain([notification]) {
+                            if notif_tx2.send(e).await.is_err() {
+                                closed = true;
+                                break;
+                            }
+                        }
+                        if closed {
                             break;
                         }
                     }

@@ -172,7 +172,7 @@ Vorprüfung: surviving it means only that the Anmeldung is not directly
 refusable. If the Marktlokation is assigned at the Zuordnungsbeginn, the NB owes
 the incumbent LFA an Anfrage zur Beendigung der Zuordnung (55010) before
 answering the LFN, because `E_0623` Prüfschritte 20–50 read that answer (GPKE
-Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4, Nr. 3).
+Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4, Nr. 3).
 
 The waiting `AnmeldungAnfrage` is written to `abmeldeanfragen` **before** the
 Anfrage goes out, so a fast loopback answer always finds it; phase two replays
@@ -184,7 +184,7 @@ exactly one answers the LFN.
 Antwort beim NB eingeht, gilt dies als Bestätigung nach Fall a)." A Widerspruch
 other than `A30` / `A41` refuses the Anmeldung with `E_0623` `A50` / `A57`
 (`Z35` in Gas). Those two codes need a second `SG4 STS+Z35` restating the LFA's
-`E_0624` code (GPKE Teil 2 § 2.1.2 Nr. 6); `processd` puts it on the `ablehnen`
+`E_0624` code (GPKE Teil 2 Kap. 2.1.2 Nr. 6); `processd` puts it on the `ablehnen`
 command and `makod` refuses to render the message without it.
 
 **Geschäftsvorfall.** On 55077/55078 `SG4 STS+7` DE 9013 element 3 carries
@@ -238,7 +238,7 @@ stillgelegte Marktlokationen and the Modell-2-Zuordnung.
 
 **Strom, erzeugende Marktlokation** (Prüfschritte 220–830) asks the Neuanlage
 question at 220 as above and uses `A45` / `A25` for the same two questions, then picks one of the **six** Vorlauffristen of
-GPKE Teil 2 § 2.1.1, keyed on `(Geschäftsvorfall, bestehende, angemeldete
+GPKE Teil 2 Kap. 2.1.1, keyed on `(Geschäftsvorfall, bestehende, angemeldete
 Veräußerungsform)`. The angemeldete one is `SG10 CCI+Z22`; the bestehende one
 and the Ausfallvergütung flag come from `einsd`
 (`GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform`, `[nb] einsd_url`),
@@ -419,7 +419,7 @@ otherwise the NB secures the Bilanzkreis (vertragliche Ersatzbelieferung, STS
 | Gas | 44013 | Anmeldung E/G | `E_3008` | 44014 / 44015 | Ablauf des 2. WT |
 | Gas | 44016 | Kündigung beim Altlieferanten | `E_3001` | 44017 / 44018 | Ablauf des 3. WT |
 
-For the two „am ÜT" rows GPKE Teil 2 (§ 2.3.2.2 resp. § 2.4.2.2) states two
+For the two „am ÜT" rows GPKE Teil 2 (Kap. 2.3.2.2 resp. Kap. 2.4.2.2) states two
 windows depending on whether the Zuordnungsbeginn lies in the future.
 `mako-fristen` publishes the same-day instant, rolling to 15:00 on the next
 Werktag when that instant is already past, after the cut-off or on a
@@ -452,11 +452,11 @@ Two facts come from the message itself:
   Ergänzung escalates. The same element carries `ZW0`–`ZW2` on a 55077 and
   `ZW8`–`ZX1` on a 55607; the PID decides which code space applies.
 - **Vorlauffrist** (`E_0609` Prüfschritt 40, `E_3002` `E17`) —
-  `mako_fristen::abmeldung` per GPKE Teil 2 § 2.5.2 Nr. 1: a calendar month for
+  `mako_fristen::abmeldung` per GPKE Teil 2 Kap. 2.5.2 Nr. 1: a calendar month for
   EEG-Marktlokationen, the day before the last Werktag otherwise. An erzeugende
   Marktlokation escalates unless the deployment can say which applies.
 
-**55607: silence is not a lapse.** GPKE Teil 2 § 2.4.2.2 Nr. 3 has the NB assign
+**55607: silence is not a lapse.** GPKE Teil 2 Kap. 2.4.2.2 Nr. 3 has the NB assign
 the supplier „aufgrund fehlender Antwort" with the Bilanzkreis on file. The
 substance of the answer is that Bilanzkreis (`A01` / `A99` are the only codes).
 UTILMD AHB Strom 2.2 Bedingungen [161]–[164] map `ZW8`–`ZX1` onto
@@ -584,11 +584,11 @@ The ESA Werteanfrage dispatches its refusal only; its Angebot goes through the
 | GeLi Gas Anmeldung 44001 | Ablauf des 4. WT nach Eingang | BK7-24-01-009 Kap. 3.2.3 |
 | GeLi Gas Abmeldung 44004 | Ablauf des 3. WT nach Eingang | BK7-24-01-009 Kap. 3.2.2 |
 | WiM MSB-Wechsel 55039 / 55042 / 55051 / 55168 | 3 / 5 / 7 / 1 WT | WiM Strom Teil 1 |
-| GPKE Neuanlage 55600 / 55601 | 00:00 Uhr des 61. WT nach dem ÜT | BK6-24-174 Teil 2 § 2.2.2 (60 WT täglicher Prüflauf, `E_0608`) |
-| GPKE Sperr-/Entsperrauftrag 17115 / 17117 / 39000 | spätester ÜT ist der 1. WT nach dem ÜT | BK6-24-174 Teil 2 §§ 3.5.1.2 / 3.5.2.2 / 3.5.3.2 Nr. 2 |
-| GPKE Anfrage Sperrung an den MSB 17116 | 3. WT nach dem ÜT — Fristverstreichen gilt als Zustimmung | BK6-24-174 Teil 2 § 3.5.1.2 Nr. 4 |
-| GPKE Teil 4 Stammdaten-Rückmeldung 55109 / 55230 / 55557 / 55639–55643 / 55693 | 2. WT nach dem ÜT | BK6-22-024 Anlage 1d (GPKE Teil 4) §§ 1.4.3 / 1.4.4 Nr. 2 |
-| GPKE Teil 2 Bearbeitungsstand Abrechnungsdaten 55156 / 55220 / 55673 | 2. WT nach dem ÜT | BK6-24-174 Teil 2 §§ 3.1.1.2 / 3.1.2.2 / 3.1.3.2 |
+| GPKE Neuanlage 55600 / 55601 | 00:00 Uhr des 61. WT nach dem ÜT | BK6-24-174 Teil 2 Kap. 2.2.2 (60 WT täglicher Prüflauf, `E_0608`) |
+| GPKE Sperr-/Entsperrauftrag 17115 / 17117 / 39000 | spätester ÜT ist der 1. WT nach dem ÜT | BK6-24-174 Teil 2 Kap. 3.5.1.2 / 3.5.2.2 / 3.5.3.2 Nr. 2 |
+| GPKE Anfrage Sperrung an den MSB 17116 | 3. WT nach dem ÜT — Fristverstreichen gilt als Zustimmung | BK6-24-174 Teil 2 Kap. 3.5.1.2 Nr. 4 |
+| GPKE Teil 4 Stammdaten-Rückmeldung 55109 / 55230 / 55557 / 55639–55643 / 55693 | 2. WT nach dem ÜT | BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.3 / 1.4.4 Nr. 2 |
+| GPKE Teil 2 Bearbeitungsstand Abrechnungsdaten 55156 / 55220 / 55673 | 2. WT nach dem ÜT | BK6-24-174 Teil 2 Kap. 3.1.1.2 / 3.1.2.2 / 3.1.3.2 |
 
 The 45-minute APERAK window is a separate clock, owned by `makod`.
 
@@ -758,7 +758,7 @@ measures the second; the first never reaches it.
 
 | Clock | Window | A breach means | Where it shows |
 |---|---|---|---|
-| **APERAK Frist** | Strom UTILMD/ORDERS 45 min (Samstag: Sonntag 12:00), other Strom next Werktag 12:00; Gas Folgeprozess next Werktag 12:00, Initialprozess end of the 3. Werktag (APERAK AHB 1.1 §§ 2.3.1 / 2.4.1) | the counterparty's acknowledgement did not arrive — a transport or validation fault | not in the read model: makod raises the delivery-window alert and keeps the message in its outbox |
+| **APERAK Frist** | Strom UTILMD/ORDERS 45 min (Samstag: Sonntag 12:00), other Strom next Werktag 12:00; Gas Folgeprozess next Werktag 12:00, Initialprozess end of the 3. Werktag (APERAK AHB 1.1 Kap. 2.3.1 / 2.4.1) | the counterparty's acknowledgement did not arrive — a transport or validation fault | not in the read model: makod raises the delivery-window alert and keeps the message in its outbox |
 | **Antwortfrist** | per PID — see below | the *business answer* is owed and has not been sent | `deadline_at`, computed on `process.initiated` |
 
 `state = antwortfrist_abgelaufen` is set by `de.mako.antwortfrist.abgelaufen`, which
@@ -934,7 +934,7 @@ not queued: it is not an order to execute.
 
 ### Timing — three clocks, all published
 
-BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 state three deadlines, counted in
+BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 / 3.5.2.2 state three deadlines, counted in
 Werktagen on the BDEW-MaKo calendar:
 
 | Clock | Frist | Tracked by |
@@ -982,7 +982,7 @@ execute and fail cannot both reach the wire. The IFTSTA carries `SG15 STS` `Z37`
 (Sperren) / `Z38` (Entsperren) with `Z14 erfolgreich` or `Z13 gescheitert`, the
 EBD Prüfschritt code (`pruefschritt_code`, a **Muss**), and `DTM+293`
 Fertigstellungsdatum — Muss on `Z14` and ≤ the document date (condition [495]),
-so a future `executed_at` is refused at the API (IFTSTA AHB 2.1 § 7.2).
+so a future `executed_at` is refused at the API (IFTSTA AHB 2.1 Kap. 7.2).
 
 `202`: recorded, and the IFTSTA 21039 committed with it as an `event_outbox`
 command to `makod` (key `processd-sperr-iftsta-<order>`); the Lieferant is told
@@ -1013,7 +1013,7 @@ delivered to `[sperr] erp_webhook_url`; without it the notices accumulate in
 | `de.sperr.fehlgeschlagen` | Not carried out — IFTSTA `Z13`, with the Prüfschritt code |
 | `de.sperr.storniert` | A pending order was withdrawn; no IFTSTA |
 | `de.sperr.ausfuehrung.ueberfaellig` | The 6-WT execution window closed with the order still open |
-| `de.sperr.iftsta.ausstehend` | The IFTSTA command was dead-lettered **or** the § 3.5.1.2 Nr. 5 Frist has passed, and the LF is still uninformed |
+| `de.sperr.iftsta.ausstehend` | The IFTSTA command was dead-lettered **or** the Kap. 3.5.1.2 Nr. 5 Frist has passed, and the LF is still uninformed |
 
 `agentd`'s `sperrd-agent` subscribes to the `de.sperr.*` glob. All four
 Sperrauftrag Cedar actions require the `NB` role and a tenant match;

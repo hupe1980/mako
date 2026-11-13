@@ -135,9 +135,10 @@ pub use foerderdauer::{
 pub use formula::calculate_settlement;
 pub use grid_billing::{RoundMoney, round_money};
 pub use kwkg::{
-    KwkAnlagenart, KwkFoerderdauerInput, KwkLeistungsanteil, KwkVerwendung, KwkZuschlagInput,
-    foerderdauer_vollbenutzungsstunden, jahreshoechstbetrag_vollbenutzungsstunden,
-    jahreskontingent_kwh, zuschlag_ct_kwh, zuschlag_leistungsanteile,
+    KwkAnlagenart, KwkAnspruchError, KwkAnspruchsgrundlage, KwkFoerderdauerInput,
+    KwkLeistungsanteil, KwkVerwendung, KwkZuschlagInput, foerderdauer_vollbenutzungsstunden,
+    jahreshoechstbetrag_vollbenutzungsstunden, jahreskontingent_kwh, zuschlag_anspruch,
+    zuschlag_ct_kwh, zuschlag_leistungsanteile,
 };
 pub use model::{
     CapacityBlock, Pflichtverstoss, SanktionAlt, SanktionsTyp, SettleInput, SettleOutput,

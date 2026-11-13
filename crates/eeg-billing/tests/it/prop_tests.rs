@@ -243,7 +243,7 @@ proptest! {
 // ── INV-6: KWKG surcharge is always non-negative ──────────────────────────────
 
 proptest! {
-    /// **INV-6** — §7 KWKG 2023: the KWK-Zuschlag is always ≥ 0 EUR.
+    /// **INV-6** — §7 KWKG: the KWK-Zuschlag is always ≥ 0 EUR.
     ///
     /// Even when all remaining eligible kWh are zero (cap reached),
     /// the result must be EUR 0, not negative.
