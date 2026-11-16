@@ -121,6 +121,10 @@ Commands:
   check-answer-commands  Refuse an invoicd PID route naming a makod command that does not exist
   check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
                         agrees with that server's own `read_only_hint`
+  check-translations  Every translated site page (site/content/**/*.<lang>.md) names its English
+                        source and that source's sha256, has its English twin, and states no
+                        figure the English pages' guards hold (--rehash <file>: re-pin a page
+                        after re-translating it)
   check-mcp-surface   Every MCP server speaks the declared revisions through
                         `mako_service::mcp`, holds no session and enables no deprecated
                         capability; agentd's client connects on 2026-07-28
@@ -219,6 +223,7 @@ mod check_sts_codes;
 mod check_tenant_predicate;
 mod check_thin_main;
 mod check_tool_grants;
+mod check_translations;
 mod check_vex;
 mod check_vorlauf_consulted;
 mod check_wire_timestamps;
@@ -318,6 +323,13 @@ fn main() {
         Some("check-as4-controls") => check_as4_controls(),
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
+        Some("check-translations") => {
+            let (root, _) = workspace_info();
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            if !check_translations::run(std::path::Path::new(&root), &args) {
+                std::process::exit(1);
+            }
+        }
         Some("check-mcp-surface") => root_task(check_mcp_surface::run),
         Some("check-clippy-bans") => root_task(check_clippy_bans::run),
         Some("check-thin-main") => root_task(check_thin_main::run),

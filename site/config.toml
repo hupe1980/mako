@@ -2,6 +2,11 @@
 # https://www.getzola.org/documentation/getting-started/configuration/
 
 base_url = "https://hupe1980.github.io/mako"
+# English is the site; German is a curated subset under /de/, each page pinned
+# to the English source it was translated from (`cargo xtask
+# check-translations`). A Zola section has no fallback across languages, so a
+# German page needs the German `_index.de.md` of every section above it.
+default_language = "en"
 title = "mako — AI-first German Energy Market Platform in Rust"
 # Search engines show roughly 155-160 characters and `base.html` truncates at
 # 180. This is the fallback for every page without its own front-matter
@@ -10,11 +15,118 @@ description = "Open-source, AI-first German energy-market platform in Rust: BDEW
 
 # Pretty URLs (/page/ → /page/index.html); no trailing-slash 404s on GitHub Pages.
 compile_sass = true
-build_search_index = true
+# Search is Pagefind, run over `public/` by `tools/postbuild.mjs` after the
+# build: it fetches only the index chunks a query needs and stems each page in
+# its own `<html lang>`. Zola's own index would be a second, unread download.
+build_search_index = false
 generate_feeds = true
 feed_filenames = ["atom.xml"]
 
 taxonomies = []
+
+[languages.de]
+title = "mako — KI-first Plattform für die deutsche Marktkommunikation in Rust"
+description = "Open-Source-Plattform in Rust für die Marktkommunikation von Strom und Gas: BDEW-MaKo von EDIFACT bis Produktion, MCP-Werkzeuge für Agenten, Abrechnung und AS4."
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+build_search_index = false        # Pagefind owns search; see above
+taxonomies = []
+
+# ── UI strings ───────────────────────────────────────────────────────────────
+# Every string a template shows is read with `trans(key=…, lang=lang)`, so a
+# German page carries no English chrome. The German strings address the reader
+# with „du", like the Desk.
+[translations]
+skip_to_content = "Skip to content"
+nav_primary = "Primary"
+nav_docs = "Docs"
+nav_get_started = "Get started"
+nav_services = "Services"
+nav_reference = "Reference"
+nav_for_utilities = "For utilities"
+github = "GitHub ↗"
+search_placeholder = "Search docs…"
+search_label = "Search documentation"
+search_results = "Search results"
+theme_toggle = "Toggle color theme"
+theme_toggle_title = "Toggle theme"
+lang_switch_label = "Language"
+lang_switch_text = "Deutsch"
+lang_switch_title = "Diese Seite auf Deutsch"
+lang_switch_fallback_title = "Zur deutschen Startseite — diese Seite gibt es nur auf Englisch"
+footer_nav = "Footer"
+footer_docs = "Documentation"
+footer_pid_reference = "PID reference"
+footer_on_crates = "on crates.io ↗"
+footer_tagline = "German energy-market operations in Rust."
+footer_or = "or"
+footer_conforms = "Conforms to"
+footer_not_affiliated = "not affiliated with BDEW, DVGW or the Bundesnetzagentur."
+breadcrumb = "Breadcrumb"
+docs_sidebar = "Documentation"
+on_this_page = "On this page"
+toc_sections = "sections"
+pager = "Page navigation"
+previous = "← Previous"
+next = "Next →"
+edit_page = "Edit this page ↗"
+page_one = "page"
+page_many = "pages"
+anchor_label = "Permalink to this section"
+english_docs = "Full documentation (English)"
+status = "Experimental · pre-1.0"
+og_image_alt = "mako — German energy-market operations in Rust"
+og_locale = "en_US"
+md_view = "View as Markdown"
+md_copy = "Copy page as Markdown"
+md_copied = "Markdown copied."
+md_copy_failed = "Copy failed — use “View as Markdown”."
+
+[languages.de.translations]
+skip_to_content = "Zum Inhalt springen"
+nav_primary = "Hauptnavigation"
+nav_docs = "Doku"
+nav_get_started = "Loslegen"
+nav_services = "Dienste"
+nav_reference = "Referenz"
+nav_for_utilities = "Für Stadtwerke"
+github = "GitHub ↗"
+search_placeholder = "Doku durchsuchen…"
+search_label = "Dokumentation durchsuchen"
+search_results = "Suchergebnisse"
+theme_toggle = "Farbschema wechseln"
+theme_toggle_title = "Farbschema wechseln"
+lang_switch_label = "Sprache"
+lang_switch_text = "English"
+lang_switch_title = "This page in English"
+lang_switch_fallback_title = "To the English home page — this page exists in German only"
+footer_nav = "Fußzeile"
+footer_docs = "Dokumentation"
+footer_pid_reference = "PID-Referenz"
+footer_on_crates = "auf crates.io ↗"
+footer_tagline = "Deutsche Energiemarkt-Prozesse in Rust."
+footer_or = "oder"
+footer_conforms = "Konform zu"
+footer_not_affiliated = "nicht mit BDEW, DVGW oder der Bundesnetzagentur verbunden."
+breadcrumb = "Brotkrumen"
+docs_sidebar = "Dokumentation"
+on_this_page = "Auf dieser Seite"
+toc_sections = "Abschnitte"
+pager = "Seitennavigation"
+previous = "← Zurück"
+next = "Weiter →"
+edit_page = "Diese Seite bearbeiten ↗"
+page_one = "Seite"
+page_many = "Seiten"
+anchor_label = "Link auf diesen Abschnitt"
+english_docs = "Vollständige Doku (Englisch)"
+status = "Experimentell · vor 1.0"
+og_image_alt = "mako — deutsche Energiemarkt-Prozesse in Rust"
+og_locale = "de_DE"
+md_view = "Als Markdown ansehen"
+md_copy = "Seite als Markdown kopieren"
+md_copied = "Markdown kopiert."
+md_copy_failed = "Kopieren fehlgeschlagen — nutze „Als Markdown ansehen“."
 
 [markdown]
 render_emoji = true
@@ -37,21 +149,13 @@ theme = "nord"
 internal_level = "error"
 external_level = "warn"
 
-[search]
-# `fuse_json`, not `elasticlunr_json`: `static/js/search.js` scans the documents
-# itself, so an inverted index would be downloaded and never read. 1.3 MB,
-# fetched lazily on first focus of the search box.
-index_format = "fuse_json"
-include_title = true
-include_description = true
-include_path = true
-include_content = true
-
 [extra]
 # Every key here must be read by a template: a value nothing reads still looks
 # like the source of truth while the real one drifts elsewhere. The Mermaid
-# major is pinned in `static/js/mermaid-init.js`; the hero copy lives in
-# `templates/index.html`.
+# major is pinned in `static/js/mermaid-init.js`; the English hero copy lives in
+# `templates/index.html`, the German one in `content/_index.de.md`. A string
+# that differs by language — the status line, the card's alt text, the `og:`
+# locale — is a translation, not an `extra` key.
 #
 # ── Branding ──────────────────────────────────────────────────────────────────
 repo = "https://github.com/hupe1980/mako"
@@ -69,11 +173,7 @@ author = "hupe1980"
 og_image = "img/og-card.png"
 og_image_width = "1200"
 og_image_height = "630"
-og_image_alt = "mako — German energy-market operations in Rust"
-og_locale = "en_US"
 # Matches --bg in sass/style.scss for each theme; drives the mobile browser
 # chrome so the sticky header does not sit against a white bar in dark mode.
 theme_color_light = "#ffffff"
 theme_color_dark = "#0d1117"
-# Shown on the landing page, so a reader sizes the project before the features.
-status = "Experimental · pre-1.0"

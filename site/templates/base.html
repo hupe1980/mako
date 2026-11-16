@@ -1,25 +1,45 @@
 <!DOCTYPE html>
-{#- The prose is English throughout; German appears only as domain terms
-    (Marktlokation, Prüfidentifikator, Frist) inside English sentences. Per-term
-    `lang="de"` spans would be hundreds of markup insertions for no assistive
-    gain — a screen reader announcing "Prüfidentifikator" with a German voice
-    inside an English sentence is a regression, not an improvement. So: en. -#}
-<html lang="en" data-theme="auto">
+{#- The page's own language. An English page carries German only as domain
+    terms (Marktlokation, Prüfidentifikator, Frist) inside English sentences.
+    Per-term `lang="de"` spans would be hundreds of markup insertions for no
+    assistive gain — a screen reader announcing "Prüfidentifikator" with a
+    German voice inside an English sentence is a regression, not an
+    improvement. The German pages under /de/ are German throughout. -#}
+<html lang="{{ lang }}" data-theme="auto">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   {#- ── Page identity ───────────────────────────────────────────────────────
       Three kinds, because the structured data below differs for each:
-        home    — the landing page (content/_index.md, template index.html)
+        home    — the landing page (content/_index.md with index.html; a
+                  translation, content/_index.<lang>.md with home.html)
         section — a docs section index
         page    — a single documentation page                              -#}
   {%- set kind = "section" -%}
   {%- if page is defined -%}
     {%- set kind = "page" -%}
-  {%- elif section is defined and section.relative_path == "_index.md" -%}
+  {%- elif section is defined and section.relative_path in ["_index.md", "_index." ~ lang ~ ".md"] -%}
     {%- set kind = "home" -%}
   {%- endif -%}
+
+  {#- ── Language ────────────────────────────────────────────────────────────
+      `translations` lists every language version of this page, itself
+      included; a page with one entry has no twin. Zola sections have no
+      fallback across languages, so every lookup names its language: the home
+      and the docs index are this language's, and a link to a page that exists
+      in English only says `lang="en"`. -#}
+  {%- set home_url = get_url(path="@/_index.md", lang=lang) -%}
+  {%- if lang == config.default_language -%}
+    {%- set docs_index = "docs/_index.md" -%}
+    {%- set other_lang = "de" -%}
+  {%- else -%}
+    {%- set docs_index = "docs/_index." ~ lang ~ ".md" -%}
+    {%- set other_lang = config.default_language -%}
+  {%- endif -%}
+  {%- set translations = [] -%}
+  {%- if page is defined -%}{%- set translations = page.translations -%}
+  {%- elif section is defined -%}{%- set translations = section.translations -%}{%- endif -%}
 
   {%- set page_title = title | default(value=config.title) -%}
   {%- if page is defined and page.title -%}{%- set page_title = page.title ~ " · mako" -%}{%- elif section is defined and section.title and section.title != "mako" -%}{%- set page_title = section.title ~ " · mako" -%}{%- endif -%}
@@ -40,6 +60,17 @@
       result thumbnail rather than a cropped square. -#}
   <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
   <link rel="canonical" href="{{ page_url | safe }}">
+  {#- Each language version names every other and itself; `x-default` is the
+      English one. A page without a twin states no alternate, so no link points
+      at a translation that does not exist. -#}
+  {%- if translations | length > 1 %}
+  {%- for t in translations %}
+  <link rel="alternate" hreflang="{{ t.lang }}" href="{{ t.permalink | safe }}">
+  {%- if t.lang == config.default_language %}
+  <link rel="alternate" hreflang="x-default" href="{{ t.permalink | safe }}">
+  {%- endif %}
+  {%- endfor %}
+  {%- endif %}
   {#- The square mark, not the wordmark: `mako-logo.svg` is a 120×32 lockup and
       a browser tab renders it as an unreadable 16px smear. -#}
   <link rel="icon" href="{{ get_url(path='img/mako-mark.svg') | safe }}" type="image/svg+xml">
@@ -50,7 +81,10 @@
   <!-- Open Graph / Twitter -->
   <meta property="og:type" content="{% if kind == 'page' %}article{% else %}website{% endif %}">
   <meta property="og:site_name" content="mako">
-  <meta property="og:locale" content="{{ config.extra.og_locale }}">
+  <meta property="og:locale" content="{{ trans(key='og_locale', lang=lang) }}">
+  {%- for t in translations %}{% if t.lang != lang %}
+  <meta property="og:locale:alternate" content="{{ trans(key='og_locale', lang=t.lang) }}">
+  {%- endif %}{% endfor %}
   <meta property="og:title" content="{{ page_title }}">
   <meta property="og:description" content="{{ meta_desc }}">
   <meta property="og:url" content="{{ page_url | safe }}">
@@ -58,12 +92,12 @@
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="{{ config.extra.og_image_width }}">
   <meta property="og:image:height" content="{{ config.extra.og_image_height }}">
-  <meta property="og:image:alt" content="{{ config.extra.og_image_alt }}">
+  <meta property="og:image:alt" content="{{ trans(key='og_image_alt', lang=lang) }}">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="{{ page_title }}">
   <meta name="twitter:description" content="{{ meta_desc }}">
   <meta name="twitter:image" content="{{ og_image | safe }}">
-  <meta name="twitter:image:alt" content="{{ config.extra.og_image_alt }}">
+  <meta name="twitter:image:alt" content="{{ trans(key='og_image_alt', lang=lang) }}">
 
   {#- ── Structured data ──────────────────────────────────────────────────────
       One block per page kind: the home page describes the software, and a
@@ -81,11 +115,11 @@
     "@graph": [
       {
         "@type": "WebSite",
-        "@id": {{ (config.base_url ~ "/#website") | json_encode | safe }},
-        "url": {{ (config.base_url ~ "/") | json_encode | safe }},
+        "@id": {{ (home_url ~ "#website") | json_encode | safe }},
+        "url": {{ home_url | json_encode | safe }},
         "name": "mako",
         "description": {{ config.description | striptags | json_encode | safe }},
-        "inLanguage": "en"
+        "inLanguage": {{ lang | json_encode | safe }}
       },
       {
         {#- Both types, because the properties below straddle them:
@@ -94,7 +128,7 @@
             SoftwareSourceCode. Declaring one and using the other's vocabulary is
             what a validator flags. -#}
         "@type": ["SoftwareApplication", "SoftwareSourceCode"],
-        "@id": {{ (config.base_url ~ "/#software") | json_encode | safe }},
+        "@id": {{ (home_url ~ "#software") | json_encode | safe }},
         "name": "mako",
         "description": {{ config.description | striptags | json_encode | safe }},
         "applicationCategory": "DeveloperApplication",
@@ -103,9 +137,10 @@
         "runtimePlatform": "Rust",
         "license": "https://spdx.org/licenses/MIT.html",
         "codeRepository": {{ config.extra.repo | json_encode | safe }},
-        "url": {{ (config.base_url ~ "/") | json_encode | safe }},
+        "url": {{ home_url | json_encode | safe }},
         "image": {{ og_image | json_encode | safe }},
-        "isPartOf": { "@id": {{ (config.base_url ~ "/#website") | json_encode | safe }} },
+        "inLanguage": {{ lang | json_encode | safe }},
+        "isPartOf": { "@id": {{ (home_url ~ "#website") | json_encode | safe }} },
         "author": {
           "@type": "Person",
           "name": {{ config.extra.author | json_encode | safe }},
@@ -127,10 +162,10 @@
         "headline": {{ page_title | json_encode | safe }},
         "name": {{ page_title | json_encode | safe }},
         "description": {{ meta_desc | json_encode | safe }},
-        "inLanguage": "en",
+        "inLanguage": {{ lang | json_encode | safe }},
         "image": {{ og_image | json_encode | safe }},
-        "isPartOf": { "@id": {{ (config.base_url ~ "/#website") | json_encode | safe }} },
-        "about": { "@id": {{ (config.base_url ~ "/#software") | json_encode | safe }} },
+        "isPartOf": { "@id": {{ (home_url ~ "#website") | json_encode | safe }} },
+        "about": { "@id": {{ (home_url ~ "#software") | json_encode | safe }} },
         "author": {
           "@type": "Person",
           "name": {{ config.extra.author | json_encode | safe }},
@@ -140,7 +175,7 @@
       {#- The trail is mako › Documentation › [subsection] › this page. The
           crumb name is the bare title, not the `<title>`: " · mako" is a
           browser-tab disambiguator, not part of the page's name. -#}
-      {%- set docs = get_section(path="docs/_index.md", metadata_only=true) -%}
+      {%- set docs = get_section(path=docs_index, metadata_only=true) -%}
       {%- set crumb_title = page_title -%}
       {%- if page is defined and page.title -%}{%- set crumb_title = page.title -%}
       {%- elif section is defined and section.title -%}{%- set crumb_title = section.title -%}{%- endif -%}
@@ -157,7 +192,7 @@
             "@type": "ListItem",
             "position": 1,
             "name": "mako",
-            "item": {{ (config.base_url ~ "/") | json_encode | safe }}
+            "item": {{ home_url | json_encode | safe }}
           },
           {%- if at_docs_root %}
           {
@@ -197,7 +232,7 @@
 
   <link rel="stylesheet" href="{{ get_url(path='style.css') | safe }}">
   {%- if config.generate_feeds %}
-  <link rel="alternate" type="application/atom+xml" title="{{ config.title }}" href="{{ get_url(path='atom.xml', trailing_slash=false) | safe }}">
+  <link rel="alternate" type="application/atom+xml" title="{{ config.title }}" href="{{ get_url(path='atom.xml', lang=lang, trailing_slash=false) | safe }}">
   {%- endif %}
   <script>
     // Apply persisted theme before paint to avoid a flash.
@@ -208,10 +243,10 @@
   </script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
+  <a class="skip-link" href="#main">{{ trans(key="skip_to_content", lang=lang) }}</a>
   <header class="site-header">
     <div class="header-inner">
-      <a class="brand" href="{{ config.base_url ~ "/" }}">
+      <a class="brand" href="{{ home_url | safe }}">
         {#- alt="" is correct: the wordmark beside it already names the site, so
             a described logo would make a screen reader say "mako" twice. -#}
         <img src="{{ get_url(path='img/mako-mark.svg') | safe }}" alt="" width="28" height="28">
@@ -220,27 +255,53 @@
       {#- `current_url` is empty on the home page render in some Zola versions;
           defaulting keeps the containment tests below total. -#}
       {%- set here = current_url | default(value=page_url) -%}
-      <nav class="site-nav" aria-label="Primary">
+      <nav class="site-nav" aria-label="{{ trans(key='nav_primary', lang=lang) }}">
+        {#- [content path, its language, label key]. The German subset has no
+            Services or Reference section, so its nav names the pages it has and
+            the English reference, marked as English. -#}
+        {%- if lang == config.default_language -%}
         {%- set nav = [
-          ["@/docs/_index.md", "Docs"],
-          ["@/docs/guide/getting-started.md", "Get started"],
-          ["@/docs/services/_index.md", "Services"],
-          ["@/docs/reference/_index.md", "Reference"]
+          ["@/docs/_index.md", "en", "nav_docs"],
+          ["@/docs/guide/getting-started.md", "en", "nav_get_started"],
+          ["@/docs/guide/for-utilities.md", "en", "nav_for_utilities"],
+          ["@/docs/services/_index.md", "en", "nav_services"],
+          ["@/docs/reference/_index.md", "en", "nav_reference"]
         ] -%}
+        {%- else -%}
+        {%- set nav = [
+          ["@/docs/_index.md", "de", "nav_docs"],
+          ["@/docs/guide/getting-started.md", "de", "nav_get_started"],
+          ["@/docs/guide/for-utilities.md", "de", "nav_for_utilities"],
+          ["@/docs/reference/_index.md", "en", "nav_reference"]
+        ] -%}
+        {%- endif -%}
         {%- for item in nav -%}
-          {%- set href = get_url(path=item[0]) -%}
+          {%- set href = get_url(path=item[0], lang=item[1]) -%}
           {#- Exact match is the page itself; a prefix match means an ancestor
               section, which `aria-current="true"` is for. -#}
-          <a href="{{ href | safe }}"{% if here == href %} aria-current="page" class="active"{% elif here != "" and href in here %} aria-current="true" class="active"{% endif %}>{{ item[1] }}</a>
+          <a href="{{ href | safe }}"{% if item[1] != lang %} hreflang="{{ item[1] }}"{% endif %}{% if here == href %} aria-current="page" class="active"{% elif here != "" and href in here %} aria-current="true" class="active"{% endif %}>{{ trans(key=item[2], lang=lang) }}{% if item[1] != lang %} <span class="nav-lang">{{ item[1] | upper }}</span>{% endif %}</a>
         {%- endfor -%}
-        <a href="{{ config.extra.repo }}" rel="noopener">GitHub ↗</a>
+        <a href="{{ config.extra.repo }}" rel="noopener">{{ trans(key="github", lang=lang) }}</a>
       </nav>
       <div class="header-actions">
-        <input type="search" id="search" class="search-box" placeholder="Search docs…"
-               aria-label="Search documentation" autocomplete="off"
+        <input type="search" id="search" class="search-box" placeholder="{{ trans(key='search_placeholder', lang=lang) }}"
+               aria-label="{{ trans(key='search_label', lang=lang) }}" autocomplete="off"
                role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list">
-        <div id="search-results" class="search-results" role="listbox" aria-label="Search results" hidden></div>
-        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle color theme" title="Toggle theme">◑</button>
+        <div id="search-results" class="search-results" role="listbox" aria-label="{{ trans(key='search_results', lang=lang) }}" hidden></div>
+        {#- The language switch: the same page in the other language, or —
+            where it has no twin — that language's home. A link, never a
+            redirect: the reader chose the URL they are on. -#}
+        <nav class="lang-switch" aria-label="{{ trans(key='lang_switch_label', lang=lang) }}">
+          <span class="lang-current" aria-current="true">{{ lang | upper }}</span>
+          {%- if translations | length > 1 -%}
+            {%- for t in translations -%}{%- if t.lang != lang %}
+          <a href="{{ t.permalink | safe }}" hreflang="{{ t.lang }}" lang="{{ t.lang }}" title="{{ trans(key='lang_switch_title', lang=lang) }}" aria-label="{{ trans(key='lang_switch_text', lang=lang) }}">{{ t.lang | upper }}</a>
+            {%- endif -%}{%- endfor -%}
+          {%- else %}
+          <a href="{{ get_url(path='@/_index.md', lang=other_lang) | safe }}" hreflang="{{ other_lang }}" lang="{{ other_lang }}" title="{{ trans(key='lang_switch_fallback_title', lang=lang) }}" aria-label="{{ trans(key='lang_switch_text', lang=lang) }}">{{ other_lang | upper }}</a>
+          {%- endif %}
+        </nav>
+        <button id="theme-toggle" class="theme-toggle" aria-label="{{ trans(key='theme_toggle', lang=lang) }}" title="{{ trans(key='theme_toggle_title', lang=lang) }}">◑</button>
       </div>
     </div>
   </header>
@@ -251,22 +312,27 @@
 
   <footer class="site-footer">
     <div class="footer-inner">
-      <nav class="footer-nav" aria-label="Footer">
-        <a href="{{ get_url(path='@/docs/_index.md') | safe }}">Documentation</a>
-        <a href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Get started</a>
-        <a href="{{ get_url(path='@/docs/regulatory/pid-reference.md') | safe }}">PID reference</a>
+      <nav class="footer-nav" aria-label="{{ trans(key='footer_nav', lang=lang) }}">
+        {#- `get_url(lang=…)` takes the default-language path and finds that
+            language's file itself. -#}
+        <a href="{{ get_url(path='@/docs/_index.md', lang=lang) | safe }}">{{ trans(key="footer_docs", lang=lang) }}</a>
+        <a href="{{ get_url(path='@/docs/guide/getting-started.md', lang=lang) | safe }}">{{ trans(key="nav_get_started", lang=lang) }}</a>
+        {%- if lang != config.default_language %}
+        <a href="{{ get_url(path='@/docs/_index.md', lang='en') | safe }}" hreflang="en">{{ trans(key="english_docs", lang=lang) }}</a>
+        {%- endif %}
+        <a href="{{ get_url(path='@/docs/regulatory/pid-reference.md', lang='en') | safe }}"{% if lang != "en" %} hreflang="en"{% endif %}>{{ trans(key="footer_pid_reference", lang=lang) }}</a>
         {%- for crate in config.extra.crates %}
-        <a href="{{ crate.url }}" rel="noopener">{{ crate.name }} on crates.io ↗</a>
+        <a href="{{ crate.url }}" rel="noopener">{{ crate.name }} {{ trans(key="footer_on_crates", lang=lang) }}</a>
         {%- endfor %}
-        <a href="{{ config.extra.repo }}" rel="noopener">GitHub ↗</a>
+        <a href="{{ config.extra.repo }}" rel="noopener">{{ trans(key="github", lang=lang) }}</a>
       </nav>
       <p>
-        <strong>mako</strong> — German energy-market operations in Rust.
+        <strong>mako</strong> — {{ trans(key="footer_tagline", lang=lang) }}
         · <a href="{{ config.extra.repo }}/blob/main/LICENSE-MIT">MIT</a>
-        or <a href="{{ config.extra.repo }}/blob/main/LICENSE-APACHE">Apache&nbsp;2.0</a>
-        · Conforms to <a href="{{ config.extra.edi_energy_url }}">BDEW EDI@Energy</a> {{ config.extra.format_versions }}
+        {{ trans(key="footer_or", lang=lang) }} <a href="{{ config.extra.repo }}/blob/main/LICENSE-APACHE">Apache&nbsp;2.0</a>
+        · {{ trans(key="footer_conforms", lang=lang) }} <a href="{{ config.extra.edi_energy_url }}">BDEW EDI@Energy</a> {{ config.extra.format_versions }}
       </p>
-      <p class="footer-note">{{ config.extra.status }} — not affiliated with BDEW, DVGW or the Bundesnetzagentur.</p>
+      <p class="footer-note">{{ trans(key="status", lang=lang) }} — {{ trans(key="footer_not_affiliated", lang=lang) }}</p>
     </div>
   </footer>
 

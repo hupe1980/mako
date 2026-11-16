@@ -9,8 +9,12 @@ static site. Content lives in `content/docs/`, templates in `templates/`.
 
 ```sh
 cd site && zola serve      # http://127.0.0.1:1111, live reload
-just check-site            # diagrams + link check, what CI runs
+just build-site            # the deployed site in public/, post-build step included
+just check-site            # diagrams + link check + build-site, what CI runs
 ```
+
+`zola serve` has no search: the Pagefind index is written by the post-build
+step, which only `just build-site` runs.
 
 `zola check` validates internal links (`internal_level = "error"`, so a dead
 `@/docs/…#anchor` fails the build). It does **not** look at diagrams — that is
@@ -77,8 +81,11 @@ palette into the generated SVG.
 | `templates/anchor-link.html` | Heading anchor; deliberately empty, the `#` comes from CSS so it stays out of copied headings and the search index |
 | `templates/robots.txt` | Rendered to `/robots.txt`; see the note inside it about GitHub Pages project paths |
 | `static/js/mermaid-init.js` | Diagram renderer. **The Mermaid major is pinned here**, in the import URL — there is no config key for it |
-| `static/js/search.js` | Client-side search over Zola's `fuse_json` index |
+| `static/js/search.js` | The search box, on the Pagefind JS API (`pagefind/pagefind.js`, imported on first focus) |
+| `static/js/copy-md.js` | "Copy page as Markdown" on docs pages |
 | `tools/check-mermaid.mjs` | Diagram + renderer validation |
+| `tools/postbuild.mjs` | Runs after `zola build`: the Pagefind index, a Markdown twin at `<page>/index.md`, `llms.txt` and `llms-full.txt` — all derived from `content/` |
 
-`package.json` exists only for that checker. The published site is static and
-loads Mermaid from a CDN at runtime; nothing here is bundled or shipped.
+`package.json` holds the build-time tools: the diagram checker's dependencies
+and Pagefind, pinned exactly. The published site is static and loads Mermaid
+from a CDN at runtime, and only on a page with a diagram.

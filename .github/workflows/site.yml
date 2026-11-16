@@ -70,6 +70,16 @@ jobs:
           node tools/check-links.mjs
           zola check --skip-external-links
 
+      # The post-build step refuses a content page with no built HTML, a
+      # section with no `llms.txt` group and a search index that holds a
+      # different number of pages than the content tree — see
+      # site/tools/postbuild.mjs.
+      - name: Build and post-build
+        working-directory: site
+        run: |
+          zola build
+          node tools/postbuild.mjs
+
   build:
     needs: check
     if: github.event_name != 'pull_request'
@@ -91,10 +101,22 @@ jobs:
         id: pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
       - name: Build
         working-directory: site
-        # `--base-url` from the Pages deployment ensures correct absolute URLs.
-        run: zola build --base-url "${{ steps.pages.outputs.base_url }}"
+        # `--base-url` from the Pages deployment ensures correct absolute URLs;
+        # the post-build step reads it back from the built home page, so the
+        # twins, `llms.txt` and the search index carry the same one.
+        env:
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          npm ci --no-audit --no-fund
+          zola build --base-url "$BASE_URL"
+          node tools/postbuild.mjs
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1

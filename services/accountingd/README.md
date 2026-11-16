@@ -1,59 +1,56 @@
 # accountingd
 
-`accountingd` (`:9380`) is the customer account ledger (Massenkontokorrent) of
-the retail stack: open items, Abschläge, dunning and the §§ 41f/41g EnWG
-Sperr-Sequenz, SEPA collections and payouts, bank-statement import and the
-Jahresabschluss. Every money movement is one balanced entry in the
-[`doubleentry`](https://github.com/hupe1980/doubleentry) 0.9 ledger — append-only,
-Merkle-logged and sealable per month (GoBD / § 146 AO) — committed with the
-business change that causes it through a booking draft.
-
-## Run it
-
-```bash
-just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
-```
-
-## At a glance
+`accountingd` is the Lieferant's customer account ledger (Massenkontokorrent):
+open items, Abschläge, dunning and the §§ 41f/41g EnWG Sperr-Sequenz, SEPA
+collections and payouts, bank-statement import and the Jahresabschluss. For the
+Netzbetreiber it pays the EEG Gutschriften `einsd` settles. Every money movement
+is one balanced entry in the [`doubleentry`](https://github.com/hupe1980/doubleentry)
+ledger, committed with the business change that causes it; it prices nothing.
 
 | | |
 |---|---|
-| **Database** | PostgreSQL — satellites (accounts, mandates, dunning, SEPA runs, booking drafts) in `public`, the ledger in the `ledger` schema; `migration_url` migrates, `url`'s role cannot rewrite the journal |
-| **Auth** | OIDC + Cedar `policies/accountingd.cedar` on every route; reads split into `read-account`, `read-banking`, `read-books`; the EEG payout run, its orders (`read-eeg-payouts`) and its pain.002 status, the EnFG reads, the Rückforderungen, Aufrechnungen and Rückzahlungen are `NB`'s. `/webhook` is HMAC-verified |
-| **Ledger** | accountingd owns the chart of accounts (`ledger::Chart`) and the Buchungsart → postings map; every booking is a draft staged in its business transaction and booked after the commit (`booking`); a refused one parks for the Desk |
-| **SEPA** | pain.008 per collection date (CORE/B2B × sequence type), pain.001 payouts, pain.002 status (incl. Verification of Payee), pain.007 reversal, camt.055/029 recall; structured `PstlAdr` (or none) |
-| **Bank import** | camt.052/053/054 and a flat JSON import; only `BOOK` entries post, deduplicated on the bank reference |
-| **Dunning** | Mahnstufe 1→3, then Sperrandrohung → Sperrankündigung → Sperrauftrag (ORDERS 17115 via `makod`) → Entsperrauftrag (17117). A live Mahnsperre or an `ACTIVE` payment plan holds both; a missed instalment defaults the plan (§ 41g Abs. 1 S. 11 EnWG). The § 288 Abs. 5 BGB Pauschale is claimed once per claim from a non-Verbraucher. EEG plant accounts are never dunned |
-| **Events** | `de.accounting.*` through the transactional outbox to `erp_webhook_url` |
-| **MCP** | 18 tools at `/mcp`, each authorized as its REST twin; the contract is pinned by `mcp.snapshot.json` |
-| **Metrics** | `GET /accountingd/metrics` (the runner owns `/metrics`) |
+| **Port** | 9380 (`dev/ports.toml`) |
+| **Database** | PostgreSQL — satellites in `public`, the journal in schema `ledger` |
+| **MCP** | 18 tools, 1 prompt at `/mcp` |
+| **Emits** | `de.accounting.*` (`payment.imported`, `mahnung.issued`, `sperrauftrag`, `sepa.collection-rejected`, …) to the ERP webhook |
+| **Consumes** | `de.billing.rechnung.erstellt`, `de.invoic.receipt.settled`, `de.eeg.verguetung.berechnet`, `de.eeg.marktpraemie.berechnet` at `POST /webhook` |
+| **Depends on** | `makod` (ORDERS 17115/17117), `outputd` (Mahnung), `vertragd` (Mahnung recipient) |
 
-## Routes
+## Run
 
-| Area | Routes |
+```bash
+just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
+ACCOUNTINGD_CONFIG=dev/config/accountingd.toml cargo run -p accountingd -- --check-config
+```
+
+`just test-accountingd-db` runs the PostgreSQL scenario suite.
+
+## API
+
+| Route | Purpose |
 |---|---|
-| Accounts | `/api/v1/accounts/{malo_id}` and its `/balance`, `/ledger`, `/kontoauszug`, `/open-items`, `/clear`, `/buchen`, `/reconcile`, `/abschlag(e)`, `/vorauszahlung`, `/zahlungsinformation`, `/interest-charges`, `/payment-plans`, `/locks`, `/business-partner`, `/anonymize` |
-| Reports | `GET /api/v1/aging`, `/offene-posten`, `/trial-balance`, `/business-partners/{kunden_nr}/{accounts,balance}` |
-| Dunning | `/api/v1/dunning`, `/{id}/locks`, `/{id}/einwaende`, `/{id}/abwendung/angebot`, `/{id}/resolve`, `/{account_id}/escalate` |
-| SEPA | `/api/v1/sepa/mandates`, `/run`, `/pain002`, `/reversals`, `/recalls`, `/camt029`, `/collections/{run_id}/entries` |
-| Payments | `POST /api/v1/payments/import`, `/import/camt052`, `/camt053`, `/camt054` |
-| Periods & proofs | `POST /api/v1/periods/{id}/seal`, `GET /periods/seals`, `/periods/{id}/balance-proof`, `/entries/{id}/proof`, `/entries/consistency-proof` |
-| Parked bookings | `POST /api/v1/bookings/{key}/rebook`, `/discard` |
-| Jahresabschluss · EEG | `POST /api/v1/jahresabschluss/{malo_id}`; `/api/v1/eeg/payouts` (each order pays a receipt chain's outstanding difference, Vergütung and Marktprämie — a correction is never paid in full twice; an `ACSC` books the payment); `GET /api/v1/eeg/rueckforderungen`; `POST /api/v1/eeg/rueckzahlungen`; `GET /api/v1/eeg/enfg-zahlungen` (settled payouts and Aufrechnungen per month, § 13 Abs. 1 EnFG); `POST /api/v1/eeg/aufrechnungen` |
+| `/api/v1/accounts/{malo_id}/…` | balance, ledger, Kontoauszug, open items, Abschläge, payment plans, locks |
+| `GET /api/v1/aging` · `/offene-posten` · `/trial-balance` | reports |
+| `/api/v1/dunning/…` | Mahnstufen, Einwände, Abwendung, escalation into the Sperr-Sequenz |
+| `/api/v1/sepa/…` | mandates, pain.008 runs, pain.002, reversals, recalls |
+| `POST /api/v1/payments/import` · `/import/camt05{2,3,4}` | bank-statement import |
+| `/api/v1/periods/…` · `/api/v1/entries/…` | period seals and audit proofs |
+| `POST /api/v1/jahresabschluss/{malo_id}` | the annual settlement |
+| `/api/v1/eeg/…` | EEG payouts, Rückforderungen, Aufrechnungen, EnFG payments |
+
+The full route list with each Cedar action is the guide's
+[Endpoints](https://hupe1980.github.io/mako/docs/services/accountingd/#endpoints).
 
 ## Configuration
 
-Top-level: `tenant`, `creditor_iban`, `creditor_id` (Gläubiger-ID),
-`creditor_name`, `pain008_schema` / `pain001_schema`, `erp_webhook_url`,
-`erp_hmac_secret`, `makod_url` / `makod_api_key` (without them the Sperr-Sequenz
-does not run), `sperrkosten_ct` / `entsperrkosten_ct`, `dunning_auto_enabled`,
-`dunning_grace_days`, `dunning_zahlungsfrist_stufe{1,2,3}_tage` and `dunning_fee_stufe{1,2,3}_ct` (required with `dunning_auto_enabled`). Tables: `[http]` (`addr`), `[database]`, `[oidc]`, `[creditor_address]`,
-`[eeg]`. `accountingd --check-config [--json]` prints every configuration
-finding (path, severity, source) and exits non-zero on a blocking one; the same
-findings are served at `GET /admin/einrichtung`, the posture at
-`GET /api/v1/policy` and by the MCP tool `get_policy`. DB-backed scenario tests:
-`just test-accountingd-db`.
+`tenant`; `[database]` (`url`, and `migration_url` for the role that may write
+the journal); `[oidc]`; the SEPA creditor `creditor_iban`, `creditor_id`,
+`creditor_name`, `[creditor_address]`; `makod_url` / `makod_api_key` (without
+them the Sperr-Sequenz does not run); `outputd_url`, `vertragd_url`;
+`erp_webhook_url` / `erp_hmac_secret`. `dunning_auto_enabled` requires
+`dunning_fee_stufe{1,2,3}_ct` and `dunning_zahlungsfrist_stufe{1,2,3}_tage`.
+accountingd has no `[policy]` reading.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/accountingd/)
-covers the ledger model, SEPA, dunning, the emitted events and the full
-configuration reference.
+covers the ledger model, SEPA, dunning, the events and the full configuration
+reference.

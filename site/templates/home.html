@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{#- The landing page of a translated language, rendered from its front matter.
+
+    The English landing page keeps its copy in `index.html`, because the makod
+    tests and `check-tool-grants` read the figures there. A translation states
+    none of those figures (`cargo xtask check-translations` refuses one) and
+    links the English page that does, so this template carries no prose of its
+    own: every sentence is in `content/_index.<lang>.md`. -#}
+
+{% block content %}
+{%- set x = section.extra -%}
+<section class="hero">
+  <div class="hero-inner">
+    <p class="hero-eyebrow">
+      <span class="tag tag-status">{{ trans(key="status", lang=lang) }}</span>
+      <span>{{ x.eyebrow }} {{ config.extra.format_versions }}</span>
+    </p>
+    <h1 class="hero-title">{{ x.hero_title | safe }}</h1>
+    <p class="hero-sub">{{ x.hero_sub | markdown(inline=true) | safe }}</p>
+    <div class="hero-cta">
+      {%- for c in x.cta %}
+      <a class="btn {% if loop.first %}btn-primary{% else %}btn-ghost{% endif %}" href="{{ get_url(path=c.path, lang=c.lang) | safe }}"{% if c.lang != lang %} hreflang="{{ c.lang }}"{% endif %}>{{ c.label }}</a>
+      {%- endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="stats" aria-label="{{ x.scope_label }}">
+  <p class="stats-note wrap">{{ x.scope_note | markdown(inline=true) | safe }}</p>
+</section>
+
+<section class="roles section-pad" aria-labelledby="who">
+  <div class="wrap">
+    <h2 id="who">{{ x.roles_title }}</h2>
+    <p class="section-lead">{{ x.roles_lead | markdown(inline=true) | safe }}</p>
+    <div class="card-grid card-grid-4">
+      {%- for r in x.roles %}
+      <div class="card">
+        <h3><span class="role-abbr">{{ r.abbr }}</span> {{ r.name }}</h3>
+        <p>{{ r.text | markdown(inline=true) | safe }}</p>
+        <a class="card-count" href="{{ get_url(path=r.path, lang=r.lang) | safe }}"{% if r.lang != lang %} hreflang="{{ r.lang }}"{% endif %}>{{ r.link }}</a>
+      </div>
+      {%- endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="features section-pad alt">
+  <div class="wrap">
+    <h2>{{ x.cards_title }}</h2>
+    <div class="card-grid">
+      {%- for c in x.cards %}
+      <div class="card">
+        <h3>{{ c.title }}</h3>
+        <p>{{ c.text | markdown(inline=true) | safe }}</p>
+        <a class="card-count" href="{{ get_url(path=c.path, lang=c.lang) | safe }}"{% if c.lang != lang %} hreflang="{{ c.lang }}"{% endif %}>{{ c.link }}</a>
+      </div>
+      {%- endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="why section-pad">
+  <div class="wrap why-grid">
+    <div>
+      <h2>{{ x.why_title }}</h2>
+      <p>{{ x.why_lead | markdown(inline=true) | safe }}</p>
+      <ul class="check">
+        {%- for w in x.why %}
+        <li><strong>{{ w.title }}</strong> — {{ w.text | markdown(inline=true) | safe }}</li>
+        {%- endfor %}
+      </ul>
+    </div>
+    <div class="doc-body">
+      {{ section.content | safe }}
+    </div>
+  </div>
+</section>
+{% endblock content %}

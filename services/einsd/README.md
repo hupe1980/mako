@@ -1,63 +1,53 @@
 # einsd
 
-`einsd` (`:9180`) is the Einspeiser registry and EEG/KWKG settlement service of
-the Netzbetreiber. It holds the Anlagenbetreiber and their plants, settles each
-plant monthly through the `eeg-billing` engine and issues the result as a § 14
-UStG Gutschrift (BO4E `Rechnung`), and tracks Förderdauer, § 52 Pflichtzahlungen
-and the §§ 53b–54 reductions of the anzulegender Wert.
-
-## Run it
-
-```bash
-just dev einsd         # dev/config/einsd.toml against the dev PostgreSQL
-```
-
-## At a glance
+`einsd` is the Netzbetreiber's Einspeiser registry and EEG/KWKG settlement
+service. It holds the Anlagenbetreiber and their plants, settles each plant
+monthly through the `eeg-billing` engine and issues the result as a § 14 UStG
+Gutschrift (BO4E `Rechnung`), and tracks Förderdauer, § 52 Pflichtzahlungen and
+the §§ 53b–54 reductions of the anzulegender Wert. A missing price or feed-in is
+a refusal, never a substitute.
 
 | | |
 |---|---|
-| **Database** | PostgreSQL — `einspeiser`, `eeg_anlagen`, `settlement_receipts`, `eeg_pflichtverstoesse`, `marktwert_preise`, `eeg_verguetungssaetze`, `enfg_ledger` |
-| **Auth** | OIDC + Cedar [`policies/einsd.cedar`](policies/einsd.cedar): reads for the tenant, writes and settlement for `NB`/`LF`/`UENB`, corrections for `NB`/`UENB`, the EnFG ledger and Mitteilung for `NB`. Refuses to start without `[oidc]` unless `allow_insecure_no_auth` |
-| **Settlement** | 12 models (VERGUETUNG … FLEXIBILITAET_ZUSCHLAG), 18 `erzeugungsart` values; REST, batch, MCP and the monthly worker all call `settle::settle_plant`. `Decimal` only |
-| **Beihilfevorbehalt** | a Teil-3 payment from 01.01.2027 settles only under a recorded approval or `[policy] beihilfe_politik` — [operator guide](https://hupe1980.github.io/mako/docs/services/einsd/#policy-beihilfe-politik) |
-| **Inputs** | `arbeitsmenge_kwh` and the § 51 ¼h feed-in fetched from `edmd` when not supplied; Marktwert series per Anlage 1 Nr. 2 — a miss is `PriceMissing`, never a substitute |
-| **Events** | `de.eeg.*` through the transactional outbox to `erp_webhook_url`, HMAC-signed |
+| **Port** | 9180 (`dev/ports.toml`) |
+| **Database** | PostgreSQL — `einspeiser`, `eeg_anlagen`, `settlement_receipts`, `marktwert_preise`, `enfg_ledger`, … |
+| **MCP** | 20 tools, 6 prompts at `/mcp` |
+| **Emits** | `de.eeg.verguetung.berechnet`, `de.eeg.marktpraemie.berechnet`, `de.eeg.veraeusserungsform.gewechselt`, `de.eeg.anlage.*` |
+| **Consumes** | none |
+| **Depends on** | `edmd` (feed-in), `accountingd` and `marktd` (EnFG ledger) |
 
-## Routes
+## Run
 
-| Area | Routes |
+```bash
+just dev einsd         # dev/config/einsd.toml against the dev PostgreSQL
+EINSD_CONFIG=dev/config/einsd.toml cargo run -p einsd -- --check-config
+```
+
+`just test-einsd-db` runs the PostgreSQL suite.
+
+## API
+
+| Route | Purpose |
 |---|---|
-| Register | `/api/v1/einspeiser`, `/api/v1/anlagen` (+ `/{tr_id}`, `/foerderung-auslaufend`), `/repowering`, `/zusammenlegen` (§ 24), `/mastr-registrierung`, `/switch-veraeusserungsform`, `/wind-reevaluation` |
-| Settlement | `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}`, `POST /api/v1/settle/{year}/{month}` (batch), `/settlements` (+ `/{year}/{month}/correction`), `POST /anlagen/{tr_id}/jahresabrechnung/{year}` |
-| Pflichten & AW cuts | `/anlagen/{tr_id}/pflichtverstoesse` (+ `/{typ}/behoben`), `/aw-reduktionen` (Regionalnachweis, Stromsteuerbefreiung, § 54 Defekt) |
-| Market data | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}`, `/marktwert/{year}/nachbewertung`, `/epex-monthly/{year}/{month}`, `PUT /epex-spot`, `POST /verguetungssatz-lookup` |
-| EnFG (§§ 13, 14, 50 Nr. 1) | `POST/GET /api/v1/enfg/ledger/{year}/{month}` — payments made per ÜNB and head, from accountingd; `GET /api/v1/enfg/mitteilung/{year}/{month}` — the § 50 Nr. 1 Mitteilung, naming every item mako does not hold |
-| For `processd` | `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` — the `CCI+Z22` code plus an `ausfallverguetung` flag |
+| `/api/v1/einspeiser` · `/api/v1/anlagen` | the register: Anlagenbetreiber and plants |
+| `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}` | settle one plant's month |
+| `POST /api/v1/settle/{year}/{month}` | settle every plant's month |
+| `/api/v1/anlagen/{tr_id}/settlements` (+ `/{year}/{month}/correction`) | receipts and corrections |
+| `/api/v1/anlagen/{tr_id}/pflichtverstoesse` · `/aw-reduktionen` | § 52 Pflichtverstöße, §§ 53b–54 reductions |
+| `/api/v1/marktwert/…` · `/api/v1/epex-monthly/…` | market-value series |
+| `/api/v1/enfg/ledger/{year}/{month}` · `/enfg/mitteilung/{year}/{month}` | EnFG Belastungsausgleich |
+| `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` | the form in force, for `processd` |
 
-## MCP server — `/mcp` (20 tools, 6 prompts)
-
-Seventeen tools read; three write — `trigger_settle`, `import_marktwert` and
-`import_epex_monthly_price`. Money crosses the surface as exact decimals.
+The full list with each Cedar action is the guide's
+[Endpoints](https://hupe1980.github.io/mako/docs/services/einsd/#endpoints).
 
 ## Configuration
 
-| Key | What |
-|---|---|
-| `tenant` | data-isolation key written to every row |
-| `edmd_url` / `edmd_api_key` | the feed-in source when a request supplies none |
-| `accountingd_url` / `accountingd_api_key`, `marktd_url` / `marktd_api_key` | the EnFG ledger |
-| `auto_settle_catchup_months`, `auto_settle_from_day` | the monthly settlement worker |
-| `jahresmarktwert_url` | the Marktwert import |
-| `erp_webhook_url` / `erp_hmac_secret` | the event webhook |
-| `[http]` (`addr`), `[database]`, `[oidc]` | listener, pool, authentication |
-| `[beihilfevorbehalt]` | recorded state-aid approvals, each naming its `regelung`: `eeg2027`, or `eeg2023_verlaengerung`, under which the periods to its `gilt_bis` settle on the EEG 2023 Fassung |
-| `[policy]` | `beihilfe_politik` (`verweigern`, `unter_vorbehalt`, `halten`) for an uncovered payment from 01.01.2027; `sect52_aufrechnung` |
-
-The policy report is logged at startup, served at `GET /api/v1/policy` and by
-the MCP tool `get_policy`. `einsd --check-config [--json]` prints every
-configuration finding (path, severity, source) and exits non-zero on a blocking
-one; the same findings are served at `GET /admin/einrichtung`. DB suite:
-`just test-einsd-db`.
+`tenant`; `[database]`, `[oidc]`; `edmd_url`, `accountingd_url`, `marktd_url`
+with their `_api_key`s; `erp_webhook_url` / `erp_hmac_secret`;
+`[beihilfevorbehalt]` for recorded state-aid approvals. `[policy]` holds
+[`beihilfe_politik`](https://hupe1980.github.io/mako/docs/services/einsd/#policy-beihilfe-politik)
+and [`sect52_aufrechnung`](https://hupe1980.github.io/mako/docs/services/einsd/#policy-sect52-aufrechnung).
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/einsd/)
 carries every statutory rule with its Fundstelle, the settlement formulas and

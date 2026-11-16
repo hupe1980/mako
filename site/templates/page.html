@@ -4,9 +4,12 @@
 <div class="docs-layout">
   {% set current = page.permalink %}{% include "partials/sidebar.html" %}
 
-  <article class="doc">
-    <nav class="doc-breadcrumb" aria-label="Breadcrumb">
-      <a href="{{ get_url(path='@/docs/_index.md') | safe }}">Docs</a>
+  {#- `data-pagefind-body` limits the search index to the article; the
+      sidebar, header and footer around it are on every page and would match
+      every query. Navigation inside the article opts out the same way. -#}
+  <article class="doc" data-pagefind-body>
+    <nav class="doc-breadcrumb" aria-label="{{ trans(key='breadcrumb', lang=lang) }}" data-pagefind-ignore>
+      <a href="{{ get_url(path='@/docs/_index.md', lang=lang) | safe }}">{{ trans(key="nav_docs", lang=lang) }}</a>
       {%- if page.ancestors | length > 1 -%}
         {% set parent = get_section(path=page.ancestors | last, metadata_only=true) %}
         <span aria-hidden="true">/</span><a href="{{ parent.permalink | safe }}">{{ parent.title }}</a>
@@ -14,6 +17,19 @@
     </nav>
     <h1>{{ page.title }}</h1>
     {% if page.description %}<p class="doc-lead">{{ page.description }}</p>{% endif %}
+
+    {#- The Markdown twin `tools/postbuild.mjs` writes beside every page, for a
+        reader pasting the page into an LLM. Plain link first, so the twin is
+        reachable without script. -#}
+    {%- set twin = page.permalink ~ "index.md" %}
+    <p class="doc-md" data-pagefind-ignore>
+      <a href="{{ twin | safe }}" type="text/markdown">{{ trans(key="md_view", lang=lang) }}</a>
+      <button type="button" class="doc-md-copy" data-twin="{{ twin | safe }}"
+              data-done="{{ trans(key="md_copied", lang=lang) }}"
+              data-fail="{{ trans(key="md_copy_failed", lang=lang) }}"
+              hidden>{{ trans(key="md_copy", lang=lang) }}</button>
+      <span class="doc-md-status" role="status" aria-live="polite"></span>
+    </p>
 
     {#- ── One h1 per page ──────────────────────────────────────────────────
         Every content file opens with a Markdown `# Title` that repeats its own
@@ -41,8 +57,8 @@
     {% if toc | length > 2 %}
     {#- Open by default while it fits on screen; the 42-section operator guides
         stay collapsed so the page still starts with prose. -#}
-    <details class="doc-toc"{% if toc | length <= 14 %} open{% endif %}>
-      <summary>On this page <span class="doc-toc-count">{{ toc | length }} sections</span></summary>
+    <details class="doc-toc"{% if toc | length <= 14 %} open{% endif %} data-pagefind-ignore>
+      <summary>{{ trans(key="on_this_page", lang=lang) }} <span class="doc-toc-count">{{ toc | length }} {{ trans(key="toc_sections", lang=lang) }}</span></summary>
       <ul>
         {% for h in toc %}
           <li><a href="{{ h.permalink | safe }}">{{ h.title }}</a></li>
@@ -55,22 +71,22 @@
       {{ body | safe }}
     </div>
 
-    <nav class="doc-pager" aria-label="Page navigation">
-      {% if page.lower %}<a class="prev" href="{{ page.lower.permalink | safe }}"><span>← Previous</span>{{ page.lower.title }}</a>{% endif %}
-      {% if page.higher %}<a class="next" href="{{ page.higher.permalink | safe }}"><span>Next →</span>{{ page.higher.title }}</a>{% endif %}
+    <nav class="doc-pager" aria-label="{{ trans(key='pager', lang=lang) }}" data-pagefind-ignore>
+      {% if page.lower %}<a class="prev" href="{{ page.lower.permalink | safe }}"><span>{{ trans(key="previous", lang=lang) }}</span>{{ page.lower.title }}</a>{% endif %}
+      {% if page.higher %}<a class="next" href="{{ page.higher.permalink | safe }}"><span>{{ trans(key="next", lang=lang) }}</span>{{ page.higher.title }}</a>{% endif %}
     </nav>
 
-    <p class="doc-edit">
-      <a href="{{ config.extra.repo }}/edit/main/site/content/{{ page.relative_path }}" rel="noopener">Edit this page ↗</a>
+    <p class="doc-edit" data-pagefind-ignore>
+      <a href="{{ config.extra.repo }}/edit/main/site/content/{{ page.relative_path }}" rel="noopener">{{ trans(key="edit_page", lang=lang) }}</a>
     </p>
   </article>
 </div>
 {% endblock content %}
 
 {% block scripts %}
-<script type="module">
-  if (document.querySelector('pre > code[data-lang="mermaid"], code.language-mermaid, pre.mermaid')) {
-    import("{{ get_url(path='js/mermaid-init.js') | safe }}");
-  }
-</script>
+<script defer src="{{ get_url(path='js/copy-md.js') | safe }}"></script>
+{#- Decided at build time, so a page without a diagram ships no Mermaid. -#}
+{%- if 'data-lang="mermaid"' in page.content %}
+<script type="module" src="{{ get_url(path='js/mermaid-init.js') | safe }}"></script>
+{%- endif %}
 {% endblock scripts %}

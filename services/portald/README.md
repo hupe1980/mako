@@ -1,87 +1,52 @@
 # portald
 
-`portald` (`:9480`) is the customer portal gateway of the LF side: one
-customer-facing REST API assembled on the request path from `vertragd`, `edmd`,
-`billingd`, `accountingd`, `einsd`, `marktd` and `outputd`. It has no database,
-cache or session store — scale replicas freely.
+`portald` is the LF's customer portal gateway: one customer-facing REST API
+assembled on the request path from `vertragd`, `edmd`, `billingd`,
+`accountingd`, `einsd`, `marktd` and `outputd`. It verifies no tokens itself —
+every route forwards the customer's bearer token to `vertragd` and serves only
+on its verdict. It holds no state, so replicas scale freely.
 
-## Run it
+| | |
+|---|---|
+| **Port** | 9480 (`dev/ports.toml`) |
+| **Database** | none |
+| **MCP** | none — a tool carries no customer token, so it could not pass the `vertragd` ownership check |
+| **Emits** | none |
+| **Consumes** | none |
+| **Depends on** | vertragd (required, authorization), edmd, billingd, accountingd, einsd, marktd, outputd |
+
+## Run
 
 ```bash
-just dev portald       # dev/config/portald.toml
+just dev portald    # dev/config/portald.toml
+PORTALD_CONFIG=dev/config/portald.toml cargo run -p portald -- --check-config
 ```
 
-## Authorization
+## API
 
-`portald` verifies no tokens itself. Every route forwards the customer's bearer
-token to `vertragd GET /api/v1/kunden/authenticate?malo_id=…` and serves only on
-its verdict; each handler takes the resulting `PortalAuthCtx`, and
-`tests/it/authorization_guard.rs` drives every route against a refusing
-`vertragd`.
+Every path is prefixed `/api/v1/portal/{malo_id}`.
 
-The invoice download additionally checks the record's own `malo_id`. Startup
-refuses without `vertragd_url` unless `allow_insecure_no_auth = true`.
+| Route | Upstream |
+|---|---|
+| `GET /dashboard` | marktd · accountingd · billingd · edmd, concurrently |
+| `GET /lastgang?from=&to=` | edmd |
+| `GET /invoices`, `GET /invoices/{record_id}/download` | billingd — the EN 16931 CII XML |
+| `GET /dokumente`, `GET /dokumente/{document_id}` | outputd — the document inbox; opening one records the read receipt |
+| `GET /balance` · `/kontoauszug` · `/vorauszahlung`, `PUT /sepa` | accountingd |
+| `GET /eeg` | einsd |
+| `GET /versorgung` | marktd |
+| `GET /vertrag` · `/kuendigungsfrist`, `POST /tarifwechsel` · `/kuendigen`, `GET\|PUT /kontakt` | vertragd |
 
-## Endpoints
-
-All paths are prefixed `/api/v1/portal/{malo_id}`.
-
-| Method | Path | Upstream |
-|---|---|---|
-| `GET` | `/dashboard` | all five, concurrently; a field is `null` when its upstream has no data |
-| `GET` | `/lastgang?from=&to=` | `edmd` |
-| `GET` | `/invoices?limit=&outcome=` | `billingd` |
-| `GET` | `/invoices/{record_id}/download` | `billingd` — XRechnung 3.0 CII XML (EN 16931) |
-| `GET` | `/dokumente?kind=&limit=` | `outputd` — the document inbox: what was issued and sent |
-| `GET` | `/dokumente/{document_id}` | `outputd` — the bytes as issued; opening it records the portal read receipt |
-| `GET` | `/balance` · `/kontoauszug` · `/vorauszahlung` | `accountingd` |
-| `GET` | `/eeg` | `einsd` |
-| `GET` | `/versorgung` | `marktd` |
-| `GET` | `/vertrag` · `/kuendigungsfrist` | `vertragd` |
-| `POST` | `/tarifwechsel` · `/kuendigen` | `vertragd` |
-| `GET` · `PUT` | `/kontakt` | `vertragd` (GDPR Art. 16) |
-| `PUT` | `/sepa` | `accountingd` |
-
-Notice periods and tariff rules live in `vertragd`: `portald` validates date
-format only and relays `vertragd`'s `422`, which names the rule applied. Health
-and `/metrics` come from the service runner.
+Notice periods and tariff rules live in `vertragd`; `portald` relays its `422`,
+which names the rule applied.
 
 ## Configuration
 
-`portald --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one.
-
-```toml
-# portald.toml
-tenant = "9900357000004"
-
-# Required — the authorization authority.
-vertragd_url     = "http://vertragd:9780"
-vertragd_api_key = "env:PORTALD_VERTRAGD_SERVICE_KEY"   # sent as X-Api-Key
-
-edmd_url        = "http://edmd:8380"
-billingd_url    = "http://billingd:9280"
-accountingd_url = "http://accountingd:9380"
-einsd_url       = "http://einsd:9180"
-marktd_url      = "http://marktd:8180"
-outputd_url     = "http://outputd:9880"   # the document inbox behind /dokumente
-# …_api_key = "env:…"  — opaque service Bearer tokens
-
-[http]
-addr = "0.0.0.0:9480"
-```
-
-## No MCP server
-
-`portald` serves no `/mcp`. An MCP tool takes a `malo_id` and no customer
-token, so it could not pass the `vertragd` ownership check every route here
-makes. Agents read the same data from the service that owns it, behind that
-service's Cedar policy: `billingd` `list_billing_records`, `accountingd`
-`get_balance` · `list_ledger` · `get_vorauszahlung`, `edmd` `get_timeseries`,
-`einsd` `list_plants`, `marktd` `get_versorgungsstatus`.
-
-An LF-role service (§§ 6a, 7a EnWG): it reads `marktd` only for the LF's own
-VersorgungsStatus; `netzbilanzd` and `processd` (which holds the Sperrauftrag
-queue) are not reachable through it.
+`tenant`, `vertragd_url` / `vertragd_api_key` (required — startup refuses
+without it unless `allow_insecure_no_auth = true`), and each upstream's `_url`
+and `_api_key`. `lf_mp_id` (the MP-ID a self-service SEPA mandate is registered
+under) defaults to `tenant`. No `[policy]`, no `[oidc]`.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/portald/)
-has the full reference.
+covers authorization, every endpoint and its failures, the dashboard and
+deployment.

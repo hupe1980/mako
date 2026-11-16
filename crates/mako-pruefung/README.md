@@ -23,50 +23,59 @@ assert_ne!(gpke_abmeldung.bedeutung, gpke_anmeldung.bedeutung);
 println!("{} → {:?}", gpke_abmeldung.bedeutung, gpke_abmeldung.cluster);
 ```
 
-The process walks — `nb::evaluate`, `lf::pruefe_beendigung_zuordnung`,
-`msb::…`, `esa::…`, `rechnung::…`, `mabis::…`, `emob::…` — take the message's
-facts plus the caller's records and return a decision carrying its code and tree.
+The walks — `nb::evaluate`, `lf::pruefe_beendigung_zuordnung`, `msb::…`,
+`esa::…`, `rechnung::…`, `mabis::…`, `emob::…` — take the message's facts plus
+the caller's records and return a decision carrying its code and tree. The
+Anmeldung walk (`E_0622`), for one, refuses a missing Zuordnungsermächtigung at
+Prüfschritt 60 with `A05` and at 260 with `A25`.
 
-## Roles
+## What it covers
 
-| Module | Prüfende Rolle | Processes |
+| Module | Prüfende Rolle | Trees |
 |---|---|---|
-| `nb` | Netzbetreiber | Anmeldung (`E_0622` → `E_0623` / `E_3005` → `E_3007`), Abmeldung (`E_0607` / `E_3019`), Neuanlage (`E_0608`) |
-| `lf` | Lieferant | Abmeldung (`E_0609`/`E_3002`), Beendigung der Zuordnung (`E_0624`/`E_3020`), Kündigung (`E_0614`/`E_3001`), Anmeldung E/G (`E_0615`/`E_3008`), Zuordnung LF (`E_0603`–`E_0606`, Strom only) |
-| `msb` | Messstellenbetreiber **und** Netzbetreiber | Anmeldung MSB (`E_0201`), Ende MSB (`E_0202`), Kündigung MSB (`E_0200`), Weiterverpflichtung (`E_0203`), Ersteinbau iMS (`E_0233`), Änderung der Technik (`E_0278`·`E_0281`, `E_0279`·`E_0283`, `E_0286`), Rechnungsabwicklung über den LF (`E_0205`–`E_0209`), Preisblatt-B-Abrechnung (`E_0270`–`E_0277`) |
-| `esa` | MSB (Bestellung) **und** Energieserviceanbieter (Abrechnung) | Wertebestellung (`E_0252`, `E_0256`, `E_0257`, `E_0254`); the Kap. 4.5 Abrechnung (`E_0264`–`E_0267`) is `rechnung::ESA` bound |
-| `rechnung` (ungated) | ESA, LF **und** NB | One invoice walk, three families: `E_0264`–`E_0267` (ESA), `E_0270`–`E_0272`/`E_0276` (Preisblatt B ↔ LF), `E_0273`–`E_0275`/`E_0277` (↔ NB) |
-| `emob` | NB (VNB) **und** LF | NZR-EMob / Modell 2 (`E_0510`–`E_0513`): Anmeldung, Beendigung der Zuordnung, Abmeldung |
-| `mabis` | NB, LF **und** BKV | Summenzeitreihen (`E_0007`, `E_0040`–`E_0041`, `E_0062`–`E_0065`, `E_0093`, `E_0098`/`E_0099`), Listenabgleich (`E_0004`, `E_0014`, `E_0017`, `E_0047`, `E_0049`, `E_0052`, `E_0070`, `E_0096`, `E_0097`), MaBiS-ZP (`E_0010`, `E_0020`, `E_0102`, `E_0103`), MaBiS-ZP für die monatliche AAÜZ (`E_0071`/`E_0072` NB↔BKV(LF), `E_0078`/`E_0079` NB↔anfNB), Profile (`E_0100`), Einzelanforderung/Listeninhalt (`E_0068`, `E_0104`), Redispatch-Ausfallarbeit (`E_0901`, `E_0902`) — 32 trees in `mabis::codes::MABIS_TREES` |
+| `nb` | Netzbetreiber | Anmeldung `E_0622` → `E_0623`, Gas `E_3005` → `E_3007`; Abmeldung `E_0607` / `E_3019`; Neuanlage `E_0608` |
+| `lf` | Lieferant | `E_0609`/`E_3002`, `E_0624`/`E_3020`, `E_0614`/`E_3001`, `E_0615`/`E_3008`; Strom `E_0603`–`E_0606` |
+| `msb` | MSB and NB | `E_0200`–`E_0203`, Ersteinbau `E_0233`, Änderung der Technik `E_0249`/`E_0250`, `E_0278`/`E_0279`, `E_0281`, `E_0283`, `E_0286` |
+| `esa` | MSB (Bestellung) | Wertebestellung `E_0252`, `E_0254`, `E_0256`, `E_0257` |
+| `rechnung` (ungated) | ESA, LF and NB | one invoice walk: `E_0264`–`E_0267` (ESA), `E_0270`–`E_0277` (Preisblatt B ↔ LF / NB) |
+| `emob` | NB (VNB) and LF | NZR-EMob / Modell 2, `E_0510`–`E_0513` |
+| `mabis` | NB, LF and BKV | the 32 MaBiS and Redispatch-Ausfallarbeit trees in `mabis::codes::MABIS_TREES` |
 
-The `role-nb`, `role-lf`, `role-msb`, `role-esa`, `role-mabis` and `role-emob`
-features (all on by default) compile only their own rules, so a role-gated
-binary cannot answer as a role it was not built for — a misconfiguration fails
-closed. That is not an unbundling control: the confidentiality duty of § 6a
-Abs. 1 EnWG is met by the deployment's access policy, not by a build flag.
-`role-msb` implies `role-esa`.
-
-## Rules the crate keeps
+Rules the crate keeps:
 
 - **Resolve within the tree.** `codes::lookup(ebd, code)`; Strom and Gas use
-  disjoint alphabets, and `E_0622`'s two branches share no code.
+  disjoint alphabets, and `E_0622`'s two Strom branches share no code.
 - **Never guess.** A Prüfschritt the caller's records cannot answer
-  (`Bekannt::Unbekannt`) escalates naming that Prüfschritt; a Vorgang that fits
-  no edge is refused, never walked through to a Zustimmung.
-- **More than two outcomes.** `E_0608` can answer `NeuanlageEntscheidung::Vertagen`
-  (re-checked daily for 60 Werktage), and MaBiS adds clusters off the agreement
-  axis:
+  (`Bekannt::Unbekannt`) escalates naming that Prüfschritt.
+- **More than two outcomes.** `Cluster` has eight variants: besides
+  `Zustimmung`/`Ablehnung`, an `Abweisung` was refused before it was assessed
+  and its Prüfmitteilung is not forwarded (MaBiS Kap. 9.8.2 Nr. 2), and list,
+  Reklamation and `E_0595` clusters sit off the agreement axis. `E_0608` can
+  also answer `Vertagen`.
+- These codes travel in `SG4 STS+E01` (UTILMD) or `AJT` (REMADV, ORDRSP); they
+  are not ERC codes.
 
-| Cluster | What it means | Consequence |
-|---|---|---|
-| `Zustimmung` / `Ablehnung` | the agreement axis | picks the answer PID |
-| `Abweisung` | refused **before** it was assessed | its Prüfmitteilung is **not forwarded** (MaBiS Kap. 9.8.2 Nr. 2) |
-| `AblehnungDerGesamtenListe` | the whole list is refused | carries **no** positions; resend a whole list |
-| `KorrekturlisteWegenAblehnung` | individual positions are disputed | the answer **is** a list, one entry per Marktlokation |
-| `Reklamation` | the tree publishes only complaints | there is no Zustimmung; an acceptable profile is answered with silence |
-| `AenderungDerDaten` / `KeineAenderungDerDaten` | `E_0595` — whether data follows | off the agreement axis |
+## Features
 
-These codes travel in `SG4 STS+E01++<code>:<ebd>`; they are not ERC codes (those
-are `mako_engine::erc`).
+Each feature compiles only its own trees, so a role-gated build cannot answer
+as a role it was not built for and a misconfiguration fails closed. All are on
+by default.
 
-API documentation: <https://docs.rs/mako-pruefung>.
+| Feature | Trees |
+|---|---|
+| `role-nb` | `nb` |
+| `role-lf` | `lf` |
+| `role-msb` | `msb`; implies `role-esa` |
+| `role-esa` | `esa`, without the Messstellenbetrieb trees |
+| `role-mabis` | `mabis`, both NB and LF sides |
+| `role-emob` | `emob`; a full Modell-2 deployment also needs `role-mabis` |
+
+## Sources
+
+- BDEW Entscheidungsbaum-Diagramme und Codelisten 4.3
+- BK6-24-174 (GPKE, WiM Strom, MaBiS Anlage 3); BK7-24-01-009 (GeLi Gas)
+
+Operator reference: [processd](https://hupe1980.github.io/mako/docs/services/processd/) ·
+API: <https://docs.rs/mako-pruefung>
+
+License: MIT OR Apache-2.0

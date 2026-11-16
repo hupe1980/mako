@@ -489,6 +489,15 @@ fn grant_count(workspace_root: &Path) -> usize {
         .sum()
 }
 
+/// `1 prompt`, `6 prompts` — the README card's spelling of a prompt count.
+fn prompt_phrase(n: usize) -> String {
+    if n == 1 {
+        "1 prompt".to_owned()
+    } else {
+        format!("{n} prompts")
+    }
+}
+
 /// How many MCP tools and prompts each individual service exposes, as its own
 /// docs state it.
 ///
@@ -519,10 +528,8 @@ fn per_service_claims(
     let (invoicd, makod, marktd) = (t("invoicd"), t("makod"), t("marktd"));
     let (netzbilanzd, processd) = (t("netzbilanzd"), t("processd"));
     let (productd, vertragd) = (t("productd"), t("vertragd"));
-    let _ = processd; // no doc states processd's count as a number
 
     let (p_edmd, p_einsd) = (p("edmd"), p("einsd"));
-    let p_netzbilanzd = p("netzbilanzd");
     let (p_productd, p_vertragd) = (p("productd"), p("vertragd"));
 
     vec![
@@ -614,36 +621,86 @@ fn per_service_claims(
             "site/content/docs/services/vertragd.md",
             format!("{vertragd} read-only tools and {p_vertragd} prompts at `/mcp`"),
         ),
-        // ── Crate/service READMEs ──
+        // ── Service READMEs ──
+        //
+        // Every service README opens with the same card, whose MCP row is
+        // spelled one way, so one format pins all eleven servers.
         (
             "services/accountingd/README.md",
-            format!("| **MCP** | {accountingd} tools at `/mcp`"),
+            format!(
+                "| **MCP** | {accountingd} tools, {} at `/mcp` |",
+                prompt_phrase(p("accountingd"))
+            ),
+        ),
+        (
+            "services/billingd/README.md",
+            format!(
+                "| **MCP** | {billingd} tools, {} at `/mcp` |",
+                prompt_phrase(p("billingd"))
+            ),
         ),
         (
             "services/edmd/README.md",
-            format!("MCP `POST\\|GET /mcp` ({edmd} tools, {p_edmd} prompts)"),
+            format!(
+                "| **MCP** | {edmd} tools, {} at `/mcp` |",
+                prompt_phrase(p("edmd"))
+            ),
         ),
         (
             "services/einsd/README.md",
-            format!("## MCP server — `/mcp` ({einsd} tools, {p_einsd} prompts)"),
+            format!(
+                "| **MCP** | {einsd} tools, {} at `/mcp` |",
+                prompt_phrase(p("einsd"))
+            ),
+        ),
+        (
+            "services/invoicd/README.md",
+            format!(
+                "| **MCP** | {invoicd} tools, {} at `/mcp` |",
+                prompt_phrase(p("invoicd"))
+            ),
+        ),
+        (
+            "services/makod/README.md",
+            format!(
+                "| **MCP** | {makod} tools, {} at `/mcp` |",
+                prompt_phrase(p("makod"))
+            ),
         ),
         (
             "services/marktd/README.md",
-            format!("| **MCP** | {marktd} read-only tools and"),
+            format!(
+                "| **MCP** | {marktd} tools, {} at `/mcp` |",
+                prompt_phrase(p("marktd"))
+            ),
         ),
         (
             "services/netzbilanzd/README.md",
             format!(
-                "| **MCP server** | {netzbilanzd} **read-only** tools · {p_netzbilanzd} prompts"
+                "| **MCP** | {netzbilanzd} tools, {} at `/mcp` |",
+                prompt_phrase(p("netzbilanzd"))
+            ),
+        ),
+        (
+            "services/processd/README.md",
+            format!(
+                "| **MCP** | {processd} tools, {} at `/mcp` |",
+                prompt_phrase(p("processd"))
             ),
         ),
         (
             "services/productd/README.md",
-            format!("| **MCP** | {productd} tools + {p_productd} prompts at `/mcp` |"),
+            format!(
+                "| **MCP** | {productd} tools, {} at `/mcp` |",
+                prompt_phrase(p("productd"))
+            ),
         ),
         (
             "services/vertragd/README.md",
-            format!("| **MCP** | {vertragd} read-only tools + {p_vertragd} prompts at `/mcp` |"),
+            format!(
+                "| **MCP** | {vertragd} tools, {} at `/mcp` |",
+                prompt_phrase(p("vertragd"))
+            ),
         ),
         // ── Copilot instructions ──
         // ── Concept docs ──

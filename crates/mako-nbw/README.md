@@ -3,93 +3,69 @@
 [![Crates.io](https://img.shields.io/crates/v/mako-nbw?label=mako-nbw&color=f59e0b&logo=rust)](https://crates.io/crates/mako-nbw)
 
 Netzbetreiberwechsel — the § 46 EnWG handover of every Lokation in a grid area
-from the outgoing Netzbetreiber (NBA) to the incoming one (NBN). This crate is
-the migration's domain model: the Paket-ID, the Änderungszeitpunkt and the
-ordered calendar of what must have been sent by when, for Strom and Gas. No I/O,
-no clock, no workflow engine.
-
-A NB-Wechsel has **no message family of its own**: no Prüfidentifikator, AHB or
-EDIFACT message. The Anwendungshilfen sequence existing GPKE, MaBiS and WiM
-Use-Cases plus two non-standardised exchanges. 55690 (Lokationsbündelstruktur)
-is the one PID attributed to the AWH NBW alone and is routed to no workflow;
-`makod` registers no NBW module.
+from the outgoing Netzbetreiber (NBA) to the incoming one (NBN), for Strom and
+Gas. This crate is the migration's domain model: the Paket-ID, the
+Änderungszeitpunkt and the ordered calendar of what must have been sent by
+when. No I/O, no clock, no workflow: a NB-Wechsel has no Prüfidentifikator, AHB
+or EDIFACT message of its own — the Anwendungshilfen sequence existing GPKE,
+MaBiS and WiM Use-Cases plus two non-EDIFACT exchanges — so `makod` registers no
+NBW module.
 
 ## Example
 
 ```rust
 use mako_nbw::{Aenderungszeitpunkt, Fristenkalender, Sparte};
-use time::macros::date;
+use time::{Date, Month};
 
-// A future Monatserster that leaves the Sparte's minimum lead — nothing else constructs.
-let zeitpunkt = Aenderungszeitpunkt::neu(date!(2027-07-01), date!(2026-10-09), Sparte::Strom)?;
+let heute = Date::from_calendar_date(2026, Month::January, 15).unwrap();
+let az = Aenderungszeitpunkt::neu(
+    Date::from_calendar_date(2027, Month::January, 1).unwrap(),
+    heute,
+    Sparte::Strom,
+)
+.expect("ein Monatserster mit 6 Monaten Vorlauf");
 
-for geplant in Fristenkalender::fuer(Sparte::Strom).plan(zeitpunkt)? {
-    println!("{:?}  Kap. {}  {}", geplant.faellig, geplant.meilenstein.kapitel, geplant.meilenstein.prozess);
-}
+let plan = Fristenkalender::strom().plan(az).expect("die Tabelle ist konsistent");
+// Kap. 6.1 is due four months before — 2026-09-01.
+assert_eq!(
+    plan[0].faellig,
+    Some(Date::from_calendar_date(2026, Month::September, 1).unwrap())
+);
 ```
 
-## What ships
+## What it covers
 
 | Item | What it is |
 |---|---|
-| `Sparte` | Strom or Gas — two Anwendungshilfen, not two dialects of one |
-| `PaketId` | the identifier the Energie Codes & Services GmbH issues, as an opaque non-empty token |
-| `PaketAntrag` | the three application cases of Strom Kap. 3, the third of them a refusal |
-| `Paket`, `PaketStatus` | the lifecycle: beantragt (ohne/mit NBN) → in Umsetzung → abgeschlossen, plus the „kein NB-Wechsel" outcome |
-| `Aenderungszeitpunkt` | a future Monatserster that leaves the Sparte's minimum lead; nothing else can be constructed |
-| `Meilenstein`, `STROM`, `GAS` | one entry per published Fristenübersicht row, with its Kapitel, parties, lead time, prerequisites and Fundstelle |
-| `Fristenkalender::plan` | dated milestones in dependency order, refusing a plan whose prerequisite falls after what depends on it |
+| `Sparte` | Strom or Gas — two Anwendungshilfen with their own chapters, Fristen and Rollen; Gas has no Paket-ID |
+| `PaketId`, `PaketAntrag` | the identifier the Energie Codes & Services GmbH issues; Strom Kap. 3's three application cases, the third a refusal (NBN identical to NBA) |
+| `Paket`, `PaketStatus` | the lifecycle of one handover, including the „kein NB-Wechsel" outcome |
+| `Aenderungszeitpunkt` | a future Monatserster that keeps the Sparte's minimum lead; nothing else constructs |
+| `Meilenstein`, `STROM`, `GAS` | one entry per Fristenübersicht row — 21 Strom (Kap. 5), 7 Gas (Kap. 4.1.2) — with Kapitel, parties, lead time and prerequisites |
+| `Fristenkalender::plan` | dated milestones in dependency order; refuses a table whose prerequisite falls after its dependant |
 
-## Fristen
+Leads before the Änderungszeitpunkt:
 
-Strom — Prozess- und Fristenübersicht, Kap. 5, „eine (erstmalige) Übermittlung
-sollte spätestens stattfinden":
+| Sparte | Lead | Kapitel |
+|---|---|---|
+| Strom | 6 Monate — Paket-ID beantragt; 4 Monate — NBN gemeldet | 3 |
+| Strom | 4 / 3 / 2 / 1 Monate | 6.1–6.3, 7.1, 9.1 / 7.2–7.4 / 6.4, 7.5 / 8 |
+| Gas | 4 Monate, 3 Monate + 10 WT, 3 Monate, 2 Monate, 25 WT | 4.2, 4.3, 4.4, 4.5, 4.6 |
+| Gas | an update after the first transmission: 3 WT nach Kenntnisnahme | 4.2.2, 4.3.2, 4.4.2, 4.5.2 |
 
-| Vor dem Änderungszeitpunkt | Kapitel |
-|---|---|
-| 4 Monate | 6.1, 6.2, 6.3, 7.1, 9.1 |
-| 3 Monate | 7.2, 7.3 (five rows), 7.4 |
-| 2 Monate | 6.4, 7.5 (five rows) |
-| 1 Monat | 8 (two rows) |
-| — | 9.2, whose Frist comes from the Use-Case „Ende Messstellenbetrieb" (WiM Strom Teil 1) |
+Strom Kap. 9.2 and Gas Kap. 4.8 / 4.9 state no figure of their own. Werktage
+count on the `mako-fristen` BDEW MaKo calendar.
 
-Gas — Prozess- und Fristenübersicht, Kap. 4.1.2, „Frist zum initialen
-Austausch":
+## Sources
 
-| Vor dem Änderungszeitpunkt | Kapitel |
-|---|---|
-| 4 Monate | 4.2 |
-| 3 Monate + 10 WT | 4.3 |
-| 3 Monate | 4.4 |
-| 2 Monate | 4.5 |
-| 25 WT | 4.6 |
-| gemäß Abstimmung NBA/NBN | 4.8 |
-| gemäß WiM Gas | 4.9 |
+- § 46 EnWG — the Konzessionsverfahren
+- BDEW-Anwendungshilfe „Marktprozesse Netzbetreiberwechsel Sparte Strom",
+  Version 1.2 (30.10.2025)
+- BDEW/VKU/GEODE-Anwendungshilfe „Marktprozesse Netzbetreiberwechsel Sparte
+  Gas", Version 1.0 (26.06.2026)
+- BDEW-Anwendungshilfe „Rollenmodell für die Marktkommunikation im deutschen
+  Energiemarkt", Version 2.1
 
-Plus, in Gas, „unverzüglich, spätestens jedoch 3 WT nach Kenntnisnahme" for every
-update after the first transmission (Kap. 4.2.2, 4.3.2, 4.4.2, 4.5.2).
+API: <https://docs.rs/mako-nbw>
 
-The Paket-ID is applied for **6 Monate** before the planned Änderungszeitpunkt
-and the NBN reported **4 Monate** before it (Strom Kap. 3).
-
-## Regulatory sources
-
-- **§ 46 EnWG** — the Konzessionsverfahren whose Abs. 3 Bekanntgabe starts the
-  clock on a Konzessionsübergang.
-- **BDEW-Anwendungshilfe „Marktprozesse Netzbetreiberwechsel Sparte Strom",
-  Version 1.2 (30.10.2025)** — applicable from 01.08.2025 for a NB-Wechsel to
-  01.01.2026; a Paket-ID may be applied for before that date.
-- **BDEW/VKU/GEODE-Anwendungshilfe „Marktprozesse Netzbetreiberwechsel Sparte
-  Gas", Version 1.0 (26.06.2026)**.
-- **BDEW-Anwendungshilfe „Rollenmodell für die Marktkommunikation im deutschen
-  Energiemarkt", Version 2.1**.
-- **BNetzA BK6-24-174**, Anlagen 1a–1c — GPKE Teil 1 bis 3, and **BK6-22-024**
-  Anlage 1d — GPKE Teil 4: the Kap.-5 sequences reference Use-Cases from both.
-  BK6-24-174 also carries WiM Strom Teil 1 und 2 (Anlagen 2a/2b), which Kap. 7.5
-  and Kap. 9.2 lean on.
-- **BNetzA BK6-24-174 Anlage 3** — MaBiS, the source of the Kap.-7.3
-  Profil-Use-Cases.
-- **BNetzA BK7-16-142 / BK7-19-001** — GeLi Gas, cited by the Gas
-  Anwendungshilfe.
-
-API documentation: <https://docs.rs/mako-nbw>.
+License: MIT OR Apache-2.0

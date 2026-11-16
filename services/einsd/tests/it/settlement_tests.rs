@@ -392,7 +392,7 @@ fn post_eeg_spot_negative_epex_no_floor() {
     assert_eq!(out.settlement_eur, Some(dec!(-5.00)));
 }
 
-// ── §21 Abs. 3 EEG — Eigenverbrauch ─────────────────────────────────────────────────
+// ── Eigenverbrauch ─────────────────────────────────────────────────────────────────
 
 #[test]
 fn eigenverbrauch_always_zero_eur() {

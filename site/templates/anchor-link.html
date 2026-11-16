@@ -5,4 +5,4 @@
     then reads "Available Builders#"). The glyph comes from
     `a.zola-anchor::before` in the stylesheet, so it is presentation only, and
     the `aria-label` is what a screen reader announces. -#}
-<a class="zola-anchor" href="#{{ id }}" aria-label="Permalink to this section"></a>
+<a class="zola-anchor" href="#{{ id }}" aria-label="{{ trans(key='anchor_label', lang=lang) }}"></a>

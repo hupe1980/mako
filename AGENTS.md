@@ -68,6 +68,9 @@ The split is **who reads it**, not frontend vs. backend.
   template carries both forms. Two documents are always „Sie": the
   Widerrufsbelehrung, because the statutory Muster keeps its effect only as
   published, and the Gebührenbescheid, a Verwaltungsakt.
+- **The site is English, with a curated German subset under `/de/`** —
+  the pages `cargo xtask check-translations` lists. Those address the reader
+  with „du", like the Desk, and each is pinned to its English source's hash.
 - **A service answers with a stable English `code`**
   (`process_not_found`); its `message` is for the developer. The user-facing
   surface renders the German sentence for that `code` from its catalogue and
@@ -382,7 +385,7 @@ reads clap flags with its TOML file as an overlay — none of which `run()` host
 | 31010 | `mako-gabi-gas` (Kapazitätsrechnung, Kapazitätsabrechnung Gas) | BK7 |
 | 31011 | `mako-geli-gas` (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF) | BK7-24-01-009 |
 | 17134–17135 | `mako-gpke` (ORDERS Konfiguration, GPKE Teil 3) | BK6-22-024 |
-| 19001–19002 | `mako-wim` (ORDRSP Geräteübernahme, WiM Strom) **and** `mako-gpke` (ORDRSP Konfiguration, NB role) — multi-domain: both "WiM Gas" and "WiM Strom Teil 1" per BDEW PID 3.3/4.0 xlsx | BK6-24-174 |
+| 19001–19002 | `mako-wim` `wim-geraeteubernahme-msbn` (ORDRSP Bestellbestätigung / Ablehnung der Bestellung, MSBA → MSBN, WiM Gas and WiM Strom Teil 1). No ORDRSP answers the GPKE Teil 3 Konfiguration 17134/17135 | PID-Übersicht 4.0 |
 | 23001, 23003, 23004, 23005, 23008, 23009, 23011, 23012 | `mako-wim` `wim-insrpt` — one workflow, beide Sparten; die Frist folgt Messtechnik (Strom) bzw. ist flach (Gas). Not a span: 23002, 23006, 23007 and 23010 are unassigned | BK6-24-174 Anlage 2b / AWH WiM Gas 2.0 Kap. 4.3 |
 | 23005, 23009 | `mako-wim` `wim-insrpt` — both Sparten: Strom MSB (Messlokation) → MSB (Marktlokation), WiM Strom Teil 2; Gas MSB → NB, AWH WiM Gas 2.0. Not Gas-only | PID-Übersicht 4.0 (Lfd. Nr. 31350/31400 Strom, 39730/39760 Gas) |
 

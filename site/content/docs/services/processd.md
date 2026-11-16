@@ -243,7 +243,8 @@ A **ruhende** Marktlokation is not refused at 30: its Hinweis names only
 stillgelegte Marktlokationen and the Modell-2-Zuordnung.
 
 **Strom, erzeugende Marktlokation** (Prüfschritte 220–830) asks the Neuanlage
-question at 220 as above and uses `A45` / `A25` for the same two questions, then picks one of the **six** Vorlauffristen of
+question at 220 as above and uses `A45` / `A25` for the same two questions —
+the Zuordnungsermächtigung at Prüfschritt 260 — then picks one of the **six** Vorlauffristen of
 GPKE Teil 2 Kap. 2.1.1, keyed on `(Geschäftsvorfall, bestehende, angemeldete
 Veräußerungsform)`. The angemeldete one is `SG10 CCI+Z22`; the bestehende one
 and the Ausfallvergütung flag come from `einsd`
@@ -1044,6 +1045,8 @@ Sperrauftrag Cedar actions require the `NB` role and a tenant match;
 overridden by `PROCESSD_<SECTION>__<KEY>` (e.g. `PROCESSD_DATABASE__URL`).
 Unknown keys are refused, and a config error names every offending field.
 `cargo test -p processd --test it -- published_config` parses the block below.
+`just test-processd-db` runs the DB suites — the approval queue, the read
+model's sweeps and rebuild, the webhook fan-out and the Sperrauftrag queue.
 
 ### Full `processd.toml` reference
 

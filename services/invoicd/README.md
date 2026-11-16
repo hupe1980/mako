@@ -1,138 +1,50 @@
 # invoicd
 
-`invoicd` (`:8280`) checks every INVOIC a market partner sends this deployment
-(the Lieferant by default), records it as a Buchungsbeleg (§ 147 AO) and answers
-the counterparty — accept or dispute — through `makod`.
-
-## Run it
-
-```bash
-just dev invoicd       # dev/config/invoicd.toml against the dev PostgreSQL
-```
+`invoicd` checks every INVOIC a market partner sends this deployment — as
+Lieferant by default, or as Netzbetreiber or ESA — records it as a
+Buchungsbeleg (§ 147 AO) and answers the counterparty, accept or dispute,
+through `makod`. It handles PIDs 31001–31009 and 31011; 31010
+(Kapazitätsrechnung) is refused into `invoic_dlq`.
 
 | | |
 |---|---|
-| **Inbound** | `de.mako.process.initiated` from `marktd` (HMAC-signed `POST /webhook`) |
-| **Outbound** | answer commands to `makod`; `de.invoic.*` CloudEvents to the ERP |
-| **Invariants** | the receipt is persisted before the answer is sent; an event that cannot become a receipt goes to `invoic_dlq` with its reason |
-| **MCP** | 8 read-only tools and 4 prompts at `/mcp` |
+| **Port** | 8280 (`dev/ports.toml`) |
+| **Database** | PostgreSQL — `invoic_receipts`, `leistungsnachweise`, `invoic_dlq` |
+| **MCP** | 9 tools, 4 prompts at `/mcp` |
+| **Emits** | `de.invoic.receipt.settled`, `de.invoic.receipt.disputed`, `de.invoic.payment.overdue` to the ERP webhook |
+| **Consumes** | `de.mako.process.initiated` from `marktd` at `POST /webhook` (HMAC) |
+| **Depends on** | `makod` (answer commands, the Rechnung), `marktd` (Preisblätter, MMM prices, ESA-Angebote) |
 
-## PID routing
+## Run
 
-One pipeline; the differences are a table in `src/routing.rs`.
+```bash
+just dev invoicd       # dev/config/invoicd.toml against the dev PostgreSQL
+INVOICD_CONFIG=dev/config/invoicd.toml cargo run -p invoicd -- --check-config
+```
 
-| PID | Meaning | Check | Answer commands |
-|---|---|---|---|
-| 31001 | Abschlagsrechnung Netznutzung | `PreisblattNetznutzung` | `gpke.abrechnung.*` |
-| 31002 | NN-Rechnung (both Sparten) | `PreisblattNetznutzung` | `gpke.abrechnung.*` |
-| 31003 | WiM-Rechnung — Dienstleistungen im Messwesen, **beide Sparten** | `PreisblattMessung` + AufAbschlag | `wim.rechnung.*` |
-| 31004 | Stornorechnung — Sparte-neutral, any process | arithmetic only | `invoic.stornorechnung.*` |
-| 31005 | MMM-Rechnung Strom | + MMM Strom prices | `gpke.abrechnung.*` |
-| 31006 | MMM Mehrmenge, selbst ausgestellt | + MMM Strom prices | `gpke.abrechnung.*` |
-| 31007 | GaBi Gas MMM-Rechnung | + MMM Gas prices (THE) | `gabi.rechnung.*` |
-| 31008 | GaBi Gas MMM, selbst ausgestellt | + MMM Gas prices (THE) | `gabi.rechnung.*` |
-| 31009 | WiM MSB-Rechnung | `PreisblattMessung` + AufAbschlag | `wim.rechnung.*` |
-| 31011 | Rechnung sonstige Leistung — Sparte-neutral (GPKE Teil 2 · AWH Sperrprozesse Gas) | `PreisblattNetznutzung` | `invoic.sonstige-leistung.*` |
-
-A PID with no route is never answered with a default command. 31010
-(Kapazitätsrechnung, NB → Kapazitätsnutzer — INVOIC AHB 1.0b Kap. 3.1.4) is
-refused into `invoic_dlq`: no answer command permits that role.
-
-31003 bills the
-abgebender MSB's Dienstleistungen im Messwesen in both Sparten and prices
-against `PreisblattMessung`. A Rechnung flagged `ist_storno` takes the
-arithmetic-only check whatever its PID. Command names come from
-`mako_markt::commands`; `cargo xtask check-answer-commands` holds the table to
-`makod`'s registry.
-
-## Outcomes
-
-| Outcome | Meaning |
-|---|---|
-| `Ok` | accepted |
-| `AcceptedPartial` | Storno accepted on the reduced check |
-| `Warn` | warnings, auto-approved below `auto_dispute_threshold_eur` |
-| `Offen` | held: a walked Entscheidungsbaum reached a Prüfschritt no record answers; nothing is sent or announced |
-| `Dispute` | rejected; the answer carries the disputing findings as `ablehnungsgrund`, German, within one REMADV `FTX+ABO` DE 4440 (`an..512`), with how many more findings did not fit |
-| `Resolved` | dispute closed by an operator |
-
-A `Warn` escalates to `Dispute` only above `auto_dispute_threshold_eur`
-(default `0.0`: every warning is approved).
+`just test-invoicd-db` runs the PostgreSQL suite (needs Docker).
 
 ## API
 
-| Method | Path | Cedar action |
-|---|---|---|
-| `POST` | `/webhook` | — (HMAC from `marktd`) |
-| `GET` | `/api/v1/receipts` · `/receipts/{id}` · `/receipts/{id}/rechnung` | `read-receipt` |
-| `GET` | `/api/v1/disputes` | `read-disputes` |
-| `GET` | `/api/v1/overdue-remadv` | `read-overdue-remadv` |
-| `GET` | `/api/v1/zahlungsstatus/{malo_id}` | `read-receipt` |
-| `POST` | `/api/v1/receipts/{id}/confirm-payment` | `write-receipt` |
-| `POST` | `/api/v1/receipts/{id}/dispatch-answer` | `write-receipt` |
-| `POST` | `/api/v1/receipts/{id}/resolve-dispute` | `write-receipt` |
-| `POST` | `/api/v1/receipts/{id}/feststellungen` | `record-feststellung` |
-| `POST` | `/api/v1/leistungsnachweise` | `record-feststellung` |
-| `GET` | `/invoicd/metrics` | — (internal) |
+| Route | Purpose |
+|---|---|
+| `POST /webhook` | inbound process events from `marktd` |
+| `GET /api/v1/receipts` · `/receipts/{id}` · `/receipts/{id}/rechnung` | receipts and the BO4E Rechnung |
+| `GET /api/v1/disputes` · `/overdue-remadv` · `/zahlungsstatus/{malo_id}` | disputes, missing REMADV, payment state |
+| `POST /api/v1/receipts/{id}/confirm-payment` · `/dispatch-answer` · `/resolve-dispute` | the Lieferant's decisions |
+| `POST /api/v1/receipts/{id}/feststellungen` · `/api/v1/leistungsnachweise` | the statements that decide a held invoice |
 
-`write-receipt` is restricted to the `LF` role, `record-feststellung` — the
-statements that decide a held invoice — to the 31009 recipients `ESA`, `LF` and
-`NB` (`policies/invoicd.cedar`).
-`/webhook` answers `204` once an event is finished with — answered, deliberately
-unanswered or dead-lettered — and `503` when the reference data (Preisblatt,
-Mehr-/Mindermengenpreise, ESA-Angebot) could not be read from `marktd`, so the
-sender redelivers.
+Each route's Cedar action is in the guide's
+[Routes and authorization](https://hupe1980.github.io/mako/docs/services/invoicd/#routes-and-authorization).
 
 ## Configuration
 
-`invoicd --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one; `--json` prints the body `GET /admin/einrichtung` serves.
-
-```toml
-# invoicd.toml
-[http]
-addr = "0.0.0.0:8280"
-
-[database]
-url = "env:DATABASE_URL"
-
-[identity]
-tenant     = "9900357000004"
-# The Marktrolle this deployment *receives* invoices in: lieferant (default),
-# netzbetreiber or esa. PID 31009 carries five Use-Cases and the message names
-# none; this is half the lookup and `IMD+7081` is the other half.
-marktrolle = "lieferant"
-
-[makod]
-url     = "http://makod:8080"
-api_key = "env:INVOICD_MAKOD_API_KEY"
-
-[marktd]
-url     = "http://marktd:8180"
-api_key = "env:INVOICD_MARKTD_API_KEY"
-
-[webhook]
-inbound_secret = "env:INVOICD_INBOUND_SECRET"
-
-[subscription]
-webhook_url = "http://invoicd:8280/webhook"
-
-[check]
-arithmetic_tolerance       = 0.01   # relative; 0.01 = 1 %
-total_tolerance            = 0.01
-tariff_tolerance           = 0.03
-require_tariff             = false  # true: a missing PRICAT entry disputes
-auto_dispute_threshold_eur = "0.00"    # EUR as a string; "0.00" = never escalate a Warn
-# max_zahlungsziel_days    = 60     # optional ceiling in days, an operator choice; unset = none
-
-[erp]
-webhook_url = "https://erp.example.com/webhooks/invoicd"
-hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
-```
-
-## Tests
-
-`cargo test -p invoicd` runs the unit and policy tests; `just test-invoicd-db`
-runs the real-PostgreSQL suite (`tests/it/receipts_pg.rs`, needs Docker).
+`[identity]` `tenant` and `marktrolle` (`lieferant`, `netzbetreiber` or `esa`
+— the role this deployment receives invoices in); `[makod]` and `[marktd]`
+`url` / `api_key`; `[webhook] inbound_secret`; `[subscription] webhook_url`;
+`[erp] webhook_url` / `hmac_secret`; `[database]`, `[oidc]`. `[check]` holds the
+tolerances and `auto_dispute_threshold_eur`. invoicd has no `[policy]` reading.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/invoicd/)
-covers the checks, ERP delivery, metrics and the full configuration reference.
+covers the checks, the answer trees, ERP delivery, metrics and the full
+configuration reference.

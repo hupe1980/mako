@@ -1,59 +1,54 @@
 # marktd
 
-`marktd` (`:8180`) is the market data hub: the source of truth for what market
-messages are *about* — Marktlokationen and Messlokationen, the supply-status
-lifecycle, devices, the location graph, price sheets, counterparties and the
-ERP webhook fan-out. It holds **no domain policy**: it records `makod`'s process
-events and fans them out; `processd` decides.
-
-## Run it
-
-```bash
-just dev marktd        # dev/config/marktd.toml against the dev PostgreSQL
-```
-
-The file is optional: `MARKTD_CONFIG` names it, `MARKTD_<SECTION>__<KEY>`
-overrides any key, and a `*_FILE` variable reads a value from a file.
-
-## At a glance
+`marktd` is the market data hub for every Marktrolle: the source of truth for
+what market messages are *about* — Marktlokationen and Messlokationen, the
+supply status, devices, the location graph, price sheets, Referenzreihen,
+Zuordnungsermächtigungen, counterparties — and the durable fan-out of every
+`makod` and `marktd` event to its subscribers. It holds no domain policy: it
+records `makod`'s process events and fans them out; `processd` decides.
 
 | | |
 |---|---|
-| **Database** | PostgreSQL 15+ with `btree_gist` — validity is half-open `[valid_from, valid_to)`, enforced by `EXCLUDE` constraints |
-| **Auth** | OIDC + Cedar `policies/marktd.cedar`: reads and writes for the tenant; NB-published data (Preisblatt, NeLo, Tranche, Grundversorger) needs `NB`; ESA consent needs `MSB`/`ESA`; subscriptions and the Referenzreihen import need `ADMIN` |
-| **BO4E** | `GET` returns `rubo4e::current` types; every `PUT` validates `_typ` and refuses out-of-schema values (`422`) |
-| **Supply status** | `de.mako.process.*` events drive `lf_zuordnung` (one row per assignment: supplier, share, Tranche, `Angekuendigt`/`Aktiv`); every transition writes history (`?at=YYYY-MM-DD`) and emits `de.markt.versorgung.changed` |
-| **Events** | CloudEvents 1.0 from `urn:mako:marktd:tenant:{tenant}`, HMAC-signed, durable two-phase fan-out ordered per aggregate |
-| **API spec** | OpenAPI 3.1 at `/api/v1/openapi.json` — open it in any Swagger UI or Redoc |
-| **MCP** | 21 read-only tools and 4 prompts at `/mcp` |
+| **Port** | 8180 (`dev/ports.toml`) |
+| **Database** | PostgreSQL 15+ with `btree_gist`; validity is half-open `[valid_from, valid_to)` under `EXCLUDE` constraints |
+| **MCP** | 21 tools, 4 prompts at `/mcp` |
+| **Emits** | `de.markt.*` (e.g. `versorgung.changed`, `malo.updated`) and relayed `de.mako.*`, HMAC-signed, from `urn:mako:marktd:tenant:{tenant}` |
+| **Consumes** | `de.mako.*` from `makod` at `[webhook] inbound_path` (HMAC) |
+| **Depends on** | makod |
 
-Startup refuses a missing `[oidc]` or `webhook.inbound_secret` unless
-`allow_insecure_no_auth = true`.
+## Run
 
-## Routes
+```bash
+just dev marktd    # dev/config/marktd.toml against the dev PostgreSQL
+MARKTD_CONFIG=dev/config/marktd.toml cargo run -p marktd -- --check-config
+```
 
-| Area | Routes |
+## API
+
+| Route | Purpose |
 |---|---|
-| Marktlokation | `/api/v1/malos` (+ `/{id}`, `/lastprofil`, `/bundesland`, `/grid`, `/bilanzierung`, `/lokationen`, `/buendel`), `/api/v1/versorgung/{malo_id}` (+ `/history`) |
-| Messlokation & devices | `/api/v1/melos/{id}` (+ `/msb`, `/zaehler`, `/sharing-eligibility`), `/api/v1/zaehler/{id}/…`, `/geraete/{id}`, `/steuerbare-ressourcen/{sr_id}`, `/technische-ressourcen/{tr_id}`, `/lokationszuordnungen` |
-| Counterparties & registries | `/api/v1/partners`, `/nb-contracts`, `/grundversorger/{nb_mp_id}`, `/energiemix/{nb_mp_id}`, `/nelos`, `/tranchen`, `/mabis-zp`, `/bilanzierungsgebiete/{eic}/mabis-zp`, `/zuordnungsermaechtigungen/{lf_mp_id}`, `/netzzugang/antraege`, `/msb-rahmenvertraege` (+ `/check`), `/correlations` |
-| ESA | `/api/v1/esa/einwilligungen`, `/framework`, `/preise`, `/messprodukte`, `/subscriptions/{bestellung_ref}`, `/consent-check` |
-| Price sheets | `/api/v1/preisblaetter{,-messung,-ka,-dienstleistung,-hardware}/{mp_id}`, `/mmma-preise/gas`, `/mmm-preise/strom/{year}/{month}`, `/pricat/{nb_mp_id}/…` |
-| Referenzreihen | `/api/v1/referenzreihen` (+ `/{reihe}/werte`, `/{reihe}/wert`, `/{reihe}/import`) — published figures billing reads, bitemporal, `422 referenzwert_fehlt` when missing |
-| Fan-out & admin | `/api/v1/subscriptions` (+ `/{id}/test`), inbound at `webhook.inbound_path`, `/admin/fanout/dlq…`, `/admin/events` |
+| `/api/v1/malos/{id}`, `/api/v1/versorgung/{malo_id}` | Marktlokation and its supply status (`?at=YYYY-MM-DD`) |
+| `/api/v1/melos/{id}`, `/zaehler/{zaehler_id}`, `/geraete/{geraet_id}` | Messlokation and devices |
+| `/api/v1/partners`, `/nb-contracts`, `/msb-rahmenvertraege` | Counterparties and contracts |
+| `GET /api/v1/zuordnungsermaechtigungen/{lf_mp_id}` | Zuordnungsermächtigungen naming the LF (from UTILMD 55071/55072) |
+| `GET /api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | MaBiS-Zählpunkt; a `404` means refuse the submission, never substitute the EIC |
+| `/api/v1/preisblaetter/{nb_mp_id}`, `-messung`, `-ka`, `-dienstleistung`, `-hardware` | Price sheets |
+| `/api/v1/referenzreihen/{reihe}/werte` · `/wert` · `/import` | Published figures billing reads; `422 referenzwert_fehlt` when missing |
+| `/api/v1/esa/…` | ESA consent and framework |
+| `/api/v1/subscriptions`, `/admin/fanout/dlq` | Fan-out subscribers and dead letters |
 
-A `404` from `/bilanzierungsgebiete/{eic}/mabis-zp` means *refuse the
-submission*, never *substitute the EIC*.
+Every `GET` returns `rubo4e::current` types and every `PUT` passes the BO4E
+gate. The full table is the operator guide's [Endpoints](https://hupe1980.github.io/mako/docs/services/marktd/#endpoints);
+OpenAPI 3.1 at `/api/v1/openapi.json`.
 
 ## Configuration
 
-`marktd --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one; `--json` prints the body `GET /admin/einrichtung` serves.
-
-Sections: `[database]`, `[http]`, `[markt] tenant`, `[oidc]`, `[makod]`,
-`[webhook]` (`inbound_path`, `inbound_secret`, delivery timeouts),
-`[mmma_import]` (Gas and Strom Mehr-/Mindermengenpreise), `[mcp]`.
-`dev/config/marktd.toml` is a working example.
+- `[markt] tenant`, `[database] url`.
+- `[makod]` (`base_url`, `api_key`), `[webhook] inbound_secret`.
+- `[oidc]` — without it and `inbound_secret` marktd refuses to start, unless
+  `allow_insecure_no_auth = true`.
+- `[mmma_import]` for the automated Mehr-/Mindermengenpreise import.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/marktd/)
-covers the supply-status derivation, temporal integrity, the fan-out, every
-route and the full configuration reference.
+covers the supply-status derivation, temporal integrity, Referenzreihen, the
+fan-out, every route and the full configuration reference.

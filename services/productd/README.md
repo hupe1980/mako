@@ -1,90 +1,55 @@
 # productd
 
-`productd` (`:9080`) is the LF's product and tariff catalogue and the source of
-the market price series its invoices derive from: EPEX Spot day-ahead (§ 41a
-EnWG) and nEHS certificate prices (BEHG). It also runs B2B quotations (CPQ) and
-publishes the § 41c EnWG comparison feed. `billingd` is its service reader;
-which product a MaLo is on lives in `vertragd`.
-
-## Run it
-
-```bash
-just dev productd      # dev/config/productd.toml against the dev PostgreSQL
-```
-
-## At a glance
+`productd` is the LF's product and tariff catalogue and the source of the
+market price series its invoices derive from: EPEX Spot day-ahead (§ 41a EnWG)
+and nEHS certificate prices (BEHG). It freezes the all-in priced
+Endkunden-Angebot an online order cites, runs B2B quotations and publishes the
+§ 41c EnWG comparison feed. It knows what a product code costs on a date, not
+who is on it — that assignment lives in `vertragd`.
 
 | | |
 |---|---|
-| **Database** | PostgreSQL — `products`, `product_history`, `epex_prices`, `nehs_prices`, `angebote`, `endkunden_angebote` (append-only) |
-| **Auth** | OIDC + Cedar `policies/productd.cedar`: reads for the tenant; setting prices and the Angebot lifecycle for LF, MSB, ESA, ADMIN. The two § 41c feed routes are public by statute |
-| **Identities** | `tenant` is the data-isolation key, `lf_mp_id` the market identity products are sold under (defaults to `tenant`) |
-| **Versioning** | one row per price version, `[valid_from, valid_to]`, no overlap (GiST); `PUT` of a future version end-dates the running one; `DELETE` withdraws, never deletes (§ 147 AO) |
-| **EPEX** | keyed on the UTC start of the market time unit; 15-minute MTUs since delivery day 1 Oct 2025 |
-| **MCP** | 14 tools + 3 prompts at `/mcp` |
+| **Port** | 9080 (`dev/ports.toml`) |
+| **Database** | PostgreSQL, `public` schema — `products`, `epex_prices`, `nehs_prices`, `angebote`, `endkunden_angebote` (append-only) |
+| **MCP** | 14 tools, 3 prompts at `/mcp` |
+| **Emits** | `de.tarif.product.updated`, `de.tarif.angebot.angenommen` through the transactional outbox |
+| **Consumes** | none |
+| **Depends on** | billingd (`[policy] behg_regime`), marktd (Preisblätter for an Endkunden-Angebot) |
 
-## Routes
+The catalogue holds 14 categories: 13 are billable `energy_billing::Product`
+kinds, and `BUNDLE` expands into its component products before billing sees it.
 
-| Area | Routes |
+## Run
+
+```bash
+just dev productd    # dev/config/productd.toml against the dev PostgreSQL
+PRODUCTD_CONFIG=dev/config/productd.toml cargo run -p productd -- --check-config
+just test-productd-db
+```
+
+## API
+
+| Route | Purpose |
 |---|---|
-| Catalogue | `GET /api/v1/products/{lf_mp_id}`, `PUT`/`DELETE /{product_code}`, `/history`, `/energiemix`, `POST /products/{lf_mp_id}/resolve` (many `(code, as_of)` in one call; `null` in place for an unpriceable leg) |
-| Market prices | `PUT /api/v1/epex-prices/{date}`, `GET /epex-prices/{date}/quarter-hourly`, `/epex-prices/{year}/{month}/average`, `PUT /nehs-prices/{date}`, `GET /nehs-prices/latest` |
-| § 41c feed | `GET /api/v1/comparison-feed`, `/comparison-feed/bo4e` — `PUBLISHED` products of the comparison categories only |
-| Endkunden-Angebot | `POST /api/v1/products/{lf_mp_id}/endkunden-angebote`, `GET /api/v1/endkunden-angebote/{id}` — the frozen, all-in priced B2C offer an online order cites by id and `content_sha256`; a missing Preisblatt, position or series year refuses `422 eingabe_fehlt` naming each (Cedar `quote-endkunde` / `read-endkunden-angebot`, LF and ADMIN) |
-| Angebote | `/api/v1/angebote` (+ `/{id}`, `/comparison`, `/versenden`, `/annehmen`, `/ablehnen`, `/expire`) — `ANGELEGT → VERSANDT → ANGENOMMEN \| ABGELEHNT \| ABGELAUFEN`; an unpriceable position refuses the whole quotation (`422`, `unpreisbare_positionen`) |
-
-Acceptance emits `de.tarif.angebot.angenommen`; `vertragd` creates the
-Rahmenvertrag from the accepted variant.
+| `GET /api/v1/products/{lf_mp_id}`, `PUT\|DELETE /{product_code}` (+ `/history`, `/energiemix`) | Catalogue; one row per price version, `DELETE` withdraws |
+| `POST /api/v1/products/{lf_mp_id}/resolve` | Many `(code, as_of)` prices in one call — `billingd`'s read |
+| `PUT /api/v1/epex-prices/{date}`, `GET /{date}/quarter-hourly`, `GET /{year}/{month}/average` | EPEX day-ahead series |
+| `PUT /api/v1/nehs-prices/{date}`, `GET /nehs-prices/latest` | nEHS certificate prices |
+| `POST /api/v1/products/{lf_mp_id}/endkunden-angebote`, `GET /api/v1/endkunden-angebote/{id}` | Frozen Endkunden-Angebot; a missing input refuses `422 eingabe_fehlt` |
+| `/api/v1/angebote` (+ `/{id}`, `/comparison`, `/versenden`, `/annehmen`, `/ablehnen`, `/expire`) | B2B quotations |
+| `GET /api/v1/comparison-feed`, `/comparison-feed/bo4e` | § 41c EnWG feed, public |
 
 ## Configuration
 
-```toml
-# productd.toml
-tenant   = "9900357000004"   # data-isolation key
-lf_mp_id = "9900357000004"   # market identity; defaults to tenant
-
-erp_webhook_url = "http://erp:8000/events"
-erp_hmac_secret = "env:PRODUCTD_ERP_HMAC_SECRET"
-
-# Which law prices nEHS certificates in a year § 10 BEHG fixes no price for
-# (2027) is billingd's [policy] behg_regime, read from its GET /api/v1/policy,
-# so a Gas quotation and its invoice agree. Without billingd such a position
-# is refused BEHG_PREIS_FEHLT. A behg_regime key here is refused at startup.
-billingd_url     = "http://billingd:9280"
-billingd_api_key = "env:PRODUCTD_BILLINGD_API_KEY"
-
-# An Endkunden-Angebot reads the NB's Preisblätter (Netznutzung, Messung,
-# Konzessionsabgabe) and a MaLo's NB from marktd. Without it that route
-# answers 503 marktd_nicht_konfiguriert.
-marktd_url     = "http://marktd:8180"
-marktd_api_key = "env:PRODUCTD_MARKTD_API_KEY"
-
-[http]
-addr = "0.0.0.0:9080"
-
-[database]
-url = "postgresql://productd:secret@db:5432/productd"
-
-[oidc]
-issuer   = "https://auth.example.de/realms/mako"
-audience = "productd"
-
-# billingd reads the catalogue and the price series with a service key:
-# [[oidc.service_keys]]
-# secret = "env:PRODUCTD_BILLINGD_KEY"
-# sub    = "billingd"
-
-[mcp]
-api_key = "env:PRODUCTD_MCP_API_KEY"
-```
-
-`productd --check-config [--json]` prints every configuration finding (path,
-severity, source) and exits non-zero on a blocking one; the same findings are
-served at `GET /admin/einrichtung`, the posture at `GET /api/v1/policy` and by
-the MCP tool `get_policy`.
-
-DB suite: `just test-productd-db`.
+`tenant`, `lf_mp_id` (defaults to `tenant`), `billingd_url` (without it a Gas
+position in a year § 10 BEHG fixes no price for is refused `BEHG_PREIS_FEHLT`),
+`marktd_url` (without it the Endkunden-Angebot route answers `503`),
+`erp_webhook_url` / `erp_hmac_secret`, `[database]`, `[oidc]`, `[mcp]`.
+productd has no `[policy]` of its own; a `behg_regime` key is refused at
+startup because billingd's
+[`behg_regime`](https://hupe1980.github.io/mako/docs/services/billingd/#policy-behg-regime)
+decides it.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/productd/)
-covers the catalogue model, the price series, quotations and the full
-configuration reference.
+covers the catalogue model, the price series, the Endkunden-Angebot, quotations,
+the comparison feed and the full configuration.

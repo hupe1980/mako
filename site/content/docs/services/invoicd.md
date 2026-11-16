@@ -54,6 +54,13 @@ Every `/api/v1/*` route needs a JWT and a Cedar action (paths under `/api/v1`):
 | `POST /mcp` | `use-mcp` | any caller in the tenant (OIDC or `[mcp]` key) |
 | `GET /api/v1/policy`, `GET /admin/einrichtung` | `read-policy`, `read-config` | any caller in the tenant |
 
+`/webhook` answers `204` once an event is finished with — answered,
+deliberately unanswered or dead-lettered — and `503` when the reference data
+(Preisblatt, Mehr-/Mindermengenpreise, ESA-Angebot) could not be read from
+`marktd`, so the sender redelivers. The receipt is persisted before the answer
+is sent; an event that cannot become a receipt goes to `invoic_dlq` with its
+reason.
+
 The runner adds `/health/live`, `/health/ready` and `/metrics`; invoicd's own
 gauges are at `GET /invoicd/metrics`. `tests/it/cedar_actions.rs` holds the
 actions in code and policy to each other in both directions.
@@ -138,6 +145,13 @@ not net plus tax) is **disputable** and answered by a REMADV from check stage 7.
 the Kommunikation as „NB an KN" (the Kapazitätsnutzer), a role no answer command
 permits; `BGM` DE1004 names the PDF Kapazitätsrechnung that is the actual
 document (Änd-ID 26872). It is settled by hand.
+
+Each route answers through one command family, from `mako_markt::commands`:
+`gpke.abrechnung.*` (31001, 31002, 31005, 31006), `wim.rechnung.*` (31003,
+31009), `invoic.stornorechnung.*` (31004), `gabi.rechnung.*` (31007, 31008)
+and `invoic.sonstige-leistung.*` (31011). A PID with no route is never answered
+with a default command. `cargo xtask check-answer-commands`
+holds the table to `makod`'s registry.
 
 **PID 31009** prices metering service and is checked against
 `PreisblattMessung`; when the Rechnung is not in the process payload, `invoicd`
@@ -286,6 +300,17 @@ German name for its kind (`bezeichnung`). A refusal's `ablehnungsgrund` joins
 the disputing findings' sentences within one REMADV `SG7 FTX+ABO` DE 4440
 (`an..512`, REMADV MIG): it ends on a whole finding and says how many more did
 not fit; every finding stays on the receipt (`get_check_result`).
+
+### Outcomes
+
+| Outcome | Meaning |
+|---|---|
+| `Ok` | accepted |
+| `AcceptedPartial` | Storno accepted on the reduced check |
+| `Warn` | warnings, auto-approved up to `auto_dispute_threshold_eur` |
+| `Offen` | held: a walked Entscheidungsbaum reached a Prüfschritt no record answers; nothing is sent or announced |
+| `Dispute` | rejected; the answer carries the disputing findings as `ablehnungsgrund` |
+| `Resolved` | dispute closed by an operator |
 
 ---
 

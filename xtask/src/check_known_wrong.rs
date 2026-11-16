@@ -157,6 +157,13 @@ const RULES: &[Rule] = &[
                  Kap. 2.13\"",
     },
     Rule {
+        id: "eeg-21-3-eigenverbrauch",
+        row: "§38a EEG 2023 = Mieterstromzuschlag",
+        pattern: r"§ ?21 Abs\. ?3 EEG( 2023)?\s*[—:-]\s*\**Eigenverbrauch|Eigenverbrauch`?\s*\|[^\n]*\|\s*§ ?21 Abs\. ?3 EEG( 2023)?\s*\|",
+        reason: "§ 21 Abs. 3 EEG 2023 is the Mieterstromzuschlag; it is no basis for \
+                 Eigenverbrauch, which earns no payment",
+    },
+    Rule {
         id: "gpke-kap-1-7",
         row: "GPKE Teil 1 Kap. 1.7 defines the Werktag",
         pattern: r"GPKE Teil 1,? Kap(\.|itel)? ?1\.7",
@@ -897,6 +904,10 @@ mod tests {
     fn a_planted_phrase_fails_per_covered_row() {
         let planted: &[(&str, &str)] = &[
             (
+                "eeg-21-3-eigenverbrauch",
+                "/// §21 Abs. 3 EEG — **Eigenverbrauch**: no grid feed-in payment.",
+            ),
+            (
                 "aperak-weekday",
                 "/// APERAK: 45 Minuten on a weekday for a UTILMD",
             ),
@@ -1207,6 +1218,30 @@ mod tests {
                 hit_ids(line)
             );
         }
+    }
+
+    /// Eigenverbrauch cited under the Mieterstromzuschlag paragraph is refused;
+    /// the Mieterstromzuschlag itself passes, also beside an Eigenverbrauch.
+    #[test]
+    fn eigenverbrauch_is_not_cited_under_21_abs_3() {
+        assert!(
+            hit_ids("/// §21 Abs. 3 EEG — **Eigenverbrauch**: no payment")
+                .contains(&"eeg-21-3-eigenverbrauch")
+        );
+        assert!(
+            hit_ids("//! | `Eigenverbrauch` | EUR 0 | §21 Abs. 3 EEG |")
+                .contains(&"eeg-21-3-eigenverbrauch")
+        );
+        assert!(
+            !hit_ids("/// §21 Abs. 3 EEG 2023 — **Mieterstrom** surcharge")
+                .contains(&"eeg-21-3-eigenverbrauch")
+        );
+        assert!(
+            !hit_ids(
+                "/// Solar PV / Eigenverbrauch / §42b EnWG GGV / §21 Abs. 3 EEG Mieterstrom product"
+            )
+            .contains(&"eeg-21-3-eigenverbrauch")
+        );
     }
 
     /// A chapter of a BDEW document cited with `§` is refused; the same

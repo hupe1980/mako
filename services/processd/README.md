@@ -1,121 +1,66 @@
 # processd
 
-`processd` (`:8580`) is the process decision engine. It subscribes to `marktd`'s
-durable fan-out and, for each `de.mako.process.initiated`, applies the policy of
-the Marktrolle that owes the answer — automatically where a published
-Entscheidungsbaum decides, through an operator approval queue (bounded by the
-business Frist) where it does not. Answers go to `makod` as commands.
+`processd` is the process decision engine for NB, LF and MSB: for each
+`de.mako.process.initiated` from `marktd`'s fan-out it applies the
+Entscheidungsbaum of the Marktrolle that owes the answer and sends the answer to
+`makod` as a command — automatically where the tree decides, through an operator
+approval queue bounded by the business Frist where it does not. Beside the
+decisions it keeps the process read model (per-PID KPIs, the overdue list, the
+§ 7a Abs. 5 EnWG Gleichbehandlung evidence) and, in an NB build, the
+Sperrauftrag queue that turns ORDERS 17115 / 17117 into field work and IFTSTA
+21039. The APERAK is `makod`'s, not this service's.
 
-Two modules ride the same delivery. The **process read model** (`src/obs/`)
-projects every `de.mako.*` lifecycle event into `process_projections` — per-PID
-KPIs, the overdue list against each process's Antwortfrist, the § 7a Abs. 5 EnWG
-Gleichbehandlung evidence, the Antwortcode a counterparty answered with and its
-BDEW wording within the list it named — in every role build, and is rebuildable
-from `marktd`'s replay log. In an NB build the **Sperrauftrag queue** (`src/sperr/`)
-turns an inbound ORDERS 17115 / 17117 into a field work order and reports its
-outcome as IFTSTA 21039. `POST /webhook` verifies once and hands each event to
-the read model first, then to the queue, then to the decision modules.
+| | |
+|---|---|
+| **Port** | 8580 (`dev/ports.toml`) |
+| **Database** | PostgreSQL — approval queue, decisions, read model, Sperrauftrag queue |
+| **MCP** | 22 tools, 8 prompts at `/mcp` |
+| **Emits** | `de.obs.deadline.approaching`, `de.obs.stp.parity.alert`, `de.sperr.*` |
+| **Consumes** | `de.mako.*` and `de.markt.versorgung.*` at `POST /webhook` (HMAC) |
+| **Depends on** | makod, marktd; einsd and vertragd optional |
 
-## Run it
+Role features (`role-{lf,nb}-{strom,gas}`, `role-msb`; composites `lf-only`,
+`nb-only`, `msb-only`, `integrated` — the default) select which decision paths
+a binary answers for. Among the NB answers: `E_0622` refuses an Anmeldung whose
+Bilanzkreis no Zuordnungsermächtigung covers (Prüfschritt 60 verbrauchend, 260
+erzeugend), and a Gas Anmeldung on an assigned Marktlokation first asks the LFA
+with UTILMD 44010.
+
+## Run
 
 ```bash
-just dev processd                                              # dev/config/processd.toml
-cargo run -p processd --no-default-features --features nb-only # one role only
+just dev processd    # dev/config/processd.toml against the dev PostgreSQL
+PROCESSD_CONFIG=dev/config/processd.toml cargo run -p processd -- --check-config
+cargo run -p processd --no-default-features --features nb-only   # one role only
 ```
 
-Role features select which decision paths are registered, so a binary cannot
-answer as a role it was not built for (`tests/it/role_separation.rs`):
-`role-{lf,nb}-{strom,gas}`, `role-msb`, and the composites `lf-only`,
-`nb-only`, `msb-only`, `integrated`. The default build is `integrated`,
-which registers every role's paths.
+## API
 
-## What answers what
+| Route | Purpose |
+|---|---|
+| `POST /webhook` | Inbound CloudEvent from `marktd` |
+| `GET /api/v1/decisions`, `/api/v1/queue` | Anmeldung STP decisions; approval queue |
+| `POST /api/v1/queue/{id}/approve` · `/reject` | Decide a queued answer |
+| `POST /api/v1/start-supply` · `-gas`, `/end-supply` · `-gas` | LF Lieferbeginn / Lieferende bootstrap |
+| `GET /api/v1/eog`, `/api/v1/neuanlage` | EoG and `E_0608` Neuanlage case logs |
+| `GET /obs/processes`, `/obs/kpis`, `/obs/overdue` | Process read model |
+| `GET /api/v1/audit/gleichbehandlung` | § 7a Abs. 5 EnWG evidence (`?year=&format=csv`) |
+| `/api/v1/sperr-orders` | Sperrauftrag queue (NB build) |
 
-The PID is the inbound trigger, never the answer. Every window comes from
-`mako_fristen::antwort` — the table `makod` registers the process deadline from —
-and is evaluated in Europe/Berlin; `processd` adds only `OPERATOR_HEADROOM`.
-The APERAK (45 min Strom UTILMD) is `makod`'s, not this service's.
-
-| Role | Inbound PID | Process | Business Frist | Decision basis |
-|---|---|---|---|---|
-| **NB** | 55001, 55077 | GPKE Anmeldung (verb. / erz. MaLo) | **11:00 Uhr des 1. WT nach dem ÜT** | `mako_pruefung::evaluate` — `E_0622`'s two branches, confirmed out of `E_0623` |
-| **NB** | 55004 | GPKE Abmeldung — Lieferende von LF an NB | **06:00 Uhr des 1. WT nach dem ÜT** | `mako_pruefung::evaluate_abmeldung` (`E_0607`) |
-| **NB** | 44001 | GeLi Gas Anmeldung NN | **Ablauf des 4. Werktags** | `mako_pruefung::evaluate` (`G_0011`) |
-| **NB** | 44004 | GeLi Gas Abmeldung NN | **Ablauf des 3. Werktags** | `mako_pruefung::evaluate_abmeldung` (`G_0007`) |
-| **NB** | 55042, 44042 | WiM Anmeldung MSB (MSBN → NB) | 5 WT | `mako_pruefung::msb` (`E_0201` / `E_2002`): MeLo known, Versicherung, Mindestvorlauf, and the `marktd` MSB-Rahmenvertrag of that Sparte `abgeschlossen` on the Zuordnungsbeginn — any other Befund escalates naming itself |
-| **NB** | 55051 | WiM Ende MSB (MSBA → NB) | 7 WT | operator queue |
-| **NB** | 55600, 55601 | GPKE Neuanlage (verb. / erz. MaLo) | **00:00 Uhr des 61. WT nach dem ÜT** | `mako_pruefung::nb::neuanlage` (`E_0608`), daily Prüflauf |
-| **NB** | *(event)* | EoG gap closure → 55013 (§ 36/§ 38 EnWG) | unverzüglich; 3-month timer | `grundversorger` from `marktd` |
-| **LF** | 55007 | Abmeldung / Beendigung der Zuordnung vom NB (EBD `E_0609`) | **05:00 Uhr des 1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` + `mako_fristen::abmeldung` |
-| **LFA** | 55010 | Anfrage zur Beendigung der Zuordnung (EBD `E_0624`) | **09:00 Uhr des 1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
-| **LFA** | 55016 | GPKE Kündigung (LFN → LFA, EBD `E_0614`) | **1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
-| **LFN** | 55607 | Ankündigung Zuordnung LF, erz. MaLo / Tranche (EBDs `E_0603`–`E_0606`) | **15:00 Uhr am ÜT** | `malo.bilanzierungsgebiet` from `marktd` + `[[lf.bilanzkreise]]` |
-| **E/G** | 55013 | Anmeldung Ersatz-/Grundversorgung (EBD `E_0615`) | **15:00 Uhr am ÜT** | `[lf] grundversorgungs_netzgebiete` + `VersorgungsStatus` |
-| **LFA** | 44007, 44010, 44016 | GeLi Gas Lieferende von NB / Beendigung der Zuordnung / Kündigung | 3 Werktage | `VersorgungsStatus` from `marktd` |
-| **E/G** | 44013 | GeLi Gas Anmeldung Ersatz-/Grundversorgung (`E_3008`) | **Ablauf des 2. WT** | as 55013 |
-| **MSB** | 55039 | WiM Kündigung MSB (MSBN → MSBA) | 3 WT | MeLo / partner checks |
-| **MSB** | 55168 | WiM Verpflichtungsanfrage (NB → gMSB) | 1 WT | operator queue |
-| **MSB** | 35001, 35002, 35004, 35005 | REQOTE Preisanfrage | 5 WT | `PreisblattMessung` from `marktd` |
-| **MSB** | 35003 | ESA Werteanfrage (WiM Teil 2 Kap. 4) | 5 WT | `mako_pruefung::esa::wertebestellung` (`E_0252`) — refusals dispatch, a surviving Anfrage queues |
-| **MSB** | 17007 | ESA Bestellung von Werten | 2 WT | `mako_pruefung::esa::wertebestellung` (`E_0256`) |
-| **MSB** | 39002 | ESA Stornierung der Bestellung | 2 WT | `mako_pruefung::esa::wertebestellung` (`E_0257`) |
-| **MSB** | 17008 | ESA Abbestellung von Werten | 2 WT | `mako_pruefung::esa::wertebestellung` (`E_0254`) |
-| **MSB** | *(workflow)* | § 14a Steuerungsauftrag → ORDRSP | 5 WT | contracted `konfigurationsprodukte` |
-
-A transport failure on master data answers `5xx` so the fan-out redelivers; only
-a genuine absence of that data escalates to an operator.
-
-## Routes
-
-| Method | Path | Cedar action | Description |
-|---|---|---|---|
-| `POST` | `/webhook` | *(HMAC)* | Inbound `marktd` CloudEvent |
-| `GET` | `/api/v1/decisions` | `read-decisions` | Recent Anmeldung STP decisions |
-| `GET` | `/api/v1/queue` | `read-queue` | Approval-queue entries |
-| `POST` | `/api/v1/queue/{id}/approve` · `/reject` | `decide-queue` | Decide an entry; dispatches the answer frozen on it, or the operator's (`antwort_code`, `antwort_tree`, `antwort_codeliste`, `bemerkung` in the optional body) — refused with `422` when the command's answer contract is not met |
-| `POST` | `/api/v1/start-supply` · `-gas` | `initiate-supply` | LFN bootstrap (Strom / Gas). Both require a **Bilanzkreis** — Strom as the `SG8 SEQ+Z79` Produktpaket, Gas as `SG10 CCI+Z19` — falling back to the single `standard` entry of that Sparte's `[[lf.bilanzkreise]]` fallback row, else `422` |
-| `POST` | `/api/v1/end-supply` · `-gas` | `initiate-supply` | LF Lieferende bootstrap; `transaktionsgrund` (the 55004 / 44004 `SG4 STS+7`) required |
-| `GET` | `/api/v1/eog` | `read-eog` | EoG case log (`?status=`) |
-| `GET` | `/api/v1/neuanlage` | `read-neuanlage` | `E_0608` case log (`?status=`), with each case's `letzter_pruefungstag` |
-| `PUT` | `/api/v1/neuanlage/{id}/identifikation` | `identify-neuanlage` | Record the MaLo-ID the NB matched from address/device data |
-| `GET` | `/obs/processes` · `/obs/processes/{id}` | `read-process` | Process projections |
-| `GET` | `/obs/kpis` | `read-kpi` | Per-PID KPIs for a `YYYY-MM` month |
-| `GET` | `/obs/overdue` | `read-overdue` | Past their business Antwortfrist |
-| `GET` | `/api/v1/audit/gleichbehandlung` | `read-kpi` | § 7a Abs. 5 EnWG evidence (`?year=&format=csv`) |
-| `POST` | `/api/v1/obs/rebuild` | `rebuild-projection` | Replay `marktd`'s `GET /admin/events` into the projection (`ADMIN`) |
-| `GET` | `/obs/metrics` | — | Read-model gauges; restrict at the ingress |
-| `GET` · `POST` | `/api/v1/sperr-orders` | `read-sperr-order` · `create-sperr-order` | The Sperrauftrag queue (NB build) |
-| `GET` | `/api/v1/sperr-orders/{id}` · `/stats` | `read-sperr-order` | One order; counters incl. outstanding IFTSTA |
-| `PUT` | `/api/v1/sperr-orders/{id}/execute` · `/fail` | `execute-sperr-order` | Field outcome → IFTSTA 21039 `Z14` / `Z13` |
-| `PUT` | `/api/v1/sperr-orders/{id}/cancel` | `cancel-sperr-order` | Withdraw a pending order |
-| `GET` | `/health/live` · `/health/ready` · `/metrics` | — | Mounted by `mako_service::run` |
-| `GET\|POST` | `/mcp` | `use-mcp` | MCP Streamable HTTP |
-
-Every route checks a Cedar action in `policies/processd.cedar`; the deciding
-principal is recorded in `approval_queue.decided_by` and on the dispatched
-command.
+Every route checks a Cedar action in `policies/processd.cedar`; the full table is
+in the operator guide's [Routes and authorization](https://hupe1980.github.io/mako/docs/services/processd/#routes-and-authorization).
 
 ## Configuration
 
-`processd --check-config [--json]` prints every configuration finding — setting path, severity, source — and exits non-zero on a blocking one; `--json` prints the body `GET /admin/einrichtung` serves.
+- `[identity] own_mp_id` (must match `makod`'s primary party) and
+  `verbundene_lieferanten` (required, `[]` included).
+- `[makod]`, `[marktd]` (`url`, `api_key`), `[webhook] inbound_secret`,
+  `[subscription]` (self-registers with `marktd`), `[oidc]`.
+- Per role: `[nb]`, `[lf]` (`[[lf.bilanzkreise]]`), `[msb]`, `[esa]`, `[eog]`;
+  `[obs]` and `[sperr]` for the outbound notices.
 
-`PROCESSD_CONFIG` names the file; `PROCESSD_<SECTION>__<KEY>` overrides any key.
-
-- **Wiring:** `[http]`, `[database]`, `[identity] own_mp_id` (must match
-  `makod`'s primary party), `[makod]`, `[marktd]`, `[webhook] inbound_secret`,
-  `[subscription]` (self-registers with `marktd` at startup), `[oidc]`.
-- **Automation per role:** `[nb]` (`auto_accept`, `einsd_url`), `[lf]`
-  (`auto_respond`, `[[lf.bilanzkreise]]`), `[msb]`, `[esa]`, `[eog]`.
-- **Read model:** `[identity] verbundene_lieferanten` (required; the affiliated
-  Lieferanten the NB hold and the § 7a Abs. 5 evidence both read),
-  `[obs]` (`outbound_url` / `outbound_secret` for the `de.obs.*` producers, the
-  sweep intervals, the operator's `parity_threshold_pp`).
-- **Sperrauftrag queue:** `[sperr]` (`erp_webhook_url` / `erp_hmac_secret` for
-  the `de.sperr.*` notices).
-
-DB suites: `just test-processd-db` — the approval queue, the read model's
-sweeps, its rebuild and the webhook fan-out, and the Sperrauftrag queue.
+Policy: [`[policy] msb_vorlauf_lesart`](https://hupe1980.github.io/mako/docs/services/processd/#policy-msb-vorlauf-lesart).
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/processd/)
-covers the NB and LF decision pipelines, the Entscheidungsbäume, metrics and the
-full configuration reference.
+covers every decision pipeline and its Entscheidungsbaum, the Fristen, the read
+model, the Sperrauftrag queue and the full configuration reference.

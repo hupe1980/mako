@@ -1,14 +1,10 @@
-// Client-side docs search over Zola's `fuse_json` search index.
+// Client-side docs search over the Pagefind index `tools/postbuild.mjs` writes
+// to `pagefind/`.
 //
-// The index is fetched once, on first focus of the search box, and scanned
-// here: 46 documents is far below the size where a real inverted index earns
-// its download. `config.toml` therefore builds `fuse_json` — a flat array of
-// {url, title, description, body, path} — rather than `elasticlunr_json`,
-// whose inverted index this file would never read.
-//
-// It used to read `raw.documents`, a key `elasticlunr_json` does not have
-// (documents live under `documentStore.docs`), so every query rendered
-// "No matches." and the search box had never worked.
+// Pagefind's bundle is imported on first focus of the search box and fetches
+// only the index chunks a query touches, so a visitor who never searches
+// downloads nothing. It reads the page's `<html lang>` and searches the index
+// built for that language, which stems German pages as German.
 (function () {
   const box = document.getElementById("search");
   const panel = document.getElementById("search-results");
@@ -16,82 +12,57 @@
 
   const MAX_RESULTS = 8;
 
-  let docs = null;
+  // The site root, from this script's own URL (`<root>js/search.js`): it is
+  // `/mako/` on the GitHub Pages project path and `/` on a domain of its own,
+  // so no base path is hard-coded.
+  const ROOT = new URL("..", document.currentScript.src);
+
+  let pagefind = null;
   let pending = null;
   let selected = -1;
+  let latest = 0;
 
   function load() {
-    if (docs) return Promise.resolve(docs);
+    if (pagefind) return Promise.resolve(pagefind);
     if (pending) return pending;
-    // `document.baseURI` resolves under the /mako/ path prefix on GitHub Pages
-    // and under / on a custom domain, so no base path is hard-coded.
-    pending = fetch(new URL("search_index.en.json", document.baseURI))
-      .then((res) => (res.ok ? res.json() : []))
-      .then((raw) => {
-        // Tolerate either shape: `fuse_json` is the array, `elasticlunr_json`
-        // hides the same documents one level down. Neither is guessed at.
-        docs = Array.isArray(raw)
-          ? raw
-          : Object.values((raw && raw.documentStore && raw.documentStore.docs) || {});
-        docs = docs.map((d) => ({
-          url: d.url || d.id,
-          title: d.title || "",
-          description: d.description || "",
-          body: d.body || "",
-          hay: ((d.title || "") + "\n" + (d.description || "") + "\n" + (d.body || "")).toLowerCase(),
-          titleLc: (d.title || "").toLowerCase(),
-          descLc: (d.description || "").toLowerCase(),
-        }));
-        return docs;
+    pending = import(new URL("pagefind/pagefind.js", ROOT).href)
+      .then(async (pf) => {
+        // Result URLs are relative to the indexed `public/`; the base URL puts
+        // the project path back in front of them.
+        await pf.options({ baseUrl: ROOT.pathname });
+        pf.init();
+        return (pagefind = pf);
       })
-      .catch(() => (docs = []));
+      .catch(() => {
+        pending = null;
+        return null;
+      });
     return pending;
   }
 
-  function search(q) {
-    const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!terms.length || !docs) return [];
-    const scored = [];
-    for (const d of docs) {
-      let score = 0;
-      let matchedAll = true;
-      for (const t of terms) {
-        if (d.hay.indexOf(t) === -1) {
-          matchedAll = false;
-          break;
-        }
-        // A term in the title is what the page is about; in the description,
-        // what it claims to be; in the body, how much of the page is about it.
-        // The body bonus is capped so one long page cannot outrank the page
-        // that actually names the thing.
-        if (d.titleLc.indexOf(t) !== -1) score += 12;
-        if (d.descLc.indexOf(t) !== -1) score += 6;
-        score += Math.min(6, d.hay.split(t).length - 1);
-      }
-      if (matchedAll) scored.push({ d, score });
-    }
-    scored.sort((a, b) => b.score - a.score || a.d.title.localeCompare(b.d.title));
-    return scored.slice(0, MAX_RESULTS).map((s) => s.d);
+  async function search(q) {
+    const pf = await load();
+    if (!pf || !q.trim()) return [];
+    // Debounced, so a word typed letter by letter does not fetch the excerpts
+    // of every prefix; a superseded query answers `null` and renders nothing.
+    const found = await pf.debouncedSearch(q, {}, 150);
+    if (!found) return null;
+    return Promise.all(found.results.slice(0, MAX_RESULTS).map((r) => r.data()));
   }
 
   const esc = (s) =>
     String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  // A window of body text around the first hit, with the term marked. Result
-  // text comes from the index, so it is escaped before the <mark> goes in.
-  function snippet(doc, term) {
-    const source = doc.body || doc.description;
-    if (!source) return "";
-    const i = source.toLowerCase().indexOf(term);
-    if (i === -1) return esc(source.slice(0, 120).trim()) + "…";
-    const start = Math.max(0, i - 45);
-    const raw = source.slice(start, start + 150).trim();
-    const at = raw.toLowerCase().indexOf(term);
-    const out =
-      at === -1
-        ? esc(raw)
-        : esc(raw.slice(0, at)) + "<mark>" + esc(raw.slice(at, at + term.length)) + "</mark>" + esc(raw.slice(at + term.length));
-    return (start > 0 ? "…" : "") + out + "…";
+  // Pagefind's excerpt is HTML with the hits in <mark>. Decode it to text,
+  // escape that, and put back only the marks — nothing else from the index
+  // reaches the page as markup.
+  const decoder = document.createElement("textarea");
+  function snippet(excerpt) {
+    decoder.innerHTML = String(excerpt || "")
+      .replace(/<mark>/g, "\u0001")
+      .replace(/<\/mark>/g, "\u0002")
+      .replace(/<[^>]*>/g, "");
+    return esc(decoder.value).replace(/\u0001/g, "<mark>").replace(/\u0002/g, "</mark>");
   }
 
   function setExpanded(open) {
@@ -110,13 +81,12 @@
       panel.innerHTML = '<div class="sr-empty">No matches for “' + esc(q.trim()) + "”.</div>";
       return setExpanded(true);
     }
-    const term = q.trim().toLowerCase().split(/\s+/)[0];
     panel.innerHTML = results
       .map(
         (d, i) =>
           `<a id="sr-${i}" role="option" aria-selected="false" href="${esc(d.url)}">` +
-          `<span class="sr-title">${esc(d.title || d.url)}</span>` +
-          `<span class="sr-snip">${snippet(d, term)}</span></a>`
+          `<span class="sr-title">${esc((d.meta && d.meta.title) || d.url)}</span>` +
+          `<span class="sr-snip">${snippet(d.excerpt)}</span></a>`
       )
       .join("");
     setExpanded(true);
@@ -137,7 +107,15 @@
     if (el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
   }
 
-  const run = () => load().then(() => render(search(box.value), box.value));
+  // Answers can arrive out of order while the reader types; only the newest
+  // query may render.
+  const run = () => {
+    const q = box.value;
+    const ticket = ++latest;
+    search(q).then((results) => {
+      if (results && ticket === latest) render(results, q);
+    });
+  };
 
   box.addEventListener("focus", load, { once: true });
   box.addEventListener("input", run);

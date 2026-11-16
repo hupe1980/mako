@@ -12,4 +12,9 @@ Allow: /
 # nothing to disallow. An empty Disallow says "all of it" explicitly.
 Disallow:
 
+# LLM-readable indexes, generated at build by `tools/postbuild.mjs`. On this
+# project path they live under /mako/ — {{ get_url(path="llms.txt", trailing_slash=false) | safe }}
+# and llms-full.txt beside it — not at the host root, which is not ours. Every
+# docs page also has its Markdown source at `<page URL>index.md`.
+
 Sitemap: {{ get_url(path="sitemap.xml", trailing_slash=false) | safe }}

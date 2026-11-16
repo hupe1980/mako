@@ -15,7 +15,7 @@
 //! | `MarketPremium` | `max(0, AW − Marktwert) × kwh / 100` | §23a EEG + Anlage 1 |
 //! | `MarketPremium` + `TariffSource::Auction` | same formula, AW from BNetzA tender | §§22a,28 EEG 2023 |
 //! | `PostEeg` | `kwh × EPEX / 100` (§23b cap: 10 ct; configurable floor) | §21 EEG (post-Förderung) |
-//! | `Eigenverbrauch` | EUR 0 (no feed-in remuneration) | §21 Abs. 3 EEG |
+//! | `Eigenverbrauch` | EUR 0 (no feed-in remuneration) | — |
 //! | `KwkSurcharge` | `eligible_kwh × rate / 100` (Vollbenutzungsstunden-Grenze) | §§7, 8 KWKG |
 //! | `FlexibilityPremium` | Vergütung + `kwh × flex_praemie_ct / 100` | §50b EEG 2023 (bestehende Anlagen) |
 //! | `FlexibilitySurcharge` | `kw × rate / 12` (monthly capacity payment) | §50a EEG 2023 (neue Anlagen) |

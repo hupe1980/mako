@@ -672,6 +672,10 @@ tenant   = "9910000000002"   # data-isolation key
 lf_mp_id = "9910000000002"   # market identity products are sold under; defaults to tenant
 billingd_url = "http://billingd:9280"   # its [policy] behg_regime prices a year § 10 BEHG fixes none
 # billingd_api_key = "env:PRODUCTD_BILLINGD_API_KEY"
+# An Endkunden-Angebot reads the NB's Preisblätter and a MaLo's NB from marktd;
+# without it that route answers 503 marktd_nicht_konfiguriert.
+marktd_url = "http://marktd:8180"
+# marktd_api_key = "env:PRODUCTD_MARKTD_API_KEY"
 
 [http]
 addr = "0.0.0.0:9080"

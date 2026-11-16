@@ -187,7 +187,7 @@ pub enum SettlementScheme {
         rate_eur_per_kw_year: Decimal,
     },
 
-    /// §21 Abs. 3 EEG — **Eigenverbrauch**: self-consumption, no grid feed-in payment.
+    /// **Eigenverbrauch**: self-consumption, no grid feed-in payment.
     ///
     /// Formula: EUR 0 always. No NB payment.
     Eigenverbrauch,

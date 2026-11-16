@@ -4,11 +4,13 @@
 <div class="docs-layout">
   {% set current = section.permalink %}{% include "partials/sidebar.html" %}
 
-  <article class="doc">
-    {%- set docs = get_section(path="docs/_index.md", metadata_only=true) -%}
+  {#- `data-pagefind-body`: see `page.html`. -#}
+  <article class="doc" data-pagefind-body>
+    {%- if lang == config.default_language -%}{%- set docs_index = "docs/_index.md" -%}{%- else -%}{%- set docs_index = "docs/_index." ~ lang ~ ".md" -%}{%- endif -%}
+    {%- set docs = get_section(path=docs_index, metadata_only=true) -%}
     {% if section.permalink != docs.permalink %}
-    <nav class="doc-breadcrumb" aria-label="Breadcrumb">
-      <a href="{{ docs.permalink | safe }}">Docs</a>
+    <nav class="doc-breadcrumb" aria-label="{{ trans(key='breadcrumb', lang=lang) }}" data-pagefind-ignore>
+      <a href="{{ docs.permalink | safe }}">{{ trans(key="nav_docs", lang=lang) }}</a>
     </nav>
     {% endif %}
     <h1>{{ section.title }}</h1>
@@ -27,20 +29,20 @@
 
     {# Landing cards: subsections (on the docs root) or pages (within a subsection) #}
     {% if section.subsections %}
-    <div class="card-grid">
+    <div class="card-grid" data-pagefind-ignore>
       {% for sub_path in section.subsections %}
         {% set sub = get_section(path=sub_path) %}
         <a class="card" href="{{ sub.permalink | safe }}">
           <h2>{{ sub.title }}</h2>
           {% if sub.description %}<p>{{ sub.description }}</p>{% endif %}
-          <span class="card-count">{{ sub.pages | length }} page{{ sub.pages | length | pluralize }}</span>
+          <span class="card-count">{{ sub.pages | length }} {% if sub.pages | length == 1 %}{{ trans(key="page_one", lang=lang) }}{% else %}{{ trans(key="page_many", lang=lang) }}{% endif %}</span>
         </a>
       {% endfor %}
     </div>
     {% endif %}
 
     {% if section.pages %}
-    <div class="card-grid">
+    <div class="card-grid" data-pagefind-ignore>
       {% for p in section.pages %}
         <a class="card" href="{{ p.permalink | safe }}">
           <h2>{{ p.title }}</h2>
@@ -54,9 +56,8 @@
 {% endblock content %}
 
 {% block scripts %}
-<script type="module">
-  if (document.querySelector('pre > code[data-lang="mermaid"], code.language-mermaid, pre.mermaid')) {
-    import("{{ get_url(path='js/mermaid-init.js') | safe }}");
-  }
-</script>
+{#- Decided at build time, so a page without a diagram ships no Mermaid. -#}
+{%- if 'data-lang="mermaid"' in section.content %}
+<script type="module" src="{{ get_url(path='js/mermaid-init.js') | safe }}"></script>
+{%- endif %}
 {% endblock scripts %}

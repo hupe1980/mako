@@ -1,127 +1,64 @@
 # vertragd
 
-`vertragd` (`:9780`) is the customer registry and retail contract lifecycle
-engine for B2C and B2B customers: Kunden, Versorgungs- and Rahmenverträge,
-Kündigung, Tarifwechsel and Preisanpassung, and the valid-time assignment of a
-MaLo to its product. It is also the authorization gateway that maps a
-customer's OIDC identity to the MaLo-IDs they may see (`portald` asks it on
-every request).
-
-## Run it
-
-```bash
-just dev vertragd      # dev/config/vertragd.toml against the dev PostgreSQL
-```
-
-## At a glance
+`vertragd` is the LF's customer registry and retail contract engine for B2C and
+B2B customers: Kunden, Versorgungs- and Rahmenverträge, online Vertragsschluss
+and Widerruf, Kündigung, Tarifwechsel and Preisanpassung, and the valid-time
+assignment of a MaLo to its product and § 14a EnWG modules. It is also the
+gateway that maps a customer's OIDC identity to the MaLo-IDs they may see. It
+speaks no EDIFACT: Anmeldung and Kündigung reach the market through `processd`.
 
 | | |
 |---|---|
-| **Database** | PostgreSQL (`migrations/0001_schema.sql`) |
-| **Statutory rules** | pure functions in `src/domain.rs`, chosen by `vertragsart` (`GRUNDVERSORGUNG` / `ERSATZVERSORGUNG` / `SONDERVERTRAG`) and `haushaltskunde` (§ 3 Nr. 57 EnWG) |
-| **Product assignment** | half-open `[gueltig_von, gueltig_bis)` slices, no overlap (`kp_no_overlap`, GiST); `GET /api/v1/malo/{malo_id}/produkte` is what `billingd` bills from |
-| **§ 14a module state** | Modul 1/2/3 per component as valid-time slices (`ks_no_overlap`); `GET`/`POST /api/v1/malo/{malo_id}/sect14a`, read by `billingd` to select the reductions it bills |
-| **Market side** | Anmeldung and Kündigung reach the market through `processd`; inbound `de.mako.*` and `de.tarif.angebot.angenommen` arrive at `POST /api/v1/events` / `/webhooks/angebot` (HMAC) |
-| **Online Vertragsschluss** | `POST /api/v1/bestellungen` concludes a contract only with its append-only Bestellnachweis (§ 312j Abs. 4 BGB), idempotent on `Idempotency-Key`; `[policy] vertragsschluss` (`mit_bestellung` / `mit_annahme`, no default) decides when; the consumer's Widerruf runs on `mako_fristen::vorlauf::widerrufsfrist` |
-| **MCP** | 20 read-only tools + 4 prompts at `/mcp` |
+| **Port** | 9780 (`dev/ports.toml`) |
+| **Database** | PostgreSQL, `public` schema (`migrations/0001_schema.sql`) |
+| **MCP** | 20 tools, 4 prompts at `/mcp` |
+| **Emits** | `de.vertrag.*` (contract lifecycle, Bestellung, Widerruf) through the transactional outbox |
+| **Consumes** | `de.mako.*` process outcomes at `POST /api/v1/events`; `de.tarif.angebot.angenommen` at `POST /api/v1/webhooks/angebot` |
+| **Depends on** | processd, accountingd, edmd, outputd, productd |
 
-## The rules
+## Run
 
-| Rule | Source | Value |
-|---|---|---|
-| Kündigung Grundversorgung | § 20 Abs. 1 StromGVV / GasGVV | 2 Wochen, jederzeit |
-| Kündigungsbestätigung | § 41 Abs. 8 Nr. 2 EnWG, § 20 Abs. 2 GVV | unverzüglich, Textform |
-| Kündigung Sondervertrag | Vertrag, gedeckelt durch § 309 Nr. 9 lit. c BGB | ≤ 1 Monat für Verbraucher |
-| Sonderkündigung Preisanpassung | § 41 Abs. 5 Satz 4 EnWG, § 5 Abs. 3 GVV | fristlos zum Wirksamwerden |
-| Sonderkündigung Umzug | § 41b Abs. 5 EnWG | 6 Wochen (Haushaltskunden) |
-| Preisänderungsanzeige Sondervertrag | § 41 Abs. 5 Satz 2 EnWG | 1 Monat (Haushaltskunde), sonst 2 Wochen |
-| Preisänderungsanzeige Grundversorgung | § 5 Abs. 2 StromGVV / GasGVV | 6 Wochen, nur zum Monatsersten |
-| Erstlaufzeit Verbrauchervertrag | § 309 Nr. 9 lit. a BGB | ≤ 24 Monate |
-| Stillschweigende Verlängerung | § 309 Nr. 9 lit. b BGB | nur unbefristet, ≤ 1 Monat kündbar |
-| Ersatzversorgung | § 38 Abs. 4 EnWG | endet spätestens nach 3 Monaten |
-| Online-Vertrag nur mit Bestellnachweis | § 312j Abs. 4 BGB | Schaltfläche „zahlungspflichtig bestellen“ (Abs. 3 Satz 2), sonst `bestellbutton_beschriftungen` |
-| Widerrufsfrist | § 355 Abs. 2 Satz 1, § 356 Abs. 2 Nr. 2 BGB | 14 Tage ab Vertragsschluss, nicht vor der Belehrung; Absendung genügt (§ 355 Abs. 1 Satz 5) |
-| Wertersatz nach Widerruf | § 357a Abs. 2 Satz 1 Nr. 1 und 3 BGB | nur mit ausdrücklichem Verlangen und Wertersatz-Information |
+```bash
+just dev vertragd    # dev/config/vertragd.toml against the dev PostgreSQL
+VERTRAGD_CONFIG=dev/config/vertragd.toml cargo run -p vertragd -- --check-config
+just test-vertragd-db
+```
 
-A Kündigung or Tarifwechsel that misses its Frist is refused with `422` naming
-`fruehestens` and the `rechtsgrundlage`; `GET /vertraege/{id}/kuendigungsfrist`
-shows every reachable date first.
+## API
 
-## Routes
-
-| Area | Routes |
+| Route | Purpose |
 |---|---|
-| Kunden | `/api/v1/kunden` (+ `/{id}`, `/person`, `/zahlungsinformation`, `/identitaeten`, `/portfolio`, `/export`, `/anonymize`), `/kunden/authenticate`, `/kunden/by-sub/{sub}` |
-| Verträge | `/api/v1/kunden/{id}/vertraege`, `/api/v1/vertraege` (+ `/{id}`, `/kuendigen`, `/widerruf-kuendigung`, `/stornieren`, `/tarifwechsel`, `/preisgarantie`, `/kuendigungsfrist`, `/expiring`, `/by-malo/{malo_id}`, `/billing-candidates`) |
-| Rahmenverträge | `/api/v1/kunden/{id}/rahmenvertraege`, `/api/v1/rahmenvertraege` (+ `/{id}`, `/kuendigen`, `/malos`) |
-| Other contracts | `/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`, `/aggregatorvertraege`, `/ggv/{ggv_id}/betreiber` |
-| Online Vertragsschluss | `PUT /api/v1/rechtsdokumente/{art}`, `GET /rechtsdokumente/{sha256}`, `POST /api/v1/bestellungen` (+ `/{id}/annehmen`, `/ablehnen`, `/nachweis`, `/widerruf`), `POST /api/v1/vertraege/{id}/widerruf` |
-| Operations | `GET /api/v1/outbound/dead`, `POST /outbound/dead/{id}/retry` |
+| `/api/v1/kunden` (+ `/{id}`, `/person`, `/zahlungsinformation`, `/identitaeten`, `/portfolio`, `/export`, `/anonymize`) | Kunden and their DSGVO export / erasure |
+| `POST /api/v1/kunden/authenticate`, `GET /kunden/by-sub/{sub}` | OIDC identity → Kunde → MaLo-IDs (asked by `portald`) |
+| `/api/v1/kunden/{id}/vertraege`, `/api/v1/vertraege/{id}` (+ `/kuendigen`, `/widerruf-kuendigung`, `/stornieren`, `/tarifwechsel`, `/preisgarantie`, `/kuendigungsfrist`) | Versorgungsverträge |
+| `/api/v1/kunden/{id}/rahmenvertraege`, `/api/v1/rahmenvertraege/{id}` (+ `/kuendigen`, `/malos`) | Rahmenverträge |
+| `PUT\|GET /api/v1/rechtsdokumente/{key}` | Rechtsdokumente — `PUT` by `art`, `GET` by SHA-256 |
+| `POST /api/v1/bestellungen` (+ `/{id}/annehmen`, `/ablehnen`, `/nachweis`, `/widerruf`) | Online order with its Bestellnachweis (§ 312j Abs. 4 BGB), `angebot_ref` and `Idempotency-Key` |
+| `POST /api/v1/vertraege/{id}/widerruf` | Widerruf of an online contract |
+| `GET /api/v1/malo/{malo_id}/produkte`, `GET\|POST /malo/{malo_id}/sect14a` | Product and § 14a module slices `billingd` bills from |
+| `/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`, `/aggregatorvertraege`, `/ggv/{ggv_id}/betreiber` | Other customer contracts |
+
+A Kündigung or Tarifwechsel that misses its Frist is refused `422` with
+`fruehestens` and the `rechtsgrundlage`.
 
 ## Configuration
 
-```toml
-# vertragd.toml
-tenant   = "9900357000004"   # data-isolation key (here: the operator's BDEW-Codenummer)
-lf_mp_id = "9900357000004"   # market identity registered on the UTILMD
+`tenant`, `lf_mp_id`, `processd_url`, `accountingd_url`, `edmd_url` (each with
+an `_api_key`), `inbound_secret` (the only authentication on the two webhook
+routes), `erp_webhook_url` / `erp_hmac_secret`, `outputd_url`, `[absender]
+name` (the § 126b BGB declarant), `[database]`, `[oidc]`. `productd_url`,
+`outputd_url` and `[absender] name` are required once `[policy]
+vertragsschluss` is set.
 
-processd_url    = "http://processd:8580"
-accountingd_url = "http://accountingd:9380"
-edmd_url        = "http://edmd:8380"
-edmd_api_key    = "env:VERTRAGD_EDMD_SERVICE_KEY"
-
-# Drains the customer-facing CloudEvents from the transactional outbox.
-erp_webhook_url = "http://erp:8000/events"
-erp_hmac_secret = "env:VERTRAGD_ERP_HMAC_SECRET"
-
-# The only authentication on POST /api/v1/events and /api/v1/webhooks/angebot.
-inbound_secret  = "env:VERTRAGD_INBOUND_SECRET"
-
-# Renders and delivers the § 41 Abs. 5 EnWG letter; without it only the CloudEvent goes out.
-outputd_url     = "http://outputd:9880"
-outputd_api_key = "env:VERTRAGD_OUTPUTD_SERVICE_KEY"
-
-# The frozen Endkunden-Angebot an online order accepts; required once
-# [policy] vertragsschluss is set, as are outputd_url and [absender] name.
-# productd_url     = "http://productd:9080"
-# productd_api_key = "env:VERTRAGD_PRODUCTD_SERVICE_KEY"
-
-max_identitaeten_per_kunde = 50
-
-[http]
-addr = "0.0.0.0:9780"
-
-[database]
-url = "postgresql://vertragd:secret@db:5432/vertragd"
-
-[oidc]
-# required in production; see mako-service oidc docs
-
-# The declarant on that letter — § 126b BGB Textform needs a named sender.
-[absender]
-name      = "Beispiel Energie GmbH"
-post_code = "10115"
-city      = "Berlin"
-```
-
-`[policy] vertragsschluss` (`mit_bestellung` / `mit_annahme`) has no default:
-unset, `POST /api/v1/bestellungen` refuses with `409 policy_nicht_gesetzt` and
-every other route runs. `lieferbeginn_in_widerrufsfrist` (`nur_auf_verlangen`
-by default, or `immer`) and `bestellbutton_beschriftungen` (by default only
-„zahlungspflichtig bestellen“) sit beside it.
-
-`[policy.dsr]` holds the data protection officer's readings for the DSGVO
-export: `portabel.<kategorie>` (Art. 20 Abs. 1) and `automatisiert.<prozess>`
-(Art. 15 Abs. 1 lit. h, Art. 22), each defaulting to `true`. The export states
-the Art. 20 subset and the automated-decision statement with the reading
-behind each; the policy report is served at `GET /api/v1/policy` and by the MCP
-tool `get_policy`. `vertragd --check-config [--json]` prints every configuration
-finding (path, severity, source) and exits non-zero on a blocking one; the same
-findings are served at `GET /admin/einrichtung`.
-
-DB suite: `just test-vertragd-db`.
+`[policy]`:
+[`vertragsschluss`](https://hupe1980.github.io/mako/docs/services/vertragd/#policy-vertragsschluss)
+(`mit_bestellung` / `mit_annahme`, no default — unset, `POST
+/api/v1/bestellungen` refuses `409 policy_nicht_gesetzt`),
+`lieferbeginn_in_widerrufsfrist` and `bestellbutton_beschriftungen` beside it,
+and [`dsr`](https://hupe1980.github.io/mako/docs/services/vertragd/#policy-dsr).
+All are listed in the
+[operator policy reference](https://hupe1980.github.io/mako/docs/reference/operator-policy/).
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/vertragd/)
-covers the data model, authorization, online Vertragsschluss and Widerruf,
-Kündigung, Tarifwechsel, DSGVO erasure, background workers and the full
-configuration reference.
+covers the statutory rules, data model, authorization, online Vertragsschluss
+and Widerruf, Kündigung, Tarifwechsel, DSGVO, events and the full configuration.

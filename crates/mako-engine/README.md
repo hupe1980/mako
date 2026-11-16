@@ -2,16 +2,12 @@
 
 [![Crates.io](https://img.shields.io/crates/v/mako-engine?label=mako-engine&color=f59e0b&logo=rust)](https://crates.io/crates/mako-engine)
 
-The event-sourced process runtime the MaKo domain crates build on. A
-`Workflow` is a pair of pure functions; `Process::run` replays its events,
-handles one command and persists the resulting events, outbox messages,
-deadlines and correlation keys in one atomic write. The runtime also routes
-inbound messages by Prüfidentifikator, schedules deadlines and drives the
-outbox delivery worker.
-
-```bash
-cargo add mako-engine            # add --features testing for the in-memory stores
-```
+The event-sourced process runtime the MaKo domain crates build on. A `Workflow`
+is a pair of pure functions; `Process::run` replays its events, handles one
+command and persists the resulting events, outbox messages, deadlines and
+correlation keys in one atomic write. The engine routes inbound messages by
+Prüfidentifikator and schedules deadlines. It parses no EDIFACT (that is
+`edi-energy`) and holds no process rule — those live in the domain crates.
 
 ## Example
 
@@ -72,44 +68,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Key types
+## What it covers
 
-| Item | Description |
+| Item | Role |
 |---|---|
-| `Workflow` | Core trait — pure `handle()` and `apply()`; `DEADLINE_LABELS` and `on_deadline()` for the Fristen it owns |
-| `Process` | Runtime handle — `run(cmd, RunOptions)`, `run_timeout(&deadline, RunOptions)`, `state()`, `state_with_snapshot()` |
-| `RunOptions` | Context, version-conflict attempts, extra deadlines, correlation keys, snapshot — options, never another method |
-| `EngineContext` | Entry point — `spawn()` and `resume()` processes |
-| `EngineBuilder` | Fluent builder for wiring stores and modules |
-| `EventStore` | Read side of the append-only event log |
-| `AtomicAppend` | The one write: `append(AppendBatch)`, no default body |
-| `WorkflowDriver` | A workflow registered once, by type, in `EngineModule::drivers` — what a host dispatches deadlines and migrations through |
-| `payload::*` | Typed outbound payloads (`AperakPayload`, `UtilmdPayload`, …) shared by the producing workflow and the renderer |
-| `OutboxStore` | Transactional outbox for AS4 message delivery |
-| `DeadlineStore` | Registered deadlines; a fired one runs through `Process::run_timeout` → `Workflow::on_deadline` |
-| `SnapshotStore` | Optional snapshot layer for O(k) state reconstruction |
-| `PidRouter` | Routes inbound messages to the correct workflow by **Prüfidentifikator** (PID) — the five-digit BDEW code naming the Anwendungsfall, not the EDIFACT message type |
-| `ProcessRegistry` | Maps conversation IDs to `ProcessIdentity` |
-| `DeadLetterSink` | Receives unroutable or duplicate messages with structured reasons |
+| `Workflow` | pure `handle` and `apply`; `DEADLINE_LABELS` and `on_deadline` for the Fristen it owns |
+| `Process`, `RunOptions` | `run`, `run_timeout`, `state`, `state_with_snapshot`; every option travels in `RunOptions` |
+| `EngineBuilder`, `EngineContext` | wire stores and `EngineModule`s; `spawn` and `resume` processes |
+| `AtomicAppend` | the store's one write, `append(AppendBatch)`, with no default body |
+| `EventStore`, `SnapshotStore` | the append-only log and the optional snapshot layer |
+| `OutboxStore`, `DeadlineStore` | outbound delivery and registered deadlines |
+| `WorkflowDriver` | a workflow registered once, by type, in `EngineModule::drivers` |
+| `PidRouter`, `ProcessRegistry` | route an inbound message by Prüfidentifikator; find its process |
+| `MessageAdapter`, `AdapterRegistry` | the inbound message's own format version picks its adapter |
+| `DeadLetterSink` | unroutable or duplicate messages, with a structured reason |
+| `payload` | typed outbound payloads (`AperakPayload`, …) shared by workflow and renderer |
 
 ## Contracts
 
-- **One write.** `AtomicAppend::append(AppendBatch)` is the store's only write
-  and has no default body; an outbox entry or deadline without an event is
-  refused (`EngineError::UnrecordedEffect`).
-- **Owned deadlines.** The engine refuses to persist a label outside the
-  workflow's `DEADLINE_LABELS` unless it is a delivery window. Deadlines are
-  never cancelled, so `on_deadline` must check that the window is still open.
-- **Format versions coexist.** A process keeps the `WorkflowId` (and FV) it was
-  created with; the inbound message's FV picks the `MessageAdapter`.
-  `AdapterRegistry::uncovered_format_versions` names what a registry misses.
-- **The numbers live in `mako-fristen`**, never beside a call site.
+- **One write.** An outbox entry or deadline without an event is refused
+  (`EngineError::UnrecordedEffect`).
+- **Owned deadlines.** A label outside the workflow's `DEADLINE_LABELS` is
+  refused unless it is a delivery window. Deadlines are never cancelled, so
+  `on_deadline` checks that the window is still open.
+- **Format versions coexist.** A process keeps the `WorkflowId` it was created
+  with; `AdapterRegistry::uncovered_format_versions` names a format version no
+  adapter covers.
+- **The windows live in `mako-fristen`**, never beside a call site.
+
+## Features
 
 | Feature | Enables |
 |---|---|
-| `slatedb` | the durable `SlateDbStore` — binary crates only |
-| `testing` | `InMemoryEventStore`, `InMemoryOutboxStore`, `EngineBuilder::new()` — never in production |
-| `tracing` | instrumentation spans on workflow execution |
+| `slatedb` | `SlateDbStore`, the durable SlateDB event and outbox store — binary crates only |
+| `testing` | the `InMemory*` and `Noop*` stores and `EngineBuilder::new()` — never in production |
+| `tracing` | `#[instrument]` spans on `Process::run`, `state` and `state_with_snapshot` |
 
-API documentation: <https://docs.rs/mako-engine>. Architecture:
-[engine](https://hupe1980.github.io/mako/docs/architecture/engine/).
+Architecture: [Engine](https://hupe1980.github.io/mako/docs/architecture/engine/) ·
+API: <https://docs.rs/mako-engine>
+
+License: MIT OR Apache-2.0

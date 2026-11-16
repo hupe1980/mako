@@ -506,6 +506,12 @@ procedure naming an ungranted tool does not crash: agentplane reports the unknow
 tool to the model, which improvises. Run both ways, it holds the grants and the
 procedure to the **same set** — 161 grants across 30 manifests.
 
+`cargo test -p agentd --test it` runs the suites under `tests/it/` against real
+stores with a fake provider: the golden run and its strict replay, every
+specialist answering its own schema, the exact procedure and tool surface each
+model is offered, durability, ingest idempotency, oversight and evidence
+signatures.
+
 ---
 
 ## Architecture
@@ -594,7 +600,7 @@ procedure by `cargo xtask check-prompt-tools`.
 | `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.mako.aperak.*` |
 | `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.obs.deadline.approaching` |
 | `desk-assistant` | `desk.assistant` | `tool-calling` | 5 on makod, processd, vertragd | none — started from the Desk by a person's question (`POST /api/v1/runs`); every sentence cites its call and is checked (`GET /api/v1/runs/{run}/antwort`); on a held decision it may propose one, which the Desk prefills and never sends |
-| `einrichtung-assistent` | `einrichtung.vorbelegen` | `tool-calling` | none — reads no service | none — started from the Desk's Einrichtung with one sentence (`POST /api/v1/runs`, input `satz`); its answer is the interview's answers in `angaben`, every MP-ID and Bilanzkreis kept only where the sentence contains it, each confirmed by the person |
+| `einrichtung-assistent` | `einrichtung.vorbelegen` | `tool-calling` | none — reads no service | none — started from the Desk's Einrichtung with one sentence (`POST /api/v1/runs`, input `satz`); its answer is the interview's answers in `angaben` — the Rollen among `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`, `esa-strom`, `bkv-strom` — every MP-ID and Bilanzkreis kept only where the sentence contains it, each confirmed by the person |
 | `billing-agent` | `billing` | `tool-calling` | 9 on accountingd, billingd, invoicd, marktd | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
 | `netzbilanz-agent` | `netzbilanz` | `tool-calling` | 7 on marktd, netzbilanzd | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue`, `de.netzbilanz.invoic.disputed` |
 | `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | 6 on accountingd, billingd, invoicd | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |

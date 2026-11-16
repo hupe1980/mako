@@ -1,4 +1,4 @@
-//! The request bodies the README and the operator guide print must parse.
+//! The request bodies the operator guide prints must parse.
 //!
 //! A documented example that does not deserialise is worse than none: it is
 //! read as authoritative and costs an operator an afternoon.
@@ -41,7 +41,7 @@ fn issuable(position: &netzbilanzd::request::BillingPositionRequest) {
     billing::refuse_unissuable(position, &drafted).expect("the documented NN-Rechnung is issuable");
 }
 
-/// The README quick-start and the operator guide's fuller NNE example.
+/// The operator guide's NNE examples.
 #[test]
 fn the_documented_nne_examples_parse() {
     let readme = grenzpreis_aufgeloest(parse(serde_json::json!({
@@ -277,7 +277,7 @@ fn the_smoke_test_body_parses() {
     }));
 }
 
-/// The §13b reverse-charge shape the README and the operator guide print.
+/// The §13b reverse-charge shape the operator guide prints.
 ///
 /// A Mehr-/Mindermenge is a Lieferung, so the two §3g facts travel on the
 /// settlement; both documents show them in exactly this form.

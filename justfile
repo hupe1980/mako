@@ -513,7 +513,7 @@ ci:
     RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
 
 [private]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-referenzreihen check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-referenzreihen check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-translations check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -1069,6 +1069,13 @@ check-request-bodies:
 check-thin-main:
     cargo xtask check-thin-main
 
+# Every German page of the site names the English page it was translated from
+# and that page's sha256, so a changed English page fails here until the
+# translation follows (`cargo xtask check-translations --rehash <file>`) — and
+# states none of the figures the English pages' guards hold.
+check-translations:
+    cargo xtask check-translations
+
 # A configuration check returns every finding as a `Befund` with its path; a
 # `bail!`/`anyhow!`/`ensure!` in a `Daemon::validate`, or in any function that
 # collects findings, stops at the first defect and names no setting.
@@ -1229,7 +1236,17 @@ check-mermaid:
 check-links:
     cd site && node tools/check-links.mjs
 
-check-site: check-mermaid check-links
+# Build the docs site as deployed: `zola build`, then the post-build step —
+# the Pagefind search index, a Markdown twin beside every page, `llms.txt` and
+# `llms-full.txt` (site/tools/postbuild.mjs). Output in site/public/. Mirrors
+# the "Build" steps in .github/workflows/site.yml.
+build-site:
+    cd site && npm install --no-audit --no-fund --silent && zola build && node tools/postbuild.mjs
+
+# `build-site` is part of the check: the post-build step refuses a content
+# page with no built HTML, an `llms.txt` group missing for a section, and a
+# search index that holds a different number of pages than the content tree.
+check-site: check-mermaid check-links build-site
     cd site && zola check
 
 # ── Fuzz ──────────────────────────────────────────────────────────────────────

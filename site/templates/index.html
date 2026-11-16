@@ -13,7 +13,7 @@
 <section class="hero">
   <div class="hero-inner">
     <p class="hero-eyebrow">
-      <span class="tag tag-status">{{ config.extra.status }}</span>
+      <span class="tag tag-status">{{ trans(key="status", lang=lang) }}</span>
       <span>Rust · MIT or Apache-2.0 · BDEW EDI@Energy {{ config.extra.format_versions }}</span>
     </p>
     <h1 class="hero-title">AI-first German energy-market operations,<br>from raw EDIFACT to production — in Rust.</h1>
@@ -312,7 +312,7 @@ cd demos/nb-stp &amp;&amp; docker compose up -d &amp;&amp; bash smoke.sh
 # Drive it from Python — generators, simulators, pytest plugin
 pip install makotest</code></pre>
       <p><a class="btn btn-primary" href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Full getting-started guide →</a></p>
-      <p class="fineprint">{{ config.extra.status }}: interfaces may change between releases,
+      <p class="fineprint">{{ trans(key="status", lang=lang) }}: interfaces may change between releases,
         and a production deployment needs your own testing against your own counterparties.
         Dual-licensed <a href="{{ config.extra.repo }}/blob/main/LICENSE-MIT">MIT</a> or
         <a href="{{ config.extra.repo }}/blob/main/LICENSE-APACHE">Apache&nbsp;2.0</a>.</p>
@@ -326,9 +326,6 @@ pip install makotest</code></pre>
 {% endblock content %}
 
 {% block scripts %}
-<script type="module">
-  if (document.querySelector('pre > code[data-lang="mermaid"], code.language-mermaid, pre.mermaid')) {
-    import("{{ get_url(path='js/mermaid-init.js') | safe }}");
-  }
-</script>
+{#- The landing page always carries its two diagrams. -#}
+<script type="module" src="{{ get_url(path='js/mermaid-init.js') | safe }}"></script>
 {% endblock scripts %}

@@ -3,13 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Build-time checks for the mako documentation site. Not shipped \u2014 the site itself is static and loads Mermaid from a CDN at runtime.",
+  "description": "Build-time tooling for the mako documentation site: diagram and link checks, and the post-build step (Pagefind index, Markdown twins, llms.txt). Not shipped — Mermaid loads from a CDN at runtime.",
   "scripts": {
     "check:mermaid": "node tools/check-mermaid.mjs",
     "check:links": "node tools/check-links.mjs"
   },
   "devDependencies": {
     "jsdom": "^27.0.0",
-    "mermaid": "^11.16.0"
+    "mermaid": "^11.16.0",
+    "pagefind": "1.5.2"
   }
 }

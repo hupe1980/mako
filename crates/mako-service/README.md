@@ -1,11 +1,11 @@
 # mako-service
 
-The service SDK every mako daemon is built on. `run::<D>()` owns the daemon
-lifecycle — tracing, layered config, the tuned PostgreSQL pool, migrations,
-`/health/*` and `/metrics`, graceful SIGINT/SIGTERM shutdown and `--check` — and
-the modules below supply the shared OIDC, Cedar, Standard Webhooks, CloudEvents
-and transactional-outbox plumbing, so service code is domain logic only.
-Workspace-internal (`publish = false`).
+The service SDK every mako daemon except `makod` is built on. `run::<D>()` owns
+the lifecycle — tracing, layered config, the tuned PostgreSQL pool, migrations,
+`/health/*` and `/metrics`, graceful SIGINT/SIGTERM shutdown and the `--check`
+flags — and the modules supply the shared OIDC, Cedar, Standard Webhooks,
+CloudEvents and transactional-outbox plumbing, so a service's own code is domain
+logic only. Workspace-internal (`publish = false`).
 
 ## Example
 
@@ -45,54 +45,61 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-`migrate` runs as the role that owns the schema: `[database] migration_url`
-when set (one connection, closed after), `url` otherwise. With two roles the
-runner then grants `url`'s role data access to `public` — `SELECT`, `INSERT`,
-`UPDATE`, `DELETE`, sequences, functions — and no DDL, so a service can serve
-as a role that cannot alter its own schema.
+What an implementer needs beyond the snippet:
 
-`build` must not bind a listener or add health routes — the runner mounts them,
-and `build_for_test::<D>(cfg)` (feature `testing`) builds the router exactly as
-`run` does so a startup test catches a route collision or a refused config.
+- **`build` binds nothing.** It must not bind a listener or add health routes;
+  further ports come from `Daemon::listeners`, and the runner merges `/health/*`
+  into each.
+- **`validate` returns every finding.** `Daemon::validate` returns all
+  `Befund`s, never the first; a blocking one refuses the boot, and
+  `--check-config`, `--print-config` and `GET /admin/einrichtung` read the same
+  list.
+- **Two database roles.** `migrate` runs as `[database] migration_url` when set
+  (one connection, closed after), `url` otherwise; with two roles the runner
+  then grants `url`'s role `SELECT`, `INSERT`, `UPDATE`, `DELETE` on `public`
+  and no DDL.
+- **Config** is `<NAME>.toml` (or `<NAME>_CONFIG`), overridden per key by
+  `<NAME>_<SECTION>__<KEY>`; a `*_FILE` variable reads the value from a file
+  and `env:VAR` indirects a value inside the TOML.
+- **Startup tests.** `build_for_test::<D>(cfg)` (feature `testing`) builds the
+  router exactly as `run` does, so a test catches a route collision or a
+  refused config.
 
-## Modules
+## What it covers
 
-| Module | Key exports | Purpose |
+| Module | Key items | Purpose |
 |---|---|---|
-| `service` | `run`, `Daemon`, `ServiceConfig`, `ServiceContext` | **The daemon lifecycle owner** — `main` = `run::<D>().await` |
-| `error` | `ApiError`, `ApiResult`, `UpstreamFailure` | Shared HTTP error → JSON problem body (`?`-friendly); `ApiError::forbidden(reason)` is the one 403; a 500 (`ApiError::internal`) and a 502/503/504 (`ApiError::upstream_*`) carry an `error_id` the log line carries, never the error's text |
-| `json` | `Json`, `Lenient`, `DETAIL_SENTINEL` | The request-body extractor — every rejection in the problem shape, and a key the type does not declare refused as a 422 with its JSON path; `Lenient` reads an externally specified schema without that refusal |
-| `headers` | `single_str` | Identity/idempotency headers — a repeated header is refused, never first-wins |
-| `dates` | `parse_iso_date`, `DateError` | The one request-date parser — a malformed date is a 400 naming the field, never `None` |
-| `config` | `load_config`, `DatabaseConfig`, `HttpConfig`, `runtime_role` | Layered TOML + env-var config loading; `[database]` takes `url`, an optional `migration_url` and the pool tuning |
-| `policy` | `policy_choice!`, `Policy`, `PolicyReport`, `router` | Operator settings under `[policy]` — each option sourced, logged at startup, exported as `mako_policy_info`, changes recorded in `service_policy_log`, served at `GET /api/v1/policy` |
-| `shutdown` | `token()`, `serve()` | Graceful shutdown — SIGINT **and** SIGTERM |
-| `oidc` | `OidcConfig`, `OidcVerifier`, `Claims`, `ExpectedTenant` | OIDC/JWT verification + `build_verifier()` factory |
-| `mcp_auth` | `McpAuth`, `McpAuthConfig`, `McpApiKey`, `McpIdentity` | Unified MCP server authentication (needs `cedar` **and** `oidc`) |
-| `telemetry` | `init_tracing`, `init_tracing_from_env`, `LogFormat`, `OtelConfig` | Structured logging (JSON by default) and the OTLP exporter |
-| `cedar` | `CedarEnforcer` | Cedar ABAC policy enforcement |
-| `health` | `health_routes` | `/health/live` + `/health/ready` endpoints |
-| `http` | `default_client` | `reqwest::Client` with connect + request timeouts |
-| `webhook` | `sign`, `headers`, `verify_request` | The one [Standard Webhooks](https://www.standardwebhooks.com/) signer/verifier (`webhook-signature: v1,<base64>`) |
-| `cloudevent` | `CloudEvent`, `source`, `post_ce_with_retry` | Canonical CloudEvents 1.0 envelope + signed, retried publisher |
-| `outbox` | `enqueue`, `OutboxWorker`, `ensure_schema` | Transactional outbox — persist-before-dispatch + drain worker + DLQ |
-| `builder` | `ServiceBuilder` | Composable Axum router with health, metrics, rate-limit |
-| `metrics` | Prometheus handler | `GET /metrics` |
-| `rate_limit` | `RateLimitConfig` | GCRA rate limiting |
-| `worker_lock` | Postgres advisory locks | One runner per periodic background worker across replicas |
-| `schema_check` | `check_values_in`, `assert_agrees_in` | Reads a SQL `CHECK (col IN (…))` list, so a test can hold it against the Rust that writes the column |
-
-Configuration is `<NAME>.toml` (or `<NAME>_CONFIG`), overridden per key by
-`<NAME>_<SECTION>__<KEY>`; a `*_FILE` variable reads the value from a file and
-`env:VAR` indirects a value inside the TOML.
+| `service` | `run`, `Daemon`, `ServiceConfig`, `ServiceContext`, `Listener` | the daemon lifecycle |
+| `befund` | `Befund`, `Schwere` | config findings with TOML path and source |
+| `einrichtung` | `router`, `checkliste`, `befragung::vorschlag` | readiness report, deployment checklist, setup interview (`befragung::Rolle`, `lf-strom` … `bkv-strom`) |
+| `policy` | `policy_choice!`, `Policy`, `PolicyReport`, `router` | operator settings under `[policy]`, logged, exported, served at `GET /api/v1/policy` |
+| `error` | `ApiError`, `ApiResult` | problem body; a 500 or upstream failure carries an `error_id`, never the error text |
+| `json` | `Json`, `Lenient` | request bodies; an undeclared key is a 422 naming its JSON path |
+| `headers`, `dates` | `single_str`, `parse_iso_date` | a repeated header and a malformed date are refused by name |
+| `config` | `load_config`, `DatabaseConfig`, `HttpConfig` | layered TOML and environment config |
+| `webhook` | `sign`, `headers`, `verify_request` | [Standard Webhooks](https://www.standardwebhooks.com/): `webhook-signature: v1,<base64>` over `{id}.{timestamp}.{body}` |
+| `cloudevent` | `CloudEvent`, `source`, `post_ce_with_retry` | CloudEvents 1.0 envelope and the signed, retried publisher |
+| `outbox` | `enqueue`, `OutboxWorker`, `ensure_schema` | transactional outbox, drained by a worker |
+| `oidc`, `cedar`, `mcp_auth` | `OidcVerifier`, `Claims`, `CedarEnforcer`, `McpAuth` | authentication and Cedar authorisation |
+| `mcp`, `mcp_snapshot` | `REVISIONS` | the MCP revisions served; the pinned tool contract |
+| `telemetry`, `metrics` | `init_tracing`, `init_metrics` | JSON logs, OTLP export, Prometheus |
+| `builder`, `health`, `http`, `shutdown` | `ServiceBuilder`, `health_routes`, `default_client` | router, probes, HTTP client, SIGINT/SIGTERM |
+| `rate_limit`, `worker_lock` | `RateLimitConfig` | GCRA limiting; one runner per periodic worker across replicas |
+| `schema_check`, `sql` | `check_values_in`, `dynamic` | hold a SQL `CHECK` list against Rust; the one runtime-SQL assertion |
 
 ## Features
 
-| Feature | What it enables |
+| Feature | Enables |
 |---|---|
-| `oidc` | `OidcVerifier`, `Claims` extractor, `ExpectedTenant`, JWKS background refresh |
-| `cedar` | `CedarEnforcer`, Cedar ABAC policy evaluation |
-| `otel` | OpenTelemetry OTLP/gRPC traces via `tracing-opentelemetry` |
-| `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total`, `mako_http_request_duration_seconds` and `mako_bo4e_fractional_json_number_total` |
-| `rate-limit` | GCRA rate limiter via `governor` |
-| `testing` | `build_for_test` / `build_for_test_on` — a daemon's router as `run` mounts it, for startup tests; a dev-dependency feature only |
+| `oidc` | `OidcVerifier`, the `Claims` extractor, JWKS refresh; implies `cedar` |
+| `cedar` | `CedarEnforcer` |
+| `otel` | OpenTelemetry OTLP/gRPC traces |
+| `metrics` | Prometheus `GET /metrics` with the request counters and histogram |
+| `mcp` | `mcp::REVISIONS` and the stateless Streamable HTTP service |
+| `rate-limit` | the `governor` GCRA rate limiter |
+| `testing` | `build_for_test` / `build_for_test_on` — dev-dependencies only |
+
+Webhook contract: [ERP Integration](https://hupe1980.github.io/mako/docs/architecture/erp-integration/) ·
+Operator settings: [Operator policy](https://hupe1980.github.io/mako/docs/reference/operator-policy/)
+
+License: MIT OR Apache-2.0

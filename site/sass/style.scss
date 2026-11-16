@@ -86,6 +86,12 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
   border-radius: 8px; background: var(--surface); color: var(--text); font-size: .9rem;
 }
 .search-box:focus { outline: 2px solid var(--primary); border-color: var(--primary); }
+/* Language switch: the current language as text, the other as a link. */
+.lang-switch { display: flex; align-items: center; gap: .3rem; font-size: .8rem; font-weight: 700; flex: none; }
+.lang-switch .lang-current { color: var(--text); }
+.lang-switch a { color: var(--text-soft); border: 1px solid var(--border); border-radius: 8px; padding: .3rem .45rem; }
+.lang-switch a:hover { color: var(--primary); border-color: var(--primary); text-decoration: none; }
+.nav-lang { font-size: .68rem; font-weight: 700; color: var(--text-soft); border: 1px solid var(--border); border-radius: 4px; padding: 0 .2rem; margin-left: .15rem; }
 .theme-toggle { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; width: 36px; height: 36px; cursor: pointer; color: var(--text); font-size: 1rem; flex: none; }
 .search-results {
   position: absolute; top: 110%; right: 0; width: 420px; max-width: 85vw; max-height: 60vh; overflow: auto;
@@ -178,6 +184,11 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
 .doc-breadcrumb { font-size: .85rem; color: var(--text-soft); display: flex; gap: .4rem; margin-bottom: .5rem; }
 .doc h1 { font-size: clamp(1.7rem, 3vw, 2.3rem); letter-spacing: -.02em; margin: .2rem 0 .5rem; }
 .doc-lead { font-size: 1.1rem; color: var(--text-soft); margin-top: 0; max-width: 72ch; }
+.doc-md { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; font-size: .85rem; margin: 0 0 1rem; }
+.doc-md-copy { font: inherit; padding: .25rem .65rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; }
+.doc-md-copy:hover { border-color: var(--primary); }
+.doc-md-copy:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.doc-md-status { color: var(--text-soft); }
 .doc-toc { background: var(--bg-alt); border: 1px solid var(--border); border-radius: var(--radius); padding: .5rem 1rem; margin: 1.5rem 0; }
 .doc-toc summary { cursor: pointer; font-weight: 700; }
 .doc-toc-count { font-weight: 400; color: var(--text-soft); font-size: .85rem; margin-left: .4rem; }
@@ -309,7 +320,7 @@ pre.mermaid, .mermaid { background: var(--surface); color: var(--text); border: 
 }
 
 @media print {
-  .site-header, .sidebar, .doc-pager, .doc-edit, .site-footer, .search-results { display: none; }
+  .site-header, .sidebar, .doc-pager, .doc-edit, .doc-md, .site-footer, .search-results { display: none; }
   .docs-layout { display: block; }
   a[href^="http"]::after { content: " (" attr(href) ")"; font-size: .8em; word-break: break-all; }
 }

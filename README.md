@@ -9,15 +9,19 @@
 > **⚠️ Experimental** — pre-1.0. APIs change between releases. Do not run it in
 > production without thorough in-house testing against your own counterparties.
 
-**mako is an open-source, AI-first market-operations platform for the German
-energy market, in Rust.** It takes BDEW Marktkommunikation (MaKo) from raw EDIFACT and
-AS4 bytes to event-sourced workflows that answer inside their Frist, and carries
-metering, grid and EEG settlement, retail billing and the ledger on the same
-events — for the NB, LF, MSB and ESA roles and the BKV's MaBiS share. The BDEW formats are read from the
-published MIG and AHB documents as data, so a format release is an import run,
-not a rewrite. AI-first means one typed surface: the services speak MCP, agents
-and the operator Desk read the same tools, and a model reads, explains and
-proposes while code computes every Frist, amount and verdict.
+**mako is an open-source, AI-first operating platform for the German energy
+market, in Rust.** Every regulated process runs as a proven, event-sourced
+workflow — BDEW Marktkommunikation from raw EDIFACT and AS4 bytes, metering,
+grid and EEG settlement, retail billing and the ledger — for the NB, LF, MSB
+and ESA roles and the BKV's MaBiS share. Agents prepare the work; a named
+person decides; every answer, amount and Frist carries its source.
+
+- **The rules are data.** MIG and AHB profiles are imported from the binding
+  BDEW PDFs, so a format release is an import run, not a rewrite.
+- **Code computes, models propose.** Fristen, amounts and verdicts are Rust
+  functions; agents read the same MCP surface as the Desk and never send.
+- **Proof ships with the release.** Every defect class is a CI guard, and each
+  release carries SBOMs, provenance and a VEX document.
 
 <p align="center">
   <picture>
@@ -25,18 +29,18 @@ proposes while code computes every Frist, amount and verdict.
     <img alt="mako Desk: a Freigabe with the assistant's checked proposal taken into the decision form, unsent" src="site/content/docs/guide/desk/freigaben-light.png" width="860">
   </picture>
   <br>
-  <sub>mako Desk — the assistant's proposal was waiting on the Freigabe; <kbd>U</kbd> fills the form, a person checks it and sends.</sub>
+  <sub>mako Desk — the assistant's proposal waits on the Freigabe; <kbd>U</kbd> fills the form, a person checks it and sends.</sub>
 </p>
 
 | Layer | What it is |
 |---|---|
-| **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon — 77 workflows over 498 Prüfidentifikatoren |
-| **Market data** | `mako-markt` library · `marktd` hub (PostgreSQL, durable CloudEvents fan-out, OIDC/JWT) |
+| **Protocol** | `edi-energy`, `dvgw-edi`, `redispatch-xml` formats · `mako-engine` runtime · `makod` — 77 workflows over 498 Prüfidentifikatoren, AS4 with mutual TLS |
+| **Market data** | `mako-markt` · `marktd` hub: master data, registries, Referenzreihen, durable CloudEvents fan-out |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
-| **Customer management** | `accountingd` ledger · `portald` portal · `outputd` documents · `vertragd` contracts · `productd` catalogue |
-| **Agent surface** | 11 of the 14 services expose an MCP server — **183 tools** — and `agentd` is the governed consumer: 30 specialists (28 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
-| **Operator UI** | `desk/` — mako Desk: processes and their Verlauf, customers, Heute, Freigaben, and an assistant that cites every sentence and proposes decisions on Freigaben, invoice disputes and geparkte Buchungen. The `mako-desk` image runs behind an OIDC gateway; `just desk` for development ([guide](https://hupe1980.github.io/mako/docs/guide/desk/), [AGENTS](desk/AGENTS.md)) |
-| **Testing** | `makotest` — Python toolkit over the same Rust core: check digits, the answer Fristen, Entscheidungsbaum codes, AHB-validated EDIFACT, answering counterparties, a `pytest` plugin ([README](makotest/README.md)) |
+| **Customer** | `vertragd` contracts and online Vertragsschluss · `productd` catalogue · `accountingd` ledger · `outputd` documents · `portald` portal |
+| **Agents** | 11 of the 14 services expose an MCP server — **183 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
+| **Desk** | [`desk/`](desk/) — one inbox per Rolle, the rule behind every item, an assistant that cites every sentence ([guide](https://hupe1980.github.io/mako/docs/guide/desk/)) |
+| **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties and a `pytest` plugin |
 
 ## Quick start
 
@@ -50,56 +54,54 @@ curl -s localhost:8180/health/ready
 ```
 
 Every service has a `dev/config/<service>.toml`; `makod` needs no database.
-`<service> --help` prints the config conventions, and a broken config names
-every missing, unknown or invalid key at once.
+`<service> --check-config` names every missing, unknown or invalid key at once.
 
-Or run a whole stack — three demos under [`demos/`](demos/), each a
-`docker compose` file plus a `smoke.sh` that asserts every step:
+Or run a whole stack — each demo is a `docker compose` file plus a `smoke.sh`
+that asserts every step:
 
 | Demo | Services | What it shows |
 |---|---|---|
-| [`nb-stp`](demos/nb-stp/) | `makod` · `marktd` · `processd` | A UTILMD 55001 Anmeldung is decided by E_0622 and answered with 55002 inside the Frist |
-| [`eeg-billing`](demos/eeg-billing/) | `marktd` · `edmd` · `einsd` | A month of quarter-hour feed-in settles into a § 21 EEG 2023 Vergütung and a Gutschrift |
-| [`o2c`](demos/o2c/) | `productd` · `vertragd` · `billingd` · `outputd` · `accountingd` | A tariff prices a contract, the invoice becomes a document and an Offener Posten, a payment closes it |
+| [`nb-stp`](demos/nb-stp/) | `makod` · `marktd` · `processd` | A UTILMD 55001 Anmeldung decided by `E_0622` and answered with 55002 inside the Frist |
+| [`eeg-billing`](demos/eeg-billing/) | `marktd` · `edmd` · `einsd` | A month of quarter-hour feed-in settled into a § 21 EEG 2023 Vergütung and a Gutschrift |
+| [`o2c`](demos/o2c/) | `productd` · `vertragd` · `billingd` · `outputd` · `accountingd` | A tariff prices a contract; the invoice becomes a document and an Offener Posten; a payment closes it |
 
 ```bash
 just build-demo && cd demos/nb-stp && docker compose up -d && bash smoke.sh
 ```
 
-`just build-demo-eeg` and `just build-demo-o2c` build the other two; they
-compile the whole workspace, so budget 20–45 minutes cold. The
-[Getting Started guide](https://hupe1980.github.io/mako/docs/guide/getting-started/)
-walks the first demo step by step.
+`just build-demo-eeg` and `just build-demo-o2c` build the other two (20–45
+minutes cold). The [Getting Started guide](https://hupe1980.github.io/mako/docs/guide/getting-started/)
+walks the first demo.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     subgraph Market["Regulated market"]
-        MP["Counterparty MSH<br/>(NB · LF · MSB · ÜNB)"]
+        MP["Counterparty MSH<br/>(NB · LF · MSB · ÜNB · BIKO)"]
     end
 
     subgraph Transport["Transport & process"]
-        MAKOD["makod<br/>AS4 sign+encrypt · UNB…UNZ<br/>signed receipts · PID router"]
-        PROCESSD["processd<br/>STP decisions · process KPIs<br/>Sperrauftrag queue"]
-        MARKTD["marktd<br/>Market Data Hub"]
+        MAKOD["makod<br/>AS4 mTLS · sign+encrypt<br/>signed receipts · PID router"]
+        PROCESSD["processd<br/>Entscheidungsbäume · KPIs<br/>Sperrauftrag queue"]
+        MARKTD["marktd<br/>master data · Referenzreihen"]
     end
 
     subgraph Settlement["Settlement & billing"]
         EDMD["edmd<br/>meter data · § 60 Abs. 1 MsbG"]
         NETZB["netzbilanzd<br/>NNE · MMM · MaBiS 13003"]
         EINSD["einsd<br/>EEG/KWKG"]
-        BILLINGD["billingd<br/>retail billing · risk gate"]
+        BILLINGD["billingd<br/>retail billing"]
         INVOICD["invoicd<br/>INVOIC checking"]
-        PRODUCTD["productd<br/>product catalog · EPEX"]
+        PRODUCTD["productd<br/>catalogue · Endkunden-Angebote"]
     end
 
     subgraph Business["Customer & operations"]
-        VERTRAGD["vertragd<br/>contracts · §40b cadence<br/>§41e Aggregatorverträge"]
+        VERTRAGD["vertragd<br/>contracts · Bestellnachweis<br/>Widerruf"]
         ACCOUNTINGD["accountingd<br/>FI-CA ledger"]
-        OUTPUTD["outputd<br/>customer documents<br/>+ delivery"]
+        OUTPUTD["outputd<br/>documents + delivery"]
         PORTALD["portald<br/>customer portal"]
-        AGENTD["agentd<br/>30 specialists<br/>28 model-backed + 2 coded"]
+        AGENTD["agentd<br/>30 specialists"]
         ERP["ERP / operator systems"]
     end
 
@@ -107,10 +109,9 @@ flowchart LR
     MAKOD --> PROCESSD --> MARKTD
     MARKTD --> EDMD --> NETZB & EINSD & BILLINGD
     MAKOD --> INVOICD
-    PRODUCTD --> BILLINGD
+    PRODUCTD --> VERTRAGD --> BILLINGD
     BILLINGD --> ACCOUNTINGD
-    BILLINGD --> OUTPUTD
-    VERTRAGD --> BILLINGD
+    BILLINGD & VERTRAGD --> OUTPUTD
     EDMD & VERTRAGD --> PORTALD
     MARKTD -.->|"de.mako.*"| PROCESSD
     MAKOD & BILLINGD & EDMD -.->|"CloudEvents"| AGENTD
@@ -128,48 +129,48 @@ Each crate's README carries its scope, PIDs and regulatory sources.
 | [`dvgw-edi`](crates/dvgw-edi/) | DVGW gas transport — ALOCAT, NOMINT, NOMRES, SSQNOT |
 | [`redispatch-xml`](crates/redispatch-xml/) | Redispatch 2.0 XML — the nine CIM document types |
 | [`energy-api`](crates/energy-api/) | BDEW API-Webdienste Strom — REST/WebSocket client and Axum server |
-| [`mako-as4`](crates/mako-as4/) | BDEW AS4-Profil over `asx-rs` — sign, encrypt, signed receipts |
+| [`mako-as4`](crates/mako-as4/) | BDEW AS4-Profil over `asx-rs` — mutual TLS, sign, encrypt, signed receipts, part properties |
 | [`mako-engine`](crates/mako-engine/) | Event-sourced runtime — `Workflow`, `Process`, event store, outbox, deadlines |
-| [`mako-fristen`](crates/mako-fristen/) | BDEW Werktage, the MaKo holiday table, the per-PID Antwortfristen |
-| [`mako-markt`](crates/mako-markt/) | Master data — 101 active `rubo4e::current` types behind one gate, validated `MaloId` / `MeloId` / `MarktpartnerId`, the master-data record types |
+| [`mako-fristen`](crates/mako-fristen/) | Werktage, the MaKo holiday table, every Antwort- and Vorlauffrist |
+| [`mako-markt`](crates/mako-markt/) | Master data — 101 active `rubo4e::current` types behind one gate, validated identifiers, the Referenzreihen catalogue |
 | [`mako-gpke`](crates/mako-gpke/) | GPKE Strom — Lieferantenwechsel, Stammdatenänderung, Sperrung, PARTIN, INVOIC |
 | [`mako-geli-gas`](crates/mako-geli-gas/) | GeLi Gas — Lieferantenwechsel Gas, Stammdatenänderung, Sperrprozesse |
 | [`mako-wim`](crates/mako-wim/) | WiM, Strom and Gas — MSB-Wechsel, Geräteübernahme, Preisanfrage, INSRPT, ESA |
-| [`mako-mabis`](crates/mako-mabis/) | MaBiS Strom — Summenzeitreihen, Clearinglisten, MaBiS-ZP lifecycle |
+| [`mako-mabis`](crates/mako-mabis/) | MaBiS Strom — Summenzeitreihen, Clearinglisten, Zuordnungsermächtigungen, the BKV's share |
 | [`mako-gabi-gas`](crates/mako-gabi-gas/) | GaBi Gas — allocation, nomination, MMM and capacity invoices |
 | [`mako-emob`](crates/mako-emob/) | NZR-EMob Modell 2 — the virtual Bilanzierungsgebiet |
-| [`mako-redispatch`](crates/mako-redispatch/) | Redispatch 2.0 workflows — §§ 13/13a/14 EnWG |
+| [`mako-redispatch`](crates/mako-redispatch/) | Redispatch 2.0 workflows — §§ 13, 13a, 14 EnWG |
 | [`mako-nbw`](crates/mako-nbw/) | Netzbetreiberwechsel (§ 46 EnWG) — sequences the other crates' Use-Cases, owns no PID |
 | [`mako-pruefung`](crates/mako-pruefung/) | The BDEW Entscheidungsbäume — NB, LF, MSB, ESA, MaBiS and NZR-EMob answer rules |
 | [`mako-invoic`](crates/mako-invoic/) | The INVOIC settle/dispute state machine |
-| [`invoic-checker`](crates/invoic-checker/) | INVOIC plausibility pipeline |
-| [`grid-billing`](crates/grid-billing/) | Grid settlement — NNE, MMM, MSB, AWH Gas, each position with its legal reference |
+| [`invoic-checker`](crates/invoic-checker/) | INVOIC plausibility pipeline and its REMADV codes |
+| [`grid-billing`](crates/grid-billing/) | Grid settlement — NNE, KA, MMM, MSB, AWH Gas, each position with its legal reference |
 | [`eeg-billing`](crates/eeg-billing/) | EEG/KWKG feed-in settlement |
-| [`energy-billing`](crates/energy-billing/) | Retail billing — 13 product categories, § 41a dynamic tariffs, EN 16931 |
-| [`mako-service`](crates/mako-service/) | Service SDK — `run::<D>()`, config, health, OIDC, Cedar, MCP auth, outbox |
+| [`energy-billing`](crates/energy-billing/) | Retail billing — 13 product kinds, § 41a dynamic tariffs, EN 16931 |
+| [`mako-service`](crates/mako-service/) | Service SDK — `run::<D>()`, config findings, policy, OIDC, Cedar, MCP, outbox, webhooks |
 | [`mako-events`](crates/mako-events/) | The CloudEvents type catalogue, one `pub const` per type |
 
 ## Services
 
-One PostgreSQL schema per daemon; the operator reference — routes,
-config, deployment — is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
+One PostgreSQL schema per daemon; routes, configuration and deployment are in
+[mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 77 workflows over 498 Prüfidentifikatoren, AS4 · REST · iMS |
-| [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, durable CloudEvents fan-out |
-| [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Process decision engine — answers the published Entscheidungsbäume, escalates what it cannot decide; the process read model (KPIs, Fristen, the § 7a Abs. 5 EnWG Gleichbehandlung report) and the NB Sperr-/Entsperrauftrag queue |
+| [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, Zuordnungsermächtigungen, Referenzreihen, CloudEvents fan-out |
+| [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Answers the Entscheidungsbäume and escalates what it cannot decide; process KPIs, Fristen, the § 7a Abs. 5 EnWG report, the Sperrauftrag queue |
 | [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 16 MCP tools |
-| [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — every contract with a Kunde on one side · 20 MCP tools |
-| [`productd`](services/productd/) | `:9080` | LF | Product and tariff catalogue — 14 categories, Angebot lifecycle, EPEX and BEHG price series · 14 MCP tools |
-| [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement runs — NNE, KA, MMM, MSB, AWH, and the MaBiS Summenzeitreihen filed with the BIKO; issues the INVOIC · 13 MCP tools |
+| [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — online Vertragsschluss with its Bestellnachweis, Widerruf, every contract with a Kunde on one side · 20 MCP tools |
+| [`productd`](services/productd/) | `:9080` | LF | Product catalogue — 14 categories (13 billable kinds and Bundle), Endkunden-Angebote, EPEX and BEHG price series · 14 MCP tools |
+| [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement — NNE, KA, MMM, MSB, AWH and the MaBiS Summenzeitreihen; issues the INVOIC · 13 MCP tools |
 | [`einsd`](services/einsd/) | `:9180` | NB · LF | Einspeiser registry and EEG/KWKG settlement · 20 MCP tools + 6 prompts |
 | [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle · 9 MCP tools |
 | [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 13 MCP tools |
 | [`accountingd`](services/accountingd/) | `:9380` | LF | Massenkontokorrent — tamper-evident double-entry ledger, SEPA, Mahnwesen |
-| [`outputd`](services/outputd/) | `:9880` | — | Customer communications — renders and delivers what other services computed |
-| [`portald`](services/portald/) | `:9480` | LF | Customer portal read-model gateway and the § 41 EnWG self-service writes; no MCP server |
-| [`agentd`](services/agentd/) | `:9580` | All | Advisory agent plane — 30 specialists over the platform's MCP tools, journaled and human-gated |
+| [`outputd`](services/outputd/) | `:9880` | — | Customer documents and their delivery, addressed by `[policy] anrede` |
+| [`portald`](services/portald/) | `:9480` | LF | Customer portal gateway and the § 41 EnWG self-service writes |
+| [`agentd`](services/agentd/) | `:9580` | All | Advisory agent plane — 30 specialists over the MCP tools, journaled and human-gated |
 
 ## Use a crate
 
@@ -197,6 +198,14 @@ let state = process.state().await?;     // replayed from the stored events
 ```
 
 ```rust
+use mako_markt::domain::{MaloId, MarktpartnerId, nad_agency_code};
+
+let malo = MaloId::new("51238696012")?;               // check digit verified
+let mp: MarktpartnerId = "9900357000004".parse()?;
+assert_eq!(nad_agency_code(&mp), "293");               // BDEW-Codenummer
+```
+
+```rust
 use dvgw_edi::DvgwPlatform;
 
 let msg = DvgwPlatform::default().parse(edi_bytes)?;   // identity from BGM DE 1001
@@ -210,15 +219,8 @@ let doc = parse_and_validate(xml_bytes)?;              // XSD + semantic rules
 println!("{} from {}", doc.mrid(), doc.sender_id());
 ```
 
-```rust
-use mako_markt::domain::{MaloId, MarktpartnerId, nad_agency_code};
-
-let malo = MaloId::new("51238696012")?;               // check digit verified
-let mp: MarktpartnerId = "9900357000004".parse()?;
-assert_eq!(nad_agency_code(&mp), "293");               // BDEW-Codenummer
-```
-
-The [Reference](https://hupe1980.github.io/mako/docs/reference/) covers parsing,
+The
+[Reference](https://hupe1980.github.io/mako/docs/reference/) covers parsing,
 validation, builders, AS4, DVGW and Redispatch; feature flags are in each
 crate's README.
 
@@ -229,8 +231,7 @@ just            # list every recipe
 just check      # cargo check, all targets and features
 just test       # the whole suite (cargo-nextest when installed)
 just test-db    # the real-PostgreSQL suites (testcontainers, needs Docker)
-just ci         # the gate — run it as below; a pipe hides the exit code
-just ci > ci.log 2>&1; echo EXIT:$?
+just ci > ci.log 2>&1; echo EXIT:$?   # the gate — a pipe would hide the exit code
 ```
 
 [CONTRIBUTING.md](./CONTRIBUTING.md) covers building, testing one crate,
@@ -246,12 +247,12 @@ generated from the BDEW PDFs — fix the reader in `xtask/src/bdew/` and run
 
 | Section | What's inside |
 |---|---|
-| [Guide](https://hupe1980.github.io/mako/docs/guide/) | Run the demos, run one service from source |
+| [Guide](https://hupe1980.github.io/mako/docs/guide/) | Run the demos, set up a deployment, use the Desk |
 | [Architecture](https://hupe1980.github.io/mako/docs/architecture/) | Engine, domain model, deadlines, ERP integration |
-| [Reference](https://hupe1980.github.io/mako/docs/reference/) | Parsing, validation, builders, process catalogue, AS4, DVGW, Redispatch, `makotest` |
+| [Reference](https://hupe1980.github.io/mako/docs/reference/) | Parsing, validation, builders, process catalogue, AS4, operator policy, `makotest` |
 | [Services](https://hupe1980.github.io/mako/docs/services/) | One operator guide per daemon |
 | [Regulatory](https://hupe1980.github.io/mako/docs/regulatory/) | Festlegungen and the Prüfidentifikator catalogue |
-| [Release & Compliance](https://hupe1980.github.io/mako/docs/compliance/) | Format releases, schema versioning, licences, what a release carries |
+| [Release & Compliance](https://hupe1980.github.io/mako/docs/compliance/) | Format releases, licences, what a release carries |
 | [docs.rs](https://docs.rs/edi-energy) | Rustdoc for the published crates |
 
 ## Releases
@@ -266,8 +267,8 @@ and binary carries build-provenance and SBOM attestations:
 gh attestation verify oci://ghcr.io/hupe1980/mako-makod:X.Y.Z --repo hupe1980/mako
 ```
 
-See [What a release carries](https://hupe1980.github.io/mako/docs/compliance/release-lifecycle/#what-a-release-carries)
-and [SECURITY.md](./SECURITY.md).
+See [What a release carries](https://hupe1980.github.io/mako/docs/compliance/release-lifecycle/#what-a-release-carries),
+[CHANGELOG.md](./CHANGELOG.md) and [SECURITY.md](./SECURITY.md).
 
 ## Contributing
 
@@ -282,9 +283,9 @@ Licensed under either of [MIT](./LICENSE-MIT) or
 ## Related crates
 
 - [edifact](https://crates.io/crates/edifact) — the EDIFACT parser underneath `edi-energy`
-- [asx-rs](https://crates.io/crates/asx-rs) — AS4/ebMS3 transport used by `makod`
+- [asx-rs](https://crates.io/crates/asx-rs) — AS4/ebMS3 transport with mutual TLS, used by `makod`
 - [rubo4e](https://crates.io/crates/rubo4e) — BO4E business-object types
 - [metering](https://crates.io/crates/metering) and [meterstore](https://crates.io/crates/meterstore) — metering domain and time-series store beneath `edmd`
 - [doubleentry](https://crates.io/crates/doubleentry) — the ledger beneath `accountingd`
-- [billing](https://crates.io/crates/billing) — the EN 16931 tariff/invoicing engine under the settlement crates
+- [billing](https://crates.io/crates/billing) — the EN 16931 tariff and invoicing engine under the settlement crates
 - [SlateDB](https://slatedb.io/) — embedded storage behind `mako-engine`

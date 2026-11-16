@@ -6,9 +6,12 @@
    `macros::sidebar(..)` builds on 0.22 and fails on 0.23. `{% include %}`
    inherits the caller's context in both, so this partial works on either.
 
-   The caller sets `current` to the active permalink before including. #}
-{% set docs = get_section(path="docs/_index.md") %}
-<nav class="sidebar" aria-label="Documentation">
+   The caller sets `current` to the active permalink before including. A
+   German page lists the German docs tree — the curated subset — and links the
+   English documentation for the rest. #}
+{%- if lang == config.default_language -%}{%- set docs_index = "docs/_index.md" -%}{%- else -%}{%- set docs_index = "docs/_index." ~ lang ~ ".md" -%}{%- endif -%}
+{% set docs = get_section(path=docs_index) %}
+<nav class="sidebar" aria-label="{{ trans(key='docs_sidebar', lang=lang) }}">
   <a class="sidebar-home {% if current == docs.permalink %}active{% endif %}" href="{{ docs.permalink | safe }}">
     {{ docs.title }}
   </a>
@@ -32,4 +35,7 @@
       </ul>
     </details>
   {% endfor %}
+  {%- if lang != config.default_language %}
+  <a class="sidebar-home" href="{{ get_url(path='@/docs/_index.md', lang=config.default_language) | safe }}" hreflang="{{ config.default_language }}">{{ trans(key="english_docs", lang=lang) }}</a>
+  {%- endif %}
 </nav>

@@ -1,65 +1,47 @@
 # mako-events
 
-**The compile-time CloudEvents catalog for the mako platform.**
+[![Crates.io](https://img.shields.io/crates/v/mako-events?label=mako-events&color=f59e0b&logo=rust)](https://crates.io/crates/mako-events)
 
-Every CloudEvents `type` string exchanged between mako services is a `pub const`
-in this crate, grouped by bounded context (`mako`, `markt`, `billing`,
-`vertrag`, `tarif`, `messwert`, `invoic`, `netzbilanz`, `obs`, `agent`, …).
-Producer/consumer drift is a **compile error**, not a runtime surprise: services
-import the constant instead of typing the string.
+The compile-time catalogue of every CloudEvents `type` the mako services emit
+and consume: one `pub const` per type, grouped by bounded context, so a
+producer and a consumer that disagree on a name fail to compile. It is a leaf
+with no dependencies and owns the type names and the glob `matches()` only —
+the envelope, signing and delivery live in `mako-service` (`CloudEvent`,
+`source`, `post_ce_with_retry`, `webhook::{sign, verify_request}`).
+
+## Example
 
 ```rust
-use mako_events::markt;
+use mako_events::{markt, vertrag};
 
 assert_eq!(markt::VERSORGUNG_GAP_DETECTED, "de.markt.versorgung.gap-detected");
+assert_eq!(vertrag::WIDERRUF_EINGEGANGEN, "de.vertrag.widerruf.eingegangen");
+
+// The one glob matcher every subscription uses.
+assert!(mako_events::matches("de.vertrag.bestellung.*", vertrag::BESTELLUNG_ANGENOMMEN));
+assert!(mako_events::all().contains(&markt::VERSORGUNG_GAP_DETECTED));
 ```
 
-## Scope: type names only (a zero-dependency leaf)
+## What it covers
 
-This crate is deliberately a **single-purpose leaf with no dependencies**: it owns
-the event *identity* layer — the `type` constants and the glob `matches()` — and
-nothing else. It is safe for any crate to depend on because it pulls in nothing
-and rebuilds nothing.
-
-The CloudEvent *envelope* and *transport* — the structured-mode body, the
-`source` convention, Standard Webhooks signing and the retrying publisher — live
-in [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
-(`CloudEvent`, `source`, `post_ce_with_retry`, `webhook::{sign, verify_request}`).
-Emitters pass a constant from this catalogue as the `type`.
+| Item | Contents |
+|---|---|
+| context modules | `mako`, `markt`, `billing`, `invoic`, `eeg`, `accounting`, `netzbilanz`, `messwert`, `tarif`, `vertrag`, `vpp`, `agent`, `gabi`, `obs`, `sperr`, `mabis` |
+| `vertrag::BESTELLUNG_*` | an online order `EINGEGANGEN`, `ANGENOMMEN` or `ABGELEHNT`; `subject` is the `bestellreferenz` |
+| `vertrag::WIDERRUF_EINGEGANGEN` | a consumer's Widerruf (§ 355 BGB) recorded, timely or not |
+| `all()` | every constant, held complete by a test |
+| `matches(pattern, type)` | `*` any sequence, `?` one character, everything else literal |
 
 ## Conventions
 
-- Lowercase reverse-DNS: `de.<context>.<noun>.<participle>`
-  (`de.markt.versorgung.eog-begonnen`). German domain nouns keep their
-  spelling; hyphenated nouns stay hyphenated.
-- Every constant appears in `all()` — enforced by tests — so catalogs,
-  subscription UIs, and docs can enumerate the full event surface.
-- `matches()` implements the shared glob matcher (`de.markt.*`) used by every
-  subscription mechanism (marktd fan-out, agentd triggers, ERP webhooks).
-- A constant **no service in this workspace emits** carries a `⚠ phantom:` doc
-  note saying so and why, and a test demands the note. The note is about
-  emission only: some phantoms
-  are subscriptions placed ahead of their emitter, others are neither emitted
-  nor consumed. A phantom is a recorded gap, not a promise.
+- Lowercase reverse-DNS, `de.<context>.<noun>.<participle>`; a multi-word
+  segment joins with `-`, never `_`. German domain nouns keep their spelling.
+- A constant no service in this workspace emits carries a `⚠ phantom:` doc
+  note saying why, and a test demands the note. It is about emission only.
+- Adding an event: the `pub const` with a doc comment naming emitter and
+  consumers, an entry in `all()`, then the emission in the owning service.
 
-## Adding an event
+Event delivery: [ERP Integration](https://hupe1980.github.io/mako/docs/architecture/erp-integration/) ·
+API: <https://docs.rs/mako-events>
 
-1. Add the `pub const` to the right context module with a doc comment naming
-   the emitter and consumers.
-2. Append it to `all()`.
-3. Emit it via the owning service; consume it via `mako_events::matches()`.
-
-A constant that stops at step 2 needs the `⚠ phantom:` note. Minting one with no
-emitter and no note declares an event that cannot fire — a subscriber matching it
-waits forever, and the doc comment naming its emitter is simply untrue.
-
-## Related crates
-
-| Crate | Role |
-|---|---|
-| [`mako-events`](https://docs.rs/mako-events) ← **this crate** | The `type` constants and the glob `matches()` — nothing else |
-| [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service) | The CloudEvents *envelope* and transport — building, signing, delivering |
-| [`mako-markt`](https://docs.rs/mako-markt) | Emits the `de.markt.*` half of the catalog |
-
-Part of **mako**, an open-source Rust platform for German energy market
-communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>
+License: MIT OR Apache-2.0

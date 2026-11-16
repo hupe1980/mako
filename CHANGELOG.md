@@ -9,6 +9,26 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.34.2] — 2026-11-16
+
+### Added
+
+- Site: a curated German subset under `/de/` — the landing page, „Für Stadtwerke" (new, with its English twin „For utilities"), Loslegen, Einrichtung and the Desk guide, addressed with „du". Every template string comes from `[translations]` in `site/config.toml`; pages carry `<html lang>`, `og:locale`, `hreflang` alternates with `x-default` and a per-language JSON-LD `inLanguage`, and the header has a DE/EN switch linking the same page in the other language or, where there is none, that language's home.
+- xtask: `check-translations` — every German page names its English source and that file's sha256, has its English twin and states none of the figures the English pages' guards hold; `--rehash <file>` re-pins a page after re-translation.
+- site: search runs on Pagefind 1.5.2 (`site/tools/postbuild.mjs`, after `zola build`) — a query fetches only the index chunks it needs, and a page is stemmed in its own `<html lang>`, so the German pages search as German.
+- site: every docs page has its Markdown source at `<page URL>index.md`, `@/` links resolved to absolute URLs, with „View as Markdown" and „Copy page as Markdown" under the lead.
+- site: `/mako/llms.txt` (llmstxt.org) lists every page's Markdown twin with its description by section; `/mako/llms-full.txt` holds them all. Both are generated from `content/`.
+- `just build-site` builds the site as deployed; `just check-site` runs it and refuses a content page with no built HTML, a section `llms.txt` has no group for, and a search index whose page count differs from the content tree.
+
+### Changed
+
+- site: Zola builds no search index (`build_search_index = false`); the 1 MB `search_index.en.json` is gone. Mermaid is included only on a page whose content holds a diagram, decided at build time.
+
+### Fixed
+
+- READMEs: the root, crate and service READMEs follow one shape each and state current truth — corrected workflow and MCP counts, routes and config keys; facts held only in a README moved to the operator guides.
+- eeg-billing: `Eigenverbrauch` no longer cites § 21 Abs. 3 EEG, which is the Mieterstromzuschlag; `check-known-wrong` refuses that pairing.
+
 ## [0.34.1] — 2026-11-16
 
 ### Added

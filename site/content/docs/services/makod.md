@@ -359,8 +359,10 @@ MaBiS-ZP whose Aktivierung it has not recorded is refused by name.
 and gas-only deployments have no §§ 13/13a obligations (BK6-20-059/060/061 as
 consolidated by BK6-23-241).
 
-Every build links every domain crate; the declaration selects registrations,
-and `--marktrollen` additionally refuses commands at runtime. Declaring every
+Every build links every domain crate; makod has no role cargo features and
+enables SlateDB through its `mako-engine` dependency, so a plain
+`cargo build -p makod` is the binary every deployment runs. The declaration
+selects registrations, and `--marktrollen` additionally refuses commands at runtime. Declaring every
 role registers the full **77 workflows over 498 Prüfidentifikatoren**, and the
 startup log records the counts a declaration registers. Which principal may
 read which role's processes is the Cedar policy's decision

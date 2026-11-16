@@ -709,7 +709,9 @@ The § 21c Abs. 1 Satz 2 fünftletzter-Werktag variant is not applied. A success
 updates `last_veraeusserungsform_switch` and emits
 `de.eeg.veraeusserungsform.gewechselt` in the same transaction.
 `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` gives processd the
-form in force and the `E_0623` Prüfschritt 540 Direktvermarktungspflicht.
+form in force as its `SG10 CCI+Z22` DE 7037 code, an `ausfallverguetung` flag
+(`Z90` covers both the Einspeisevergütung and the Ausfallvergütung) and the `E_0623`
+Prüfschritt 540 Direktvermarktungspflicht.
 
 ### §§ 53b–54 — reductions of the AW
 
@@ -1266,6 +1268,9 @@ they are null for `EIGENVERBRAUCH`. Deliveries are
 ## MCP server
 
 At `/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session), authenticated by `[mcp]`.
+
+Seventeen tools read; three write — `trigger_settle`, `import_marktwert` and
+`import_epex_monthly_price`. Money crosses the surface as exact decimals.
 
 **20 tools:**
 `get_policy` · `list_plants` · `get_plant` · `list_expiring` · `list_settlements` ·
