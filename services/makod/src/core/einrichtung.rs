@@ -354,15 +354,10 @@ pub fn de0004_befunde(as4: &As4Config) -> Vec<Befund> {
 /// (Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.3, S. 6).
 pub const MIN_ZERTIFIKAT_WARNFENSTER_TAGE: u32 = 14;
 
-/// The AS4 settings Regelungen zum Übertragungsweg für AS4 2.6 speaks to that
-/// `asx-rs` and the partner directory leave to the operator:
-///
-/// - a warning window that cannot report an own certificate before its
-///   successor is due blocks (Kap. 5.3, S. 6);
-/// - a partner endpoint whose encryption certificate names no URI-type
-///   subject alternative name is a warning: the address cannot be taken from
-///   the certificate as Kap. 2 (S. 4) requires. One that names another address,
-///   or several, is refused by the partner directory.
+/// The AS4 setting Regelungen zum Übertragungsweg für AS4 2.6 speaks to that
+/// `asx-rs` leaves to the operator: a warning window that cannot report an own
+/// certificate before its successor is due blocks (Kap. 5.3, S. 6). The
+/// certificate and endpoint rules of Kap. 2, 3 and 5.2 are `build()`'s.
 #[must_use]
 pub fn as4_regel_befunde(as4: &As4Config) -> Vec<Befund> {
     let mut out = Vec::new();
@@ -381,35 +376,6 @@ pub fn as4_regel_befunde(as4: &As4Config) -> Vec<Befund> {
             .bereich(Bereich::Zertifikate)
             .quelle("Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.3 (S. 6)"),
         );
-    }
-    for (i, p) in as4.partner.iter().enumerate() {
-        let (Some(endpoint), Some(datei)) = (&p.endpoint, &p.encryption_cert_pem_file) else {
-            continue;
-        };
-        let Some(uris) = std::fs::read(datei)
-            .ok()
-            .and_then(|pem| asx::Certificate::from_pem(&pem).ok())
-            .and_then(|cert| mako_as4::certificate::uri_subject_alt_names(cert.der()))
-        else {
-            continue;
-        };
-        if uris.is_empty() {
-            out.push(
-                Befund::warnung(
-                    format!("as4.partner[{i}].endpoint"),
-                    format!(
-                        "Das Verschlüsselungszertifikat des Partners {} nennt keine AS4-Adresse \
-                         (Alternativname vom Typ URI); {endpoint} ist nicht aus dem Zertifikat \
-                         belegt",
-                        p.mp_id
-                    ),
-                )
-                .bereich(Bereich::Zertifikate)
-                .quelle(
-                    "Regelungen zum Übertragungsweg für AS4 2.6, Kap. 2 (S. 4), Kap. 5.2 (S. 6)",
-                ),
-            );
-        }
     }
     out
 }
@@ -456,15 +422,20 @@ pub fn zertifikate(as4: &As4Config, parties: &[PartyConfig]) -> Vec<Zertifikat> 
             (
                 "signing_cert_pem_file",
                 "Signaturzertifikat",
-                &k.signing_cert_pem_file,
+                Some(&k.signing_cert_pem_file),
             ),
             (
                 "encryption_cert_pem_file",
                 "Verschlüsselungszertifikat",
-                &k.encryption_cert_pem_file,
+                Some(&k.encryption_cert_pem_file),
             ),
-            ("tls_cert_pem_file", "TLS-Zertifikat", &k.tls_cert_pem_file),
+            (
+                "tls_cert_pem_file",
+                "TLS-Zertifikat",
+                k.tls_cert_pem_file.as_ref(),
+            ),
         ] {
+            let Some(pfad) = pfad else { continue };
             dateien.push((
                 format!("party[{i}].as4.{feld}"),
                 format!("Das {was} von {}", p.mp_id),
@@ -847,18 +818,6 @@ mod tests {
         assert!(befunde[0].text.contains("9900001000005"));
     }
 
-    fn as4_partner(mp_id: &str) -> crate::config::As4PartnerConfig {
-        crate::config::As4PartnerConfig {
-            mp_id: mp_id.to_owned(),
-            agency: None,
-            endpoint: None,
-            encryption_cert_pem_file: None,
-            signing_cert_pem_files: Vec::new(),
-            quirks: None,
-            de0004_ausnahme: Vec::new(),
-        }
-    }
-
     /// Kap. 5.3: a window shorter than ten Werktage can span blocks; the
     /// default and anything from 14 days pass.
     #[test]
@@ -889,35 +848,6 @@ mod tests {
                 .any(|b| b.pfad == "as4.zertifikat_warnfenster_tage"),
             "{:?}",
             p.einrichtung.befunde
-        );
-    }
-
-    /// Kap. 2: an endpoint the partner's encryption certificate does not name
-    /// is reported; the test PKI's certificates carry no URI.
-    #[test]
-    fn an_endpoint_the_certificate_does_not_name_is_warned() {
-        let dir = tempfile::tempdir().unwrap();
-        let cert = TestCa::sm_pki().bdew_party("9900001000002").encryption;
-        let datei = dir.path().join("enc.pem");
-        std::fs::write(&datei, &cert.cert_pem).unwrap();
-        let mut partner = crate::config::As4PartnerConfig {
-            endpoint: Some("https://partner.example/as4".to_owned()),
-            encryption_cert_pem_file: Some(datei),
-            ..as4_partner("9900001000002")
-        };
-        let befunde = as4_regel_befunde(&As4Config {
-            partner: vec![partner.clone()],
-            ..As4Config::default()
-        });
-        assert_eq!(befunde.len(), 1, "{befunde:?}");
-        assert_eq!(befunde[0].pfad, "as4.partner[0].endpoint");
-        partner.endpoint = None;
-        assert!(
-            as4_regel_befunde(&As4Config {
-                partner: vec![partner],
-                ..As4Config::default()
-            })
-            .is_empty()
         );
     }
 }

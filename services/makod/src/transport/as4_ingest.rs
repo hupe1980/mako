@@ -50,7 +50,7 @@ pub const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long an accepted dedup key is remembered: 8 days.
 ///
-/// `asx-rs` 0.16.2 accepts an inbound `eb:Timestamp` up to 7 days old and
+/// `asx-rs` 0.17 accepts an inbound `eb:Timestamp` up to 7 days old and
 /// requires a `DedupStore` to remember accepted keys for at least that long,
 /// so a sender's retry — BDEW retries for 72 hours — is answered as a duplicate
 /// rather than processed twice. One day above the floor for the daily purge.
@@ -194,7 +194,7 @@ impl BdewAs4IngestHandler {
         // `asx-rs` has already verified that the signer chains to the SM-PKI
         // root and that its OU carries `from`. Under `nur_konfigurierte`
         // that is not enough: the sender must also be a configured partner
-        // (BDEW AS4-Profil 1.2 §2.3.7 lets a receiver whitelist by the OU
+        // (BDEW AS4-Profil 1.2 Kap. 2.3.7 lets a receiver whitelist by the OU
         // MP-ID). Retryable on purpose — once the operator configures the
         // partner, the sender's next retry is served.
         if !self.clients.admits_sender(&from) {
@@ -211,7 +211,7 @@ impl BdewAs4IngestHandler {
             )));
         }
 
-        // ── Transmission-path switch (BDEW AS4-Profil 1.2 §2.3.7) ───────
+        // ── Transmission-path switch (BDEW AS4-Profil 1.2 Kap. 2.3.7) ───────
         // Payload-less by definition; the receipt confirms reception. The
         // confirmSwitch answer is the operator's.
         if let Some(kind) = msg.path_switch() {
@@ -233,10 +233,11 @@ impl BdewAs4IngestHandler {
                 .await?;
         }
 
-        // One Übertragungsdatei per message — the profile defines no
-        // multi-payload UserMessage.
-        let payload = match msg.payloads() {
-            [one] => one.bytes().clone(),
+        // One Übertragungsdatei per message — Regelungen zum Übertragungsweg
+        // für AS4 2.6, Kap. 7.2 (S. 8): „Es wird genau eine Übertragungsdatei
+        // übermittelt."
+        let (payload, properties) = match msg.payloads() {
+            [one] => (one.bytes().clone(), one.properties().to_vec()),
             parts => {
                 use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
                 let count = parts.len();
@@ -259,6 +260,10 @@ impl BdewAs4IngestHandler {
             from_party     = %from,
             to_party       = %self.local_mp_id,
             payload_bytes  = payload.len(),
+            // Kap. 6 (S. 7) properties are recorded, not checked: BDEW
+            // AS4-Profil 1.2 Kap. 2.3.5 (S. 18) leaves the receiver free to
+            // use them and gives it no duty.
+            part_properties = ?properties,
             "AS4 inbound: message received",
         );
         self.handle_first_seen(&msg_id, &from, &payload).await
@@ -1341,7 +1346,7 @@ impl BdewAs4IngestHandler {
             }
         }
 
-        // ── Synchronous receipt (BDEW AS4-Profil §2.2.4) ──────────────
+        // ── Synchronous receipt (BDEW AS4-Profil Kap. 2.2.4) ──────────────
         Ok(())
     }
 }

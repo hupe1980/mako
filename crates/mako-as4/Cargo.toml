@@ -1,7 +1,7 @@
 [package]
 name         = "mako-as4"
 version.workspace     = true
-description  = "BDEW AS4-Profil 1.2 for German energy market communication on asx-rs: partners, services, file names and the retry window"
+description  = "BDEW AS4-Profil 1.2 for German energy market communication on asx-rs: partners, services, part properties, file names and the retry window"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true

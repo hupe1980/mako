@@ -1,7 +1,7 @@
 //! The AS4 clients of a deployment: one `asx::as4::As4` per local MP-ID.
 //!
 //! A receiving MSH checks that the signing certificate's subject OU carries
-//! the `eb:From` MP-ID (BDEW AS4-Profil 1.2 §2.3.2, §2.3.4.4; Regelungen zum
+//! the `eb:From` MP-ID (BDEW AS4-Profil 1.2 Kap. 2.3.2, 2.3.4.4; Regelungen zum
 //! Übertragungsweg für AS4 2.6 Kap. 5.2), and an inbox answers only for its own
 //! `eb:To`. So each `[[party]]` sends with, and is served by, a client built
 //! from its own `[party.as4]` key pairs. All clients share the trust anchor
@@ -40,6 +40,21 @@ pub struct As4Setup {
     /// `[[as4.partner]] de0004_ausnahme`: per authenticated partner, the
     /// further MP-IDs it may name in `UNB` DE 0004.
     pub de0004_ausnahmen: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// The refusal of a `[party.as4]` without its TLS key pair. Every connection
+/// to a partner MSH is mutual TLS — BDEW AS4-Profil 1.2 Kap. 2.2.6.1 (S. 10):
+/// „Client-Authentifizierung ist ERFORDERLICH." — and the TLS certificate is
+/// the third of the Zertifikatstripel (Regelungen zum Übertragungsweg für AS4
+/// 2.6, Kap. 1.3, S. 3). A party that only receives sends its receipts on the
+/// same connection, so it needs the pair too.
+pub(crate) fn tls_required(mp_id: &str) -> String {
+    format!(
+        "[party.as4] of {mp_id}: tls_cert_pem_file and tls_key_pem_file are required — every \
+         AS4 connection authenticates the client (BDEW AS4-Profil 1.2 Kap. 2.2.6.1, S. 10), and \
+         the TLS certificate belongs to the Zertifikatstripel (Regelungen zum Übertragungsweg für \
+         AS4 2.6, Kap. 1.3, S. 3)"
+    )
 }
 
 fn read(field: &str, path: &Path) -> anyhow::Result<Vec<u8>> {
@@ -100,7 +115,7 @@ impl As4Setup {
         anyhow::ensure!(
             without.is_empty(),
             "[[party]] {without:?} has no [party.as4]: every MP-ID sends and receives AS4 with \
-             its own signing, encryption and TLS key pairs (BDEW AS4-Profil 1.2 §2.3.4.4; the \
+             its own signing, encryption and TLS key pairs (BDEW AS4-Profil 1.2 Kap. 2.3.4.4; the \
              signing certificate's OU carries the MP-ID, Regelungen zum Übertragungsweg für AS4 \
              2.6 Kap. 5.2)"
         );
@@ -152,7 +167,10 @@ impl As4Setup {
                     &keys.encryption_key_pem_file,
                 )?,
                 retired_decrypters: Vec::new(),
-                tls: key_pair(&at("tls"), &keys.tls_cert_pem_file, &keys.tls_key_pem_file)?,
+                tls: match (&keys.tls_cert_pem_file, &keys.tls_key_pem_file) {
+                    (Some(cert), Some(key)) => key_pair(&at("tls"), cert, key)?,
+                    _ => anyhow::bail!(tls_required(&party.mp_id)),
+                },
             });
         }
 
@@ -191,7 +209,7 @@ impl As4Setup {
                         .ok_or_else(|| {
                             anyhow::anyhow!(
                                 "[[as4.partner]] {} is no MP-ID: the AS4 PartyId is a \
-                                 BDEW-/DVGW-Codenummer or GLN (BDEW AS4-Profil 1.2 §2.3.1.1, \
+                                 BDEW-/DVGW-Codenummer or GLN (BDEW AS4-Profil 1.2 Kap. 2.3.1.1, \
                                  S. 13–14), all 13 digits",
                                 p.mp_id
                             )
@@ -318,6 +336,33 @@ impl As4Clients {
         http: H,
     ) -> anyhow::Result<Self> {
         Self::build_with(setup, Box::new(move |b| b.http_client(http.clone())))
+    }
+
+    /// Build with the built-in HTTP client reaching each `(host, address)` of
+    /// `pins` at that address instead of by DNS (`Builder::resolve`, exempt
+    /// from the client's private-address filter). TLS, SNI and the server
+    /// certificate check are unchanged. For tests against a socket-bound MSH.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::build`].
+    #[allow(
+        dead_code,
+        reason = "the integration tests reach a socket-bound MSH through the library target"
+    )]
+    pub fn build_with_resolve(
+        setup: As4Setup,
+        pins: Vec<(String, std::net::SocketAddr)>,
+    ) -> anyhow::Result<Self> {
+        Self::build_with(
+            setup,
+            Box::new(move |mut b| {
+                for (host, addr) in &pins {
+                    b = b.resolve(host.clone(), *addr);
+                }
+                b
+            }),
+        )
     }
 
     fn build_with(setup: As4Setup, configure: Box<Configure>) -> anyhow::Result<Self> {

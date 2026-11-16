@@ -1,11 +1,14 @@
-//! The AS4 boundary on `asx-rs` 0.16: makod's clients against a BDEW partner
-//! client over an in-process loopback, with test SM-PKI material.
+//! The AS4 boundary on `asx-rs` 0.17: makod's clients against a BDEW partner
+//! client over an in-process loopback or a socket-bound TLS MSH, with test
+//! SM-PKI material.
 //!
 //! The partner is a real `asx::as4::As4` client of its own; nothing here
 //! weakens a check. `asx::testkit::pki::TestCa::sm_pki()` plays the SM-PKI
 //! root and issues each MP-ID separate signing, encryption and TLS key pairs
-//! with the MP-ID as subject OU; `asx::testkit::loopback::Loopback` carries
-//! the requests and serves each test CA's CRL.
+//! with the MP-ID as subject OU and its AS4 address as the one URI subject
+//! alternative name; `asx::testkit::loopback::Loopback` carries the requests
+//! and serves each test CA's CRL, `asx::testkit::tls::TlsMsh` is a real MSH on
+//! 127.0.0.1 that requires a client certificate.
 //!
 //! | Test | Contract |
 //! |---|---|
@@ -25,6 +28,10 @@
 //! | `an_interchange_under_another_sender_is_refused` | UNB DE0004 is the authenticated `eb:From` |
 //! | `a_named_de0004_ausnahme_admits_the_represented_sender` | `[[as4.partner]] de0004_ausnahme` |
 //! | `a_rotated_identity_serves_without_a_restart` | new key material mid-run; the replaced encryption key still decrypts (AS4 2.6 Kap. 5.3) |
+//! | `the_part_properties_travel_with_the_message` | Kap. 6: the four `eb:PartProperties` from the EDIFACT envelope |
+//! | `an_expansion_beyond_the_message_limit_is_refused_ebms_0303` | gzip expands to at most `MAX_MESSAGE_BYTES` per message |
+//! | `the_tls_identity_reaches_the_handshake` | mutual TLS: `[party.as4]` TLS certificate presented, SNI the endpoint's host |
+//! | `a_tls_refusal_is_a_retryable_transport_error` | a server outside the SM-PKI root: nothing written, the outbox retries |
 
 use std::sync::{Arc, Mutex};
 
@@ -72,8 +79,8 @@ impl Pki {
             .crl_signer("CCRL-S(Root)", KeyAlg::EcBrainpoolP256r1)
             .certificate();
         Self {
-            own: ca.bdew_party(OWN),
-            partner: ca.bdew_party(PARTNER),
+            own: ca.bdew_party_at(OWN, OWN_URL),
+            partner: ca.bdew_party_at(PARTNER, PARTNER_URL),
             stranger: ca.bdew_party(STRANGER),
             crl_signer,
             ca,
@@ -421,7 +428,14 @@ async fn slatedb_dedup_conforms() {
 
 /// One message the partner's handler saw: message id, service, payload,
 /// payload name and the evidence as JSON.
-type Seen = (String, String, Vec<u8>, Option<String>, serde_json::Value);
+type Seen = (
+    String,
+    String,
+    Vec<u8>,
+    Option<String>,
+    serde_json::Value,
+    Vec<(String, String)>,
+);
 
 /// What the partner's handler saw.
 #[derive(Clone, Default)]
@@ -449,6 +463,7 @@ fn mount_partner(pki: &Pki, loopback: &Loopback, refuse_first: usize) -> Receive
                         payload.bytes().to_vec(),
                         payload.name().map(str::to_owned),
                         serde_json::to_value(msg.evidence()).unwrap(),
+                        payload.properties().to_vec(),
                     ));
                     if refused.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < refuse_first {
                         return Err(asx::Reject::new("not yet"));
@@ -462,6 +477,11 @@ fn mount_partner(pki: &Pki, loopback: &Loopback, refuse_first: usize) -> Receive
 }
 
 async fn sender(pki: &Pki, loopback: &Loopback) -> (makod::as4_sender::BdewAs4Sender, As4Evidence) {
+    sender_over(pki.makod(loopback, UnbekannteAbsender::NurKonfigurierte)).await
+}
+
+/// makod's AS4 sender over `clients`.
+async fn sender_over(clients: As4Clients) -> (makod::as4_sender::BdewAs4Sender, As4Evidence) {
     let store = SlateDbStore::open_in_memory().await.unwrap();
     let evidence = As4Evidence::new(store.clone());
     let malo_sender = makod::malo_ident_sender::MaloIdentSender::new(
@@ -473,7 +493,7 @@ async fn sender(pki: &Pki, loopback: &Loopback) -> (makod::as4_sender::BdewAs4Se
         None,
     );
     let sender = makod::as4_sender::BdewAs4Sender::new(
-        pki.makod(loopback, UnbekannteAbsender::NurKonfigurierte),
+        clients,
         evidence.clone(),
         malo_sender,
         registry(),
@@ -510,9 +530,9 @@ async fn an_outbound_message_is_delivered_with_its_receipt_evidence() {
 
     let got = received.0.lock().unwrap().clone();
     assert_eq!(got.len(), 1);
-    let (id, service, bytes, name, _) = &got[0];
+    let (id, service, bytes, name, _, _) = &got[0];
     assert_eq!(id, &format!("{}@as4.makod.test", msg.message_id));
-    // BDEW AS4-Profil 1.2 §2.3.1.2.1: the Marktprozesse service.
+    // BDEW AS4-Profil 1.2 Kap. 2.3.1.2.1: the Marktprozesse service.
     assert_eq!(service, "https://www.bdew.de/as4/communication/services/MP");
     assert!(
         bytes.starts_with(b"UNA") || bytes.starts_with(b"UNB"),
@@ -781,7 +801,7 @@ async fn an_unconfigured_sender_is_refused_under_nur_konfigurierte() {
     );
 }
 
-/// `bdew_ou_zulassen` (BDEW AS4-Profil 1.2 §2.3.2): the same sender is served.
+/// `bdew_ou_zulassen` (BDEW AS4-Profil 1.2 Kap. 2.3.2): the same sender is served.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unconfigured_sender_is_served_under_bdew_ou_zulassen() {
     let pki = Pki::new();
@@ -1030,7 +1050,7 @@ async fn captured_request(
 async fn a_rotated_identity_serves_without_a_restart() {
     use tower::Service as _;
     let pki = Pki::new();
-    let neu = pki.ca.bdew_party(OWN);
+    let neu = pki.ca.bdew_party_at(OWN, OWN_URL);
     let loopback = Loopback::new();
     let clients = pki.makod(&loopback, UnbekannteAbsender::NurKonfigurierte);
     let store = SlateDbStore::open_in_memory().await.unwrap();
@@ -1101,4 +1121,164 @@ async fn a_rotated_identity_serves_without_a_restart() {
         200,
         "the replaced encryption key still decrypts inside the overlap"
     );
+}
+
+// ── Part properties and limits ────────────────────────────────────────────────
+
+/// Regelungen zum Übertragungsweg für AS4 2.6, Kap. 6 (S. 7): every outbound
+/// Übertragungsdatei carries `BDEWDocumentType` (UNH DE0065),
+/// `BDEWDocumentDate` (`YYYY-MM-DD`) and `BDEWDocumentNo` (UNB DE0020); an
+/// APERAK has no DE0026, so no `BDEWApplicationReference`, and none of the
+/// three unused properties is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_part_properties_travel_with_the_message() {
+    use mako_engine::builder::As4Sender as _;
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let received = mount_partner(&pki, &loopback, 0);
+    let (sender, _) = sender(&pki, &loopback).await;
+
+    sender.send(&aperak()).await.expect("delivered");
+
+    let got = received.0.lock().unwrap().clone();
+    let (_, _, bytes, _, _, properties) = &got[0];
+    let names: Vec<&str> = properties.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        ["BDEWDocumentType", "BDEWDocumentDate", "BDEWDocumentNo"]
+    );
+    let value = |name: &str| {
+        properties
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.clone())
+            .unwrap()
+    };
+    assert_eq!(value("BDEWDocumentType"), "APERAK");
+    let date = value("BDEWDocumentDate");
+    assert!(
+        date.len() == 10 && date.as_bytes()[4] == b'-' && date.as_bytes()[7] == b'-',
+        "YYYY-MM-DD: {date}"
+    );
+    let text = String::from_utf8_lossy(bytes);
+    let unz = text.rsplit("UNZ+").next().unwrap();
+    assert!(
+        unz.contains(&format!("+{}'", value("BDEWDocumentNo"))),
+        "BDEWDocumentNo is the Datenaustauschreferenz UNZ repeats: {unz}"
+    );
+}
+
+/// Inbound gzip expands to at most `MAX_MESSAGE_BYTES` for the whole
+/// message; a payload decompressing beyond it is refused with `EBMS:0303`
+/// before anything reaches the handler.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_expansion_beyond_the_message_limit_is_refused_ebms_0303() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, false).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
+    let limit = usize::try_from(mako_as4::constants::MAX_MESSAGE_BYTES).unwrap();
+
+    let err = partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            vec![b'A'; limit + 1],
+            "big",
+        ))
+        .await
+        .expect_err("an expansion beyond the limit is refused");
+
+    assert_eq!(err.ebms_code(), Some("EBMS:0303"), "{err}");
+    assert!(inbox.log.take().is_empty(), "nothing was claimed");
+}
+
+// ── Mutual TLS ────────────────────────────────────────────────────────────────
+
+/// makod's clients reaching `msh` by its pinned address, the test CAs' CRLs
+/// at the MSH's CRL listener.
+fn over_tls(pki: &Pki, msh: &asx::testkit::tls::TlsMsh) -> As4Clients {
+    As4Clients::build_with_resolve(
+        pki.setup(
+            &pki.own,
+            UnbekannteAbsender::NurKonfigurierte,
+            Default::default(),
+        ),
+        vec![
+            (msh.host().to_owned(), msh.addr()),
+            (asx::testkit::pki::CRL_HOST.to_owned(), msh.crl_addr()),
+        ],
+    )
+    .expect("makod's clients build")
+}
+
+/// The partner's inbox, accepting every message.
+fn partner_inbound(pki: &Pki) -> asx::Inbound {
+    pki.counterparty(&pki.partner, &Loopback::new()).inbound(
+        asx::MemoryDedup::default(),
+        |_msg: asx::Verified<asx::as4::UserMessage>| async { Ok(()) },
+    )
+}
+
+/// `[party.as4] tls_cert_pem_file` / `tls_key_pem_file` reach the handshake:
+/// a send to an MSH that requires a client certificate (BDEW AS4-Profil 1.2
+/// Kap. 2.2.6.1) succeeds, the certificate it saw is the party's TLS
+/// certificate, and SNI names the endpoint's host (Regelungen zum
+/// Übertragungsweg für AS4 2.6, Kap. 3).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tls_identity_reaches_the_handshake() {
+    use asx::testkit::tls::TlsMsh;
+    use mako_engine::builder::As4Sender as _;
+    let pki = Pki::new();
+    let msh = TlsMsh::start(&pki.partner, &pki.ca, partner_inbound(&pki)).await;
+    assert_eq!(msh.url(), PARTNER_URL);
+    let (sender, evidence) = sender_over(over_tls(&pki, &msh)).await;
+    let msg = aperak();
+
+    sender.send(&msg).await.expect("delivered over mutual TLS");
+
+    let chains = msh.client_certificates();
+    assert!(!chains.is_empty(), "a handshake completed");
+    assert_eq!(chains[0][0], pki.own.tls.certificate());
+    assert_eq!(msh.server_names()[0].as_deref(), Some("partner.test"));
+    assert!(
+        evidence
+            .outbound(&msg.message_id.to_string())
+            .await
+            .unwrap()
+            .is_some(),
+        "the receipt came back over the connection"
+    );
+}
+
+/// A server whose certificate does not chain to the SM-PKI root is refused
+/// in the handshake: `asx-rs` reports `ErrorKind::Transport` with nothing
+/// written, and makod keeps the entry for the outbox to retry.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tls_refusal_is_a_retryable_transport_error() {
+    use asx::testkit::tls::TlsMsh;
+    use mako_engine::builder::As4Sender as _;
+    let pki = Pki::new();
+    let foreign = TestCa::sm_pki().bdew_party_at(PARTNER, PARTNER_URL);
+    let msh = TlsMsh::start(&foreign, &pki.ca, partner_inbound(&pki)).await;
+    let clients = over_tls(&pki, &msh);
+
+    let partner = clients.partners().deliverable(PARTNER).cloned().unwrap();
+    let err = clients
+        .client(OWN)
+        .unwrap()
+        .send(push(&partner, b"UNA:+.? 'UNB'".to_vec(), "t1"))
+        .await
+        .expect_err("the server is outside the trust anchor");
+    assert_eq!(err.kind(), asx::ErrorKind::Transport, "{err}");
+
+    let (sender, _) = sender_over(clients).await;
+    let err = sender
+        .send(&aperak())
+        .await
+        .expect_err("the server is outside the trust anchor");
+    assert!(
+        matches!(err, EngineError::Transport { .. }) && err.is_transient(),
+        "a TLS refusal is retried: {err:?}"
+    );
+    assert_eq!(msh.requests(), 0, "nothing was written");
 }

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "accountingd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "agentd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "agentplane",
  "anyhow",
@@ -183,7 +183,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "jsonschema",
- "rand 0.10.3",
+ "rand 0.10.4",
  "redb",
  "regex",
  "reqwest 0.13.5",
@@ -549,7 +549,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "flatbuffers",
- "lz4_flex 0.13.1",
+ "lz4_flex 0.13.2",
  "zstd 0.13.5",
 ]
 
@@ -717,9 +717,9 @@ dependencies = [
 
 [[package]]
 name = "asx-rs"
-version = "0.16.2"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d22b978653ff22b5c4c54a1fefc4a2685070424273f8ee985cdb93244e057716"
+checksum = "e7fb97fac854396bb1db4f3576c2d88160ca9905fbd36cca4e99d49af1186c8c"
 dependencies = [
  "aes-gcm 0.11.1",
  "aes-kw",
@@ -732,17 +732,20 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "lru",
  "mailparse",
  "memchr",
  "openssl",
- "reqwest 0.13.5",
  "roxmltree 0.21.2",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "subtle",
  "tokio",
+ "tokio-openssl",
  "tower-service",
  "tracing",
  "tracing-subscriber",
@@ -894,7 +897,7 @@ dependencies = [
  "hex",
  "http",
  "p256 0.14.0",
- "rand 0.10.3",
+ "rand 0.10.4",
  "sha1 0.10.7",
  "sha2 0.10.9",
  "time",
@@ -1501,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "billingd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1842,9 +1845,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.20.3"
+version = "3.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+checksum = "87a0cf66fd1eb2fb7b822cb78370d82303750809bc6ba855f3f58e517d3238db"
 
 [[package]]
 name = "by_address"
@@ -1953,9 +1956,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ff2a8126fff0f8c839080d619675a585e61720bb12d2baceae45769fd66f155"
+checksum = "33ef9e3e8154a45c7a95cff4c1299702106ad94062d7bb85fdc5d3a5afd91d45"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -2694,9 +2697,9 @@ dependencies = [
 
 [[package]]
 name = "ctor"
-version = "1.0.13"
+version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
+checksum = "ea691ed9f36489d087419b8b2ba3ef27d89621380b4178c73e2445a379e4e0f4"
 dependencies = [
  "link-section",
  "linktime-proc-macro",
@@ -3779,7 +3782,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "edifact",
  "rust_decimal",
@@ -3893,7 +3896,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "criterion",
  "edifact",
@@ -3936,7 +3939,7 @@ dependencies = [
 
 [[package]]
 name = "edmd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "arrow",
@@ -3985,7 +3988,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "billing",
  "grid-billing",
@@ -4000,7 +4003,7 @@ dependencies = [
 
 [[package]]
 name = "einsd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -4153,7 +4156,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "axum",
  "base64ct",
@@ -4175,7 +4178,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -4406,7 +4409,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee93edf3c501f0035bbeffeccfed0b79e14c311f12195ec0e661e114a0f60da4"
 dependencies = [
  "portable-atomic",
- "rand 0.10.3",
+ "rand 0.10.4",
  "web-time",
 ]
 
@@ -4720,7 +4723,7 @@ dependencies = [
  "lz4",
  "parking_lot",
  "pin-project",
- "rand 0.10.3",
+ "rand 0.10.4",
  "serde",
  "tracing",
  "twox-hash",
@@ -5049,7 +5052,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "billing",
  "mako-markt",
@@ -5583,7 +5586,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -6047,7 +6050,7 @@ dependencies = [
 
 [[package]]
 name = "invoic-checker"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "billing",
  "energy-billing",
@@ -6062,7 +6065,7 @@ dependencies = [
 
 [[package]]
 name = "invoicd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -6175,9 +6178,9 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
 name = "jiff"
-version = "0.2.43"
+version = "0.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26699905cc795a23e3949585cc7ba3ee8ade090872a27e4316304a777297894a"
+checksum = "175dc66334db3b9ab9985bf8b61cfed50dc16d20964bb47f9e479adcae984a7f"
 dependencies = [
  "jiff-core",
  "jiff-static",
@@ -6193,18 +6196,18 @@ dependencies = [
 
 [[package]]
 name = "jiff-core"
-version = "0.1.5"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffe6854081f5ac0a3046a9b223729ccd7a20b1e0e8277e44dc0660eedf67dfe2"
+checksum = "e599b80292e597019b8b3e392de3f4bea2959ddfb8c7dff60e035e9e311a2c1b"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "jiff-static"
-version = "0.2.43"
+version = "0.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b4ff49b2887190c760b86207b55cdcaabbdecaf7a0660d68aa2ed6f652abf0a"
+checksum = "c7b1af7547d47354bc438d797e3854601bde8f8d185780c5ba4ab27afa54f1ba"
 dependencies = [
  "jiff-core",
  "proc-macro2",
@@ -6214,9 +6217,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-tzdb"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
+checksum = "0980fca2cc272465bd60e82397607ba9f33add9e48defd77923301bbd03808f2"
 
 [[package]]
 name = "jiff-tzdb-platform"
@@ -6407,7 +6410,7 @@ dependencies = [
  "futures",
  "futures-core",
  "hmac 0.12.1",
- "lz4_flex 0.11.6",
+ "lz4_flex 0.11.7",
  "parking_lot",
  "pbkdf2",
  "rand 0.9.5",
@@ -6652,9 +6655,9 @@ checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 
 [[package]]
 name = "link-section"
-version = "0.19.3"
+version = "0.19.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39c29a617ce3df32c08497bdc1ab6e2376e0b17948ac166a2fbe5977c5954cd9"
+checksum = "4d9aae57673c1a235149777a74d152f3210ebd3e3b13346d2cdb6809e566bd3c"
 
 [[package]]
 name = "linked-hash-map"
@@ -6782,7 +6785,7 @@ dependencies = [
  "log",
  "md-5 0.11.0",
  "nom 8.0.0",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rangemap",
  "sha2 0.11.1",
  "stringprep",
@@ -6826,18 +6829,18 @@ dependencies = [
 
 [[package]]
 name = "lz4_flex"
-version = "0.11.6"
+version = "0.11.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+checksum = "13591d77a9b6d941f7e6fcade7f9dfd9e801308752bde50c0a9bb5852778c22c"
 dependencies = [
  "twox-hash",
 ]
 
 [[package]]
 name = "lz4_flex"
-version = "0.13.1"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
+checksum = "6a027efd2ad3c4dbb4123b5c018e3efbe7f6236da7c7612f122dad030f5d2de5"
 dependencies = [
  "twox-hash",
 ]
@@ -6855,7 +6858,7 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "asx-rs",
  "thiserror 2.0.21",
@@ -6863,7 +6866,7 @@ dependencies = [
 
 [[package]]
 name = "mako-emob"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -6879,12 +6882,12 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "criterion",
  "mako-events",
  "mako-fristen",
- "rand 0.10.3",
+ "rand 0.10.4",
  "serde",
  "serde_json",
  "slatedb",
@@ -6900,11 +6903,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.34.0"
+version = "0.34.1"
 
 [[package]]
 name = "mako-fristen"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "time",
  "time-tz",
@@ -6912,7 +6915,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "dvgw-edi",
  "mako-engine",
@@ -6929,7 +6932,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6945,7 +6948,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6961,7 +6964,7 @@ dependencies = [
 
 [[package]]
 name = "mako-invoic"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "mako-engine",
  "rubo4e",
@@ -6973,7 +6976,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -6991,7 +6994,7 @@ dependencies = [
 
 [[package]]
 name = "mako-markt"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -7010,7 +7013,7 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "mako-fristen",
  "rubo4e",
@@ -7022,7 +7025,7 @@ dependencies = [
 
 [[package]]
 name = "mako-pruefung"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "edi-energy",
  "mako-fristen",
@@ -7037,7 +7040,7 @@ dependencies = [
 
 [[package]]
 name = "mako-redispatch"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -7049,7 +7052,7 @@ dependencies = [
 
 [[package]]
 name = "mako-service"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -7095,7 +7098,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7112,7 +7115,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -7177,7 +7180,7 @@ dependencies = [
 
 [[package]]
 name = "makotest-native"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "edi-energy",
  "edifact",
@@ -7191,7 +7194,7 @@ dependencies = [
 
 [[package]]
 name = "marktd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -7412,9 +7415,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.4"
+version = "1.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
+checksum = "20521a903f02b0a573cd6840e9d0a5a0cc043d361fe924092cd70f8556cc9c4a"
 dependencies = [
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
@@ -7481,7 +7484,7 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 
 [[package]]
 name = "netzbilanzd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -7527,6 +7530,18 @@ name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77730ed34f01f4990cb2ea67fec715ecebc6fab9a6396cf83c5529b13f581bdc"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -7805,11 +7820,11 @@ dependencies = [
  "hyper",
  "itertools 0.15.0",
  "md-5 0.11.0",
- "nix",
+ "nix 0.31.3",
  "parking_lot",
  "percent-encoding",
  "quick-xml 0.41.0",
- "rand 0.10.3",
+ "rand 0.10.4",
  "reqwest 0.13.5",
  "rustls-pki-types",
  "serde",
@@ -8212,7 +8227,7 @@ dependencies = [
 
 [[package]]
 name = "outputd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -8377,7 +8392,7 @@ dependencies = [
  "futures",
  "half",
  "hashbrown 0.17.1",
- "lz4_flex 0.13.1",
+ "lz4_flex 0.13.2",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -8877,7 +8892,7 @@ dependencies = [
 
 [[package]]
 name = "portald"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -8922,7 +8937,7 @@ dependencies = [
  "hmac 0.13.0",
  "md-5 0.11.0",
  "memchr",
- "rand 0.10.3",
+ "rand 0.10.4",
  "sha2 0.11.1",
  "stringprep",
 ]
@@ -9068,7 +9083,7 @@ dependencies = [
 
 [[package]]
 name = "processd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -9126,7 +9141,7 @@ dependencies = [
 
 [[package]]
 name = "productd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -9187,7 +9202,7 @@ dependencies = [
  "chacha20",
  "core_detect",
  "num-traits",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rand_xorshift",
  "regex-syntax",
  "rusty-fork",
@@ -9413,7 +9428,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rand_pcg",
  "ring",
  "rustc-hash",
@@ -9490,9 +9505,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.3"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+checksum = "8f6fa277c67e6ea590466f04c3fe82cb509f0864fe470643e5570de9514a9b11"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -9646,7 +9661,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -10011,7 +10026,7 @@ dependencies = [
  "libc",
  "pastey",
  "pin-project-lite",
- "rand 0.10.3",
+ "rand 0.10.4",
  "reqwest 0.13.5",
  "rmcp-macros",
  "schemars 1.2.3",
@@ -11440,7 +11455,7 @@ dependencies = [
  "log",
  "md-5 0.11.0",
  "memchr",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -11790,9 +11805,9 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "target-lexicon"
-version = "0.13.5"
+version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+checksum = "8c447be3a2abfa84b2d91680c56600bd6b2873866de27b36ec911be705e291da"
 
 [[package]]
 name = "tempfile"
@@ -12102,6 +12117,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-openssl"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59df6849caa43bb7567f9a36f863c447d95a11d5903c9cc334ba32576a27eadd"
+dependencies = [
+ "openssl",
+ "openssl-sys",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-postgres"
 version = "0.7.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12120,7 +12146,7 @@ dependencies = [
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
- "rand 0.10.3",
+ "rand 0.10.4",
  "socket2 0.6.5",
  "tokio",
  "tokio-util",
@@ -12986,7 +13012,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "947dde63b6d514cc5e044edad4e0ca7261afd1099d16c83d942cb2b2f348689c"
 dependencies = [
- "rand 0.10.3",
+ "rand 0.10.4",
  "serde",
  "web-time",
 ]
@@ -13410,7 +13436,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vertragd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -13751,7 +13777,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9babd3a767a4c1aef6900409f85f5d53ce2544ccdfaa86dad48c91782c6d6893"
 dependencies = [
  "windows-collections",
- "windows-core",
+ "windows-core 0.61.2",
  "windows-future",
  "windows-link 0.1.3",
  "windows-numerics",
@@ -13763,7 +13789,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3beeceb5e5cfd9eb1d76b381630e82c4241ccd0d27f1a39ed41b2760b255c5e8"
 dependencies = [
- "windows-core",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -13775,8 +13801,21 @@ dependencies = [
  "windows-implement",
  "windows-interface",
  "windows-link 0.1.3",
- "windows-result",
- "windows-strings",
+ "windows-result 0.3.4",
+ "windows-strings 0.4.2",
+]
+
+[[package]]
+name = "windows-core"
+version = "0.62.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
+dependencies = [
+ "windows-implement",
+ "windows-interface",
+ "windows-link 0.2.1",
+ "windows-result 0.4.1",
+ "windows-strings 0.5.1",
 ]
 
 [[package]]
@@ -13785,7 +13824,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc6a41e98427b19fe4b73c550f060b59fa592d7d686537eebf9385621bfbad8e"
 dependencies = [
- "windows-core",
+ "windows-core 0.61.2",
  "windows-link 0.1.3",
  "windows-threading",
 ]
@@ -13830,7 +13869,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
 dependencies = [
- "windows-core",
+ "windows-core 0.61.2",
  "windows-link 0.1.3",
 ]
 
@@ -13844,12 +13883,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-result"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
+dependencies = [
+ "windows-link 0.2.1",
+]
+
+[[package]]
 name = "windows-strings"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56e6c93f3a0c3b36176cb1327a4958a0353d5d166c2a35cb268ace15e91d3b57"
 dependencies = [
  "windows-link 0.1.3",
+]
+
+[[package]]
+name = "windows-strings"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
+dependencies = [
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -14310,9 +14367,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.5.1"
+version = "9.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
+checksum = "80cc68510ea7553c30a69c732de5278e94183f68765af6c642dbccefd6ec777e"
 dependencies = [
  "constant_time_eq 0.6.1",
  "crc32fast",
@@ -14321,7 +14378,7 @@ dependencies = [
  "indexmap 2.14.2",
  "libc",
  "memchr",
- "nix",
+ "nix 0.32.0",
  "typed-path",
  "windows-sys 0.61.2",
  "zeroize",

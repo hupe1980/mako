@@ -859,14 +859,26 @@ impl As4Sender for BdewAs4Sender {
             };
             let as4_message_id = clients.message_id(&message_id_str);
 
+            // Regelungen zum Übertragungsweg für AS4 2.6, Kap. 6 (S. 7): the
+            // part properties, read from the interchange's own envelope. The
+            // rendering is deterministic, so one that yields none is permanent.
+            let properties =
+                mako_as4::PartProperties::from_interchange(&rendered.bytes).map_err(|e| {
+                    EngineError::Serialization(format!(
+                        "the Übertragungsdatei {message_id_str} ({message_type}) yields no AS4 \
+                         part properties: {e}"
+                    ))
+                })?;
+
             // Allgemeine Festlegungen V6.1d Kap. 2.12:
             // Nachrichtentyp_Anwendungsreferenz_von_an_yyyymmdd_DAR.txt, the
-            // creation date in UTC, von/an from the interchange's UNB.
+            // creation date in UTC, von/an and the Anwendungsreferenz
+            // (DE0026) from the interchange's UNB.
             let payload_filename = {
                 let now = time::OffsetDateTime::now_utc();
                 mako_as4::uebertragungsdatei_name(
                     &message_type,
-                    anwendungsreferenz_for(&message_type),
+                    properties.application_reference.as_deref().unwrap_or(""),
                     &rendered.sender_mp_id,
                     &rendered.receiver_mp_id,
                     (now.year(), now.month() as u8, now.day()),
@@ -874,15 +886,19 @@ impl As4Sender for BdewAs4Sender {
                 )
             };
 
+            // Kap. 7.2 (S. 8): „Es wird genau eine Übertragungsdatei
+            // übermittelt." — one payload part per AS4 message.
             let message = asx::as4::Message::to(&partner)
-                // BDEW AS4-Profil 1.2 §2.3.1.2.1: an EDIFACT Übertragungsdatei
+                // BDEW AS4-Profil 1.2 Kap. 2.3.1.2.1: an EDIFACT Übertragungsdatei
                 // of the Marktkommunikation is a Marktprozess.
                 .service(bdew_action.service().uri())
                 .message_id(as4_message_id.clone())
                 .timestamp(std::time::SystemTime::from(first_attempt_at))
                 .payload(
-                    asx::Payload::new(rendered.bytes, mako_as4::constants::PAYLOAD_MIME_TYPE)
-                        .named(payload_filename),
+                    properties.apply(
+                        asx::Payload::new(rendered.bytes, mako_as4::constants::PAYLOAD_MIME_TYPE)
+                            .named(payload_filename),
+                    ),
                 );
 
             // Join the trace of the request that caused this message: the
@@ -970,26 +986,6 @@ fn delivery_error(e: &asx::Error, recipient: &str, message_id: &str) -> EngineEr
     }
 }
 
-// ── §AF Kap. 2.12 helpers ─────────────────────────────────────────────────────────
-
-/// Returns the `Anwendungsreferenz` (UNB DE0026) token for a given EDIFACT
-/// message type, as defined by the BDEW Nachrichtenbeschreibungen.
-///
-/// For most types (UTILMD, APERAK, CONTRL, etc.) the field is empty — the
-/// §AF Kap. 2.12 filename then renders the second position as an empty string,
-/// producing a double underscore (e.g. `UTILMD__9900…`).
-///
-/// For MSCONS the value depends on the message content and is not knowable
-/// from the type alone, so we leave it empty here too.  The AS4 metadata
-/// (`BDEWApplicationReference` PartProperty) carries the same information and
-/// is also absent because our builders produce bare UNH…UNT without UNB.
-fn anwendungsreferenz_for(_message_type: &str) -> &'static str {
-    // Per AF Kap. 2.12 and BDEW Nachrichtenbeschreibungen:
-    // VL / TL / EM are only used for MSCONS, and only when the sender
-    // explicitly sets UNB DE0026 — which our bare-UNH builders never do.
-    ""
-}
-
 #[cfg(test)]
 mod loopback_guard_tests {
     use super::{MAX_LOOPBACK_HOPS, MAX_TRACKED_CONVERSATIONS, record_loopback_hop};
@@ -1064,7 +1060,7 @@ mod loopback_guard_tests {
 mod bdew_envelope_tests {
     use mako_as4::constants;
 
-    /// BDEW AS4-Profil §2.3.1.1 requires the `<eb:PartyId>/@type` attribute and
+    /// BDEW AS4-Profil Kap. 2.3.1.1 requires the `<eb:PartyId>/@type` attribute and
     /// derives it from the agency that issued the MP-ID. The AS4 party type and
     /// the EDIFACT NAD DE3055 agency describe the same fact, so they are derived
     /// from one source rather than configured twice.

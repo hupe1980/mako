@@ -68,7 +68,7 @@ struct Rule {
 /// Identifikatoren and Rollenmodell.
 macro_rules! bdew_document {
     () => {
-        r"\b(Allgemeine[n]? Festlegungen( zu den EDIFACT- und XML-Nachrichten)?|AF|(APERAK|CONTRL|UTILMD|UTILTS|INVOIC|REMADV|REQOTE|QUOTES|ORDERS|ORDRSP|ORDCHG|PRICAT|MSCONS|IFTSTA|INSRPT|PARTIN|COMDIS)[ -](AHB|MIG)( (Strom|Gas))?|(AHB|MIG) (APERAK|CONTRL|UTILMD|UTILTS|INVOIC|REMADV|REQOTE|QUOTES|ORDERS|ORDRSP|ORDCHG|PRICAT|MSCONS|IFTSTA|INSRPT|PARTIN|COMDIS)|AHB|MIG|EBD|Identifikatoren[- ]AWH|AWH Identifikatoren( in der Marktkommunikation)?|Rollenmodell( für die Marktkommunikation)?)"
+        r"\b(Allgemeine[n]? Festlegungen( zu den EDIFACT- und XML-Nachrichten)?|AF|(APERAK|CONTRL|UTILMD|UTILTS|INVOIC|REMADV|REQOTE|QUOTES|ORDERS|ORDRSP|ORDCHG|PRICAT|MSCONS|IFTSTA|INSRPT|PARTIN|COMDIS)[ -](AHB|MIG)( (Strom|Gas))?|(AHB|MIG) (APERAK|CONTRL|UTILMD|UTILTS|INVOIC|REMADV|REQOTE|QUOTES|ORDERS|ORDRSP|ORDCHG|PRICAT|MSCONS|IFTSTA|INSRPT|PARTIN|COMDIS)|AHB|MIG|EBD|Identifikatoren[- ]AWH|AWH Identifikatoren( in der Marktkommunikation)?|Rollenmodell( für die Marktkommunikation)?|(BDEW[ -])?AS4-Profile?|Regelungen zum Übertragungsweg( für AS4)?)"
     };
 }
 
@@ -151,7 +151,8 @@ const RULES: &[Rule] = &[
             bdew_document!(),
         ),
         reason: "the Allgemeine Festlegungen, every AHB, MIG and EBD document, and the BDEW \
-                 Anwendungshilfen Identifikatoren and Rollenmodell are numbered in Kapitel, \
+                 Anwendungshilfen Identifikatoren and Rollenmodell, the AS4-Profil and the Regelungen \
+                 zum Übertragungsweg are numbered in Kapitel, \
                  not §§ — cite „APERAK AHB 1.1 Kap. 2.4.1\", „Allgemeine Festlegungen 6.1d \
                  Kap. 2.13\"",
     },
@@ -168,7 +169,7 @@ const RULES: &[Rule] = &[
         id: "asx-sign-only",
         row: "`asx-rs` accepts a sign-only override",
         pattern: r"(?i)asx-rs.{0,30}refuses (a|the) (policy )?layer only when|sign-only (override|overlay).{0,30}(passes|is valid|validates)",
-        reason: "asx-rs 0.16 has no setting that relaxes signing or encryption: \
+        reason: "asx-rs 0.17 has no setting that relaxes signing or encryption: \
                  Profile::bdew() signs and encrypts, build() refuses a client without a \
                  decrypter, and an unencrypted inbound message is answered EBMS:0103",
     },
@@ -1221,6 +1222,8 @@ mod tests {
             "// REMADV AHB 1.0a § 14 UStG",
             "/// MIG and AHB carry it; § 60 Abs. 1 MsbG obliges the MSB",
             "/// Identifikatoren AWH V1.2 Kap. 2.1",
+            "/// BDEW AS4-Profil 1.2 Kap. 2.3.4.4 (S. 17)",
+            "/// Regelungen zum Übertragungsweg für AS4 2.6 Kap. 7.3",
         ] {
             assert!(
                 !hit_ids(line).contains(&"bdew-document-paragraph"),
@@ -1231,6 +1234,9 @@ mod tests {
         for line in [
             "/// INVOIC AHB 1.0b, § 14 UStG and INVOIC AHB 1.0b § 3.1.2",
             "/// § 2.4.1 APERAK AHB: 45 Minuten",
+            "/// BDEW AS4-Profil 1.2 §2.3.4.4: three key pairs",
+            "// (AS4-Profil §2.3.1.1)",
+            "/// Regelungen zum Übertragungsweg für AS4 2.6 § 7.3",
         ] {
             assert!(
                 hit_ids(line).contains(&"bdew-document-paragraph"),

@@ -7,7 +7,7 @@
 
 // ── Party identifier types ────────────────────────────────────────────────────
 
-/// `<eb:PartyId>/@type` for a GLN, per BDEW AS4-Profil 1.2 §2.3.1.1 (ebCore
+/// `<eb:PartyId>/@type` for a GLN, per BDEW AS4-Profil 1.2 Kap. 2.3.1.1 (ebCore
 /// ISO 6523, ICD 0088).
 pub const PARTY_TYPE_GLN: &str = "urn:oasis:names:tc:ebcore:partyid-type:iso6523:0088";
 
@@ -41,13 +41,16 @@ pub const fn party_id_type_for_agency(agency: &str) -> &'static str {
 /// 72 hours.
 ///
 /// Every retry resends the same message id and `eb:Timestamp`, so a receiver
-/// that already holds the message answers it as a duplicate. `asx-rs` 0.16.2
+/// that already holds the message answers it as a duplicate. `asx-rs` 0.17
 /// accepts an `eb:Timestamp` up to 7 days old, which covers the whole window.
 pub const MAX_RETRY_DURATION_SECS: u64 = 72 * 3600;
 
 // ── Size ──────────────────────────────────────────────────────────────────────
 
-/// The largest AS4 request an inbox reads, 64 MiB (`Profile::max_message_bytes`).
+/// The largest AS4 message, 64 MiB (`Profile::max_message_bytes`): the request
+/// an inbox reads and, after gzip, the expansion of the whole message — an
+/// inbound message whose payloads decompress beyond it is refused with
+/// `EBMS:0303`.
 ///
 /// BDEW AS4-Profil 1.2 names no limit; 64 MiB is far above any Übertragungsdatei
 /// and bounds what one request can make the receiver buffer.
@@ -57,7 +60,7 @@ pub const MAX_MESSAGE_BYTES: u64 = 64 << 20;
 
 /// `<eb:PartInfo>/@MimeType` of the EDIFACT payload part.
 ///
-/// BDEW AS4-Profil 1.2 §2.2.3.2: because compression is mandatory the payload
+/// BDEW AS4-Profil 1.2 Kap. 2.2.3.2: because compression is mandatory the payload
 /// is binary in its own MIME part with Content-Type `application/octet-stream`;
 /// `Profile::bdew()` refuses any other part type.
 pub const PAYLOAD_MIME_TYPE: &str = "application/octet-stream";

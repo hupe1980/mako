@@ -2,22 +2,28 @@
 //!
 //! The AS4 port is the only door a counterparty knocks on directly, and every
 //! control on it fails in the same quiet way: the code exists, reads as though
-//! it runs, and does not. `asx-rs` 0.16 owns the cryptography — `Profile::bdew()`
-//! cannot be relaxed — so what remains on mako's side is the call sites that
-//! make the library's checks apply to the deployment that boots, and the
-//! settlement order the inbox depends on.
+//! it runs, and does not. `asx-rs` 0.17 owns the cryptography, mutual TLS and
+//! the certificate rules — `Profile::bdew()` cannot be relaxed — so what remains
+//! on mako's side is the call sites that make the library's checks apply to the
+//! deployment that boots, and the settlement order the inbox depends on.
 //!
 //! ## What it requires
 //!
 //! 1. `core/preflight.rs` builds the AS4 clients (`As4Clients::build`): that
 //!    runs `As4::builder(..).build()` per local MP-ID, which is where a signer
-//!    outside the SM-PKI root, a certificate without the MP-ID in its OU or a
-//!    missing decrypter is refused — at boot and under `--check`, not on the
-//!    first delivery.
+//!    outside the SM-PKI root, a certificate without the MP-ID in its OU or
+//!    without exactly one URI subject alternative name, a partner endpoint
+//!    other than its certificate's address or a missing decrypter is refused —
+//!    at boot and under `--check`, not on the first delivery.
 //! 2. `transport/as4_clients.rs` calls `build()` on the configured builder.
 //! 3. `crates/mako-as4/src/identity.rs` registers the CRL signer and compares
 //!    the three key pairs by public key — the two checks `build()` does not do
-//!    for mako (it does not require a CRL signer, and it compares certificates).
+//!    for mako (it does not require a CRL signer, and it compares
+//!    certificates) — loads the TLS key pair as the client identity, and caps
+//!    the profile at `MAX_MESSAGE_BYTES`, which also bounds the inbound gzip
+//!    expansion; `transport/as4_sender.rs` sets the `eb:PartProperties` of
+//!    Regelungen zum Übertragungsweg für AS4 2.6 Kap. 6 on every outbound
+//!    payload.
 //! 4. `transport/as4_ingest.rs` consults the sender policy
 //!    (`[policy.as4] unbekannte_absender`) before dispatch.
 //! 5. `transport/as4_ingest.rs` refuses an interchange whose `UNB` DE 0010 is
@@ -84,6 +90,26 @@ const REQUIRED: &[Required] = &[
         reason: "BDEW AS4-Profil 1.2 §2.3.4.4 requires different key pairs for signing, \
                  encryption and TLS; asx-rs compares certificates, so two certificates of one \
                  key pair pass it",
+    },
+    Required {
+        file: "crates/mako-as4/src/identity.rs",
+        needle: ".tls_identity(identity.tls.clone())",
+        reason: "BDEW AS4-Profil 1.2 Kap. 2.2.6.1 requires client authentication: without the \
+                 TLS key pair as the local party's TLS identity no partner MSH accepts the \
+                 connection",
+    },
+    Required {
+        file: "crates/mako-as4/src/identity.rs",
+        needle: ".max_message_bytes(crate::constants::MAX_MESSAGE_BYTES)",
+        reason: "the message size cap bounds what one request makes the inbox buffer and what \
+                 its payloads may decompress to; without it the cap is asx-rs's 256 MiB ceiling",
+    },
+    Required {
+        file: "services/makod/src/transport/as4_sender.rs",
+        needle: "properties.apply(",
+        reason: "Regelungen zum Übertragungsweg für AS4 2.6 Kap. 6 fills BDEWDocumentType, \
+                 BDEWDocumentDate and BDEWDocumentNo on every Übertragungsdatei of the \
+                 Marktprozesse; without the call no outbound message carries them",
     },
     Required {
         file: "services/makod/src/transport/as4_ingest.rs",
@@ -340,17 +366,23 @@ mod tests {
         );
         w(
             "crates/mako-as4/src/identity.rs",
-            "if same_public_key(a, b) {}\n.crl_signer(crl_signer);\n",
+            "if same_public_key(a, b) {}\n.crl_signer(crl_signer);\n\
+             .tls_identity(identity.tls.clone());\n\
+             .max_message_bytes(crate::constants::MAX_MESSAGE_BYTES)\n",
+        );
+        w(
+            "services/makod/src/transport/as4_sender.rs",
+            "properties.apply(payload)\n",
         );
         w("services/makod/src/transport/as4_ingest.rs", ingest);
         w("services/makod/src/startup/servers.rs", servers);
         w(
             "Cargo.toml",
-            "asx-rs           = { version = \"0.16.2\", default-features = false }\n",
+            "asx-rs           = { version = \"0.17\", default-features = false }\n",
         );
         w(
             "fuzz/Cargo.toml",
-            "asx-rs = { version = \"0.16.2\", features = [\"test-util\"] }\n",
+            "asx-rs = { version = \"0.17\", features = [\"test-util\"] }\n",
         );
         dir
     }

@@ -107,6 +107,23 @@ fn registered() -> (usize, usize) {
     (workflows.len(), pids.len())
 }
 
+/// Every routed Prüfidentifikator, over every module under every role.
+fn routed_pids() -> BTreeSet<u32> {
+    let roles = DeploymentRoles::all();
+    let mut pids = BTreeSet::new();
+    for module in &makod::startup::production_modules() {
+        let mut router = PidRouter::new();
+        module.register_pids_with_roles(&mut router, &roles);
+        pids.extend(
+            router
+                .registered_pids()
+                .filter(|&p| router.route(p).is_some()),
+        );
+        pids.extend(router.registered_commodity_entries().map(|(p, _, _)| p));
+    }
+    pids
+}
+
 #[test]
 fn every_published_scope_claim_matches_the_registry() {
     let (workflows, pids) = registered();
@@ -254,5 +271,65 @@ fn the_answer_obligation_split_matches_the_catalogue() {
             collapse(&raw).contains(collapse(claim).as_str()),
             "{path} must state `{claim}`"
         );
+    }
+}
+
+/// The landing page splits the routed total against the published inventory
+/// (`crates/edi-energy/profiles/pid-overview.json`): how many published codes
+/// are routed, how many are not, how many routed codes come from AHB editions
+/// beyond the overview, and how many are DVGW codes BDEW does not publish. A
+/// total alone hides a published code that stops being routed behind a new
+/// DVGW one.
+#[test]
+fn the_routed_total_is_split_against_the_published_inventory() {
+    let overview: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../crates/edi-energy/profiles/pid-overview.json"),
+        )
+        .expect("the published inventory"),
+    )
+    .expect("the inventory is JSON");
+    let published: BTreeSet<u32> = overview["ahbs"]
+        .as_object()
+        .expect("ahbs")
+        .values()
+        .flat_map(|v| v.as_array().expect("a PID list").iter())
+        .map(|p| p.as_str().expect("a PID string").parse().expect("a PID"))
+        .collect();
+    let routed = routed_pids();
+    let published_routed = routed.intersection(&published).count();
+    let beyond: Vec<u32> = routed.difference(&published).copied().collect();
+    let dvgw = beyond.iter().filter(|p| **p / 1000 == 70).count();
+    let ahb_only = beyond.len() - dvgw;
+
+    let page = collapse(&strip_tags(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../site/templates/index.html"),
+        )
+        .expect("the landing page"),
+    ));
+    let total = published.len();
+    for claim in [
+        format!("{published_routed} of them are routed"),
+        format!("those {published_routed}"),
+        format!("{} published codes not routed", total - published_routed),
+        format!("{} further DVGW gas codes", dvgw),
+        format!("{} that AHB editions in force carry", number_word(ahb_only)),
+    ] {
+        assert!(page.contains(&claim), "the landing page must say `{claim}`");
+    }
+}
+
+fn number_word(n: usize) -> String {
+    match n {
+        1 => "one".into(),
+        2 => "two".into(),
+        3 => "three".into(),
+        4 => "four".into(),
+        5 => "five".into(),
+        6 => "six".into(),
+        n => n.to_string(),
     }
 }

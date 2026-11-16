@@ -108,7 +108,7 @@ missing_docs = "warn"
 allow_attributes_without_reason = "deny"
 
 [workspace.package]
-version     = "0.34.0"
+version     = "0.34.1"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -205,7 +205,7 @@ mako-fristen     = { path = "crates/mako-fristen",     version = "0.34" }
 # mako-as4 and makod both depend on it: independent declarations drift onto two
 # versions in one build. `Profile::bdew()` fixes every security and wire
 # setting; mako supplies the parties, the SM-PKI root and the CRL signer.
-asx-rs           = { version = "0.16.2", default-features = false, features = ["as4", "http-client"] }
+asx-rs           = { version = "0.17", default-features = false, features = ["as4", "http-client"] }
 mako-service     = { path = "crates/mako-service",     version = "0.34" }
 invoic-checker   = { path = "crates/invoic-checker",   version = "0.34" }
 # `default-features = false` on purpose: the crate's defaults are *every*

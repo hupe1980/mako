@@ -147,9 +147,9 @@ const SITES: &[Site] = &[
     },
     Site {
         path: "services/makod/src/transport/as4_clients.rs",
-        count: 1,
+        count: 2,
         why: Why::Target,
-        reason: "`build_with_http` is the integration tests' loopback seam: used through the library target, dead in the binary target",
+        reason: "`build_with_http` and `build_with_resolve` are the integration tests' loopback and socket-bound TLS seams: used through the library target, dead in the binary target",
     },
     Site {
         path: "services/makod/src/transport/as4_evidence.rs",

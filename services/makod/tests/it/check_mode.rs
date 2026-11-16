@@ -563,12 +563,19 @@ primary = true
 // ── AS4 ──────────────────────────────────────────────────────────────────────
 
 /// AS4 key material from a test SM-PKI, written to `dir`: makod's party
-/// `9900001000001`, a partner `9900001000002`, the root and the CCRL-S.
+/// `9900001000001`, a partner `9900001000002`, the root and the CCRL-S. Each
+/// certificate names its party's AS4 address.
 fn write_as4_material(dir: &std::path::Path) {
     let ca = asx::testkit::pki::TestCa::sm_pki();
     let crl = ca.crl_signer("CCRL-S(Root)", asx::testkit::pki::KeyAlg::EcBrainpoolP256r1);
-    let own = ca.bdew_party("9900001000001");
-    let partner = ca.bdew_party("9900001000002");
+    let own = ca.bdew_party_at(
+        "9900001000001",
+        "https://makod.check.example/as4/inbox/9900001000001",
+    );
+    let partner = ca.bdew_party_at(
+        "9900001000002",
+        "https://partner.example/as4/inbox/9900001000002",
+    );
     let w = |name: &str, bytes: &[u8]| std::fs::write(dir.join(name), bytes).expect("write");
     w("root.pem", ca.cert_pem());
     w("ccrl-s.pem", crl.cert_pem());
@@ -668,7 +675,7 @@ signing_cert_pem_files = ["DIR/partner.sig.pem"]"#;
 }
 
 /// A partner with an endpoint and no encryption certificate cannot be
-/// delivered to (BDEW AS4-Profil 1.2 §2.2.6.2.2).
+/// delivered to (BDEW AS4-Profil 1.2 Kap. 2.2.6.2.2).
 #[test]
 fn check_rejects_an_as4_partner_without_an_encryption_certificate() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -700,7 +707,7 @@ encryption_cert_pem_file = "DIR/partner.enc.pem""#;
         None,
     );
     assert!(!ok, "a plaintext endpoint must be refused");
-    assert!(out.contains("HTTPS"), "{out}");
+    assert!(out.contains("is not https"), "{out}");
 }
 
 /// The SM-PKI root is the one trust anchor; without it nothing verifies, so

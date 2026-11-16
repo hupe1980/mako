@@ -106,7 +106,7 @@ impl BdewAction {
     /// The AS4 service an Übertragungsdatei of this type is sent under.
     ///
     /// Every EDIFACT Übertragungsdatei of the Marktkommunikation is a
-    /// Marktprozess (BDEW AS4-Profil 1.2 §2.3.1.2.1). The other four services
+    /// Marktprozess (BDEW AS4-Profil 1.2 Kap. 2.3.1.2.1). The other four services
     /// carry document families that are not EDIFACT interchanges.
     #[must_use]
     pub fn service(&self) -> Service {
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(action.as_edifact_type(), "ALOCAT");
     }
 
-    /// BDEW AS4-Profil 1.2 §2.3.1.2.1: an EDIFACT Übertragungsdatei of the
+    /// BDEW AS4-Profil 1.2 Kap. 2.3.1.2.1: an EDIFACT Übertragungsdatei of the
     /// Marktkommunikation is sent under the Marktprozesse service.
     #[test]
     fn every_edifact_type_is_a_marktprozess() {

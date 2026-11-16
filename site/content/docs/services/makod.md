@@ -463,12 +463,13 @@ API keys and OIDC can be active at the same time.
 
 ### `[as4]` — AS4/ebMS3 inbound and outbound
 
-`asx-rs` 0.16's `Profile::bdew()` fixes every security and wire setting of BDEW
+`asx-rs` 0.17's `Profile::bdew()` fixes every security and wire setting of BDEW
 AS4-Profil 1.2: ECDSA on brainpoolP256r1 with an `X509PKIPathv1` token,
 ECDH-ES/ConcatKDF/AES-128-GCM with an `X509SKI` reference, sign then encrypt,
 gzip, the fixed Action, roles and `AgreementRef`, an empty `ConversationId`, CRL
 revocation with the three-day distrust rule (Regelungen zum Übertragungsweg für
-AS4 2.6 Kap. 5.4). Nothing in the configuration can relax it. What is
+AS4 2.6 Kap. 5.4), mutual TLS under BSI TR-03116-3 with the SM-PKI root as the
+only TLS root and SNI (Kap. 3). Nothing in the configuration can relax it. What is
 configured is who the parties are:
 
 | Material | Where | Used for |
@@ -479,7 +480,7 @@ configured is who the parties are:
 | Partner encryption cert | `[[as4.partner]] encryption_cert_pem_file` | Encrypting what is **sent** to the partner |
 | Partner signing certs | `[[as4.partner]] signing_cert_pem_files` | Pins: the partner's messages must be signed by one of them (several for a rollover) |
 
-BDEW AS4-Profil 1.2 §2.3.4.4 requires different EC key pairs for signing,
+BDEW AS4-Profil 1.2 Kap. 2.3.4.4 requires different EC key pairs for signing,
 encryption and TLS, issued by an SM-PKI CA, with the MP-ID in the subject — in
 its OU (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2: „Das Feld
 Organisational Unit („OU") des Subject muss die MP-ID enthalten"). A receiving
@@ -496,14 +497,14 @@ its own AS4 client**: a combined Strom+Gas deployment holds two `[party.as4]`.
 | `[as4] allow_no_signing` (`MAKOD_ALLOW_NO_AS4_SIGNING`, `--allow-no-as4-signing`) | **Dev/test:** start without AS4 key material and without an outbox webhook; outbound EDIFACT is logged |
 | `[party.as4] signing_cert_pem_file` · `signing_key_pem_file` | The MP-ID's EMT.MAK signing certificate (leaf first, then intermediates) and key |
 | `[party.as4] encryption_cert_pem_file` · `encryption_key_pem_file` | Its encryption certificate and decryption key |
-| `[party.as4] tls_cert_pem_file` · `tls_key_pem_file` | Its TLS client certificate and key, presented when a partner MSH asks for one. Each certificate of the three carries the MP-ID as subject OU (Kap. 5.2) |
+| `[party.as4] tls_cert_pem_file` · `tls_key_pem_file` | Its TLS client certificate and EC key, presented on every connection to a partner MSH — required, a receive-only party included (BDEW AS4-Profil 1.2 Kap. 2.2.6.1; the Zertifikatstripel, RzÜ AS4 2.6 Kap. 1.3). Each certificate of the three carries the MP-ID as subject OU and the inbox address as its one URI subject alternative name (Kap. 5.2) |
 | `[[as4.partner]] mp_id` · `agency` | The partner's MP-ID; the agency (party type) is derived from its prefix unless set |
-| `[[as4.partner]] endpoint` | Its inbox, `https://` on a host name (SNI, Kap. 3); the address the partner's certificate names, when it names one (Kap. 2); omit for a partner makod only receives from |
-| `[[as4.partner]] encryption_cert_pem_file` | Required with `endpoint`; its OU is the partner's MP-ID, and it names at most one URI address (Kap. 5.2) |
+| `[[as4.partner]] endpoint` | Optional: the inbox is the URI subject alternative name of the partner's encryption certificate (Kap. 2) and is taken from there when omitted; set, it must be that address, `https://` on a host name (SNI, Kap. 3) |
+| `[[as4.partner]] encryption_cert_pem_file` | Makes the partner deliverable; its OU is the partner's MP-ID and it names exactly one URI address (Kap. 5.2). Omit for a partner makod only receives from |
 | `[[as4.partner]] signing_cert_pem_files` | Pinned signing certificates; without any, the SM-PKI chain and the OU decide |
 | `[[as4.partner]] de0004_ausnahme` | MP-IDs the partner may name in `UNB` DE0004 while authenticating as itself (a Dienstleister); without it DE0004 must be the partner's own MP-ID, and each entry is a startup warning |
 
-Partner endpoints are seeded into the durable `PartnerStore`; runtime changes via
+Configured `endpoint`s are seeded into the durable `PartnerStore`; runtime changes via
 `PUT /admin/partners/{mp_id}` or inbound PARTIN survive restarts.
 
 #### `[policy.as4] unbekannte_absender` {#policy-as4-unbekannte-absender}
@@ -544,7 +545,8 @@ operator. Set it back once the cutover is complete.
 |---|---|
 | `--as4-addr` with no `[party.as4]`, or one `[[party]]` without it beside one with it | Each MP-ID's inbox and messages need its own key pairs |
 | No `trust_anchor_pem_file`, `crl_signer_pem_file` or `message_id_domain` | Nothing verifies, nothing below the root passes the CRL check, no message id can be formed |
-| `As4::builder(..).build()` refuses (a signer not chaining to the root, no MP-ID in a certificate's OU, an expired certificate, …) | The `asx-rs` refusal names the setting and the profile section |
+| A `[party.as4]` without `tls_cert_pem_file` / `tls_key_pem_file` | Client authentication is required (BDEW AS4-Profil 1.2 Kap. 2.2.6.1); the TLS certificate is part of the Zertifikatstripel (RzÜ AS4 2.6 Kap. 1.3) |
+| `As4::builder(..).build()` refuses (a signer not chaining to the root, a certificate of either triple without the MP-ID in its OU or without exactly one URI subject alternative name, a partner `endpoint` other than its certificate's address or on an IP address, a TLS key that is not EC, an expired certificate, …) | The `asx-rs` refusal names the setting and the rule; the finding cites RzÜ AS4 2.6 Kap. 1.3, 2, 3, 5.2 |
 | Two of a party's signing, encryption and TLS certificates certify one key pair | §2.3.4.4; compared by public key, not by certificate |
 | A partner endpoint on `http://`, or an endpoint without an encryption certificate | §2.2.6.2.2 encrypts every message for its recipient |
 | `[[as4.partner]] quirks`, `as4.lenient_receipts` or `MAKOD_AS4_LENIENT_RECEIPTS` set | Every receipt is verified with its NonRepudiationInformation; a transmission without an NRR has failed (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 7.3, S. 8) |
@@ -566,8 +568,9 @@ up to 7 days old; the retry window is 72 hours).
   a pinned or SM-PKI certificate of the partner, referring to the sent message
   id, echoing the signed digests as NonRepudiationInformation. Its evidence is kept (`as4ev/` in the store)
   before the outbox entry is acknowledged.
-- A partner `eb:Error`, an unverifiable receipt and a transport failure back off
-  and retry inside the **72-hour** window — protocol-safe with the same id and
+- A partner `eb:Error`, an unverifiable receipt and a transport failure — a TLS
+  refusal (unknown CA, wrong host, revoked server certificate) included, which
+  writes nothing — back off and retry inside the **72-hour** window — protocol-safe with the same id and
   timestamp. `outbox_delivery_attempted` logs `counterparty_error`,
   `receipt_unverified` or `transport_error`; a configuration refusal is
   permanent.
@@ -576,13 +579,19 @@ up to 7 days old; the retry window is 72 hours).
   message whose claim is still held gets `503`. A refused message is
   dead-lettered first and answered `EBMS:0004` (not retried); when the dead letter
   itself cannot be written, the answer is the retryable `EBMS:0202`. Accepted
-  keys are kept 8 days.
+  keys are kept 8 days. Gzip expanding a message beyond
+  `mako_as4::constants::MAX_MESSAGE_BYTES` (64 MiB) is refused `EBMS:0303`. The
+  TLS terminator in front of `--as4-addr` holds the server side of mutual TLS —
+  see [Mutual TLS](@/docs/reference/as4-bdew.md#mutual-tls).
 
-**Connectivity pings** (the ebMS3 test service, BDEW AS4-Profil 1.2 §2.3.6) are
+**Connectivity pings** (the ebMS3 test service, BDEW AS4-Profil 1.2 Kap. 2.3.6) are
 receipted by `asx-rs` and never delivered. A transmission-path switch (§2.3.7)
 is receipted and logged; the `confirmSwitch` answer is the operator's.
 
-**Outbound wire format.** A complete Übertragungsdatei `UNB … UNZ`. UNB
+**Outbound wire format.** A complete Übertragungsdatei `UNB … UNZ`, one per AS4
+message, with the `eb:PartProperties` `BDEWDocumentType`, `BDEWDocumentDate`,
+`BDEWDocumentNo` and, when DE 0026 is set, `BDEWApplicationReference`
+(Regelungen zum Übertragungsweg für AS4 2.6 Kap. 6). UNB
 sender/receiver equal `NAD+MS`/`NAD+MR` (Allgemeine Festlegungen 6.1d Kap. 2);
 DE 0007 follows the MP-ID (`500` BDEW, `502` DVGW, `14` GS1); the DE 0020
 Datenaustauschreferenz — also in UNZ and the Kap. 2.12 filename — derives from the
@@ -2297,7 +2306,7 @@ durable for the next start.
 | **OutboxErpWorker** | continuous (with `--erp-webhook-url`) | POSTs CloudEvents to the ERP webhook |
 | **DeadlineScheduler** | `--deadline-poll-interval-secs` (30 s) | Dispatches due deadlines |
 | **MabisZpRegister projection** | `--projection-checkpoint-interval` | Folds the MaBiS-ZP lifecycle into the set of activated Zählpunkte |
-| **retention-purge-worker** | daily | Evicts AS4 dedup entries after 8 days (`asx-rs` 0.16.2 requires at least 7) and spent `Idempotency-Key` records |
+| **retention-purge-worker** | daily | Evicts AS4 dedup entries after 8 days (`asx-rs` 0.17 requires at least 7) and spent `Idempotency-Key` records |
 | JWKS refresh | `oidc.jwks_refresh_secs` | With OIDC enabled |
 
 ### Deadline dispatch

@@ -305,7 +305,7 @@ pub struct PartyConfig {
 
 /// `[party.as4]` — one MP-ID's three AS4 key pairs, as PEM files.
 ///
-/// BDEW AS4-Profil 1.2 §2.3.4.4 (S. 17): different EC key pairs for signing,
+/// BDEW AS4-Profil 1.2 Kap. 2.3.4.4 (S. 17): different EC key pairs for signing,
 /// encryption and TLS, issued by an SM-PKI CA, with the MP-ID in the subject —
 /// in its OU (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2, S. 6). The
 /// signing file holds the EMT.MAK leaf first, then the intermediates.
@@ -320,10 +320,12 @@ pub struct PartyAs4Config {
     pub encryption_cert_pem_file: PathBuf,
     /// Decryption private key.
     pub encryption_key_pem_file: PathBuf,
-    /// TLS client certificate chain, presented to a partner MSH.
-    pub tls_cert_pem_file: PathBuf,
-    /// TLS private key.
-    pub tls_key_pem_file: PathBuf,
+    /// TLS client certificate chain, presented to a partner MSH on every
+    /// connection; an EC key. Required: unset, the boot is refused naming
+    /// BDEW AS4-Profil 1.2 Kap. 2.2.6.1 (client authentication is required).
+    pub tls_cert_pem_file: Option<PathBuf>,
+    /// TLS private key. Required, as `tls_cert_pem_file`.
+    pub tls_key_pem_file: Option<PathBuf>,
 }
 
 // ── Sections ─────────────────────────────────────────────────────────────────

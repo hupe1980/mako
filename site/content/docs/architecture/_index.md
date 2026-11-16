@@ -247,7 +247,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 | [`doubleentry`](https://crates.io/crates/doubleentry) | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
 | [`rubo4e`](https://crates.io/crates/rubo4e) | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
 | [`agentplane`](https://crates.io/crates/agentplane) | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
-| [`asx-rs`](https://crates.io/crates/asx-rs) | AS4/ebMS3 — `Profile::bdew()` fixes BDEW AS4-Profil 1.2's security and wire settings; one client per MP-ID, the `Inbound` service, token-fenced `DedupStore`, verified receipts |
+| [`asx-rs`](https://crates.io/crates/asx-rs) | AS4/ebMS3 — `Profile::bdew()` fixes BDEW AS4-Profil 1.2's security and wire settings, SM-PKI mutual TLS and the certificate rules of Regelungen zum Übertragungsweg für AS4 2.6; one client per MP-ID, the `Inbound` service, token-fenced `DedupStore`, verified receipts, part properties |
 | [`edifact`](https://crates.io/crates/edifact) | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation, recovering scan for CONTRL fault locations |
 
 The pinned versions are in the root `Cargo.toml`.

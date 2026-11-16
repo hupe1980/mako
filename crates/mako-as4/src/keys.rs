@@ -1,6 +1,6 @@
 //! Public-key comparison of certificates.
 //!
-//! BDEW AS4-Profil 1.2 §2.3.4.4 (S. 17): „Für die Signatur, die Verschlüsselung
+//! BDEW AS4-Profil 1.2 Kap. 2.3.4.4 (S. 17): „Für die Signatur, die Verschlüsselung
 //! und den Aufbau der TLS-Verbindung MÜSSEN unterschiedliche Schlüsselpaare
 //! verwendet werden." `asx-rs` refuses two of the three *certificates* being
 //! equal; two certificates issued for one key pair pass that check. The key

@@ -80,6 +80,10 @@ const DOCUMENTS: &[Document] = &[
         name: r"Übertragungsweg für AS4 2\.6",
         path: "regulatories/bdew-mako/Regelungen_Uebertragungsweg_AS4_2.6.pdf",
     },
+    Document {
+        name: r"AS4-Profil 1\.2",
+        path: "regulatories/bdew-mako/AS4-Profil_1.2.pdf",
+    },
 ];
 
 /// A crate whose bare `Kap. n` names one document: its subject is that

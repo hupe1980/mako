@@ -52,6 +52,11 @@ pub fn is_secure_endpoint(url: &reqwest::Url) -> bool {
 
 /// The `COM` DE 3155 qualifiers whose address is a URL `makod` **delivers to**.
 ///
+/// The rules `As4::builder(..).build()` holds the AS4 key material to.
+pub const AS4_BUILD_QUELLE: &str = "Regelungen zum Übertragungsweg für AS4 2.6, Kap. 1.3 (S. 3), \
+     Kap. 2 (S. 4), Kap. 3 (S. 5), Kap. 5.2 (S. 6); BDEW AS4-Profil 1.2 Kap. 2.2.6.1 (S. 10), \
+     Kap. 2.3.4.4 (S. 17)";
+
 /// `AK`/`AS4` is the AS4 inbox, `AW` the API-Webdienste callback. Everything
 /// else a `COM` segment can carry — `EM` e-mail, `TE` telephone, `FX` — is
 /// contact data, not a delivery destination, and is stored as given.
@@ -323,11 +328,13 @@ pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
     //
     // `As4::builder(Profile::bdew())…build()` per local MP-ID is the startup
     // check of the AS4 key material: every refusal is `asx::ErrorKind::Config`
-    // naming the setting and the profile section — a signer that does not
-    // chain to the SM-PKI root, a certificate without the MP-ID in its OU, a
-    // partner endpoint without an encryption certificate, a missing decrypter,
-    // a TLS key equal to a signing or encryption key. Running it here is what
-    // makes `--check` report the refusal instead of the first delivery.
+    // naming the setting and the rule — a signer that does not chain to the
+    // SM-PKI root, a certificate of the local or a partner triple without the
+    // MP-ID in its OU or without exactly one URI subject alternative name
+    // (Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.2), a partner
+    // endpoint other than its encryption certificate's address (Kap. 2) or
+    // on an IP address (Kap. 3), a TLS key that is not EC. Running it here is
+    // what makes `--check` report the refusal instead of the first delivery.
     let as4_configured = input.parties.iter().any(|p| p.as4.is_some());
     let as4 = match As4Setup::from_config(
         input.as4,
@@ -343,7 +350,11 @@ pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
         Ok(Some(setup)) => match As4Clients::build(setup) {
             Ok(clients) => Some(clients),
             Err(e) => {
-                out.push(Befund::aus_fehler("party.as4", e).bereich(Bereich::Zertifikate));
+                out.push(
+                    Befund::aus_fehler("party.as4", e)
+                        .bereich(Bereich::Zertifikate)
+                        .quelle(AS4_BUILD_QUELLE),
+                );
                 None
             }
         },
@@ -790,8 +801,14 @@ mod tests {
         }
     }
 
+    /// The AS4 address in the local party's certificates.
+    const OWN_URL: &str = "https://makod.test.example/as4/inbox/9900001000001";
+    /// The AS4 address in the partner's certificates, and its endpoint.
+    const PARTNER_URL: &str = "https://partner.example/as4/inbox/9900001000002";
+
     /// AS4 key material on disk, issued by a test SM-PKI: one local party
-    /// (`9900001000001`) and one partner (`9900001000002`).
+    /// (`9900001000001`) and one partner (`9900001000002`), each certificate
+    /// naming its AS4 address.
     struct As4Files {
         dir: tempfile::TempDir,
         ca: asx::testkit::pki::TestCa,
@@ -802,8 +819,8 @@ mod tests {
     impl As4Files {
         fn new() -> Self {
             let ca = asx::testkit::pki::TestCa::sm_pki();
-            let party = ca.bdew_party("9900001000001");
-            let partner = ca.bdew_party("9900001000002");
+            let party = ca.bdew_party_at("9900001000001", OWN_URL);
+            let partner = ca.bdew_party_at("9900001000002", PARTNER_URL);
             let dir = tempfile::tempdir().expect("tempdir");
             let f = Self {
                 dir,
@@ -842,8 +859,8 @@ mod tests {
                 signing_key_pem_file: self.path("sig.key.pem"),
                 encryption_cert_pem_file: self.path("enc.cert.pem"),
                 encryption_key_pem_file: self.path("enc.key.pem"),
-                tls_cert_pem_file: self.path("tls.cert.pem"),
-                tls_key_pem_file: self.path("tls.key.pem"),
+                tls_cert_pem_file: Some(self.path("tls.cert.pem")),
+                tls_key_pem_file: Some(self.path("tls.key.pem")),
             }
         }
 
@@ -856,7 +873,7 @@ mod tests {
                 partner: vec![crate::config::As4PartnerConfig {
                     mp_id: "9900001000002".to_owned(),
                     agency: None,
-                    endpoint: Some("https://partner.example/as4/inbox/9900001000002".to_owned()),
+                    endpoint: Some(PARTNER_URL.to_owned()),
                     encryption_cert_pem_file: Some(self.path("partner.enc.pem")),
                     signing_cert_pem_files: vec![self.path("partner.sig.pem")],
                     quirks: None,
@@ -992,14 +1009,14 @@ mod tests {
     }
 
     /// A TLS key pair that is the signing key pair is refused (BDEW
-    /// AS4-Profil 1.2 §2.3.4.4).
+    /// AS4-Profil 1.2 Kap. 2.3.4.4).
     #[test]
     fn a_tls_key_pair_equal_to_the_signing_key_pair_is_rejected() {
         let f = As4Files::new();
         let mut parties = f.parties();
         let keys = parties[0].as4.as_mut().expect("as4");
-        keys.tls_cert_pem_file = f.path("sig.cert.pem");
-        keys.tls_key_pem_file = f.path("sig.key.pem");
+        keys.tls_cert_pem_file = Some(f.path("sig.cert.pem"));
+        keys.tls_key_pem_file = Some(f.path("sig.key.pem"));
         let err = as4_rejection(&f.as4(), &parties);
         assert!(err.contains("same key pair"), "{err}");
     }
@@ -1015,30 +1032,62 @@ mod tests {
         assert!(err.contains("no encryption certificate"), "{err}");
 
         let mut as4 = f.as4();
-        as4.partner[0].endpoint = Some("http://partner.example/as4".to_owned());
+        as4.partner[0].endpoint = Some("http://partner.example/as4/inbox/9900001000002".to_owned());
         let err = as4_rejection(&as4, &f.parties());
-        assert!(err.contains("HTTPS"), "{err}");
+        assert!(err.contains("is not https"), "{err}");
     }
 
-    /// Regelungen zum Übertragungsweg für AS4 2.6: a partner endpoint on an IP
-    /// address cannot use SNI (Kap. 3, S. 5), and a partner encryption
-    /// certificate and an own certificate carry their MP-ID in the subject OU
-    /// (Kap. 5.2, S. 6) — each stops the boot.
+    /// Without a TLS key pair no AS4 connection can be opened: the boot is
+    /// refused naming BDEW AS4-Profil 1.2 Kap. 2.2.6.1 and the Zertifikatstripel
+    /// of Regelungen zum Übertragungsweg für AS4 2.6, Kap. 1.3.
+    #[test]
+    fn a_party_without_its_tls_key_pair_is_rejected() {
+        let f = As4Files::new();
+        for (cert, key) in [(true, false), (false, true), (false, false)] {
+            let mut parties = f.parties();
+            let keys = parties[0].as4.as_mut().expect("as4");
+            if !cert {
+                keys.tls_cert_pem_file = None;
+            }
+            if !key {
+                keys.tls_key_pem_file = None;
+            }
+            let err = as4_rejection(&f.as4(), &parties);
+            assert!(
+                err.contains("Kap. 2.2.6.1") && err.contains("Kap. 1.3"),
+                "{err}"
+            );
+        }
+    }
+
+    /// Regelungen zum Übertragungsweg für AS4 2.6, as `build()` holds it: a
+    /// partner endpoint other than its certificate's address (Kap. 2, S. 4),
+    /// a partner address on an IP address (Kap. 3, S. 5), a partner encryption
+    /// certificate and an own certificate of another MP-ID (Kap. 5.2, S. 6) —
+    /// each stops the boot, the refusal naming the chapter.
     #[test]
     fn the_as4_2_6_certificate_and_endpoint_rules_stop_the_boot() {
         let f = As4Files::new();
         let mut as4 = f.as4();
-        as4.partner[0].endpoint = Some("https://203.0.113.7/as4/inbox".to_owned());
+        as4.partner[0].endpoint = Some("https://other.example/as4/inbox".to_owned());
+        let err = as4_rejection(&as4, &f.parties());
+        assert!(err.contains("Kap. 2"), "{err}");
+
+        let at_ip =
+            f.ca.bdew_party_at("9900001000002", "https://203.0.113.7/as4/inbox");
+        f.write("partner.ip.enc.pem", &at_ip.encryption.cert_pem);
+        let mut as4 = f.as4();
+        as4.partner[0].endpoint = None;
+        as4.partner[0].encryption_cert_pem_file = Some(f.path("partner.ip.enc.pem"));
+        as4.partner[0].signing_cert_pem_files = Vec::new();
         let err = as4_rejection(&as4, &f.parties());
         assert!(err.contains("Kap. 3"), "{err}");
 
         let mut as4 = f.as4();
+        as4.partner[0].endpoint = None;
         as4.partner[0].encryption_cert_pem_file = Some(f.path("enc.cert.pem"));
         let err = as4_rejection(&as4, &f.parties());
-        assert!(
-            err.contains("subject OU of the encryption certificate"),
-            "{err}"
-        );
+        assert!(err.contains("Kap. 5.2"), "{err}");
 
         f.write("partner.enc.key.pem", &f.partner.encryption.key_pem);
         let mut parties = f.parties();
@@ -1047,6 +1096,18 @@ mod tests {
         keys.encryption_key_pem_file = f.path("partner.enc.key.pem");
         let err = as4_rejection(&f.as4(), &parties);
         assert!(err.contains("Kap. 5.2"), "{err}");
+    }
+
+    /// Kap. 2: a partner without `endpoint` is reached at its encryption
+    /// certificate's address.
+    #[test]
+    fn a_partner_without_an_endpoint_is_deliverable_at_its_certificates_address() {
+        let f = As4Files::new();
+        let mut as4 = f.as4();
+        as4.partner[0].endpoint = None;
+        let checked = as4_preflight(&as4, &f.parties()).expect("startable");
+        let clients = checked.as4.expect("AS4 configured");
+        assert!(clients.partners().deliverable("9900001000002").is_some());
     }
 
     /// The removed lenient-receipts switch is refused, naming the rule.

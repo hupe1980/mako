@@ -62,21 +62,22 @@ wildcards = "deny"
 allow-wildcard-paths = true
 deny = [
     # openssl-sys (and its peers openssl, openssl-macros) is banned for general
-    # TLS use. The workspace uses rustls-tls exclusively for HTTP clients
-    # (reqwest, object_store). However, openssl is an ACCEPTED exception for
-    # WS-Security XML cryptography (RSA/ECDSA signing and X.509 handling) via
-    # `asx-rs/crypto`, which has no pure-Rust equivalent with the same X.509
-    # PEM handling surface.
+    # TLS use. The workspace uses rustls-tls for its HTTP clients (reqwest,
+    # object_store). openssl is an ACCEPTED exception inside asx-rs, the AS4
+    # layer: its WS-Security XML cryptography (ECDSA signing, ECDH-ES, X.509
+    # handling) and, since 0.17, its built-in AS4 HTTPS client — mutual TLS on
+    # BrainpoolP256r1 under BSI TR-03116-3 (BDEW AS4-Profil 1.2 Kap. 2.2.6.1),
+    # which rustls cannot negotiate.
     #
     # The `wrappers` field permits a banned crate when it is pulled only by the
     # listed direct parents.  Provenance chain:
     #   asx-rs → openssl → openssl-sys
+    #   asx-rs → tokio-openssl → openssl, openssl-sys (the client's async TLS stream)
     #   asx-rs → openssl → openssl-macros (proc-macro companion)
-    # Only top-level `openssl` is directly pulled by `asx-rs`.
     # If any OTHER crate pulls openssl into the tree, cargo deny will still fail.
-    { name = "openssl",        wrappers = ["asx-rs"],       reason = "C-linked OpenSSL forbidden for TLS; permitted only via asx-rs WS-Security XML crypto" },
-    { name = "openssl-sys",    wrappers = ["openssl"],      reason = "C-binding companion to openssl 0.10; same asx-rs WS-Security exception" },
-    { name = "openssl-macros", wrappers = ["openssl"],      reason = "proc-macro companion to openssl 0.10; same asx-rs WS-Security exception" },
+    { name = "openssl",        wrappers = ["asx-rs", "tokio-openssl"], reason = "C-linked OpenSSL forbidden for general TLS; permitted only inside asx-rs — WS-Security crypto and the AS4 Brainpool mutual-TLS client" },
+    { name = "openssl-sys",    wrappers = ["openssl", "tokio-openssl"], reason = "C-binding companion to openssl 0.10; same asx-rs exception" },
+    { name = "openssl-macros", wrappers = ["openssl"],      reason = "proc-macro companion to openssl 0.10; same asx-rs exception" },
 ]
 
 # ── Skip entries for unavoidable transitive duplicates ───────────────────────
@@ -522,6 +523,31 @@ reason  = "Companion to rand 0.9."
 name    = "rand_chacha"
 version = "0.3"
 reason  = "Companion to rand 0.8 (and lipsum, via typst)."
+
+# windows-core 0.61 arrives through slatedb → sysinfo → windows 0.61 and 0.62
+# through datafusion/arrow → chrono → iana-time-zone; no workspace change
+# converges them. windows-result and windows-strings follow their windows-core.
+[[bans.skip]]
+name    = "windows-core"
+version = "0.61"
+reason  = "windows-core 0.61 via slatedb → sysinfo → windows 0.61; 0.62 via chrono → iana-time-zone."
+
+[[bans.skip]]
+name    = "windows-result"
+version = "0.3"
+reason  = "windows-result 0.3 travels with windows-core 0.61; 0.4 with windows-core 0.62."
+
+[[bans.skip]]
+name    = "windows-strings"
+version = "0.4"
+reason  = "windows-strings 0.4 travels with windows-core 0.61; 0.5 with windows-core 0.62."
+
+# nix 0.31 comes from object_store (makod, edmd); 0.32 from zip, which only
+# xtask uses to read the BDEW xlsx and docx archives.
+[[bans.skip]]
+name    = "nix"
+version = "0.31"
+reason  = "nix 0.31 via object_store; 0.32 via zip in xtask only."
 
 # ── Single-parent duplicates ─────────────────────────────────────────────────
 [[bans.skip]]

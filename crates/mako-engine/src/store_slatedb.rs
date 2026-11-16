@@ -2190,7 +2190,7 @@ impl SnapshotStore for SlateDbSnapshotStore {
 ///
 /// Call [`purge_expired`] periodically to reclaim storage; nothing else
 /// purges. The retention is the caller's: `makod` keeps keys for 8 days,
-/// above the 7 days asx-rs 0.16.2 requires of an AS4 dedup store.
+/// above the 7 days asx-rs 0.17 requires of an AS4 dedup store.
 ///
 /// Obtain via [`SlateDbStore::as_inbox_store`].
 ///

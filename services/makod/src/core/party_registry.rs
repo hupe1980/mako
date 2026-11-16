@@ -654,7 +654,7 @@ impl MpIdRegistry {
     ///
     /// The derivation is what makes this correct for **counterparties**, which
     /// is the main way it is called: the AS4 sender asks for the *recipient's*
-    /// agency to fill `<eb:To>/<eb:PartyId type=…>` (AS4-Profil §2.3.1.1), and a
+    /// agency to fill `<eb:To>/<eb:PartyId type=…>` (AS4-Profil Kap. 2.3.1.1), and a
     /// counterparty is by definition absent from our own `[[party]]` list.
     /// A fixed `"293"` (BDEW Strom) fallback stamps every Gas counterparty
     /// holding a DVGW `98…` code with the BDEW party type; the receiving MSH
@@ -1212,7 +1212,7 @@ mod tests {
     /// # Why this is a test
     ///
     /// The AS4 sender asks for the *recipient's* agency to fill
-    /// `<eb:To>/<eb:PartyId type=…>` (AS4-Profil §2.3.1.1), and a counterparty is
+    /// `<eb:To>/<eb:PartyId type=…>` (AS4-Profil Kap. 2.3.1.1), and a counterparty is
     /// never in our own `[[party]]` list — so this method is called with an
     /// unknown MP-ID on every outbound message. Answering a fixed `"293"`
     /// (BDEW Strom) stamps every Gas counterparty holding a DVGW `98…` code with

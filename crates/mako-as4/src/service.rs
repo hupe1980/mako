@@ -1,6 +1,6 @@
 //! The `eb:Service` values of BDEW AS4-Profil 1.2.
 
-/// A business service of BDEW AS4-Profil 1.2 §2.3.1.2.1 (S. 14).
+/// A business service of BDEW AS4-Profil 1.2 Kap. 2.3.1.2.1 (S. 14).
 ///
 /// „Im BDEW AS4-Profil ist das AS4-Protokoll vom Geschäftsprozess entkoppelt.
 /// Daher ERFORDERT dieses Profil einen vordefinierten Wert für den Service beim

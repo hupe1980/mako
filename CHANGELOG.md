@@ -9,6 +9,33 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.34.1] — 2026-11-16
+
+### Added
+
+- mako-as4: `part_properties::PartProperties` — the `eb:PartProperties` of Regelungen zum Übertragungsweg für AS4 2.6 Kap. 6 (`BDEWDocumentType` ← UNH DE0065, `BDEWApplicationReference` ← UNB DE0026 when present, `BDEWDocumentDate` ← UNB DE0017 as `YYYY-MM-DD`, `BDEWDocumentNo` ← UNB DE0020). makod sets them on every outbound Übertragungsdatei and records an inbound message's on the receive log line.
+- makod: `As4Clients::build_with_resolve` — the built-in client reaching a host at a pinned address (`asx::Builder::resolve`); the AS4 tests drive a real mutual-TLS handshake against `asx::testkit::tls::TlsMsh`.
+- xtask: `check-as4-controls` also requires the TLS identity, the `MAX_MESSAGE_BYTES` cap and the outbound part properties.
+
+### Changed
+
+- **Breaking:** asx-rs 0.17 (was 0.16.2). The built-in client is OpenSSL: mutual TLS under BSI TR-03116-3 with Brainpool, the SM-PKI root as the only TLS root, SNI, the server chain CRL-checked before a request is written; a TLS refusal is a retryable transport error. `build()` now holds the RzÜ AS4 2.6 certificate rules — the MP-ID in the OU and exactly one URI subject alternative name on every certificate of the local and the partner triple (Kap. 5.2), the partner endpoint equal to the encryption certificate's address (Kap. 2) on a DNS host (Kap. 3) — and an inbound BDEW signer without one URI is `EBMS:0101`. Certificates without the URI no longer build: re-issue them with the AS4 address.
+- **Breaking:** makod `[[as4.partner]] endpoint` is optional: omitted, the address is taken from the encryption certificate (Kap. 2); a partner is deliverable when it has an encryption certificate, not an endpoint.
+- **Breaking:** makod `[party.as4] tls_cert_pem_file` / `tls_key_pem_file` missing stop the boot naming BDEW AS4-Profil 1.2 Kap. 2.2.6.1 and RzÜ AS4 2.6 Kap. 1.3, for a receive-only party too; an AS4 build refusal's finding cites RzÜ AS4 2.6 Kap. 1.3, 2, 3, 5.2.
+- makod: the Kap. 2.12 file name takes its Anwendungsreferenz from UNB DE0026.
+- makod: inbound gzip expansion stops at `MAX_MESSAGE_BYTES` (64 MiB) for the whole message, `EBMS:0303`; a repeated `Content-Type` or MIME part `Content-ID`/`Content-Type` is refused as malformed.
+- Dependencies refreshed with `cargo update` (jiff 0.2.46, zip 9.6, mio 1.2.5, lz4_flex, rand 0.10.4 among them).
+
+### Removed
+
+- **Breaking:** mako-as4 `certificate` (`subject_organisational_units`, `carries_mp_id`, `uri_subject_alt_names`), `IdentityError::MpIdNotInSubject` and `PartnerDirectoryError::{InsecureEndpoint, EndpointWithoutHostName, MpIdNotInSubject, SeveralAddresses, EndpointNotInCertificate}` — `asx-rs` `build()` holds those rules.
+- makod: the startup warning for a partner encryption certificate without a URI address — such a certificate no longer builds.
+
+### Fixed
+
+- Landing page: the total of 498 routed Prüfidentifikatoren is split against the published inventory — 460 of the 482 published ones, five more from AHB editions in force, 33 further DVGW codes; `published_counts` holds each part.
+- The BDEW AS4-Profil and the Regelungen zum Übertragungsweg are cited by Kapitel; `check-known-wrong` refuses a `§` on their chapters.
+
 ## [0.34.0] — 2026-11-16
 
 ### Added

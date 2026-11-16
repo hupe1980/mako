@@ -453,8 +453,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         //
         // These PIDs are explicitly excluded from mako-gpke's GPKE_INVOIC_PIDS array.
         // Without registration here, all inbound WiM-domain INVOIC messages would
-        // be silently dead-lettered and no CONTRL acknowledgement would be sent,
-        // violating the AS4 acknowledgement obligation (BDEW AS4-Profile §5).
+        // be dead-lettered without a CONTRL being sent for them.
         //
         // The WimInvoicWorkflow provides a complete state machine with Settle/Dispute
         // commands. Automatic outbound REMADV generation on the auto-settlement
