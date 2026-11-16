@@ -267,6 +267,7 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
         kunde_namensformat: None,
         message_ref: cmd_ref,
         bilanzierungsgebiet: None,
+        bilanzkreis: None,
         bilanzierungsmethode: None,
         fallgruppe: None,
         validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass

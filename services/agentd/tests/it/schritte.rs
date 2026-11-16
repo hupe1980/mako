@@ -406,7 +406,7 @@ async fn a_stopped_run_reads_nothing_after_the_stop_and_its_stream_ends_abgebroc
         "get_process_history",
         json!({ "process_id": "4711" }),
     ));
-    // What the model asks after the stop: never read.
+    // What the model would ask after the stop: never asked, never read.
     provider.will_answer(read(
         "c2",
         "get_process",
@@ -443,6 +443,11 @@ async fn a_stopped_run_reads_nothing_after_the_stop_and_its_stream_ends_abgebroc
         *tools.calls.lock().unwrap(),
         ["get_process_history"],
         "no service is read after the stop"
+    );
+    assert_eq!(
+        provider.calls(),
+        1,
+        "the stop lands before the next effect: no model turn after the read in flight"
     );
     assert_eq!(answer_of(&state, &run).await["status"], "cancelled");
 }

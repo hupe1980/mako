@@ -191,9 +191,10 @@ pub use lf_stornierung::{
 };
 pub use lieferbeginn::{
     ANFRAGE_PIDS as LIEFERBEGINN_ANFRAGE_PIDS, ANTWORT_PIDS as LIEFERBEGINN_ANTWORT_PIDS,
-    GNB_ANTWORT_PIDS, GasProcessVariant, GasSupplierChangeCommand, GasSupplierChangeData,
-    GasSupplierChangeEvent, GasSupplierChangeProjection, GasSupplierChangeRecord,
-    GasSupplierChangeRecordData, GasSupplierChangeState, GeliGasSupplierChangeWorkflow,
+    AbmeldungsanfrageStand, GNB_ANTWORT_PIDS, GasProcessVariant, GasSupplierChangeCommand,
+    GasSupplierChangeData, GasSupplierChangeEvent, GasSupplierChangeProjection,
+    GasSupplierChangeRecord, GasSupplierChangeRecordData, GasSupplierChangeState,
+    GeliGasSupplierChangeWorkflow, GnbAbmeldungsanfrage,
     RESPONSE_WINDOW_LABEL as LIEFERBEGINN_RESPONSE_WINDOW_LABEL, UTILMD_PIDS, WORKFLOW_NAME,
     gnb_anfrage_key, gnb_antwort_accepted, response_pid_for,
 };

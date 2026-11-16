@@ -228,9 +228,9 @@ fn collect(dir: &Path, workspace_root: &Path) -> (Vec<Statement>, usize) {
     //
     // Scoped to the file that writes the query, then to the crate — but only
     // for a name the crate defines once. Half a dozen `marktd` modules each
-    // hold their own `SELECT_COLS`, and a flat map resolved every one of them
-    // to whichever was read last, which is how a column list from
-    // `subscriptions` ended up in a query against `partners`.
+    // hold their own `SELECT_COLS`, and a flat map resolves every one of them
+    // to whichever was read last — a column list from `subscriptions` lands in
+    // a query against `partners`.
     let sources: Vec<(PathBuf, String)> = files
         .iter()
         .filter_map(|f| std::fs::read_to_string(f).ok().map(|s| (f.clone(), s)))

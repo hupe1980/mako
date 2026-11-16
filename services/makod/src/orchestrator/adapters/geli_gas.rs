@@ -329,6 +329,17 @@ pub fn geli_gas_gnb_antwort_registry() -> AdapterRegistry<GeliGasSupplierChangeW
                     .and_then(|tx| tx.ftx.first())
                     .and_then(|f| f.text.clone()),
                 antwort_code: first_tx.and_then(|tx| tx.antwort()).map(|a| a.code.clone()),
+                // **Fall b** on a 44011 — the Abmeldedatum the LFA confirmed
+                // (`SG4 DTM+93`, AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 4, S. 41), as
+                // the Gastag it ends before.
+                zuordnungsende: if pid.as_u32() == 44_011 {
+                    super::prozesstag(
+                        super::sg4_dtm(first_tx, edi_energy::utilmd_codes::dtm::ENDE_ZUM),
+                        mako_fristen::Sparte::Gas,
+                    )?
+                } else {
+                    None
+                },
             })
         },
     ));
@@ -844,7 +855,7 @@ pub fn geli_gas_sperrprozesse_invoic_registry()
                 // The BO4E `Rechnung` rides along so `invoicd` can run its
                 // plausibility checks straight off the ProcessInitiated
                 // payload, as it already does for GPKE and WiM.
-                rechnung: Some(Box::new(build_rechnung(inv.segments()))),
+                rechnung: Some(Box::new(build_rechnung(inv.segments(), inv.decimal_mark()))),
                 // `SG1 RFF+ACE` and `IMD+7081` — Muss on the wire, and BO4E
                 // has no field for either. The first is what `E_0264`
                 // Prüfschritt 40 compares against the order on record; the

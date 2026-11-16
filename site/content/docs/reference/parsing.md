@@ -98,7 +98,7 @@ let msg = Parser::with_config(config).parse(bytes)?;
 | `max_segments` | none |
 | `max_segment_bytes` (`DEFAULT_MAX_SEGMENT_BYTES`) | 64 KiB |
 | `max_messages_per_interchange` | 1 000 |
-| `max_segments_per_message` | none; when set, edifact-rs counts `UNH` to `UNT` and refuses past it as `E036` |
+| `max_message_bytes` | none; when set, `edifact` counts the bytes from `UNH` to the `UNT` terminator and refuses past it as `E036` |
 
 No segment count is capped by default: no BDEW document sets one, and one
 monthly quarter-hour MSCONS carries about 9 000 segments (MSCONS MIG 2.5 lets

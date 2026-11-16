@@ -6,7 +6,7 @@ weight = 38
 `agentd` is the **AI automation layer**. It connects language models to
 [the production services](@/docs/services/_index.md) over MCP for analysis and
 decision support. Every specialist is a **declarative manifest** run by
-[agentplane](https://github.com/hupe1980/agentplane) 0.60, a journal-first
+[agentplane](https://github.com/hupe1980/agentplane) 0.61, a journal-first
 durable agent runtime: every model call and tool call is a journaled effect, so a
 run resumes after a crash and replays for audit. As an MCP client it offers
 protocol revision `2026-07-28` (`server/discover`), falls back to the
@@ -80,13 +80,11 @@ on its records, so a later read of the same record carries a later `um`.
 read of a tool server — so every step carries its `quelle`.
 
 A stop is agentplane's `request_cancel` with the person as operator: durable at
-once, carried out at the run's next step boundary. A tool-calling agent's whole
-tool loop is one step, so until the model next answers, every call the run asks
-for is refused before it leaves — every tool server sits behind a stop guard
-that reads the standing stop from the journal store — and shows in the stream
-as `fehlgeschlagen`. No service is read for a stopped run; its model is still
-called until it answers, within the manifest's `max_turns`. The run then concludes `cancelled`, the stream ends
-with `abgebrochen`, and the answer read reports `cancelled`.
+once, and read before each of the run's live dispatches, so it lands before the
+run's next effect. A tool call already in flight completes; after it the run
+makes no further model turn and no further tool call, so no service is read for
+a stopped run. The run then concludes `cancelled`, the stream ends with
+`abgebrochen`, and the answer read reports `cancelled`.
 
 ---
 
@@ -280,7 +278,8 @@ supply is the operator's classification. `supervised` therefore requires
 `klassifizierung_ref`, a reference to the operator's own record of it, and
 refuses to start without one; the policy report names the reference. The
 shipped specialists hold no mutating grant, and `check-tool-grants` keeps it
-so.
+so. The wording of Art. 6(1a) and (1b) is quoted under
+[The agent plane is advisory](@/docs/compliance/eu-regulations.md#the-agent-plane-is-advisory).
 
 ### A rule is stated only as a quote
 
@@ -523,7 +522,7 @@ graph TB
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 11 services, 181 tools"]
+    subgraph tools ["MCP Tools — 11 services, 183 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · processd"]
         T3["einsd · netzbilanzd · ..."]

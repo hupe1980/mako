@@ -3,19 +3,22 @@ import { useRouter } from "@tanstack/react-router";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { Button as AriaButton } from "react-aria-components";
 import { entscheidbar, fokussieren, gefunden } from "../app/aktionen";
+import { disclosed, disclosure } from "../app/disclosure";
 import { Entscheidungsstand } from "../app/Entscheidungsstand";
 import { NAECHSTE, UEBERNEHMEN, VORIGE, WARUM } from "../app/keys";
 import { useRolle } from "../app/rollen";
 import { AKTION, type Answer, type Hinweis } from "../data/agent";
 import { FristUhr } from "../design/FristUhr";
-import { Icon, type IconName } from "../design/Icon";
+import { Icon } from "../design/Icon";
+import { Kbd } from "../design/Kbd";
+import { Page } from "../design/Page";
 import { EmptyState, Panel } from "../design/Panel";
 import type { BusinessDate } from "../format/brands";
 import { formatCount } from "../format/count";
 import { epochMs, formatBusinessDate } from "../format/date";
-import { BAENDER, type Band, band, useNow } from "../format/frist";
+import { BAENDER, band, useNow } from "../format/frist";
 import { useT } from "../i18n";
-import { type Eintrag, type QuelleId, type Stand, warumAnker } from "../inbox/model";
+import { type Eintrag, type Stand, warumAnker } from "../inbox/model";
 import { alsEintrag, useBenannt, useHinweise, useQuellen, useVorschlaege } from "../inbox/quellen";
 import { Bewertung } from "./Bewertung";
 import { GeparktEntscheiden } from "./Buchungen";
@@ -24,21 +27,6 @@ import { Entscheiden } from "./Freigaben";
 import { Lage } from "./Lage";
 import { DisputEntscheiden, GehaltenEntscheiden, PruefpostenEntscheiden } from "./Rechnungen";
 import { Warum } from "./Warum";
-
-/** What a row's glyph says about where it came from. */
-const GLYPH: Record<QuelleId, IconName> = {
-  freigaben: "check",
-  ueberfaellig: "warn",
-  anmeldungen: "flow",
-  nicht_uebermittelt: "tray",
-  korrekturbedarf: "bars",
-  ableseauftraege: "clock",
-  dispute: "doc",
-  gehalten: "doc",
-  pruefposten: "doc",
-  geparkt: "warn",
-  hinweise: "sparkle",
-};
 
 /** At most this many rows in the DOM, however many items wait. */
 const SICHTBAR = 100;
@@ -59,7 +47,14 @@ function zusammenfuehren(
   const eintraege = [...gesehen.values()];
   const zu = new Map<string, Hinweis[]>();
   for (const h of hinweise) {
-    const traeger = eintraege.find((e) => h.anker.some((a) => e.bezug.includes(a.wert)));
+    // A Hinweis that names a process sits under that process's row only — a
+    // MaLo can carry several, and a note about one breached Frist must not
+    // land on another that is still running. One with no process goes by its MaLo.
+    const prozesse = h.anker.filter((a) => a.art === "process").map((a) => a.wert);
+    const traeger =
+      prozesse.length > 0
+        ? eintraege.find((e) => prozesse.some((p) => e.bezug.includes(p)))
+        : eintraege.find((e) => h.anker.some((a) => e.bezug.includes(a.wert)));
     if (traeger) zu.set(traeger.id, [...(zu.get(traeger.id) ?? []), h]);
     else eintraege.push(alsEintrag(h));
   }
@@ -73,11 +68,11 @@ function zusammenfuehren(
 function HinweisZeile({ h }: { h: Hinweis }) {
   const t = useT();
   return (
-    <p className="m-0 flex gap-2 rounded-[10px] border border-ai-border bg-ai-fill px-3 py-2 text-body text-text">
+    <p className="m-0 flex gap-2 border-l-2 border-ai pl-3 text-body text-text">
       <Icon name="sparkle" size={14} className="mt-0.5 shrink-0 text-ai" />
       <span className="min-w-0">
-        <span className="font-semibold text-ai">{h.titel ?? h.skill ?? t.heute.assistent}: </span>
-        <span className="italic">{h.text}</span>
+        <span className="font-semibold">{h.titel ?? h.skill ?? t.heute.assistent}: </span>
+        {disclosed(h.text)}
       </span>
     </p>
   );
@@ -101,12 +96,12 @@ function VorschlagZeile({ a, befund }: { a: Answer; befund?: string | undefined 
     );
   }
   return (
-    <p className="m-0 flex gap-2 rounded-[10px] border border-ai-border bg-ai-fill px-3 py-2 text-body text-text">
+    <p className="m-0 flex gap-2 border-l-2 border-ai pl-3 text-body text-text">
       <Icon name="sparkle" size={14} className="mt-0.5 shrink-0 text-ai" />
       <span className="min-w-0 flex-1">
-        <span className="font-semibold text-ai">
-          {a.disclosure} {t.heute.vorschlag(AKTION[v.aktion])}
-          {v.antwortcode && <span className="ml-1 font-mono">{v.antwortcode}</span>}
+        <span className="font-semibold">
+          {disclosure(a.disclosure)} {t.heute.vorschlag(AKTION[v.aktion])}
+          {v.antwortcode && <span className="ml-1">{v.antwortcode}</span>}
           {v.aktion === "neu_buchen" && v.buchungsdatum && (
             <span className="ml-1">
               {t.heute.am(formatBusinessDate(v.buchungsdatum as BusinessDate))}
@@ -115,20 +110,19 @@ function VorschlagZeile({ a, befund }: { a: Answer; befund?: string | undefined 
           {befund && <span className="ml-1 font-normal">{t.heute.wegen(befund)}</span>}
           {" — "}
         </span>
-        <span className="italic">{v.begruendung}</span>
+        <span>{v.begruendung}</span>
         {!v.belegt && (
-          <span className="ml-2 inline-flex h-5 items-center gap-1 rounded-full bg-soon-fill px-2 align-middle text-caption font-semibold text-soon">
+          <span className="ml-2 inline-flex items-center gap-1 align-middle text-caption font-semibold text-info">
             <Icon name="warn" size={11} />
             {t.heute.nichtBelegt}
           </span>
         )}
       </span>
-      <kbd
-        aria-hidden
-        className="shrink-0 self-center rounded-[6px] border border-ai-border px-1.5 font-sans text-caption text-ai"
-      >
-        U
-      </kbd>
+      {/* The key says what it does: U takes the proposal into the decision. */}
+      <span className="flex shrink-0 items-center gap-1.5 self-center text-callout text-text-2">
+        <Kbd>U</Kbd>
+        {t.heute.takeIn}
+      </span>
     </p>
   );
 }
@@ -176,8 +170,13 @@ function Zeile({
     <li data-quelle={e.quelle} className="border-b border-separator last:border-b-0">
       <div
         data-aktiv={aktiv}
-        className={`group flex items-start hover:bg-fill data-[aktiv=true]:bg-fill ${ai ? "bg-ai-fill" : ""}`}
+        className="group relative flex items-start hover:bg-fill data-[aktiv=true]:bg-[color-mix(in_srgb,var(--accent)_9%,transparent)]"
       >
+        {/* The row in hand: a bar in the Rolle's accent, not only a fill. */}
+        <span
+          aria-hidden="true"
+          className="absolute inset-y-1.5 left-0 w-[3px] rounded-r-full bg-accent opacity-0 group-data-[aktiv=true]:opacity-100"
+        />
         <button
           type="button"
           ref={(el) => {
@@ -192,27 +191,20 @@ function Zeile({
             if (ding) onOeffnen(offen ? null : e.id);
             else if (e.ziel) router.navigate(e.ziel);
           }}
-          className={`focus-ring flex min-w-0 flex-1 cursor-default items-start gap-4 border-0 bg-transparent py-3 text-left outline-none ${onWarum ? "pr-3 pl-5" : "px-5"}`}
+          className="focus-ring flex min-w-0 flex-1 cursor-default items-start gap-4 border-0 bg-transparent py-2.5 pl-5 text-left outline-none"
         >
-          <span
-            className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full ${ai ? "bg-ai-fill text-ai" : "bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-accent"}`}
-          >
-            <Icon name={GLYPH[e.quelle]} size={16} />
-          </span>
+          {/* Task first, the subject under it — Mail's sender and subject. */}
           <span className="min-w-0 flex-1">
-            <span
-              className={`block truncate text-callout font-medium text-text ${e.kennung ? "font-mono" : ""}`}
-            >
-              {e.titel}
+            <span className="flex items-center gap-1.5 text-headline text-text">
+              {ai && <Icon name="sparkle" size={12} className="shrink-0 text-ai" />}
+              <span className="truncate">{ai ? e.titel : e.grund}</span>
             </span>
-            <span className={`block text-body ${ai ? "text-text italic" : "text-text-2"}`}>
-              {e.grund}
+            <span className="mt-0.5 block text-body text-text-2">
+              {ai ? e.grund : [e.titel, e.detail].filter(Boolean).join(" · ")}
             </span>
-            {e.detail && (
-              <span className="block truncate font-mono text-caption text-text-2">{e.detail}</span>
-            )}
           </span>
-          <span className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
+          {/* The trailing column has one width in every row, so the Fristen align. */}
+          <span className="flex w-32 shrink-0 flex-col items-end gap-1 text-right">
             {e.frist ? (
               <FristUhr due={e.frist} />
             ) : (
@@ -220,32 +212,35 @@ function Zeile({
             )}
             {ding && <Entscheidungsstand ding={ding} fehlschlag={!offen} />}
             {ding && (
-              <span className="text-caption text-accent">
+              <span className="text-callout text-accent">
                 {offen ? t.heute.schliessen : t.heute.entscheiden}
               </span>
             )}
           </span>
         </button>
-        {onWarum && (
-          <AriaButton
-            onPress={onWarum}
-            excludeFromTabOrder={!aktiv}
-            aria-expanded={warum}
-            aria-keyshortcuts="?"
-            className={`focus-ring mt-3.5 mr-4 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-ai-border px-2 text-caption font-medium text-ai transition-opacity data-[hovered]:bg-ai-fill ${warum ? "bg-ai-fill opacity-100" : "opacity-0 group-hover:opacity-100 group-data-[aktiv=true]:opacity-100 data-[focus-visible]:opacity-100"}`}
-          >
-            <Icon name="sparkle" size={11} />
-            {t.heute.warum}
-          </AriaButton>
-        )}
+        {/* Every row keeps the slot, so „Warum?" never moves the Frist column. */}
+        <span className="mt-2 mr-3 ml-2 flex w-20 shrink-0 justify-end">
+          {onWarum && (
+            <AriaButton
+              onPress={onWarum}
+              excludeFromTabOrder={!aktiv}
+              aria-expanded={warum}
+              aria-keyshortcuts="?"
+              className={`focus-ring inline-flex h-6 items-center gap-1 rounded-full px-2 text-caption text-ai transition-opacity data-[hovered]:bg-ai-fill ${warum ? "bg-ai-fill opacity-100" : "opacity-0 group-hover:opacity-100 group-data-[aktiv=true]:opacity-100 data-[focus-visible]:opacity-100"}`}
+            >
+              <Icon name="sparkle" size={11} />
+              {t.heute.warum}
+            </AriaButton>
+          )}
+        </span>
       </div>
       {warum && anker && (
-        <div className="pr-5 pb-3 pl-[4.25rem]">
+        <div className="px-5 pb-3">
           <Warum anker={anker} />
         </div>
       )}
       {vorschlag && !offen && (
-        <div className="pr-5 pb-3 pl-[4.25rem]">
+        <div className="px-5 pb-3">
           <VorschlagZeile
             a={vorschlag}
             befund={
@@ -255,7 +250,7 @@ function Zeile({
         </div>
       )}
       {hinweise.length > 0 && (
-        <div className="flex flex-col gap-2 pr-5 pb-3 pl-[4.25rem]">
+        <div className="flex flex-col gap-2 px-5 pb-3">
           {hinweise.map((h) => (
             <div key={h.task}>
               <HinweisZeile h={h} />
@@ -347,11 +342,6 @@ export function HeuteView() {
         : e?.geparkt
           ? vorschlaege.buchung.get(e.geparkt.key)
           : undefined;
-  const bereit = [
-    ...vorschlaege.freigabe.values(),
-    ...vorschlaege.disput.values(),
-    ...vorschlaege.buchung.values(),
-  ].filter((a) => a.vorschlag).length;
   // „Warum?" needs the assistant: while agentd is unreachable it is not offered.
   const fragbar = (e: Eintrag) => !agentFehler && warumAnker(e) !== null;
 
@@ -360,7 +350,6 @@ export function HeuteView() {
     titel,
     zeilen: sichtbar.map((e, i) => ({ e, i })).filter(({ e }) => band(e.frist, now) === b),
   })).filter((g) => g.zeilen.length > 0);
-  const zahl = (b: Band) => gruppen.find((g) => g.b === b)?.zeilen.length ?? 0;
 
   // J/K and the arrows step through every band as one list.
   useEffect(() => {
@@ -404,22 +393,7 @@ export function HeuteView() {
   useEffect(() => () => fokussieren(null), []);
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">{k.titel}</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">
-          {eintraege.length === 0
-            ? k.untertitel
-            : [
-                zahl("ueberfaellig") && k.ueberfaellig(formatCount(zahl("ueberfaellig"))),
-                zahl("heute") && k.heuteFaellig(formatCount(zahl("heute"))),
-                k.insgesamt(formatCount(eintraege.length)),
-                bereit > 0 && k.mitVorschlag(formatCount(bereit)),
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-        </p>
-      </header>
+    <Page width="reading" title={k.titel}>
       {rolle === "lieferant" && <Lage />}
 
       {laedt && (
@@ -433,7 +407,9 @@ export function HeuteView() {
 
       {!laedt && eintraege.length === 0 && (
         <Panel>
-          <EmptyState title={k.erledigt}>{k.erledigtText}</EmptyState>
+          <EmptyState glyph="check" title={k.erledigt}>
+            {k.erledigtText}
+          </EmptyState>
         </Panel>
       )}
 
@@ -441,7 +417,7 @@ export function HeuteView() {
         <section key={g.b} aria-labelledby={`band-${g.b}`} className="flex flex-col gap-2">
           <h2
             id={`band-${g.b}`}
-            className={`m-0 flex items-baseline gap-2 px-1 text-callout font-semibold ${g.b === "ueberfaellig" ? "text-critical" : ""}`}
+            className={`sticky top-(--topbar) z-[1] m-0 -mx-1 flex items-baseline gap-2 bg-bg/90 px-2 py-1.5 text-headline backdrop-blur-sm ${g.b === "ueberfaellig" ? "text-critical" : ""}`}
           >
             {g.titel}
             <span className="font-normal text-text-2">{formatCount(g.zeilen.length)}</span>
@@ -488,8 +464,8 @@ export function HeuteView() {
 
       {fokus?.anker && !offen && (
         <section aria-label={k.fragenZu(fokus.titel)} className="flex flex-col gap-2">
-          <h2 className="m-0 px-1 text-callout font-semibold">
-            {k.fragenZuKopf} <span className={fokus.kennung ? "font-mono" : ""}>{fokus.titel}</span>
+          <h2 className="m-0 px-1 text-headline">
+            {k.fragenZuKopf} <span>{fokus.titel}</span>
           </h2>
           <Fragen key={JSON.stringify(fokus.anker)} anker={fokus.anker} />
         </section>
@@ -497,6 +473,6 @@ export function HeuteView() {
 
       <Quellenzeile staende={staende} agent={agentFehler} />
       <p className="m-0 px-1 text-caption text-text-2">{k.hilfe}</p>
-    </div>
+    </Page>
   );
 }

@@ -37,10 +37,9 @@ fn every_anwendungsfall_has_a_conformant_skeleton() {
                 })
                 .collect();
             if !errors.is_empty() {
-                let wire = String::from_utf8_lossy(
-                    &edifact_rs::segments_to_bytes(&segs).unwrap_or_default(),
-                )
-                .replace('\'', "'\n  ");
+                let wire =
+                    String::from_utf8_lossy(&edifact::segments_to_bytes(&segs).unwrap_or_default())
+                        .replace('\'', "'\n  ");
                 failures.push(format!(
                     "{} {} {}: {} error(s)\n  {}\n{}",
                     profile.message_type(),
@@ -91,7 +90,7 @@ fn a_formatbedingung_finding_keeps_a_skeleton_from_being_sent() {
         .expect("UTILMD S2.1 is shipped");
     let af = profile.anwendungsfall(55001).expect("55001");
     let segs = profile.skeleton(af, &SkeletonParties::default());
-    let wire = String::from_utf8(edifact_rs::segments_to_bytes(&segs).unwrap()).unwrap();
+    let wire = String::from_utf8(edifact::segments_to_bytes(&segs).unwrap()).unwrap();
     let malo = wire
         .split('\'')
         .find_map(|s| s.strip_prefix("LOC+Z16+"))
@@ -101,15 +100,15 @@ fn a_formatbedingung_finding_keeps_a_skeleton_from_being_sent() {
     let last = wrong.pop().and_then(|c| c.to_digit(10)).expect("a digit");
     wrong.push(char::from_digit((last + 1) % 10, 10).expect("a digit"));
     let tampered = wire.replace(&format!("LOC+Z16+{malo}'"), &format!("LOC+Z16+{wrong}'"));
-    let segs: Vec<edifact_rs::OwnedSegment> = edifact_rs::from_bytes(tampered.as_bytes())
-        .map(|s| s.map(edifact_rs::Segment::into_owned))
+    let segs: Vec<edifact::OwnedSegment> = edifact::from_bytes(tampered.as_bytes())
+        .map(|s| s.map(edifact::Segment::into_owned))
         .collect::<Result<_, _>>()
         .expect("the tampered skeleton parses");
     let issues = profile.validate(&segs, Pruefidentifikator::new(55001).ok());
     assert!(
         issues
             .iter()
-            .all(|i| i.severity != edifact_rs::ValidationSeverity::Error),
+            .all(|i| i.severity != edifact::ValidationSeverity::Error),
         "the tampered skeleton is still valid: {issues:#?}"
     );
     let refusals: Vec<_> = issues
@@ -164,8 +163,8 @@ fn a_seed_is_completed_to_its_column_and_keeps_its_values() {
 NAD+MS+4012345000023::9'NAD+MR+9900357000004::293'IDE+24+VG-ABC'\
 DTM+92:202601312300?+00:303'LOC+Z16+51238696781'LOC+Z17+DE00056266802AO6G56M11SN51G21M24S'\
 RFF+Z13:55001'SEQ+Z79+1'PIA+5+9991000002082:Z11'CCI+Z66'CAV+ZV4:::11XBK-STD------Y'UNT+15+MSG-7'";
-    let seed: Vec<edifact_rs::OwnedSegment> = edifact_rs::from_bytes(seed)
-        .map(|s| s.map(edifact_rs::Segment::into_owned))
+    let seed: Vec<edifact::OwnedSegment> = edifact::from_bytes(seed)
+        .map(|s| s.map(edifact::Segment::into_owned))
         .collect::<Result<_, _>>()
         .expect("the seed parses");
     let parties = SkeletonParties {
@@ -173,7 +172,7 @@ RFF+Z13:55001'SEQ+Z79+1'PIA+5+9991000002082:Z11'CCI+Z66'CAV+ZV4:::11XBK-STD-----
         receiver: "9900357000004".into(),
     };
     let done = profile.complete(&seed, af, &parties);
-    let wire = String::from_utf8(edifact_rs::segments_to_bytes(&done).unwrap()).unwrap();
+    let wire = String::from_utf8(edifact::segments_to_bytes(&done).unwrap()).unwrap();
     let issues = profile.validate(&done, edi_energy::Pruefidentifikator::new(55001).ok());
     let ids: Vec<&str> = issues.iter().filter_map(|i| i.rule_id()).collect();
     assert_eq!(
@@ -229,7 +228,7 @@ fn every_303_sample_begins_a_german_day() {
         };
         for af in profile.anwendungsfaelle() {
             let segs = profile.skeleton(af, &SkeletonParties::default());
-            let wire = String::from_utf8(edifact_rs::segments_to_bytes(&segs).unwrap_or_default())
+            let wire = String::from_utf8(edifact::segments_to_bytes(&segs).unwrap_or_default())
                 .unwrap_or_default();
             for seg in wire.split('\'') {
                 let Some(body) = seg.trim().strip_prefix("DTM+") else {
@@ -282,7 +281,7 @@ fn every_dtm_value_has_the_shape_of_its_format_code() {
     for profile in platform.registry().all_profiles() {
         for af in profile.anwendungsfaelle() {
             let segs = profile.skeleton(af, &SkeletonParties::default());
-            let wire = String::from_utf8(edifact_rs::segments_to_bytes(&segs).unwrap_or_default())
+            let wire = String::from_utf8(edifact::segments_to_bytes(&segs).unwrap_or_default())
                 .unwrap_or_default();
             for seg in wire.split('\'') {
                 let Some(body) = seg.trim().strip_prefix("DTM+") else {

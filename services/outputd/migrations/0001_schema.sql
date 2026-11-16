@@ -56,7 +56,10 @@ CREATE TABLE document_templates (
                         'INVOICE',          -- ZUGFeRD PDF/A-3 carrier
                         'MAHNUNG',          -- Textform (§ 126b BGB)
                         'PREISANPASSUNG',   -- § 41 Abs. 5 EnWG notice, Textform
-                        'GEBUEHRENBESCHEID' -- public-law Gebühr, § 157 Abs. 1 AO content
+                        'GEBUEHRENBESCHEID', -- public-law Gebühr, § 157 Abs. 1 AO content
+                        'VERTRAGSZUSAMMENFASSUNG', -- § 41 Abs. 4 EnWG, Textform
+                        'VERTRAGSBESTAETIGUNG',    -- § 312f Abs. 2 BGB, Textform
+                        'WIDERRUFSBESTAETIGUNG'    -- § 356a Abs. 4 BGB, Textform
                     )),
     -- The template source. Typst.
     source          TEXT        NOT NULL,
@@ -83,8 +86,7 @@ CREATE TABLE document_templates (
     -- renders a conformant PDF/A carrier, a Textform kind renders its specimen.
     CONSTRAINT dt_proof_matches_kind CHECK (
         (kind = 'INVOICE'        AND proof = 'RENDERED_PDFA' AND pdf_standard IS NOT NULL)
-     OR (kind IN ('MAHNUNG', 'PREISANPASSUNG', 'GEBUEHRENBESCHEID')
-         AND proof = 'RENDERED_TEXTFORM')
+     OR (kind <> 'INVOICE' AND proof = 'RENDERED_TEXTFORM')
     ),
     PRIMARY KEY (tenant, hash)
 );
@@ -133,7 +135,8 @@ CREATE TABLE documents (
     document_id     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant          TEXT        NOT NULL,
     kind            TEXT        NOT NULL CHECK (kind IN (
-                        'INVOICE', 'MAHNUNG', 'PREISANPASSUNG', 'GEBUEHRENBESCHEID'
+                        'INVOICE', 'MAHNUNG', 'PREISANPASSUNG', 'GEBUEHRENBESCHEID',
+                        'VERTRAGSZUSAMMENFASSUNG', 'VERTRAGSBESTAETIGUNG', 'WIDERRUFSBESTAETIGUNG'
                     )),
     -- The template that rendered it. A plain value rather than a foreign key:
     -- it is the same pin issuing services keep, and `document_templates` is
@@ -143,7 +146,9 @@ CREATE TABLE documents (
     -- ── Who it is about ──────────────────────────────────────────────────────
     -- `subject_ref` is the thing this document documents, in the issuing
     -- service's own terms: a Rechnungsnummer for an INVOICE, a
-    -- `dunning_cases.id` for a MAHNUNG, a slice id for a PREISANPASSUNG.
+    -- `dunning_cases.id` for a MAHNUNG, a slice id for a PREISANPASSUNG, the
+    -- contract for a VERTRAGSZUSAMMENFASSUNG or VERTRAGSBESTAETIGUNG, the
+    -- Widerruf for a WIDERRUFSBESTAETIGUNG.
     -- Unique per (tenant, kind), so a service that retries a render cannot end
     -- up having sent the same notice twice.
     subject_ref     TEXT        NOT NULL,
@@ -158,6 +163,9 @@ CREATE TABLE documents (
     content_sha256  TEXT        NOT NULL,
     byte_size       INTEGER     NOT NULL CHECK (byte_size > 0),
     media_type      TEXT        NOT NULL DEFAULT 'application/pdf',
+    -- The form of address it is written in — outputd's `[policy] anrede` at
+    -- issue, `sie` always for a GEBUEHRENBESCHEID. A re-print pins it.
+    anrede          TEXT        NOT NULL CHECK (anrede IN ('sie', 'du')),
 
     -- ── Recipient, as addressed at issue time ────────────────────────────────
     -- Snapshotted: the customer's address is live master data in vertragd, and

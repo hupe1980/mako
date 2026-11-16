@@ -202,7 +202,7 @@ mod tests {
                 endpoint: None,
                 encryption_cert_pem_file: None,
                 signing_cert_pem_files: vec![sig],
-                quirks: Vec::new(),
+                quirks: None,
                 de0004_ausnahme: Vec::new(),
             }],
             ..As4Config::default()

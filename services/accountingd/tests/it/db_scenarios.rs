@@ -2190,8 +2190,8 @@ async fn interest_for_the_same_period_is_charged_once() {
 /// A re-announced Abschlag drops at the outbox.
 ///
 /// `post_entry` is idempotent, so a second run in the same month is a ledger
-/// no-op — but it returns `Ok`, so announcing on that alone re-sent the event
-/// every time the 23-hour scheduler drifted across midnight. The CloudEvent id
+/// no-op — but it returns `Ok`, so announcing on that alone re-sends the event
+/// every time the 23-hour scheduler drifts across midnight. The CloudEvent id
 /// is derived from the same `(MaLo, month)` key the ledger uses, and
 /// `outbox::enqueue` is `ON CONFLICT (event_id) DO NOTHING`.
 #[tokio::test]
@@ -2234,9 +2234,9 @@ async fn a_replayed_abschlag_is_announced_once() {
 // ── IBAN payment matching ─────────────────────────────────────────────────────
 
 /// Registering a SEPA mandate must write `accounts.iban_hash`, because that is
-/// the only key CAMT.054 import resolves an account by. It was read but never
-/// written, so every incoming payment fell to unmatched and dunning could fire
-/// against customers who had already paid.
+/// the only key CAMT.054 import resolves an account by. Read but not written,
+/// every incoming payment falls to unmatched and dunning fires against
+/// customers who have paid.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_mandate_makes_the_account_findable_by_iban() {

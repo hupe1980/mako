@@ -16,3 +16,4 @@ pub mod invoic_ausgang;
 pub mod netzzugang;
 pub mod process_family;
 pub mod projection_worker;
+pub mod zuordnungsermaechtigung;

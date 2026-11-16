@@ -593,29 +593,19 @@ fn report_for(
     })
 }
 
-/// Count occurrences of `tag` that begin a segment.
+/// How many messages `raw` holds: its `UNH` segments, read by the `edifact`
+/// tokenizer.
 ///
-/// A segment starts at the beginning of the blob or just after an unescaped
-/// terminator `'`. EDIFACT escapes a literal terminator with `?`, so a `'`
-/// preceded by an odd number of `?` is data rather than a boundary.
-fn count_segment_starts(raw: &[u8], tag: &[u8]) -> usize {
-    let mut count = 0;
-    let mut at_start = true;
-    for (i, b) in raw.iter().enumerate() {
-        if at_start && !b.is_ascii_whitespace() {
-            if raw[i..].starts_with(tag) {
-                count += 1;
-            }
-            at_start = false;
-        }
-        if *b == b'\'' {
-            let escapes = raw[..i].iter().rev().take_while(|c| **c == b'?').count();
-            if escapes % 2 == 0 {
-                at_start = true;
-            }
-        }
-    }
-    count
+/// The tokenizer takes the service characters from the blob's `UNA` (or the
+/// ISO 9735 defaults), so a released terminator and a custom one are both read
+/// as the sender wrote them. A byte scan that assumes `'` and `?` finds one
+/// message in a blob whose `UNA` declares another terminator. Counting stops at
+/// the first syntax error — the parse that follows reports it.
+fn count_messages(raw: &[u8]) -> usize {
+    ::edifact::from_bytes(raw)
+        .map_while(Result::ok)
+        .filter(|s| s.tag == "UNH")
+        .count()
 }
 
 /// Parse and fully validate an EDIFACT interchange (MIG + AHB + semantic rules).
@@ -672,10 +662,10 @@ pub fn validate_edifact(raw: &[u8], on: &str) -> PyResult<ValidationReport> {
     // its first message, leaving the rest unvalidated. Refuse instead: several
     // messages travel in an interchange, which has an envelope.
     //
-    // Counted at segment starts only — the string `UNH+` inside an `FTX` free
-    // text is data, not a message boundary, and refusing on it would reject a
+    // Counted as segments — the string `UNH+` inside an `FTX` free text is
+    // data, not a message boundary, and refusing on it would reject a
     // perfectly good single message.
-    let unh_count = count_segment_starts(raw, b"UNH+");
+    let unh_count = count_messages(raw);
     if unh_count > 1 {
         return Err(PyValueError::new_err(format!(
             "{unh_count} messages without a UNB envelope — wrap them with \
@@ -1122,8 +1112,8 @@ fn complete_to_column(
     let Some(af) = profile.anwendungsfall(pruefidentifikator) else {
         return Ok(bytes);
     };
-    let segments: Vec<edifact_rs::OwnedSegment> = edifact_rs::from_bytes(&bytes)
-        .map(|s| s.map(edifact_rs::Segment::into_owned))
+    let segments: Vec<::edifact::OwnedSegment> = ::edifact::from_bytes(&bytes)
+        .map(|s| s.map(::edifact::Segment::into_owned))
         .collect::<Result<_, _>>()
         .map_err(|e| PyRuntimeError::new_err(format!("{} re-parse failed: {e}", mt.as_str())))?;
     let party = |role: &str| {
@@ -1139,7 +1129,7 @@ fn complete_to_column(
         receiver: party("MR").unwrap_or(defaults.receiver),
     };
     let done = profile.complete(&segments, af, &parties);
-    edifact_rs::segments_to_bytes(&done)
+    ::edifact::segments_to_bytes(&done)
         .map_err(|e| PyRuntimeError::new_err(format!("{} serialize failed: {e}", mt.as_str())))
 }
 
@@ -2184,7 +2174,24 @@ mod tests {
         }
     }
 
+    /// Messages are counted under the blob's own `UNA`: with `!` as the
+    /// terminator both messages are seen, and a released one is data.
+    #[test]
+    fn messages_are_counted_under_the_blobs_una() {
+        let custom = b"UNA:+.? !UNH+1+UTILMD:D:11A:UN:S2.1!BGM+E01!UNT+3+1!\
+                       UNH+2+UTILMD:D:11A:UN:S2.1!BGM+E01!UNT+3+2!";
+        assert_eq!(count_messages(custom), 2);
+        let released = b"UNH+1+UTILMD:D:11A:UN:S2.1'FTX+ACB+++a?'UNH+2'UNT+3+1'";
+        assert_eq!(count_messages(released), 1);
+    }
+
     fn utilmd_55001() -> Vec<u8> {
+        utilmd_55001_ref("MSG-1")
+    }
+
+    /// [`utilmd_55001`] with `UNH` reference `message_ref`: the messages of one
+    /// interchange carry distinct references (ISO 9735).
+    fn utilmd_55001_ref(message_ref: &str) -> Vec<u8> {
         let built = build_utilmd(
             55001,
             "4012345000023",
@@ -2192,7 +2199,7 @@ mod tests {
             Some("2025-10-01"),
             None,
             None,
-            "MSG-1",
+            message_ref,
             Some("20251101"),
             "E01",
             None,
@@ -2278,7 +2285,7 @@ mod tests {
                 "4012345000023",
                 "9900357000003",
                 "REF002",
-                vec![utilmd_55001(), utilmd_55001()],
+                vec![utilmd_55001_ref("MSG-1"), utilmd_55001_ref("MSG-2")],
                 Some("2025-11-01"),
                 None,
                 "0915",

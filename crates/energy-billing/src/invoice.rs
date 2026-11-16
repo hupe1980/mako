@@ -432,7 +432,7 @@ impl Invoice {
     ///
     /// Issue date **+ 14 days** (§ 40c Abs. 1 EnWG: due at the earliest two
     /// weeks after the payment request reaches the customer). Counting from the
-    /// period end instead made every catch-up invoice and every late
+    /// period end would make every catch-up invoice and every late
     /// Schlussrechnung arrive already overdue.
     ///
     /// ## Where mako-specific facts live

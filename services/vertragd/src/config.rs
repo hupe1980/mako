@@ -1,5 +1,6 @@
 //! Deployment configuration for `vertragd`.
 
+use mako_service::policy::{Policy, PolicyChoice};
 use serde::Deserialize;
 
 /// `vertragd.toml`.
@@ -61,6 +62,15 @@ pub struct VertragdConfig {
     pub outputd_url: Option<String>,
     pub outputd_api_key: Option<String>,
 
+    /// `productd` — the frozen Endkunden-Angebot an online order accepts
+    /// (`GET /api/v1/endkunden-angebote/{id}`). Required once
+    /// `[policy] vertragsschluss` is set: an order whose offer cannot be read
+    /// cannot be checked against it.
+    #[serde(default)]
+    pub productd_url: Option<String>,
+    #[serde(default)]
+    pub productd_api_key: Option<String>,
+
     /// `[absender]` — the operator as § 126b BGB's declarant, printed on every
     /// customer notice this service issues.
     ///
@@ -98,12 +108,83 @@ pub struct VertragdConfig {
 }
 
 /// `[policy]` — vertragd's operator settings.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VertragdPolicy {
     /// `[policy.dsr]` — the DPO's readings for a data-subject export.
     #[serde(default)]
     pub dsr: crate::dsr_policy::DsrPolicy,
+    /// `vertragsschluss` — when an online order becomes a contract. No
+    /// default: absent, `POST /api/v1/bestellungen` refuses with
+    /// `policy_nicht_gesetzt` and every other route runs as before.
+    #[serde(default)]
+    pub vertragsschluss: Option<Policy<Vertragsschluss>>,
+    /// `lieferbeginn_in_widerrufsfrist` — whether supply may start inside the
+    /// Widerrufsfrist without the consumer's express request.
+    #[serde(default)]
+    pub lieferbeginn_in_widerrufsfrist: Policy<LieferbeginnInWiderrufsfrist>,
+    /// `bestellbutton_beschriftungen` — the order-button labels admitted.
+    /// § 312j Abs. 3 Satz 2 BGB: „mit nichts anderem als den Wörtern
+    /// „zahlungspflichtig bestellen“ oder mit einer entsprechenden eindeutigen
+    /// Formulierung" — the statutory wording alone by default; any other is the
+    /// operator's reading, listed here.
+    #[serde(default = "default_bestellbutton")]
+    pub bestellbutton_beschriftungen: Vec<String>,
+}
+
+impl Default for VertragdPolicy {
+    fn default() -> Self {
+        Self {
+            dsr: crate::dsr_policy::DsrPolicy::default(),
+            vertragsschluss: None,
+            lieferbeginn_in_widerrufsfrist: Policy::default(),
+            bestellbutton_beschriftungen: default_bestellbutton(),
+        }
+    }
+}
+
+/// The statutory label of § 312j Abs. 3 Satz 2 BGB.
+pub const BESTELLBUTTON_GESETZLICH: &str = "zahlungspflichtig bestellen";
+
+fn default_bestellbutton() -> Vec<String> {
+    vec![BESTELLBUTTON_GESETZLICH.to_owned()]
+}
+
+mako_service::policy_choice! {
+    /// When an online order becomes a contract: at the order, or at the
+    /// operator's acceptance. No default — the operator's AGB decide it.
+    pub enum Vertragsschluss {
+        key: "vertragsschluss",
+        doc: "@/docs/services/vertragd.md#policy-vertragsschluss",
+        default: required,
+        options: {
+            /// The frozen offer is binding; the consumer's click concludes the
+            /// contract, and the Widerrufsfrist starts then.
+            MitBestellung = "mit_bestellung" => "the operator's AGB make the offer binding, so the order concludes the contract and starts the Widerrufsfrist (§ 356 Abs. 2 Nr. 2 BGB)",
+            /// The order is the consumer's offer; the contract comes about
+            /// when the operator records its acceptance (after its own credit
+            /// check).
+            MitAnnahme = "mit_annahme" => "the operator's AGB make the order the consumer's offer, so the acceptance concludes the contract and starts the Widerrufsfrist (§ 356 Abs. 2 Nr. 2 BGB)",
+        }
+    }
+}
+
+mako_service::policy_choice! {
+    /// Whether supply may start inside the Widerrufsfrist without the
+    /// consumer's express request (§ 357a Abs. 2 Satz 1 Nr. 1 BGB).
+    pub enum LieferbeginnInWiderrufsfrist {
+        key: "lieferbeginn_in_widerrufsfrist",
+        doc: "@/docs/services/vertragd.md#policy-vertragsschluss",
+        default: tightening(NurAufVerlangen, "supplying inside the Widerrufsfrist only on the express request never delivers energy the consumer may withdraw from without owing Wertersatz"),
+        options: {
+            /// Without the express request, the earliest Lieferbeginn is the
+            /// day after the Widerrufsfrist ends.
+            NurAufVerlangen = "nur_auf_verlangen" => "Wertersatz is owed only for supply the consumer expressly asked to start inside the Widerrufsfrist (§ 357a Abs. 2 Satz 1 Nr. 1 BGB)",
+            /// Supply may start inside the Widerrufsfrist in any case; energy
+            /// delivered without the request is the operator's risk.
+            Immer = "immer" => "an earlier start is not barred, but supply without the request owes no Wertersatz (§ 357a Abs. 2 Satz 1 Nr. 1 BGB)",
+        }
+    }
 }
 
 impl VertragdConfig {
@@ -113,6 +194,42 @@ impl VertragdConfig {
     pub fn policy_report(&self) -> mako_service::policy::PolicyReport {
         let mut r = mako_service::policy::PolicyReport::new();
         r.entries.extend(self.policy.dsr.entries());
+        r.entries
+            .push(self.policy.vertragsschluss.as_ref().map_or_else(
+                || mako_service::policy::PolicyEntry {
+                    key: <Vertragsschluss as PolicyChoice>::KEY.to_owned(),
+                    value: "nicht_gesetzt".to_owned(),
+                    origin: mako_service::policy::Origin::Default,
+                    class: mako_service::policy::PolicyClass::Policy,
+                    quelle: None,
+                    doc: Some(<Vertragsschluss as PolicyChoice>::DOC.to_owned()),
+                    insecure: false,
+                    review_by: None,
+                    review_grund: None,
+                },
+                Policy::entry,
+            ));
+        r.entries
+            .push(self.policy.lieferbeginn_in_widerrufsfrist.entry());
+        r.entries.push(mako_service::policy::PolicyEntry {
+            key: "bestellbutton_beschriftungen".to_owned(),
+            value: self.policy.bestellbutton_beschriftungen.join(" | "),
+            origin: if self.policy.bestellbutton_beschriftungen == default_bestellbutton() {
+                mako_service::policy::Origin::Default
+            } else {
+                mako_service::policy::Origin::Explicit
+            },
+            class: mako_service::policy::PolicyClass::Policy,
+            quelle: Some(
+                "§ 312j Abs. 3 Satz 2 BGB: „zahlungspflichtig bestellen“ oder eine entsprechende \
+                 eindeutige Formulierung"
+                    .to_owned(),
+            ),
+            doc: Some(<Vertragsschluss as PolicyChoice>::DOC.to_owned()),
+            insecure: false,
+            review_by: None,
+            review_grund: None,
+        });
         r.posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
             .posture_presence("oidc", self.oidc.is_some(), true)
             .posture_presence("inbound_secret", self.inbound_secret.is_some(), true)
@@ -150,6 +267,53 @@ impl VertragdConfig {
              allow_insecure_no_auth = true to accept an unauthenticated deployment.",
             fehlt.join("; ")
         )))
+    }
+
+    /// What `[policy] vertragsschluss` needs beside it: the order route reads
+    /// the offer from `productd` and owes the Vertragszusammenfassung and the
+    /// Vertragsbestätigung through `outputd`. An online contract concluded
+    /// without either is one whose statutory documents are never issued.
+    #[must_use]
+    pub fn bestellung_befunde(&self) -> Vec<mako_service::Befund> {
+        use mako_service::befund::Befund;
+        if self.policy.vertragsschluss.is_none() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if self.productd_url.is_none() {
+            out.push(Befund::blockiert(
+                "productd_url",
+                "productd_url — [policy] vertragsschluss is set, and an order is checked \
+                 against the frozen Endkunden-Angebot productd serves",
+            ));
+        }
+        if self.outputd_url.is_none() {
+            out.push(Befund::blockiert(
+                "outputd_url",
+                "outputd_url — [policy] vertragsschluss is set, and every online contract owes \
+                 the § 41 Abs. 4 EnWG Vertragszusammenfassung and the § 312f Abs. 2 BGB \
+                 Vertragsbestätigung, issued through outputd",
+            ));
+        }
+        if self
+            .absender
+            .as_ref()
+            .and_then(|a| a.name.as_ref())
+            .is_none()
+        {
+            out.push(Befund::blockiert(
+                "absender.name",
+                "[absender] name — [policy] vertragsschluss is set, and the documents an online \
+                 contract owes are Textform declarations that must name their declarant",
+            ));
+        }
+        if self.policy.bestellbutton_beschriftungen.is_empty() {
+            out.push(Befund::blockiert(
+                "policy.bestellbutton_beschriftungen",
+                "[policy] bestellbutton_beschriftungen is empty — every order would be refused",
+            ));
+        }
+        out
     }
 
     /// One finding per missing credential of [`Self::check_auth_posture`],

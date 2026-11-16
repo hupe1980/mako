@@ -29,8 +29,7 @@
 //! heuristic is deliberately shallow: it reads one line, and a multi-line value
 //! expression is allowed through on the assumption that anyone spreading a field
 //! across lines is doing something to it. That is the trade that keeps it free
-//! of false positives while still catching every instance of the bug that
-//! shipped.
+//! of false positives while still catching the single-line shape.
 //!
 //! **A derived `Serialize`.** `Json(record)` and `serde_json::to_value(record)`
 //! serve whatever the derive produces, and the `time` crate's `serde` feature
@@ -114,8 +113,8 @@ fn collect(dir: &Path, scanned: &mut usize, findings: &mut Vec<(PathBuf, usize, 
 ///
 /// `.ok()`, `.unwrap_or(…)`, `.map(…)` and `.and_then(…)` are deliberately
 /// **not** here: all four change the `Option` wrapper and leave the component
-/// array exactly where it was. That distinction is the whole check — every field
-/// that shipped the bug had one of those and nothing else. A `.map`/`.and_then`
+/// array exactly where it was. That distinction is the whole check — a field
+/// with one of those and nothing else is the defect. A `.map`/`.and_then`
 /// counts only when the conversion is written *inside* it, which
 /// [`maps_through_a_conversion`] decides.
 const CONVERSIONS: &[&str] = &[".format(", ".to_string()", "rfc3339", "unix_timestamp"];
@@ -187,8 +186,8 @@ fn scan(path: &Path, findings: &mut Vec<(PathBuf, usize, String)>) {
 
 /// The offending lines of one source file, as `(line, 1-based number)`.
 ///
-/// Split from the filesystem so the rule itself is testable against the exact
-/// text that shipped.
+/// Split from the filesystem so the rule itself is testable against source
+/// text.
 fn offending_lines(src: &str) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     for (i, line) in src.lines().enumerate() {
@@ -395,10 +394,10 @@ mod tests {
     }
     use super::{offending_lines, unformatted_derive_fields};
 
-    /// The exact lines that shipped the bug, and the exact lines that fixed it.
+    /// The defective lines are caught and their converted forms are clear.
     ///
-    /// A guard with no test proving it catches the original is a guard nobody
-    /// can trust, so these are copied verbatim from the diff that fixed them.
+    /// A guard with no test proving it catches the real shape is a guard nobody
+    /// can trust, so these are the defect's own lines, verbatim.
     #[test]
     fn it_catches_what_shipped_and_clears_the_fix() {
         let shipped = r#"
@@ -431,7 +430,7 @@ mod tests {
 
     /// `.ok()` and `.unwrap_or` are wrapper changes, not conversions.
     ///
-    /// If either counted, every field that shipped the bug would pass.
+    /// If either counted, every defective field would pass.
     #[test]
     fn unwrapping_is_not_formatting() {
         let line = r#"                "at": r.try_get::<time::OffsetDateTime, _>("at").ok(),"#;

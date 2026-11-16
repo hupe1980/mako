@@ -8,7 +8,7 @@
 pub enum Error {
     /// The underlying EDIFACT tokeniser rejected the input.
     #[error("EDIFACT parse error: {0}")]
-    Parse(#[from] edifact_rs::EdifactError),
+    Parse(#[from] edifact::EdifactError),
 
     /// Rendering an outbound message back to EDIFACT bytes failed.
     #[error("EDIFACT serialization error: {0}")]

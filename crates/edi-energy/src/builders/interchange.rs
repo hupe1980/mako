@@ -18,7 +18,7 @@ use crate::Error;
 ///
 /// let wire = InterchangeBuilder::new("9900123456789", "9900987654321", "REF001")
 ///     .transmission("260802", "0915")
-///     .message(b"UNH+1+UTILMD:D:11A:UN:S2.1'UNT+2+1'".to_vec())
+///     .message(b"UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01'UNT+3+1'".to_vec())
 ///     .build()
 ///     .unwrap();
 ///
@@ -32,8 +32,8 @@ pub struct InterchangeBuilder {
     receiver: String,
     /// UNB DE0020 / UNZ DE0036 Datenaustauschreferenz (`an..14`).
     dar: String,
-    date: String,
-    time: String,
+    /// UNB S004 as written: `YYMMDD` and `HHMM`.
+    transmission: Option<(String, String)>,
     /// UNB DE 0026 Anwendungsreferenz, where the AHB fixes one.
     application_reference: Option<String>,
     messages: Vec<Vec<u8>>,
@@ -42,10 +42,10 @@ pub struct InterchangeBuilder {
 impl InterchangeBuilder {
     /// Start an interchange from `sender` to `receiver` with Datenaustauschreferenz `dar`.
     ///
-    /// The transmission timestamp defaults to `000000`/`0000`; set a real one
-    /// with [`transmission`](Self::transmission). It is a parameter rather than
-    /// a clock read so that building an interchange stays deterministic —
-    /// golden-file tests depend on it.
+    /// The transmission timestamp is a parameter rather than a clock read so
+    /// that building an interchange stays deterministic — golden-file tests
+    /// depend on it — and [`build`](Self::build) refuses an interchange
+    /// without one.
     pub fn new(
         sender: impl Into<String>,
         receiver: impl Into<String>,
@@ -55,8 +55,7 @@ impl InterchangeBuilder {
             sender: sender.into(),
             receiver: receiver.into(),
             dar: dar.into(),
-            date: "000000".to_owned(),
-            time: "0000".to_owned(),
+            transmission: None,
             application_reference: None,
             messages: Vec::new(),
         }
@@ -65,8 +64,7 @@ impl InterchangeBuilder {
     /// Set the UNB transmission date (`YYMMDD`) and time (`HHMM`).
     #[must_use]
     pub fn transmission(mut self, date: impl Into<String>, time: impl Into<String>) -> Self {
-        self.date = date.into();
-        self.time = time.into();
+        self.transmission = Some((date.into(), time.into()));
         self
     }
 
@@ -90,81 +88,77 @@ impl InterchangeBuilder {
 
     /// Render the interchange.
     ///
-    /// The `UNZ` message count is derived from the messages actually added, so
-    /// it cannot disagree with the payload.
+    /// `edifact::InterchangeBuilder` writes the envelope: it computes the `UNZ`
+    /// count from the messages actually added, checks each message's `UNT`
+    /// count and reference, and encodes the payload into the `UNOC` repertoire
+    /// the header declares.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Serialize`] when a field cannot be written — e.g. a
-    /// party ID or Datenaustauschreferenz outside the UNOC character set, or
-    /// beyond the `an..14` bound of DE 0020.
+    /// Returns [`Error::Serialize`] when the interchange cannot be written — no
+    /// transmission timestamp or no message, a party ID or
+    /// Datenaustauschreferenz outside the UNOC character set or beyond the
+    /// `an..14` bound of DE 0020, or a message whose `UNT` disagrees with it.
     pub fn build(self) -> Result<Vec<u8>, Error> {
-        let payload_len: usize = self.messages.iter().map(Vec::len).sum();
-        let mut w = edifact_rs::Writer::new(Vec::with_capacity(payload_len + 96))
-            .with_charset(INTERCHANGE_CHARSET);
-        // DE 0026 sits after S005 (Referenz/Passwort des Empfängers), which
-        // MaKo never uses — so the empty position is only held when an
-        // application reference actually follows it. Emitting it unconditionally
-        // would put trailing separators on every interchange.
-        let unb: &[&[&str]] = &[
-            &["UNOC", "3"],
-            &[&self.sender, unb_qualifier_or_refuse(&self.sender)?],
-            &[&self.receiver, unb_qualifier_or_refuse(&self.receiver)?],
-            &[&self.date, &self.time],
-            &[&self.dar],
-        ];
-        let app_ref_slot: [&str; 1];
-        let with_app_ref: Vec<&[&str]>;
-        let unb = match self.application_reference.as_deref() {
-            None => unb,
-            Some(app_ref) => {
-                app_ref_slot = [app_ref];
-                with_app_ref = unb
-                    .iter()
-                    .copied()
-                    .chain([&[][..], &app_ref_slot[..]])
-                    .collect();
-                &with_app_ref
-            }
+        let (date, time) = self
+            .transmission
+            .as_ref()
+            .ok_or_else(|| Error::Serialize("UNB S004: no transmission date and time".into()))?;
+        let prepared = preparation_date_time(date, time)?;
+        let party = |id: &str| -> Result<edifact::Party, Error> {
+            Ok(edifact::Party::new(id).with_qualifier(unb_qualifier_or_refuse(id)?))
         };
-        w.write_composites("UNB", unb)
-            .map_err(|e| Error::Serialize(format!("UNB envelope: {e}")))?;
-        let mut bytes = w
-            .finish()
-            .map_err(|e| Error::Serialize(format!("UNB envelope: {e}")))?;
-
-        // The message builders render `UNH`…`UNT` as UTF-8, because their own
-        // `build()` parses the bytes straight back into a typed message. The
-        // interchange is where those bytes become wire output, so it is where
-        // the declared repertoire has to be honoured: a `UNB+UNOC:3` header
-        // over a UTF-8 body puts `Ã¼` on the counterparty's screen, with
-        // nothing in the file to explain why.
-        //
-        // `Charset::encode` borrows for ASCII, so the common interchange
-        // copies nothing.
-        for m in &self.messages {
-            let text = core::str::from_utf8(m)
-                .map_err(|e| Error::Serialize(format!("message payload is not UTF-8: {e}")))?;
-            let encoded = INTERCHANGE_CHARSET
-                .encode(text)
-                .map_err(|e| Error::Serialize(format!("message payload: {e}")))?;
-            bytes.extend_from_slice(&encoded);
+        let mut header = edifact::InterchangeHeader::new(
+            INTERCHANGE_CHARSET,
+            edifact::SyntaxVersion::V3,
+            party(&self.sender)?,
+            party(&self.receiver)?,
+            prepared,
+            self.dar,
+        );
+        if let Some(app_ref) = self.application_reference {
+            header = header.with_application_ref(app_ref);
         }
-
-        let count = self.messages.len().to_string();
-        let mut w = edifact_rs::Writer::new(bytes).with_charset(INTERCHANGE_CHARSET);
-        w.write_composites("UNZ", &[&[count.as_str()], &[&self.dar]])
-            .map_err(|e| Error::Serialize(format!("UNZ envelope: {e}")))?;
-        w.finish()
-            .map_err(|e| Error::Serialize(format!("UNZ envelope: {e}")))
+        // The message builders render `UNH`…`UNT` as UTF-8, because their own
+        // `build()` parses the bytes straight back into a typed message; the
+        // envelope encodes them into the declared repertoire.
+        let mut builder = edifact::InterchangeBuilder::new(header);
+        for m in self.messages {
+            let text = String::from_utf8(m)
+                .map_err(|e| Error::Serialize(format!("message payload is not UTF-8: {e}")))?;
+            builder = builder.message(text);
+        }
+        builder.build().map_err(Error::write)
     }
+}
+
+/// UNB S004 from `YYMMDD` and `HHMM`, the syntax version 3 representation.
+fn preparation_date_time(date: &str, time: &str) -> Result<edifact::PreparationDateTime, Error> {
+    let refuse = || Error::Serialize(format!("UNB S004 {date:?}:{time:?} is not YYMMDD:HHMM"));
+    let field = |s: &str, at: usize| -> Result<u8, Error> {
+        s.get(at..at + 2)
+            .filter(|f| f.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|f| f.parse().ok())
+            .ok_or_else(refuse)
+    };
+    if date.len() != 6 || time.len() != 4 {
+        return Err(refuse());
+    }
+    edifact::PreparationDateTime::from_two_digit_year(
+        field(date, 0)?,
+        field(date, 2)?,
+        field(date, 4)?,
+        field(time, 0)?,
+        field(time, 2)?,
+    )
+    .map_err(Error::write)
 }
 
 /// The character repertoire every BDEW `MaKo` interchange declares in `UNB`
 /// S001 DE 0001 — `UNOC`, which is ISO 8859-1 rather than UTF-8.
 ///
 /// Declared once so the header and the payload encoding cannot disagree.
-const INTERCHANGE_CHARSET: edifact_rs::Charset = edifact_rs::Charset::UnoC;
+const INTERCHANGE_CHARSET: edifact::Charset = edifact::Charset::UnoC;
 
 /// The UNB party-identification qualifier (DE 3055) for a market-partner ID.
 ///
@@ -207,20 +201,45 @@ mod tests {
     #[test]
     fn unz_count_follows_the_payload() {
         let wire = InterchangeBuilder::new("9900123456789", "9900987654321", "R1")
-            .message(b"UNH+1+X'UNT+2+1'".to_vec())
-            .message(b"UNH+2+X'UNT+2+2'".to_vec())
+            .transmission("260802", "0915")
+            .message(b"UNH+1+X:D:11A:UN'BGM+7'UNT+3+1'".to_vec())
+            .message(b"UNH+2+X:D:11A:UN'BGM+7'UNT+3+2'".to_vec())
             .build()
             .unwrap();
         let text = String::from_utf8(wire).unwrap();
         assert!(text.ends_with("UNZ+2+R1'"), "{text}");
     }
 
+    /// A message whose `UNT` miscounts its segments is refused, not wrapped.
     #[test]
-    fn empty_interchange_declares_zero_messages() {
+    fn a_miscounted_message_is_refused() {
+        let result = InterchangeBuilder::new("9900123456789", "9900987654321", "R1")
+            .transmission("260802", "0915")
+            .message(b"UNH+1+X:D:11A:UN'BGM+7'UNT+2+1'".to_vec())
+            .build();
+        assert!(matches!(result, Err(Error::Serialize(_))), "{result:?}");
+    }
+
+    #[test]
+    fn an_interchange_without_a_transmission_time_is_refused() {
+        let result = InterchangeBuilder::new("9900123456789", "9900987654321", "R1")
+            .message(b"UNH+1+X:D:11A:UN'BGM+7'UNT+3+1'".to_vec())
+            .build();
+        assert!(matches!(result, Err(Error::Serialize(_))), "{result:?}");
+    }
+
+    #[test]
+    fn the_application_reference_follows_an_empty_s005() {
         let wire = InterchangeBuilder::new("9900123456789", "9900987654321", "R1")
+            .transmission("260802", "0915")
+            .application_reference("TL")
+            .message(b"UNH+1+X:D:11A:UN'BGM+7'UNT+3+1'".to_vec())
             .build()
             .unwrap();
         let text = String::from_utf8(wire).unwrap();
-        assert!(text.ends_with("UNZ+0+R1'"), "{text}");
+        assert!(
+            text.starts_with("UNB+UNOC:3+9900123456789:500+9900987654321:500+260802:0915+R1++TL'"),
+            "{text}"
+        );
     }
 }

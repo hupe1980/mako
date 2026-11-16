@@ -31,11 +31,15 @@ function span(ms: number): string {
   return z.tage(d, String(d));
 }
 
-/** How far `due` is from `now`, and how urgent that is. */
-export function distance(due: Instant, now: number): Distance {
+/**
+ * How far `due` is from `now`, and how urgent that is. `compact` drops the
+ * word „abgelaufen" where the list around it already says so.
+ */
+export function distance(due: Instant, now: number, compact = false): Distance {
   const left = epochMs(due) - now;
   const z = katalog().zeit;
-  if (left <= 0) return { urgency: "lapsed", text: z.abgelaufenVor(span(-left)) };
+  if (left <= 0)
+    return { urgency: "lapsed", text: compact ? z.vor(span(-left)) : z.abgelaufenVor(span(-left)) };
   const urgency: Urgency = left < 2 * HOUR ? "critical" : left < DAY ? "soon" : "calm";
   return { urgency, text: z.in(span(left)) };
 }

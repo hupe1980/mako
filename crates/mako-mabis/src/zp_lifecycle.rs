@@ -827,6 +827,9 @@ pub enum ZpLifecycleEvent {
         billing_period: BillingPeriod,
         /// EDIFACT document date (`YYYYMMDD`).
         document_date: String,
+        /// The Ermächtigung of a 55071 / 55072.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zuordnungsermaechtigung: Option<ZuordnungsermaechtigungAngaben>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
@@ -1038,6 +1041,82 @@ impl ZpLifecycleState {
     }
 }
 
+// ── Zuordnungsermächtigung ────────────────────────────────────────────────────
+
+/// What a 55071 / 55072 says beyond its MaBiS header: the Ermächtigung's key
+/// and the day it starts or ends.
+///
+/// BK6-24-174 Anlage 3 (MaBiS) Kap. 10.2.1 (S. 119): „Die Ermächtigung erfolgt
+/// je ZRT, BG, BK und LF ab einem bestimmten Zeitpunkt"; the BKV is the
+/// sender. The NB keeps it as the Prüfgrundlage of `E_0622` Prüfschritt 60
+/// („Dem NB liegt die Zuordnungsermächtigung vor und diese dient als
+/// Prüfungsgrundlage für die GPKE", same page).
+///
+/// Every value is the counterparty's as it arrived — the inbound side stays
+/// representable and is refused explicitly, never by an unconstructible type.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ZuordnungsermaechtigungAngaben {
+    /// `SG12 NAD+VY` — the Lieferant the Ermächtigung names.
+    pub lf_mp_id: String,
+    /// `SG10 CCI+Z19` DE 7037 — the Bilanzkreis.
+    pub bilanzkreis: String,
+    /// `SG10 CCI+Z20` DE 7037 — the Bilanzierungsgebiet.
+    pub bilanzierungsgebiet: String,
+    /// `SG10 CCI+15++Z21` / `CAV` DE 7111 — the Zeitreihentyp.
+    pub zeitreihentyp: String,
+    /// The German day (`YYYYMMDD`) the Ermächtigung begins (`DTM+158`
+    /// Bilanzierungsbeginn, 55071) or no longer covers (`DTM+159`
+    /// Bilanzierungsende = Deaktivierungsdatum, 55072).
+    pub datum: String,
+    /// The German day (`YYYYMMDD`) of the message's `DTM+137`.
+    pub nachrichtendatum: String,
+}
+
+impl ZuordnungsermaechtigungAngaben {
+    /// The value a 55071/55072 must carry and does not, named.
+    fn fehlend(&self) -> Vec<&'static str> {
+        [
+            ("SG12 NAD+VY (Lieferant)", &self.lf_mp_id),
+            ("SG10 CCI+Z19 (Bilanzkreis)", &self.bilanzkreis),
+            (
+                "SG10 CCI+Z20 (Bilanzierungsgebiet)",
+                &self.bilanzierungsgebiet,
+            ),
+            ("SG10 CCI+15++Z21 CAV (Zeitreihentyp)", &self.zeitreihentyp),
+            ("SG4 DTM+158/159", &self.datum),
+        ]
+        .into_iter()
+        .filter(|(_, v)| v.trim().is_empty())
+        .map(|(name, _)| name)
+        .collect()
+    }
+}
+
+/// The `ProcessCompleted` payload a 55071 / 55072 leaves for the NB's
+/// `marktd`, which keys the Ermächtigung on (BKV, LF, BK, BG, ZRT).
+///
+/// `vorgang` says whether `datum` opens the Ermächtigung or ends it.
+#[must_use]
+pub fn zuordnungsermaechtigung_payload(
+    pid: Pruefidentifikator,
+    vorgang: ZpVorgang,
+    bkv: &MarktpartnerCode,
+    z: &ZuordnungsermaechtigungAngaben,
+) -> serde_json::Value {
+    serde_json::json!({
+        "pid":                 pid.as_u32(),
+        "serie":               ZpSerie::Zuordnungsermaechtigung,
+        "vorgang":             vorgang,
+        "bkv_mp_id":           bkv.as_str(),
+        "lf_mp_id":            z.lf_mp_id,
+        "bilanzkreis":         z.bilanzkreis,
+        "bilanzierungsgebiet": z.bilanzierungsgebiet,
+        "zeitreihentyp":       z.zeitreihentyp,
+        "datum":               z.datum,
+        "nachrichtendatum":    z.nachrichtendatum,
+    })
+}
+
 // ── Domain commands ───────────────────────────────────────────────────────────
 
 /// Commands for the MaBiS-ZP lifecycle workflow.
@@ -1077,6 +1156,33 @@ pub enum ZpLifecycleCommand {
         billing_period: BillingPeriod,
         /// EDIFACT document date (`YYYYMMDD`).
         document_date: String,
+        /// EDIFACT message reference.
+        message_ref: MessageRef,
+        /// `true` if AHB profile validation passed.
+        validation_passed: bool,
+        /// Validation errors collected by the AHB validator.
+        validation_errors: Vec<String>,
+    },
+    /// Inbound 55071 / 55072 — a BKV activates or deactivates a
+    /// Zuordnungsermächtigung at this NB.
+    ///
+    /// Its own command because the message is no MaBiS-Zählpunkt Anfrage: it
+    /// names no Zählpunkt and no Abrechnungszeitraum, but the (ZRT, BG, BK, LF)
+    /// key and a day (UTILMD AHB Strom 2.2 Kap. 13.5), which the NB keeps as
+    /// the Prüfgrundlage of `E_0622` Prüfschritt 60.
+    ReceiveZuordnungsermaechtigung {
+        /// Prüfidentifikator of the inbound UTILMD — 55071 or 55072.
+        pid: Pruefidentifikator,
+        /// Aktivierung (55071) or Deaktivierung (55072).
+        vorgang: ZpVorgang,
+        /// MP-ID of the BKV (`NAD+MS`).
+        sender: MarktpartnerCode,
+        /// MP-ID of the NB (`NAD+MR`).
+        receiver: MarktpartnerCode,
+        /// EDIFACT document date as it arrived.
+        document_date: String,
+        /// The Ermächtigung's key and day, as they arrived.
+        angaben: ZuordnungsermaechtigungAngaben,
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// `true` if AHB profile validation passed.
@@ -1194,6 +1300,7 @@ impl Workflow for MabisZpLifecycleWorkflow {
                 billing_period,
                 document_date,
                 message_ref,
+                ..
             } => ZpLifecycleState::AnfrageErhalten(Box::new(ZpLifecycleData {
                 pruefidentifikator: *pruefidentifikator,
                 vorgang: *vorgang,
@@ -1348,6 +1455,16 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     .into());
                 }
 
+                // A 55071 / 55072 carries an Ermächtigung, not a Zählpunkt;
+                // recorded through this arm the NB would hold an authorisation
+                // it cannot check an Anmeldung against.
+                if serie == ZpSerie::Zuordnungsermaechtigung {
+                    return Err(WorkflowError::rejected(format!(
+                        "PID {pid} ist eine Zuordnungsermächtigung und wird mit ihren \
+                         Angaben (ZRT, BG, BK, LF) empfangen, nicht als MaBiS-ZP-Anfrage"
+                    )));
+                }
+
                 let erhalten = ZpLifecycleEvent::AnfrageErhalten {
                     pruefidentifikator: pid,
                     vorgang: familie.vorgang,
@@ -1357,6 +1474,7 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     receiver,
                     billing_period,
                     document_date,
+                    zuordnungsermaechtigung: None,
                     message_ref: message_ref.clone(),
                 };
 
@@ -1368,6 +1486,70 @@ impl Workflow for MabisZpLifecycleWorkflow {
                 }
 
                 Ok(vec![erhalten].into())
+            }
+
+            ZpLifecycleCommand::ReceiveZuordnungsermaechtigung {
+                pid,
+                vorgang,
+                sender,
+                receiver,
+                document_date,
+                angaben,
+                message_ref,
+                validation_passed,
+                validation_errors,
+            } => {
+                if !matches!(state, ZpLifecycleState::New) {
+                    // Idempotent: a redelivered Anfrage is a no-op.
+                    return Ok(vec![].into());
+                }
+                let familie = familie_for(ZpSerie::Zuordnungsermaechtigung, vorgang)
+                    .filter(|f| f.anfrage == pid.as_u32())
+                    .ok_or_else(|| {
+                        WorkflowError::rejected(format!(
+                            "PID {pid} ist keine Zuordnungsermächtigung ({vorgang:?})"
+                        ))
+                    })?;
+                if !validation_passed {
+                    return Ok(vec![ZpLifecycleEvent::ValidationFailed {
+                        reason: validation_errors.join("; "),
+                    }]
+                    .into());
+                }
+                // The NB checks every Strom Anmeldung against this, so one that
+                // names no complete key authorises nothing and is refused.
+                let fehlend = angaben.fehlend();
+                if !fehlend.is_empty() {
+                    return Err(WorkflowError::rejected(format!(
+                        "PID {pid}: der Zuordnungsermächtigung fehlt {}",
+                        fehlend.join(", ")
+                    )));
+                }
+                let payload = zuordnungsermaechtigung_payload(pid, vorgang, &sender, &angaben);
+                let events = vec![
+                    ZpLifecycleEvent::AnfrageErhalten {
+                        pruefidentifikator: pid,
+                        vorgang: familie.vorgang,
+                        serie: familie.serie,
+                        mabis_zp_id: String::new(),
+                        sender,
+                        receiver,
+                        billing_period: BillingPeriod::new(angaben.datum.get(..6).unwrap_or("")),
+                        document_date,
+                        zuordnungsermaechtigung: Some(angaben),
+                        message_ref: message_ref.clone(),
+                    },
+                    // No Antwort: MaBiS Kap. 10.2.2 / 10.3.2 has the NB clear an
+                    // error manually with the BKV, not answer.
+                    ZpLifecycleEvent::Erfasst { message_ref },
+                ];
+                // The NB's marktd keeps the Ermächtigung from this
+                // notification; nothing else carries it off the process.
+                Ok(WorkflowOutput {
+                    events,
+                    outbox: vec![PendingOutbox::new("ProcessCompleted", "", payload)],
+                    deadlines: Vec::new(),
+                })
             }
 
             ZpLifecycleCommand::SendAnfrage {
@@ -1704,6 +1886,34 @@ mod tests {
         }
     }
 
+    fn receive_ermaechtigung(vorgang: ZpVorgang) -> ZpLifecycleCommand {
+        let pid = familie_for(ZpSerie::Zuordnungsermaechtigung, vorgang)
+            .expect("in the table")
+            .anfrage;
+        ZpLifecycleCommand::ReceiveZuordnungsermaechtigung {
+            pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            vorgang,
+            sender: mp("9900123456789"),
+            receiver: mp("9900987654321"),
+            document_date: "202607011000+00".to_owned(),
+            angaben: ermaechtigung(),
+            message_ref: MessageRef::new("MSG-1"),
+            validation_passed: true,
+            validation_errors: vec![],
+        }
+    }
+
+    fn ermaechtigung() -> ZuordnungsermaechtigungAngaben {
+        ZuordnungsermaechtigungAngaben {
+            lf_mp_id: "9900357000004".to_owned(),
+            bilanzkreis: "11XBK-LF-------9".to_owned(),
+            bilanzierungsgebiet: "11YB-TENNET----U".to_owned(),
+            zeitreihentyp: "SLS".to_owned(),
+            datum: "20260801".to_owned(),
+            nachrichtendatum: "20260701".to_owned(),
+        }
+    }
+
     fn receive_for_period(serie: ZpSerie, vorgang: ZpVorgang, period: &str) -> ZpLifecycleCommand {
         let mut cmd = receive(serie, vorgang);
         if let ZpLifecycleCommand::ReceiveAnfrage {
@@ -1954,11 +2164,72 @@ mod tests {
 
     // ── Behaviour ───────────────────────────────────────────────────────────
 
+    /// A 55071 is record-only — no Antwort — and still leaves the NB's marktd
+    /// the Ermächtigung it checks every Anmeldung against: BKV, LF, BK, BG,
+    /// ZRT and the day it begins.
+    #[test]
+    fn a_55071_is_recorded_and_hands_the_ermaechtigung_to_marktd() {
+        let out = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive_ermaechtigung(ZpVorgang::Aktivierung),
+        )
+        .expect("accepted");
+        assert_eq!(fold(&out.events).label(), "Erfasst");
+        let [entry] = &out.outbox[..] else {
+            panic!("one notification, got {:?}", out.outbox);
+        };
+        assert_eq!(&*entry.message_type, "ProcessCompleted");
+        let p = &entry.payload;
+        assert_eq!(p["pid"], 55071);
+        assert_eq!(p["vorgang"], "aktivierung");
+        assert_eq!(p["bkv_mp_id"], "9900123456789");
+        assert_eq!(p["lf_mp_id"], "9900357000004");
+        assert_eq!(p["bilanzkreis"], "11XBK-LF-------9");
+        assert_eq!(p["bilanzierungsgebiet"], "11YB-TENNET----U");
+        assert_eq!(p["zeitreihentyp"], "SLS");
+        assert_eq!(p["datum"], "20260801");
+    }
+
+    /// A 55072 hands over its Deaktivierungsdatum the same way.
+    #[test]
+    fn a_55072_hands_the_deaktivierung_to_marktd() {
+        let out = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive_ermaechtigung(ZpVorgang::Deaktivierung),
+        )
+        .expect("accepted");
+        assert_eq!(out.outbox[0].payload["pid"], 55072);
+        assert_eq!(out.outbox[0].payload["vorgang"], "deaktivierung");
+    }
+
+    /// A 55071 with an incomplete Ermächtigung authorises nothing and is
+    /// refused by name; one arriving as a MaBiS-ZP Anfrage, without its
+    /// Angaben, is refused as well.
+    #[test]
+    fn a_55071_without_its_ermaechtigung_is_refused() {
+        let mut cmd = receive_ermaechtigung(ZpVorgang::Aktivierung);
+        if let ZpLifecycleCommand::ReceiveZuordnungsermaechtigung {
+            ref mut angaben, ..
+        } = cmd
+        {
+            angaben.bilanzkreis.clear();
+        }
+        let err =
+            MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).expect_err("refused");
+        assert!(format!("{err}").contains("CCI+Z19"), "{err}");
+
+        MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive(ZpSerie::Zuordnungsermaechtigung, ZpVorgang::Aktivierung),
+        )
+        .expect_err("a 55071 without its Angaben is refused");
+    }
+
     #[test]
     fn a_family_without_an_antwort_is_terminal_on_arrival() {
         let out = MabisZpLifecycleWorkflow::handle(
             &ZpLifecycleState::New,
-            receive(ZpSerie::Zuordnungsermaechtigung, ZpVorgang::Aktivierung),
+            receive(ZpSerie::LfAaszr, ZpVorgang::Aktivierung),
         )
         .expect("accepted");
         let state = fold(&out.events);

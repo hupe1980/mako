@@ -433,7 +433,7 @@ async fn issue_preisanpassung_document(
         anlass: row
             .grund
             .clone()
-            .unwrap_or_else(|| "Anpassung der Preisbestandteile Ihres Liefervertrags.".to_owned()),
+            .unwrap_or_else(|| "Anpassung der Preisbestandteile des Liefervertrags.".to_owned()),
         ankuendigungsfrist: format!("{} ({})", regime.bezeichnung, regime.rechtsgrundlage),
         positionen,
         // § 41 Abs. 5 Satz 4: without notice, to the day the change takes

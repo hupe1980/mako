@@ -362,6 +362,7 @@ pub(super) async fn dispatch_geli_eog_anmelden(
         transaktionsgrund: Some(transaktionsgrund),
         bilanzierungsbeginn: Some(bilanzierungsbeginn),
         stammdaten,
+        abmeldungsanfrage: None,
     };
     {
         use mako_engine::workflow::Workflow as _;
@@ -419,6 +420,218 @@ pub(super) async fn dispatch_geli_eog_anmelden(
     .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
+}
+
+pub(super) fn cmd_geli_beendigung_zuordnung_anfragen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_beendigung_zuordnung_anfragen(s, p))
+}
+
+/// Dispatch `geli.beendigung-zuordnung.anfragen` — the GNB's Abmeldungsanfrage
+/// UTILMD G **44010** to the Altlieferant.
+///
+/// „Sofern die Marktlokation zum Anmeldedatum noch einem anderen Lieferanten
+/// (Altlieferanten) zugeordnet ist, … stellt der Netzbetreiber unverzüglich eine
+/// Abmeldungsanfrage an den Altlieferanten, die dieser dem Netzbetreiber
+/// beantwortet" (GeLi Gas 3.0 Kap. 3.2.3, S. 9) — SD Lieferbeginn Nr. 3,
+/// „Zeitgleich zu Prozessschritt 2" (AWH GeLi Gas V1.2 Kap. 2.5.2, S. 41).
+/// Issued by `processd` when `E_3006` finds the Marktlokation assigned; the
+/// Strom twin is `gpke.beendigung-zuordnung.anfragen`.
+///
+/// The spawned [`GeliGasSupplierChangeWorkflow`] (keyed by
+/// [`mako_geli_gas::gnb_anfrage_key`], under which the LFA's 44011/44012
+/// resume it) carries two windows from the start:
+///
+/// - the LFA's answer — „spätestens bis zum Ablauf des 3. WT nach Eingang der
+///   Abmeldeanfrage des NB" (Nr. 4, S. 41), out of `mako_fristen::antwort`.
+///   Its lapse releases the Marktlokation (GeLi Gas 3.0 Kap. 3.2.3) and
+///   resumes the Anmeldung like an answer;
+/// - the Information 44036 to the LFN, Ablauf des 4. WT nach Eingang der
+///   Anmeldung (Nr. 2, S. 40), out of `mako_fristen::meldung`, which
+///   `geli.zuordnung.informieren` discharges.
+///
+/// The Beendigung 44037 runs from the Bestätigung of the Anmeldung (Nr. 6) and
+/// is registered when that 44002 goes out. Before the spawn the 44010 is
+/// rendered and held against its AHB profile — the pre-send gate's check — so
+/// a Muss part it lacks refuses the command by name.
+///
+/// ## Payload — [`mako_markt::commands::GeliBeendigungZuordnungAnfragen`]
+///
+/// Any other key is refused.
+async fn dispatch_geli_beendigung_zuordnung_anfragen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_engine::workflow::Workflow as _;
+    use mako_geli_gas::lieferbeginn;
+
+    let body: mako_markt::commands::GeliBeendigungZuordnungAnfragen =
+        mako_service::json_from_value(payload.clone()).map_err(|e| {
+            DispatchError::InvalidPayload(format!(
+                "geli.beendigung-zuordnung.anfragen payload: {e} — the Abmeldungsanfrage 44010 \
+                 (UTILMD AHB Gas 1.2 Kap. 5.7)"
+            ))
+        })?;
+    let malo_id = extract_malo_id(&serde_json::json!({ "malo_id": body.malo_id }))?;
+    let eingang = time::OffsetDateTime::parse(
+        &body.anmeldung_eingang,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .map_err(|e| {
+        DispatchError::InvalidPayload(format!(
+            "\"anmeldung_eingang\" is not an RFC 3339 instant: {e}"
+        ))
+    })?;
+    let anmeldedatum = super::eog_stammdaten::stichtag(&body.process_date)?;
+    let process_date = anmeldedatum
+        .format(time::macros::format_description!("[year][month][day]"))
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+    let today = mako_fristen::heute();
+    let document_date = format!(
+        "{:04}{:02}{:02}",
+        today.year(),
+        u8::from(today.month()),
+        today.day()
+    );
+
+    let pid = Pruefidentifikator::new(lieferbeginn::ABMELDUNGSANFRAGE_PID)
+        .map_err(DispatchError::InvalidPayload)?;
+    let domain_cmd = GasSupplierChangeCommand::InitiateGnbProcess {
+        pid,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: MarktpartnerCode::new(body.lfa_mp_id.trim()),
+        malo_id: malo_id.clone(),
+        document_date,
+        process_date,
+        message_ref: MessageRef::new(format!("ABMANF-GAS-{}", uuid::Uuid::new_v4())),
+        transaktionsgrund: Some(
+            lieferbeginn::abmeldungsanfrage_transaktionsgrund(body.transaktionsgrund.trim())
+                .to_owned(),
+        ),
+        bilanzierungsbeginn: None,
+        stammdaten: mako_engine::payload::Stammdaten::default(),
+        abmeldungsanfrage: Some(Box::new(mako_geli_gas::GnbAbmeldungsanfrage {
+            anmeldung_process_id: body.anmeldung_process_id.trim().to_owned(),
+            lfn_mp_id: body.lfn_mp_id.trim().to_owned(),
+            kunde_name: body.kunde_name,
+            kunde_namensformat: body.kunde_namensformat,
+            // `SG4 IDE+24` must be unique per outbound Vorgang.
+            vorgangsnummer: super::vorgangsnummer::neu("ANF"),
+        })),
+    };
+    {
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &mako_geli_gas::GasSupplierChangeState::New,
+            domain_cmd.clone(),
+        )
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+        super::eog_stammdaten::refuse_what_the_gate_refuses(
+            state,
+            &latest_format_version(),
+            &out.outbox,
+        )?;
+    }
+
+    // Duplicate guard: one running Anfrage per Gas-MaLo and GNB-side key.
+    let gnb_key = mako_geli_gas::gnb_anfrage_key(malo_id.as_str());
+    let occupancy = find_occupying_process::<GeliGasSupplierChangeWorkflow>(
+        state,
+        &gnb_key,
+        mako_geli_gas::WORKFLOW_NAME,
+    )
+    .await?;
+    if let Some(dup_id) = occupancy.process {
+        tracing::warn!(
+            malo_id    = %malo_id,
+            process_id = %dup_id,
+            "geli.beendigung-zuordnung.anfragen refused: an Anfrage of this GNB is still running for this Gas-MaLo",
+        );
+        return Err(DispatchError::DuplicateProcess {
+            process_id: dup_id,
+            malo_id: malo_id.into(),
+        });
+    }
+
+    let anfrage_pid = lieferbeginn::ABMELDUNGSANFRAGE_PID;
+    let mut deadlines: Vec<(&'static str, time::OffsetDateTime)> =
+        mako_fristen::antwort::antwort_deadline(anfrage_pid, time::OffsetDateTime::now_utc())
+            .map(|due_at| (mako_geli_gas::LIEFERBEGINN_RESPONSE_WINDOW_LABEL, due_at))
+            .into_iter()
+            .collect();
+    // The Meldepflichten of SD Lieferbeginn the Anfrage shares its condition
+    // with, on the windows the catalogue states for the Anmeldung 44001. Only
+    // the Information runs from the Eingang; the Beendigung's day is the
+    // Bestätigung's, and the Aufhebung to a LFZ is left undecided by name.
+    for m in mako_fristen::meldung::meldepflichten_for(44_001) {
+        if mako_fristen::meldung::nicht_entschieden(
+            m,
+            44_001,
+            44_038,
+            "whether a LFZ is displaced is no fact this Anfrage or processd's decision holds",
+        ) {
+            continue;
+        }
+        if m.anchor != mako_fristen::meldung::MeldungAnchor::Eingang {
+            continue;
+        }
+        if let Some(label) = lieferbeginn::meldepflicht_label(m.pid) {
+            deadlines.push((
+                label,
+                m.due_at(
+                    eingang,
+                    anmeldedatum,
+                    mako_fristen::HolidayCalendar::BdewMaKo,
+                ),
+            ));
+        }
+    }
+
+    let workflow_id = WorkflowId::new(mako_geli_gas::WORKFLOW_NAME, latest_format_version());
+    let process_id = spawn_process::<GeliGasSupplierChangeWorkflow>(
+        &state.store,
+        state.tenant_id,
+        workflow_id,
+        domain_cmd,
+        &deadlines,
+        &[&gnb_key],
+    )
+    .await?;
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// After the Bestätigung 44002 of the Anmeldung `anmeldung` went out: the
+/// Beendigung 44037 is now owed to the LFA of every Abmeldungsanfrage that
+/// Anmeldung sent — „Am selben Tag wie in Prozessschritt 5, wenn die
+/// Anmeldung bestätigt wurde" (AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 6, S. 45).
+async fn anmeldung_bestaetigt(
+    state: &CommandsApiState,
+    malo_id: &str,
+    anmeldung: &ProcessId,
+    gesendet: time::OffsetDateTime,
+) {
+    let Some(row) = mako_fristen::meldung::meldepflichten_for(44_001)
+        .find(|m| m.pid == mako_geli_gas::lieferbeginn::BEENDIGUNG_PID)
+    else {
+        return;
+    };
+    // The Zuordnungsbeginn does not move a `SameDay` window.
+    let beendigung_faellig = row.due_at(
+        gesendet,
+        mako_fristen::berlin_date(gesendet),
+        mako_fristen::HolidayCalendar::BdewMaKo,
+    );
+    let anmeldung = anmeldung.to_string();
+    auf_abmeldungsanfragen(
+        state,
+        malo_id,
+        |a| a.anmeldung_process_id == anmeldung,
+        GasSupplierChangeCommand::AnmeldungBestaetigt { beendigung_faellig },
+    )
+    .await;
 }
 
 /// Dispatch `geli.stornierung.initiieren` — LFN/LFA initiates a Gas
@@ -860,7 +1073,7 @@ pub(super) async fn dispatch_geli_gas_antwort(
     // The tree the code was resolved in rides the event, so the Verlauf
     // reads its wording: a Lieferbeginn is answered from two.
     let antwort_ebd = tree.to_owned();
-    dispatch_to_process::<GeliGasSupplierChangeWorkflow, _>(
+    let outcome = dispatch_to_process::<GeliGasSupplierChangeWorkflow, _>(
         state,
         malo_id.as_str(),
         mako_geli_gas::WORKFLOW_NAME,
@@ -873,7 +1086,21 @@ pub(super) async fn dispatch_geli_gas_antwort(
             stammdaten: mako_engine::payload::Stammdaten::default(),
         },
     )
-    .await
+    .await?;
+    // A Bestätigung 44002 opens the Beendigung 44037 the Abmeldungsanfrage of
+    // this Anmeldung owes the LFA. After the answer's own write.
+    // Only an Anmeldung's process is ever named as the one an Abmeldungsanfrage
+    // serves, so a Bestätigung of anything else finds none.
+    if positive && let DispatchOutcome::Dispatched { process_id } = &outcome {
+        anmeldung_bestaetigt(
+            state,
+            malo_id.as_str(),
+            process_id,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await;
+    }
+    Ok(outcome)
 }
 
 /// The Gas Codeliste that governs an answer PID, when the caller does not name
@@ -1353,13 +1580,89 @@ async fn dispatch_geli_zuordnungsmeldung(
             .map(ToOwned::to_owned),
     };
 
-    spawn_meldung_process::<mako_geli_gas::GeliGasZuordnungsmeldungWorkflow>(
+    let outcome = spawn_meldung_process::<mako_geli_gas::GeliGasZuordnungsmeldungWorkflow>(
         state,
         mako_geli_gas::GAS_ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
         &malo_id,
         domain_cmd,
     )
-    .await
+    .await?;
+    // The Information (44036) and the Beendigung (44037) discharge the window
+    // the Abmeldungsanfrage on the same Marktlokation carries for them. After
+    // the Meldung's own write: a discharge that fails leaves the window to
+    // fire on a Meldung already sent — a false alarm, never a silent miss.
+    let pid = meldung.pid();
+    if mako_geli_gas::lieferbeginn::meldepflicht_label(pid).is_some() {
+        auf_abmeldungsanfragen(
+            state,
+            malo_id.as_str(),
+            |_| true,
+            GasSupplierChangeCommand::MeldungGesendet { pid },
+        )
+        .await;
+    }
+    Ok(outcome)
+}
+
+/// Run `command` on every Abmeldungsanfrage 44010 this GNB sent for `malo_id`
+/// that `which` selects. Each process decides whether the command changes it;
+/// a failure is logged, never returned — the Meldung or Bestätigung it
+/// follows is already written.
+async fn auf_abmeldungsanfragen(
+    state: &CommandsApiState,
+    malo_id: &str,
+    which: impl Fn(&mako_geli_gas::AbmeldungsanfrageStand) -> bool,
+    command: GasSupplierChangeCommand,
+) {
+    let key = mako_geli_gas::gnb_anfrage_key(malo_id);
+    let identities = match state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, &key)
+        .await
+    {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!(%e, malo_id, "Abmeldungsanfrage lookup failed");
+            return;
+        }
+    };
+    for identity in identities
+        .into_iter()
+        .filter(|id| id.workflow_id.name.as_ref() == mako_geli_gas::WORKFLOW_NAME)
+    {
+        let process_id = identity.process_id;
+        let process = mako_engine::process::Process::<
+            GeliGasSupplierChangeWorkflow,
+            Arc<mako_engine::store_slatedb::SlateDbStore>,
+        >::from_identity(Arc::clone(&state.store), identity);
+        let selected = match process.state().await {
+            Ok(s) => s
+                .data()
+                .and_then(|d| d.abmeldungsanfrage.as_ref())
+                .is_some_and(&which),
+            Err(e) => {
+                tracing::warn!(%e, malo_id, %process_id, "Abmeldungsanfrage state unreadable");
+                false
+            }
+        };
+        if !selected {
+            continue;
+        }
+        if let Err(e) = process
+            .run(
+                command.clone(),
+                RunOptions::new().snapshot(&state.snapshot_store, state.snapshot_interval),
+            )
+            .await
+        {
+            tracing::warn!(
+                %e, malo_id, %process_id,
+                "Abmeldungsanfrage not updated; a Meldepflicht window may fire on a Meldung \
+                 already sent, or never open"
+            );
+        }
+    }
 }
 
 /// The Antwortfrist of the message a Gas Stornierung cancels — the GNB answer

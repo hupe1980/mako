@@ -13,7 +13,7 @@
 energy market, in Rust.** It takes BDEW Marktkommunikation (MaKo) from raw EDIFACT and
 AS4 bytes to event-sourced workflows that answer inside their Frist, and carries
 metering, grid and EEG settlement, retail billing and the ledger on the same
-events — for the NB, LF, MSB and ESA roles. The BDEW formats are read from the
+events — for the NB, LF, MSB and ESA roles and the BKV's MaBiS share. The BDEW formats are read from the
 published MIG and AHB documents as data, so a format release is an import run,
 not a rewrite. AI-first means one typed surface: the services speak MCP, agents
 and the operator Desk read the same tools, and a model reads, explains and
@@ -34,7 +34,7 @@ proposes while code computes every Frist, amount and verdict.
 | **Market data** | `mako-markt` library · `marktd` hub (PostgreSQL, durable CloudEvents fan-out, OIDC/JWT) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer management** | `accountingd` ledger · `portald` portal · `outputd` documents · `vertragd` contracts · `productd` catalogue |
-| **Agent surface** | 11 of the 14 services expose an MCP server — **181 tools** — and `agentd` is the governed consumer: 30 specialists (28 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
+| **Agent surface** | 11 of the 14 services expose an MCP server — **183 tools** — and `agentd` is the governed consumer: 30 specialists (28 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
 | **Operator UI** | `desk/` — mako Desk: processes and their Verlauf, customers, Heute, Freigaben, and an assistant that cites every sentence and proposes decisions on Freigaben, invoice disputes and geparkte Buchungen. The `mako-desk` image runs behind an OIDC gateway; `just desk` for development ([guide](https://hupe1980.github.io/mako/docs/guide/desk/), [AGENTS](desk/AGENTS.md)) |
 | **Testing** | `makotest` — Python toolkit over the same Rust core: check digits, the answer Fristen, Entscheidungsbaum codes, AHB-validated EDIFACT, answering counterparties, a `pytest` plugin ([README](makotest/README.md)) |
 
@@ -131,7 +131,7 @@ Each crate's README carries its scope, PIDs and regulatory sources.
 | [`mako-as4`](crates/mako-as4/) | BDEW AS4-Profil over `asx-rs` — sign, encrypt, signed receipts |
 | [`mako-engine`](crates/mako-engine/) | Event-sourced runtime — `Workflow`, `Process`, event store, outbox, deadlines |
 | [`mako-fristen`](crates/mako-fristen/) | BDEW Werktage, the MaKo holiday table, the per-PID Antwortfristen |
-| [`mako-markt`](crates/mako-markt/) | Master data — 100 active `rubo4e::current` types behind one gate, validated `MaloId` / `MeloId` / `MarktpartnerId`, the master-data record types |
+| [`mako-markt`](crates/mako-markt/) | Master data — 101 active `rubo4e::current` types behind one gate, validated `MaloId` / `MeloId` / `MarktpartnerId`, the master-data record types |
 | [`mako-gpke`](crates/mako-gpke/) | GPKE Strom — Lieferantenwechsel, Stammdatenänderung, Sperrung, PARTIN, INVOIC |
 | [`mako-geli-gas`](crates/mako-geli-gas/) | GeLi Gas — Lieferantenwechsel Gas, Stammdatenänderung, Sperrprozesse |
 | [`mako-wim`](crates/mako-wim/) | WiM, Strom and Gas — MSB-Wechsel, Geräteübernahme, Preisanfrage, INSRPT, ESA |
@@ -281,7 +281,7 @@ Licensed under either of [MIT](./LICENSE-MIT) or
 
 ## Related crates
 
-- [edifact-rs](https://crates.io/crates/edifact-rs) — the EDIFACT parser underneath `edi-energy`
+- [edifact](https://crates.io/crates/edifact) — the EDIFACT parser underneath `edi-energy`
 - [asx-rs](https://crates.io/crates/asx-rs) — AS4/ebMS3 transport used by `makod`
 - [rubo4e](https://crates.io/crates/rubo4e) — BO4E business-object types
 - [metering](https://crates.io/crates/metering) and [meterstore](https://crates.io/crates/meterstore) — metering domain and time-series store beneath `edmd`

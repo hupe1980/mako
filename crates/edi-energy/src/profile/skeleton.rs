@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use edifact_rs::{Element as WireElement, OwnedSegment, Segment};
+use edifact::{Element as WireElement, OwnedSegment, Segment};
 
 use super::Profile;
 use super::conditions::{Status, Truth};
@@ -179,8 +179,8 @@ impl Profile {
         af: &Anwendungsfall,
         parties: &SkeletonParties,
     ) -> Result<Vec<u8>, crate::Error> {
-        let message = edifact_rs::segments_to_bytes(&self.skeleton(af, parties))
-            .map_err(crate::Error::Parse)?;
+        let message =
+            edifact::segments_to_bytes(&self.skeleton(af, parties)).map_err(crate::Error::Parse)?;
         crate::builders::InterchangeBuilder::new(&parties.sender, &parties.receiver, "1")
             .transmission("261001", "0700")
             .message(message)
@@ -217,7 +217,7 @@ struct Fixpoint {
 
 impl Fixpoint {
     /// Take in a round's findings; `false` once nothing new was learnt.
-    fn learn(&mut self, issues: &[edifact_rs::ValidationIssue]) -> bool {
+    fn learn(&mut self, issues: &[edifact::ValidationIssue]) -> bool {
         let mut changed = false;
         let mut drop_segment = None;
         for issue in issues {
@@ -989,7 +989,11 @@ impl Generator<'_> {
                     "610" => "202610".into(),
                     // `CCYY` — a year, not a month.
                     "602" | "802" => "2026".into(),
-                    "104" | "106" => "1001".into(),
+                    // `MMWWMMWW` — a week of a month to a week of a month,
+                    // as the MIG's own `DTM+752:05010504:104'`.
+                    "104" => "10011004".into(),
+                    // `MMDD`.
+                    "106" => "1001".into(),
                     "203" => "202610010000".into(),
                     "204" => "20261001000000".into(),
                     "401" => "0000".into(),
@@ -1074,10 +1078,12 @@ fn fit_format(rule: &ElementRule, value: String) -> String {
     if exprs.is_empty() {
         return value;
     }
+    // A skeleton is written under the default service string advice, whose
+    // decimal mark is `.`.
     let accepted = |v: &str| {
         exprs
             .iter()
-            .all(|e| formatbedingung::truth(e, v) != Truth::False)
+            .all(|e| formatbedingung::truth(e, v, '.') != Truth::False)
     };
     if accepted(&value) {
         return value;

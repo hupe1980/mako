@@ -103,6 +103,7 @@ pub fn pruefe(e: &Eingabe<'_>) -> Pruefung {
         .unwrap_or(befund::ZERTIFIKAT_WARNFENSTER_TAGE);
     befunde.extend(zertifikat_befunde(e.as4, e.parties, e.jetzt, fenster));
     befunde.extend(de0004_befunde(e.as4));
+    befunde.extend(as4_regel_befunde(e.as4));
     let (dienste, b) = dienste(e.einrichtung);
     befunde.extend(b);
 
@@ -345,6 +346,72 @@ pub fn de0004_befunde(as4: &As4Config) -> Vec<Befund> {
             })
         })
         .collect()
+}
+
+/// The shortest `as4.zertifikat_warnfenster_tage`: ten Werktage are never
+/// fewer than 14 calendar days, so a shorter window reports an own
+/// certificate only after the day its successor had to be distributed
+/// (Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.3, S. 6).
+pub const MIN_ZERTIFIKAT_WARNFENSTER_TAGE: u32 = 14;
+
+/// The AS4 settings Regelungen zum Übertragungsweg für AS4 2.6 speaks to that
+/// `asx-rs` and the partner directory leave to the operator:
+///
+/// - a warning window that cannot report an own certificate before its
+///   successor is due blocks (Kap. 5.3, S. 6);
+/// - a partner endpoint whose encryption certificate names no URI-type
+///   subject alternative name is a warning: the address cannot be taken from
+///   the certificate as Kap. 2 (S. 4) requires. One that names another address,
+///   or several, is refused by the partner directory.
+#[must_use]
+pub fn as4_regel_befunde(as4: &As4Config) -> Vec<Befund> {
+    let mut out = Vec::new();
+    if let Some(tage) = as4.zertifikat_warnfenster_tage
+        && tage < MIN_ZERTIFIKAT_WARNFENSTER_TAGE
+    {
+        out.push(
+            Befund::blockiert(
+                "as4.zertifikat_warnfenster_tage",
+                format!(
+                    "Ein Warnfenster von {tage} Tagen meldet ein eigenes Zertifikat erst, wenn \
+                     das Nachfolgezertifikat schon verteilt sein muss — spätestens 10 Werktage \
+                     vor Ablauf, also mindestens {MIN_ZERTIFIKAT_WARNFENSTER_TAGE} Tage"
+                ),
+            )
+            .bereich(Bereich::Zertifikate)
+            .quelle("Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.3 (S. 6)"),
+        );
+    }
+    for (i, p) in as4.partner.iter().enumerate() {
+        let (Some(endpoint), Some(datei)) = (&p.endpoint, &p.encryption_cert_pem_file) else {
+            continue;
+        };
+        let Some(uris) = std::fs::read(datei)
+            .ok()
+            .and_then(|pem| asx::Certificate::from_pem(&pem).ok())
+            .and_then(|cert| mako_as4::certificate::uri_subject_alt_names(cert.der()))
+        else {
+            continue;
+        };
+        if uris.is_empty() {
+            out.push(
+                Befund::warnung(
+                    format!("as4.partner[{i}].endpoint"),
+                    format!(
+                        "Das Verschlüsselungszertifikat des Partners {} nennt keine AS4-Adresse \
+                         (Alternativname vom Typ URI); {endpoint} ist nicht aus dem Zertifikat \
+                         belegt",
+                        p.mp_id
+                    ),
+                )
+                .bereich(Bereich::Zertifikate)
+                .quelle(
+                    "Regelungen zum Übertragungsweg für AS4 2.6, Kap. 2 (S. 4), Kap. 5.2 (S. 6)",
+                ),
+            );
+        }
+    }
+    out
 }
 
 /// Every `[party.as4]` and `[[as4.partner]]` certificate that has expired
@@ -701,7 +768,7 @@ mod tests {
                 endpoint: None,
                 encryption_cert_pem_file: Some(schreibe("abgelaufen", -1)),
                 signing_cert_pem_files: vec![schreibe("bald", 10), schreibe("lange", 365)],
-                quirks: Vec::new(),
+                quirks: None,
                 de0004_ausnahme: Vec::new(),
             }],
             ..As4Config::default()
@@ -763,7 +830,7 @@ mod tests {
             endpoint: None,
             encryption_cert_pem_file: None,
             signing_cert_pem_files: Vec::new(),
-            quirks: Vec::new(),
+            quirks: None,
             de0004_ausnahme: ausnahme.iter().map(|s| (*s).to_owned()).collect(),
         };
         let as4 = As4Config {
@@ -778,5 +845,79 @@ mod tests {
         assert_eq!(befunde[0].pfad, "as4.partner[1].de0004_ausnahme");
         assert_eq!(befunde[0].schwere, befund::Schwere::Warnung);
         assert!(befunde[0].text.contains("9900001000005"));
+    }
+
+    fn as4_partner(mp_id: &str) -> crate::config::As4PartnerConfig {
+        crate::config::As4PartnerConfig {
+            mp_id: mp_id.to_owned(),
+            agency: None,
+            endpoint: None,
+            encryption_cert_pem_file: None,
+            signing_cert_pem_files: Vec::new(),
+            quirks: None,
+            de0004_ausnahme: Vec::new(),
+        }
+    }
+
+    /// Kap. 5.3: a window shorter than ten Werktage can span blocks; the
+    /// default and anything from 14 days pass.
+    #[test]
+    fn a_warning_window_shorter_than_ten_werktage_blocks() {
+        let mit = |tage: Option<u32>| {
+            as4_regel_befunde(&As4Config {
+                zertifikat_warnfenster_tage: tage,
+                ..As4Config::default()
+            })
+        };
+        let befunde = mit(Some(13));
+        assert_eq!(befunde.len(), 1, "{befunde:?}");
+        assert_eq!(befunde[0].pfad, "as4.zertifikat_warnfenster_tage");
+        assert_eq!(befunde[0].schwere, befund::Schwere::Blockiert);
+        assert!(mit(Some(14)).is_empty());
+        assert!(mit(None).is_empty());
+        // The startup check runs it.
+        let as4 = As4Config {
+            zertifikat_warnfenster_tage: Some(13),
+            ..As4Config::default()
+        };
+        let policy = MakodPolicy::default();
+        let p = pruefe(&eingabe(&[], &[], &as4, &policy));
+        assert!(
+            p.einrichtung
+                .befunde
+                .iter()
+                .any(|b| b.pfad == "as4.zertifikat_warnfenster_tage"),
+            "{:?}",
+            p.einrichtung.befunde
+        );
+    }
+
+    /// Kap. 2: an endpoint the partner's encryption certificate does not name
+    /// is reported; the test PKI's certificates carry no URI.
+    #[test]
+    fn an_endpoint_the_certificate_does_not_name_is_warned() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = TestCa::sm_pki().bdew_party("9900001000002").encryption;
+        let datei = dir.path().join("enc.pem");
+        std::fs::write(&datei, &cert.cert_pem).unwrap();
+        let mut partner = crate::config::As4PartnerConfig {
+            endpoint: Some("https://partner.example/as4".to_owned()),
+            encryption_cert_pem_file: Some(datei),
+            ..as4_partner("9900001000002")
+        };
+        let befunde = as4_regel_befunde(&As4Config {
+            partner: vec![partner.clone()],
+            ..As4Config::default()
+        });
+        assert_eq!(befunde.len(), 1, "{befunde:?}");
+        assert_eq!(befunde[0].pfad, "as4.partner[0].endpoint");
+        partner.endpoint = None;
+        assert!(
+            as4_regel_befunde(&As4Config {
+                partner: vec![partner],
+                ..As4Config::default()
+            })
+            .is_empty()
+        );
     }
 }

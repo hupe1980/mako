@@ -28,7 +28,7 @@ export function SourceChip({ quelle }: { quelle: Quelle }) {
     <DialogTrigger>
       <Button
         aria-label={t.quelle.knopf(short(quelle))}
-        className="focus-ring inline-flex min-h-5 max-w-full items-center gap-1 rounded-[10px] border border-separator px-2 py-px text-left text-caption font-medium text-text-2 data-[hovered]:bg-fill data-[hovered]:text-text"
+        className="focus-ring inline-flex min-h-5 max-w-full items-center gap-1 rounded-[10px] border border-separator px-2 py-px text-left text-caption text-text-2 data-[hovered]:bg-fill data-[hovered]:text-text"
       >
         <Icon name="doc" size={12} className="shrink-0" />
         <span className="min-w-0">{short(quelle)}</span>
@@ -38,10 +38,10 @@ export function SourceChip({ quelle }: { quelle: Quelle }) {
         className="w-72 rounded-panel bg-surface-raised p-4 shadow-popover outline-none"
       >
         <Dialog className="outline-none">
-          <Heading slot="title" className="m-0 text-caption font-semibold uppercase text-text-2">
+          <Heading slot="title" className="m-0 text-caption font-semibold text-text-2">
             {t.quelle.titel}
           </Heading>
-          <p className="m-0 mt-1 text-callout font-medium text-text">{quelle.dokument}</p>
+          <p className="m-0 mt-1 text-body text-text">{quelle.dokument}</p>
           {(quelle.kapitel || quelle.seite) && (
             <p className="m-0 mt-0.5 text-body text-text-2">
               {[

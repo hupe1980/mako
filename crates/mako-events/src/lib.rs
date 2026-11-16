@@ -451,6 +451,24 @@ pub mod vertrag {
     /// that long, and with supply and invoicing running throughout. This is the
     /// event a Schlussrechnung and the § 147 AO retention clock hang off.
     pub const ABGESCHLOSSEN: &str = "de.vertrag.abgeschlossen";
+    /// An online order was received and its Bestellnachweis stored
+    /// (`POST /api/v1/bestellungen`). `subject` is the partner's own
+    /// `bestellreferenz`, so a front end correlates without polling.
+    pub const BESTELLUNG_EINGEGANGEN: &str = "de.vertrag.bestellung.eingegangen";
+    /// An online order became a contract — at the click under
+    /// `[policy] vertragsschluss = "mit_bestellung"`, at the operator's
+    /// acceptance under `"mit_annahme"`. Carries the `vertrag_id` and the
+    /// Vertragsschluss instant; `subject` is the `bestellreferenz`.
+    pub const BESTELLUNG_ANGENOMMEN: &str = "de.vertrag.bestellung.angenommen";
+    /// The operator refused an order under `mit_annahme`. Carries the
+    /// operator's `grund`; `subject` is the `bestellreferenz`.
+    pub const BESTELLUNG_ABGELEHNT: &str = "de.vertrag.bestellung.abgelehnt";
+    /// A consumer's Widerruf (§ 355 BGB) was recorded — timely or not. Carries
+    /// `rechtzeitig`, the Frist it was decided against, its `wirkung`
+    /// (`STORNIERT`, `LIEFERENDE`, `BESTELLUNG_GESCHLOSSEN`) and
+    /// `wertersatz_geschuldet` (§ 357a Abs. 2 Satz 1 BGB), which `billingd`
+    /// reads; `subject` is the `bestellreferenz`.
+    pub const WIDERRUF_EINGEGANGEN: &str = "de.vertrag.widerruf.eingegangen";
 }
 
 /// Virtual-power-plant events (`de.vpp.*`).
@@ -760,6 +778,10 @@ pub fn all() -> &'static [&'static str] {
         vertrag::PREISAENDERUNG_ANKUENDIGUNG,
         vertrag::AUTOERNEUERUNG_ANKUENDIGUNG,
         vertrag::ABLAUF_ANKUENDIGUNG,
+        vertrag::BESTELLUNG_EINGEGANGEN,
+        vertrag::BESTELLUNG_ANGENOMMEN,
+        vertrag::BESTELLUNG_ABGELEHNT,
+        vertrag::WIDERRUF_EINGEGANGEN,
         // de.vpp.*
         vpp::DISPATCH_CONFIRMED,
         vpp::SETTLEMENT_BERECHNET,

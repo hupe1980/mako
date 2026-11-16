@@ -220,14 +220,14 @@ mako_service::policy_choice! {
             /// Refuse the settlement, naming the reservation; no receipt is
             /// written, and the sweep retries the period once an approval is
             /// recorded.
-            Verweigern = "verweigern" => "BT-Drs. 21/7867 S. 248, Zu § 104: Genehmigungsvorbehalt, die Beihilfegenehmigung für das EEG 2023 ist bis zum 31. Dezember 2026 befristet",
+            Verweigern = "verweigern" => "the EEG 2023 Beihilfegenehmigung is befristet to 31.12.2026; an uncovered payment is refused (BT-Drs. 21/7867 S. 248, Zu § 104)",
             /// Settle and pay, with the reservation stated as a zero-euro
             /// position on the receipt and the Gutschrift.
-            UnterVorbehalt = "unter_vorbehalt" => "BT-Drs. 21/7867 S. 248, Zu § 104: Genehmigungsvorbehalt, die Beihilfegenehmigung für das EEG 2023 ist bis zum 31. Dezember 2026 befristet",
+            UnterVorbehalt = "unter_vorbehalt" => "the EEG 2023 Beihilfegenehmigung is befristet to 31.12.2026; an uncovered payment is made under Genehmigungsvorbehalt (BT-Drs. 21/7867 S. 248, Zu § 104)",
             /// Settle without paying: the receipt is stored as `gehalten` with
             /// no Gutschrift number and no payout event, and the sweep
             /// releases it once an approval covering the period is recorded.
-            Halten = "halten" => "BT-Drs. 21/7867 S. 248, Zu § 104: Genehmigungsvorbehalt, die Beihilfegenehmigung für das EEG 2023 ist bis zum 31. Dezember 2026 befristet",
+            Halten = "halten" => "the EEG 2023 Beihilfegenehmigung is befristet to 31.12.2026; an uncovered payment is held until an approval is recorded (BT-Drs. 21/7867 S. 248, Zu § 104)",
         }
     }
 }

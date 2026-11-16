@@ -64,6 +64,12 @@
 //                           `write-angebot` because it is a bulk state change
 //                           over the whole book, not an edit of one offer
 //
+// Endkunden-Angebot (the frozen B2C offer an online order cites):
+//   "quote-endkunde"          — POST /api/v1/products/{lf_mp_id}/endkunden-angebote
+//                               — prices and freezes a binding offer a consumer
+//                               can order against
+//   "read-endkunden-angebot"  — GET  /api/v1/endkunden-angebote/{id}
+//
 // MCP:
 //   "use-mcp"             — the whole `/mcp` surface, gated once by the shared
 //                           `McpAuth` middleware rather than per tool. Its
@@ -77,10 +83,10 @@
 //
 // `GET /api/v1/comparison-feed` and `GET /api/v1/comparison-feed/bo4e` take no
 // `Claims` and carry no Cedar action. That is deliberate and statutory: § 41c
-// EnWG obliges the supplier to make its tariff data available to independent
-// comparison instruments (Verivox, Check24, the BNetzA Markttransparenzstelle),
-// and an obligation to publish that is only discharged behind a bearer token is
-// not discharged. Requiring a credential would put the operator in breach.
+// Abs. 5 Satz 2 EnWG obliges a Stromlieferant to let comparison instruments use
+// its offer-relevant information free of charge in open data formats, and an
+// obligation to publish that is only discharged behind a bearer token is not
+// discharged. Requiring a credential would put the operator in breach.
 //
 // The exemption is bounded by the query rather than by the caller: both routes
 // serve `fetch_comparison_feed`, whose `WHERE` clause pins
@@ -109,7 +115,7 @@
 // and cannot move a single price.
 //
 // The published subset of exactly this data already leaves the house
-// unauthenticated under § 41c; what a role-less token adds is the unpublished
+// unauthenticated under § 41c Abs. 5; what a role-less token adds is the unpublished
 // draft and the history, neither of which is a price anyone is billed at.
 permit(
     principal,
@@ -160,6 +166,24 @@ permit(
 ) when {
     context.principal_tenant == context.resource_tenant &&
     context.principal_roles.containsAny(["LF", "MSB", "ESA", "ADMIN"])
+};
+
+// ── The Endkunden-Angebot ────────────────────────────────────────────────────
+// A frozen B2C offer is a binding price commitment to a consumer: an online
+// order placed against it concludes a contract at exactly that price. Making
+// one is therefore the supplier's act, held to the Lieferant and the operator;
+// reading one back is how `vertragd` checks an order's offer and hash, and
+// it carries the MaLo the offer was made for.
+permit(
+    principal,
+    action in [
+        Action::"quote-endkunde",
+        Action::"read-endkunden-angebot"
+    ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.containsAny(["LF", "ADMIN"])
 };
 
 // ── MCP ──────────────────────────────────────────────────────────────────────

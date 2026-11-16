@@ -33,7 +33,7 @@ import { VorschlagKarte } from "./Fragen";
 import { Gehalten } from "./Rechnungen";
 
 const WAHL =
-  "focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body font-medium text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent";
+  "focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent";
 const PRIMAER =
   "focus-ring h-9 rounded-control bg-accent px-4 text-body font-semibold text-on-accent data-[disabled]:opacity-40";
 const FELD =
@@ -225,13 +225,13 @@ export function GeparktEntscheiden({
 
   return (
     <Panel className="flex flex-col gap-4 p-5">
-      <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
+      <h3 className="m-0 text-body font-semibold">{t.entscheidung.titel}</h3>
       <p className="m-0 text-body text-text">{b.hinweis}</p>
       <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-body">
         <dt className="text-text-2">{k.buchung}</dt>
         <dd className="m-0 text-text">
           {was}
-          {b.beleg && <span className="ml-2 font-mono text-caption text-text-2">{b.beleg}</span>}
+          {b.beleg && <span className="ml-2 text-caption text-text-2">{b.beleg}</span>}
         </dd>
         <dt className="text-text-2">{k.abgelehntFuer}</dt>
         <dd className="m-0 text-text">

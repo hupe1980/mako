@@ -87,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or("no Anwendungsfall")?,
             };
             let segs = profile.skeleton(af, &edi_energy::profile::SkeletonParties::default());
-            let bytes = edifact_rs::segments_to_bytes(&segs)?;
+            let bytes = edifact::segments_to_bytes(&segs)?;
             let text = String::from_utf8_lossy(&bytes).replace('\'', "'\n");
             print!("{text}");
             let issues = profile.validate(
@@ -134,7 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{} {} — {} segments", mt, release, segments.len());
             for (i, seg) in segments.iter().enumerate() {
                 let wire =
-                    edifact_rs::segments_to_bytes(std::slice::from_ref(seg)).unwrap_or_default();
+                    edifact::segments_to_bytes(std::slice::from_ref(seg)).unwrap_or_default();
                 let wire = String::from_utf8_lossy(&wire);
                 match res.assigned[i] {
                     Some(a) => {

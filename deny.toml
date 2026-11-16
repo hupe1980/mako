@@ -80,95 +80,25 @@ deny = [
 ]
 
 # ── Skip entries for unavoidable transitive duplicates ───────────────────────
-#
-# Each entry documents WHY the duplicate exists and what would resolve it.
+# Each entry names the crates that pull the older copy and what would resolve
+# it. `cargo deny check` warns on a skip that no longer matches, so an entry is
+# removed when its duplicate goes.
 
-# ── Typst document renderer ──────────────────────────────────────────────────
-# `outputd` compiles operator document templates with Typst. Its syntax
-# highlighter (`syntect` → `two-face`) is a NON-optional dependency of
-# `typst-library` — there is no feature that trims it — so these duplicates
-# arrive with the renderer, as do the hayro image-decoder pairs below, and cannot be resolved by configuration. An invoice
-# template contains no code blocks, so the highlighting path is never entered.
-# energy-api signs on p256 0.14; jsonwebtoken 11.1 still verifies on 0.13.
+# ── jsonwebtoken (mako-service OIDC) on the 2022 RustCrypto generation ──────
+# jsonwebtoken 11.1 verifies on p256 0.13 / ed25519-dalek 2 / rsa 0.9, which
+# pull the sha2 0.10 / digest 0.10 chain; energy-api signs on the patched p256
+# 0.14, asx-rs, lopdf and agentplane are on sha2 0.11 / digest 0.11. The two
+# chains share no key material. Resolves when jsonwebtoken moves to
+# elliptic-curve 0.14.
 [[bans.skip-tree]]
 name    = "p256"
 version = "0.13"
 reason  = "jsonwebtoken 11.1 verifies on p256 0.13 while energy-api signs on the patched 0.14; the old subtree is verification-only."
 
 [[bans.skip]]
-name    = "constant_time_eq"
-version = "0.4"
-reason  = "blake3 (accountingd's Merkle proofs, datafusion's hash functions) pins constant_time_eq 0.4; zip 9.4.2, used only by the xtask build tool, moved to 0.6."
-
-[[bans.skip]]
-name    = "fancy-regex"
-version = "0.16"
-reason  = "syntect (via typst-library) pins fancy-regex 0.16; jsonschema uses 0.19. Syntax highlighting is unreachable from an invoice render."
-
-[[bans.skip]]
-name    = "phf_generator"
-reason  = "duplicate major pulled by the typst syntax-highlighting chain; build-time only."
-
-[[bans.skip]]
-name    = "roxmltree"
-reason  = "typst parses SVG with a different roxmltree major than en16931-formats uses for CII/UBL. Both parse trusted input (bundled assets / our own rendered XML)."
-
-[[bans.skip]]
-name    = "fearless_simd"
-version = "0.4"
-reason  = "hayro-syntax (typst-svg → hayro, PDF image decoding) pulls fearless_simd 0.4 through hayro-jpeg2000 and 1.x through hayro-jbig2; both inside the typst image stack."
-
-[[bans.skip]]
-name    = "hayro-ccitt"
-version = "0.3"
-reason  = "hayro-syntax depends on hayro-ccitt 0.3 while its own hayro-jbig2 depends on 0.4; both inside the typst image stack."
-
-[[bans.skip]]
-name    = "weezl"
-reason  = "GIF/LZW decoder duplicated across the typst image stack; not reachable from an invoice render."
-
-[[bans.skip]]
-name    = "ulid"
-version = "1"
-reason  = "slatedb 0.14 (mako-engine's store) pins ulid 1; agentplane 0.47 (agentd) uses ulid 3. Two independent upstream trees — resolves when slatedb moves to ulid 3."
-
-# ── synstructure: the AS4 X.509 chain vs. the Typst/ICU chain ────────────────
-# Two independent upstream trees, neither of them mako's to unify:
-#   0.13 — asx-rs → x509-parser → asn1-rs → asn1-rs-derive  (WS-Security X.509)
-#   0.14 — typst / icu_collections → yoke → yoke-derive     (outputd rendering)
-# `synstructure` is a proc-macro helper, so both copies are build-time only and
-# neither reaches a binary. Resolve when `asn1-rs-derive` moves to synstructure
-# 0.14 (it is the older of the two chains).
-[[bans.skip]]
-name    = "synstructure"
-version = "0.13"
-reason  = "asn1-rs-derive (asx-rs → x509-parser) pins synstructure 0.13; yoke-derive (typst/icu) is on 0.14. Proc-macro only — build-time, never linked into a binary."
-
-# ── Iceberg cold tier vs. DataFusion ─────────────────────────────────────────
-# `edmd`'s cold-tier archive brings both: `iceberg` → `apache-avro` compresses
-# Avro blocks with zstd 0.13, while `datafusion` → `async-compression` is on
-# 0.14. Both are thin bindings over the same vendored libzstd C source and never
-# exchange types. Resolve when apache-avro bumps.
-[[bans.skip]]
-name    = "zstd"
-version = "0.13"
-reason  = "apache-avro 0.21 (via iceberg) pins zstd 0.13; datafusion 53 → async-compression uses 0.14."
-
-[[bans.skip]]
-name    = "zstd-safe"
-version = "7.3"
-reason  = "Transitive of zstd 0.13 — see the zstd skip."
-
-# ── agentplane crypto chain ───────────────────────────────────────────────────
-# agentplane's `signing` feature uses the ed25519-dalek 3 line for journal record
-# attestation; our JWT verification (jsonwebtoken 11, via mako-service) still
-# pulls the 2 line. Both are maintained and the two chains never exchange types —
-# one signs journal records, the other verifies bearer tokens. Resolve when
-# jsonwebtoken bumps to ed25519-dalek 3.
-[[bans.skip]]
 name    = "ed25519-dalek"
 version = "2.2"
-reason  = "jsonwebtoken 11 (JWT verification) pins ed25519-dalek 2; agentplane signing uses 3."
+reason  = "jsonwebtoken 11 (JWT verification) pins ed25519-dalek 2; agentplane's journal signing (agentd) uses 3."
 
 [[bans.skip]]
 name    = "ed25519"
@@ -183,257 +113,526 @@ reason  = "Transitive of ed25519-dalek 2 — see the ed25519-dalek skip."
 [[bans.skip]]
 name    = "signature"
 version = "2.2"
-reason  = "Transitive of ed25519-dalek 2 — see the ed25519-dalek skip."
-
-# ── agentplane Postgres backend ───────────────────────────────────────────────
-[[bans.skip]]
-name    = "whoami"
-version = "1.6"
-reason  = "sqlx-postgres 0.8 pins whoami 1.6; agentplane's postgres journal backend (tokio-postgres) uses 2.1. Resolve when sqlx bumps whoami."
+reason  = "ecdsa 0.16, ed25519 2 and rsa 0.9 (jsonwebtoken's verifiers) use signature 2; the p256 0.14 / ed25519-dalek 3 chain uses 3."
 
 [[bans.skip]]
-name    = "base64"
-version = "0.23"
-reason  = "rmcp (the MCP server SDK) pins base64 0.23; the mainline workspace (arrow, agentd, …) uses base64 0.22 (canonical). Resolve when rmcp bumps base64 or the mainline reaches 0.23."
+name    = "pem"
+version = "=3"
+reason  = "jsonwebtoken 11 (mako-service JWT/OIDC) pins pem 3; reqsign-azure-storage (opendal → meterstore/edmd cold tier) pulls pem 4. Both only parse PEM at their own boundary. Resolves when jsonwebtoken bumps to pem 4."
 
-[[bans.skip]]
-name    = "typed-builder"
-version = "0.20.1"
-reason  = "iceberg (edmd Iceberg cold-tier archive) pins typed-builder 0.20.1; rubo4e (the BO4E domain model, used workspace-wide) uses 0.23.2. Resolve when iceberg bumps typed-builder."
-
-[[bans.skip]]
-name    = "typed-builder-macro"
-version = "0.20.1"
-reason  = "proc-macro companion of typed-builder 0.20.1; same iceberg-vs-rubo4e split."
-
-[[bans.skip]]
-name    = "arrayvec"
-version = "0.5"
-reason  = "cedar-policy-formatter (transitive dep of cedar-policy 4) depends on arrayvec 0.5; ecosystem crates use 0.7. Resolve when cedar-policy-formatter updates."
-
-[[bans.skip]]
-name    = "thiserror"
-version = "1"
-reason  = "slatedb and several ecosystem crates (foyer, object_store) still depend on thiserror 1.x. Workspace crates use thiserror 2. Resolve when slatedb bumps to thiserror 2."
-
-[[bans.skip]]
-name    = "thiserror-impl"
-version = "1"
-reason  = "proc-macro companion of thiserror 1.x; same root cause as thiserror duplicate."
-
-[[bans.skip]]
-name    = "hashbrown"
-version = "0.14"
-reason  = "indexmap 2.x depends on hashbrown 0.14. Ecosystem migration to 0.15+ in progress."
-
-[[bans.skip]]
-name    = "hashbrown"
-version = "0.15"
-reason  = "lru and tokio-util pull hashbrown 0.15. Resolves when upstream crates align on 0.16."
-
-[[bans.skip]]
-name    = "hashbrown"
-version = "0.16"
-reason  = "foyer-memory/slatedb pull hashbrown 0.16. Resolves when foyer aligns on 0.17."
-
-[[bans.skip]]
-name    = "getrandom"
-version = "0.2"
-reason  = "Some transitive deps still pull getrandom 0.2. Resolve with broader getrandom 0.3/0.4 adoption."
-
-[[bans.skip]]
-name    = "getrandom"
-version = "0.3"
-reason  = "rand 0.9 depends on getrandom 0.3; rand 0.10 pulls 0.4. Resolves when getrandom 0.4 adoption is complete."
-
-[[bans.skip]]
-name    = "rand"
-version = "0.8"
-reason  = "slatedb/foyer ecosystem pulls rand 0.8. Three-way split (0.8/0.9/0.10) until all deps align."
-
-[[bans.skip]]
-name    = "rand"
-version = "0.9"
-reason  = "Some deps pull rand 0.9 while workspace moves to rand 0.10. Resolve when all deps align."
-
-[[bans.skip]]
-name    = "rand_core"
-version = "0.6"
-reason  = "Companion to rand 0.8; three-way split (0.6/0.9/0.10)."
-
-[[bans.skip]]
-name    = "rand_core"
-version = "0.9"
-reason  = "Companion to rand 0.9; same root cause."
-
-[[bans.skip]]
-name    = "nom"
-version = "7"
-reason  = "edifact-rs (edi-energy grammar layer) depends on nom 7. Resolve when edifact-rs migrates to nom 8."
-
-[[bans.skip]]
-name    = "unicode-width"
-version = "0.1"
-reason  = "miette 7.x depends directly on unicode-width 0.1 AND pulls 0.2 via textwrap 0.16. Both are pulled by the same miette version. Resolve when miette migrates fully to unicode-width 0.2."
-
-[[bans.skip]]
-name    = "winnow"
-version = "0.6"
-reason  = "cargo's build-time toml_edit pulls winnow 0.6; runtime toml 0.8 (mako-service, invoicd, edmd, processd) pulls 0.7 via toml_edit 0.22."
-
-[[bans.skip]]
-name    = "winnow"
-version = "0.7"
-reason  = "Runtime toml 0.8 → toml_edit 0.22 pulls winnow 0.7; cargo's build-time toml_edit still pins 0.6. Both are expected co-residents."
-
-# p256/ecdsa (energy-api) still pins sha2 0.10, pulling the 2022-generation digest
-# chain (digest 0.10 / block-buffer 0.10 / crypto-common 0.1 / cpufeatures 0.2).
-# asx-rs and lopdf are both on sha2 0.11 (RustCrypto 2024 generation), so the
-# duplicate comes from the p256/ecdsa side alone.
-# Resolve when the p256/ecdsa ecosystem updates to sha2 0.11.
-[[bans.skip]]
-name    = "digest"
-version = "0.10"
-reason  = "p256/ecdsa/rfc6979 (energy-api) pulls digest 0.10 via sha2 0.10; asx-rs + lopdf use digest 0.11 via sha2 0.11. Resolve when p256 ecosystem updates."
-
-[[bans.skip]]
-name    = "block-buffer"
-version = "0.10"
-reason  = "Companion to digest 0.10 (p256/sha2 0.10 chain); asx-rs + lopdf pull block-buffer 0.12 via digest 0.11."
-
-[[bans.skip]]
-name    = "crypto-common"
-version = "0.1"
-reason  = "Companion to digest 0.10 (p256/sha2 0.10 chain); asx-rs + lopdf pull crypto-common 0.2 via digest 0.11."
-
-[[bans.skip]]
-name    = "cpufeatures"
-version = "0.2"
-reason  = "p256/sha2 0.10 chain still pulls cpufeatures 0.2; asx-rs + lopdf pull cpufeatures 0.3 via sha2 0.11. Resolve when p256 ecosystem updates."
-
-# ── asx-rs vs p256/ecdsa/energy-api crypto split ────────────────────────────────
-# asx-rs and lopdf are both on sha2 0.11 / hmac 0.13 (RustCrypto 2024 generation).
-# p256/ecdsa/rfc6979 (energy-api ECDSA, makod HMAC) are still on sha2 0.10 / hmac 0.12.
-# No shared key material or verification state across the version boundary.
-# Resolve when p256/ecdsa ecosystem aligns on sha2 0.11 / hmac 0.13.
 [[bans.skip]]
 name    = "sha2"
 version = "0.10"
-reason  = "p256/ecdsa/rfc6979 (energy-api) pin sha2 0.10; asx-rs + lopdf use sha2 0.11. Resolve when p256 ecosystem updates."
+reason  = "sqlx, jsonwebtoken, krafka, meterstore and mako's own crates use sha2 0.10; asx-rs, lopdf, agentplane and p256 0.14 use 0.11."
 
 [[bans.skip]]
 name    = "sha2"
 version = "0.11"
-reason  = "asx-rs + lopdf use sha2 0.11 (RustCrypto 2024); p256/ecdsa ecosystem pins sha2 0.10. See companion sha2 0.10 entry."
+reason  = "asx-rs, lopdf, agentplane and p256 0.14 (RustCrypto 2024 generation) use sha2 0.11 — see the sha2 0.10 entry."
+
+[[bans.skip]]
+name    = "digest"
+version = "0.10"
+reason  = "Companion to sha2 0.10, hmac 0.12 and ecdsa 0.16; the sha2 0.11 chain uses digest 0.11."
+
+[[bans.skip]]
+name    = "block-buffer"
+version = "0.10"
+reason  = "Companion to digest 0.10; digest 0.11 uses block-buffer 0.12."
+
+[[bans.skip]]
+name    = "crypto-common"
+version = "0.1"
+reason  = "Companion to digest 0.10 and cipher 0.4; the 2024 generation uses crypto-common 0.2."
+
+[[bans.skip]]
+name    = "cpufeatures"
+version = "0.2"
+reason  = "sha2 0.10, sha1 0.10, aes 0.8 and curve25519-dalek 4 use cpufeatures 0.2; their 2024-generation successors use 0.3."
 
 [[bans.skip]]
 name    = "hmac"
 version = "0.12"
-reason  = "rfc6979/ecdsa/p256 (energy-api, makod) uses hmac 0.12; asx-rs WS-Security uses hmac 0.13. Resolve when p256/ecdsa aligns on hmac 0.13."
+reason  = "jsonwebtoken, krafka, meterstore, mako-service and rfc6979 0.4 (p256 0.13) use hmac 0.12; sqlx-postgres 0.9, reqsign, agentplane and rfc6979 0.6 (p256 0.14) use 0.13."
 
 [[bans.skip]]
 name    = "hmac"
 version = "0.13"
-reason  = "asx-rs WS-Security uses hmac 0.13 (RustCrypto 2024); p256/ecdsa ecosystem pins hmac 0.12. See companion hmac 0.12 entry."
+reason  = "The 2024-generation side of the hmac 0.12 entry."
 
-# ── quick-xml versions in the tree ─────────────────────────────────────────────
-# 0.41 is the workspace version: mako's own crates, asx-rs (AS4 SOAP/ebMS3) and
-# object_store (slatedb cloud) all agree on it. The others come in transitively
-# and are not ours to move: typst's document tooling pulls both 0.38
-# (hayagriva → citationberg) and 0.42 (syntect → plist).
 [[bans.skip]]
-name    = "quick-xml"
-version = "0.41"
-reason  = "workspace version — mako's own crates, asx-rs and object_store/slatedb."
+name    = "const-oid"
+version = "0.9"
+reason  = "der 0.7, rsa 0.9, x509-cert and digest 0.10 use const-oid 0.9; der 0.8 and digest 0.11 use 0.10."
+
+[[bans.skip]]
+name    = "sha1"
+version = "0.10"
+reason  = "tungstenite 0.29 (energy-api, makod), aws-config and sqlx-mysql 0.8 use sha1 0.10; reqsign (opendal, edmd cold tier) uses 0.11."
+
+# ── Typst document renderer (outputd) ───────────────────────────────────────
+# Typst's syntax highlighter (`syntect` → `two-face`) is a non-optional
+# dependency of `typst-library`, and so is its image stack (hayro), so these
+# duplicates arrive with the renderer and cannot be trimmed by configuration.
+# An invoice template contains no code blocks, so the highlighting path is
+# never entered.
+[[bans.skip]]
+name    = "fancy-regex"
+version = "0.16"
+reason  = "syntect (via typst-library) pins fancy-regex 0.16; jsonschema uses 0.19. Syntax highlighting is unreachable from an invoice render."
+
+[[bans.skip]]
+name    = "roxmltree"
+reason  = "fontdb → fontconfig-parser (Typst's font discovery) is on roxmltree 0.20; asx-rs, en16931-formats and usvg use 0.21."
+
+[[bans.skip]]
+name    = "fearless_simd"
+version = "0.4"
+reason  = "hayro-jpeg2000 and vello_common (Typst's image stack) use fearless_simd 0.4; hayro-jbig2 uses 1.x."
+
+[[bans.skip]]
+name    = "hayro-ccitt"
+version = "0.3"
+reason  = "hayro-syntax depends on hayro-ccitt 0.3 while hayro-jbig2 depends on 0.4; both inside the Typst image stack."
+
+[[bans.skip]]
+name    = "weezl"
+reason  = "gif (Typst's image stack) uses weezl 0.1; lopdf uses 0.2."
 
 [[bans.skip]]
 name    = "quick-xml"
 version = "0.38"
-reason  = "typst document rendering (outputd) → hayagriva → citationberg pins quick-xml 0.38."
+reason  = "typst → hayagriva → citationberg pins quick-xml 0.38."
 
 [[bans.skip]]
-name    = "heck"
-version = "0.4"
-reason  = "proc-macro crates (clap_derive, enum-iterator-derive) still depend on heck 0.4."
-
-# Windows crates version-skew: Microsoft publishes rapid minor bumps; ecosystem
-# convergence lags. These are safe to skip — they do not share serialization state.
-[[bans.skip]]
-name    = "windows-link"
-version = "0.1"
-reason  = "Windows crate ecosystem version skew."
-
-# The 0.61 and 0.62 windows-core stacks arrive on two independent branches that
-# no workspace change can converge: slatedb → sysinfo → windows 0.61, and
-# datafusion → chrono → iana-time-zone → windows-core 0.62. windows-result and
-# windows-strings follow whichever windows-core pulled them.
+name    = "quick-xml"
+version = "=0.42"
+reason  = "plist (syntect, via typst) and reqsign-aws (opendal) use quick-xml 0.42; redispatch-xml, sepa, object_store and opendal-core use 0.41."
 
 [[bans.skip]]
-name    = "windows-core"
-version = "0.61"
-reason  = "windows-core 0.61 via slatedb → sysinfo → windows 0.61; 0.62 via datafusion → chrono → iana-time-zone."
+name    = "quick-xml"
+version = "0.41"
+reason  = "The version redispatch-xml, sepa, object_store and opendal-core share; coexists with 0.38 and 0.42 above."
 
 [[bans.skip]]
-name    = "windows-result"
-version = "0.3"
-reason  = "windows-result 0.3 travels with windows-core 0.61; 0.4 with windows-core 0.62."
+name    = "synstructure"
+version = "0.13"
+reason  = "asn1-rs-derive (asx-rs → x509-parser) pins synstructure 0.13; yoke-derive and zerofrom-derive (ICU, via typst) use 0.14. Proc-macro only — never linked into a binary."
 
 [[bans.skip]]
-name    = "windows-strings"
-version = "0.4"
-reason  = "windows-strings 0.4 travels with windows-core 0.61; 0.5 with windows-core 0.62."
+name    = "miniz_oxide"
+version = "=0.8"
+reason  = "apache-avro (iceberg → meterstore → edmd) and png (Typst's image stack) pin miniz_oxide 0.8; flate2 and backtrace use 0.9. No workspace crate depends on either directly."
 
-# ── sqlx / reqwest minor-version skew ──────────────────────────────────────────
-# sqlx 0.8 / reqwest 0.13 bring in newer minor versions of crates other
-# dependencies pin older.
+# ── Iceberg / DataFusion cold tier (edmd via meterstore) ─────────────────────
+[[bans.skip]]
+name    = "sqlx"
+version = "=0.8"
+reason  = "mako is on sqlx 0.9; meterstore 0.16 and iceberg-catalog-sql 0.11 (the cold-tier SQL catalogue, its own pool) still pull 0.8. No sqlx type crosses meterstore's API."
 
 [[bans.skip]]
-name    = "foldhash"
-version = "0.1"
-reason  = "foldhash 0.1.x pulled by slatedb/foyer; 0.2.x pulled by sqlx 0.8 via hashbrown 0.15."
+name    = "sqlx-core"
+version = "=0.8"
+reason  = "The sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
+
+[[bans.skip]]
+name    = "sqlx-postgres"
+version = "=0.8"
+reason  = "The sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
+
+[[bans.skip]]
+name    = "etcetera"
+version = "=0.8"
+reason  = "The sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
+
+[[bans.skip]]
+name    = "hashlink"
+version = "=0.10"
+reason  = "The sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
+
+[[bans.skip]]
+name    = "whoami"
+version = "1.6"
+reason  = "The sqlx 0.8 side of the sqlx 0.8/0.9 pair above; sqlx-postgres 0.9 and tokio-postgres (agentplane's journal) use whoami 2."
 
 [[bans.skip]]
 name    = "md-5"
 version = "0.10"
-reason  = "md-5 0.10.x legacy path; 0.11.x pulled by sqlx 0.8 digest chain."
+reason  = "The sqlx 0.8 side of the sqlx 0.8/0.9 pair above; sqlx-postgres 0.9, object_store, datafusion and lopdf use md-5 0.11."
 
 [[bans.skip]]
-name    = "rand_chacha"
-version = "0.3"
-reason  = "rand_chacha 0.3.x pulled by existing workspace; 0.9.x pulled by sqlx 0.8 / rand 0.9."
+name    = "webpki-roots"
+version = "=0.26"
+reason  = "The sqlx 0.8 side of the sqlx 0.8/0.9 pair above; webpki-roots 0.26 is a shim over 1.0."
 
 [[bans.skip]]
 name    = "windows-sys"
 version = "0.48"
-reason  = "windows-sys 0.48 legacy path; newer versions pulled by tokio / sqlx dependencies."
-
-[[bans.skip]]
-name    = "windows-sys"
-version = "0.59"
-reason  = "windows-sys 0.59 pulled by reqwest/hyper; 0.61 pulled by tokio."
+reason  = "etcetera 0.8 (the sqlx 0.8 side) uses windows-sys 0.48."
 
 [[bans.skip]]
 name    = "windows-targets"
 version = "0.48"
-reason  = "windows-targets 0.48 legacy path; 0.52+ pulled by newer deps."
+reason  = "Companion to windows-sys 0.48."
 
 [[bans.skip]]
 name    = "windows_x86_64_gnu"
 version = "0.48"
-reason  = "windows_x86_64_gnu 0.48 legacy path alongside newer version."
-
-# ── p256/ecdsa vs asx-rs const-oid split ─────────────────────────────────────────
-# p256/ecdsa (energy-api) use const-oid 0.9 (RustCrypto 2022 generation).
-# asx-rs / digest 0.11 / hmac 0.13 use const-oid 0.10 (RustCrypto 2024 generation).
-[[bans.skip]]
-name    = "const-oid"
-version = "0.9"
-reason  = "p256/ecdsa/der 0.7 (energy-api) pins const-oid 0.9; asx-rs/digest 0.11 uses const-oid 0.10. Resolve when p256 ecosystem updates."
+reason  = "Companion to windows-sys 0.48."
 
 [[bans.skip]]
 name    = "windows_x86_64_msvc"
 version = "0.48"
-reason  = "windows_x86_64_msvc 0.48 legacy path alongside newer version."
+reason  = "Companion to windows-sys 0.48."
+
+[[bans.skip]]
+name    = "reqwest"
+version = "=0.12"
+reason  = "iceberg 0.11 pins reqwest 0.12; the workspace uses 0.13. Resolves when iceberg moves to 0.13."
+
+[[bans.skip]]
+name    = "reqwest"
+version = "=0.13"
+reason  = "The workspace version; coexists with iceberg's reqwest 0.12."
+
+[[bans.skip]]
+name    = "typed-builder"
+version = "0.20.1"
+reason  = "iceberg pins typed-builder 0.20.1; rubo4e (the BO4E domain model) uses 0.23.2."
+
+[[bans.skip]]
+name    = "typed-builder-macro"
+version = "0.20.1"
+reason  = "Proc-macro companion of typed-builder 0.20.1; same iceberg-vs-rubo4e split."
+
+[[bans.skip]]
+name    = "darling"
+version = "=0.20"
+reason  = "iceberg → derive_builder 0.20 uses darling 0.20; rmcp-macros, bon-macros and serde_with_macros use 0.24."
+
+[[bans.skip]]
+name    = "darling_core"
+version = "=0.20"
+reason  = "Paired with the darling 0.20 skip above."
+
+[[bans.skip]]
+name    = "darling_macro"
+version = "=0.20"
+reason  = "Paired with the darling 0.20 skip above."
+
+[[bans.skip]]
+name    = "itertools"
+version = "=0.13"
+reason  = "iceberg uses itertools 0.13; datafusion 0.14; cedar-policy, foyer and object_store 0.15."
+
+[[bans.skip]]
+name    = "itertools"
+version = "=0.14"
+reason  = "datafusion 54 uses itertools 0.14 — see the itertools 0.13 entry."
+
+[[bans.skip]]
+name    = "strum"
+version = "0.27"
+reason  = "iceberg, iceberg-catalog-sql, apache-avro and biblatex (typst) use strum 0.27; jsonschema uses 0.28."
+
+[[bans.skip]]
+name    = "strum_macros"
+version = "0.27"
+reason  = "Proc-macro companion of strum 0.27."
+
+[[bans.skip]]
+name    = "ordered-float"
+version = "=4"
+reason  = "iceberg uses ordered-float 4; thrift (parquet) uses 3."
+
+[[bans.skip]]
+name    = "object_store"
+version = "=0.13"
+reason  = "datafusion 54 pins object_store 0.13; makod and slatedb use 0.14. Resolves when datafusion moves to 0.14."
+
+[[bans.skip]]
+name    = "zstd"
+version = "0.13"
+reason  = "apache-avro, iceberg, datafusion, parquet, arrow-ipc and foyer use zstd 0.13; async-compression's compression-codecs uses 0.14. Both bind the same vendored libzstd and never exchange types."
+
+[[bans.skip]]
+name    = "zstd-safe"
+version = "7.3"
+reason  = "Transitive of zstd 0.13 — see the zstd skip."
+
+[[bans.skip]]
+name    = "asyncband"
+version = "=0.6"
+reason  = "opendal 0.58 (iceberg-storage-opendal, edmd cold tier) uses asyncband 0.6; foyer (slatedb) and reqsign use 0.7."
+
+[[bans.skip]]
+name    = "aes-gcm"
+version = "=0.10"
+reason  = "iceberg 0.11 pins aes-gcm 0.10; asx-rs (AS4) uses 0.11. Resolves when iceberg updates its aes-gcm dependency."
+
+[[bans.skip]]
+name    = "aead"
+version = "=0.5"
+reason  = "Companion of aes-gcm 0.10 (iceberg); asx-rs uses the aead 0.6 stack."
+
+[[bans.skip]]
+name    = "ctr"
+version = "=0.9"
+reason  = "Companion of aes-gcm 0.10 (iceberg); asx-rs uses ctr 0.10."
+
+[[bans.skip]]
+name    = "ghash"
+version = "=0.5"
+reason  = "Companion of aes-gcm 0.10 (iceberg); asx-rs uses ghash 0.6."
+
+[[bans.skip]]
+name    = "polyval"
+version = "=0.6"
+reason  = "Companion of aes-gcm 0.10 (iceberg); asx-rs uses polyval 0.7."
+
+[[bans.skip]]
+name    = "universal-hash"
+version = "=0.5"
+reason  = "Companion of aes-gcm 0.10 (iceberg); asx-rs uses universal-hash 0.6."
+
+[[bans.skip]]
+name    = "aes"
+version = "=0.8"
+reason  = "aes-gcm 0.10 (iceberg) and pkcs5 0.7 (pkcs8, jsonwebtoken's key parsing) use aes 0.8; aes-gcm 0.11 and lopdf use 0.9."
+
+[[bans.skip]]
+name    = "cipher"
+version = "=0.4"
+reason  = "Paired with the aes 0.8 skip — the older block-cipher trait version."
+
+[[bans.skip]]
+name    = "block-padding"
+version = "=0.3"
+reason  = "Paired with the cipher 0.4 skip."
+
+[[bans.skip]]
+name    = "cbc"
+version = "=0.1"
+reason  = "pkcs5 0.7 uses cbc 0.1; lopdf uses 0.2."
+
+[[bans.skip]]
+name    = "inout"
+version = "=0.1"
+reason  = "Paired with the cipher 0.4 skip."
+
+# ── slatedb (mako-engine's store) ─────────────────────────────────────────────
+[[bans.skip]]
+name    = "ulid"
+version = "1"
+reason  = "slatedb 0.14 pins ulid 1; agentplane (agentd) uses ulid 3. Resolves when slatedb moves to ulid 3."
+
+[[bans.skip]]
+name    = "thiserror"
+version = "1"
+reason  = "slatedb, protobuf, serde-xml-rs and tokio-socks still depend on thiserror 1; workspace crates use thiserror 2."
+
+[[bans.skip]]
+name    = "thiserror-impl"
+version = "1"
+reason  = "Proc-macro companion of thiserror 1."
+
+[[bans.skip]]
+name    = "winnow"
+version = "0.6"
+reason  = "duration-str 0.11 (slatedb) uses winnow 0.6; toml 0.8/0.9 use 0.7 and toml 1 uses 1.x."
+
+[[bans.skip]]
+name    = "winnow"
+version = "0.7"
+reason  = "toml_edit 0.22 (toml 0.8) and toml 0.9 use winnow 0.7 — see the winnow 0.6 entry."
+
+[[bans.skip]]
+name    = "heck"
+version = "0.4"
+reason  = "ouroboros_macro (slatedb → ouroboros) uses heck 0.4; clap_derive, sqlx-macros and strum_macros use 0.5."
+
+# ── toml: three lines in one graph ───────────────────────────────────────────
+[[bans.skip]]
+name    = "toml"
+version = "=0.8"
+reason  = "figment and mako's own config-reading crates use toml 0.8; agentd uses 0.9 and meterstore 1.x. Resolves when figment reaches a newer toml."
+
+[[bans.skip]]
+name    = "toml_datetime"
+version = "=0.6"
+reason  = "Companion to toml 0.8 (toml_edit 0.22 chain)."
+
+[[bans.skip]]
+name    = "serde_spanned"
+version = "=0.6"
+reason  = "Companion to toml 0.8 (toml_edit 0.22 chain); the newer toml lines use serde_spanned 1."
+
+# ── hashbrown / foldhash / rand / getrandom: ecosystem-wide splits ───────────
+[[bans.skip]]
+name    = "hashbrown"
+version = "0.14"
+reason  = "dashmap 5/6 and ordered-multimap use hashbrown 0.14."
+
+[[bans.skip]]
+name    = "hashbrown"
+version = "0.15"
+reason  = "sqlx 0.8 (hashlink 0.10), petgraph 0.8 and tokio-util use hashbrown 0.15."
+
+[[bans.skip]]
+name    = "hashbrown"
+version = "0.16"
+reason  = "sqlx 0.9 (hashlink 0.11) uses hashbrown 0.16; indexmap, arrow, datafusion and foyer use 0.17."
+
+[[bans.skip]]
+name    = "foldhash"
+version = "0.1"
+reason  = "hashbrown 0.15 uses foldhash 0.1; hashbrown 0.16/0.17 and serde_json use 0.2."
+
+[[bans.skip]]
+name    = "getrandom"
+version = "0.2"
+reason  = "ring, jsonwebtoken, rand_core 0.6 and const-random-macro use getrandom 0.2."
+
+[[bans.skip]]
+name    = "getrandom"
+version = "0.3"
+reason  = "rand_core 0.9, ahash, asx-rs, doubleentry and jsonschema use getrandom 0.3; rand 0.10, uuid and tempfile use 0.4."
+
+[[bans.skip]]
+name    = "rand"
+version = "0.8"
+reason  = "jsonwebtoken, governor, rust_decimal and sqlx 0.8 use rand 0.8; three-way split with 0.9 and 0.10."
+
+[[bans.skip]]
+name    = "rand"
+version = "0.9"
+reason  = "datafusion, iceberg, apache-avro, krafka and bollard use rand 0.9; mako-engine, sqlx 0.9 and agentplane use 0.10."
+
+[[bans.skip]]
+name    = "rand_core"
+version = "0.6"
+reason  = "Companion to rand 0.8 and the jsonwebtoken RustCrypto 2022 chain."
+
+[[bans.skip]]
+name    = "rand_core"
+version = "0.9"
+reason  = "Companion to rand 0.9."
+
+[[bans.skip]]
+name    = "rand_chacha"
+version = "0.3"
+reason  = "Companion to rand 0.8 (and lipsum, via typst)."
+
+# ── Single-parent duplicates ─────────────────────────────────────────────────
+[[bans.skip]]
+name    = "constant_time_eq"
+version = "0.4"
+reason  = "blake3 (accountingd's Merkle proofs, datafusion's hash functions) pins constant_time_eq 0.4; zip, used only by the xtask build tool, is on 0.6."
+
+[[bans.skip]]
+name    = "phf_generator"
+reason  = "time-tz's build script (phf_codegen 0.11) and phf_macros 0.13 (typst, tokio-postgres) generate with different majors; build-time only."
+
+[[bans.skip]]
+name    = "phf"
+version = "=0.11"
+reason  = "time-tz uses phf 0.11; chrono-tz 0.12; typst and tokio-postgres 0.13."
+
+[[bans.skip]]
+name    = "phf_shared"
+version = "=0.11"
+reason  = "Paired with the phf 0.11 skip."
+
+[[bans.skip]]
+name    = "phf"
+version = "=0.12"
+reason  = "chrono-tz uses phf 0.12 — see the phf 0.11 entry."
+
+[[bans.skip]]
+name    = "phf_shared"
+version = "=0.12"
+reason  = "Paired with the phf 0.12 skip."
+
+[[bans.skip]]
+name    = "arrayvec"
+version = "0.5"
+reason  = "pretty 0.12 (cedar-policy-formatter) depends on arrayvec 0.5; everything else uses 0.7."
+
+[[bans.skip]]
+name    = "petgraph"
+version = "=0.7"
+reason  = "lalrpop (cedar-policy-core's build) uses petgraph 0.7; datafusion uses 0.8."
+
+[[bans.skip]]
+name    = "nom"
+version = "7"
+reason  = "x509-parser (via asx-rs, the AS4 layer) depends on nom 7 through asn1-rs/der-parser; lopdf (en16931-formats) is on nom 8."
+
+[[bans.skip]]
+name    = "unicode-width"
+version = "0.1"
+reason  = "miette 7 depends directly on unicode-width 0.1 and pulls 0.2 via textwrap. Resolves when miette moves fully to 0.2."
+
+[[bans.skip]]
+name    = "syn"
+version = "2.0"
+reason  = "async-trait, clap_derive, serde_derive, thiserror-impl and most current proc macros use syn 3; the rest of the proc-macro graph is still on syn 2."
+
+[[bans.skip]]
+name    = "spin"
+version = "=0.9"
+reason  = "flume, lazy_static and wasmi use spin 0.9; crc-fast uses 0.10."
+
+[[bans.skip]]
+name    = "lz4_flex"
+version = "0.11"
+reason  = "krafka (edmd Kafka ingest) pins lz4_flex 0.11; arrow-ipc and parquet use 0.13."
+
+[[bans.skip]]
+name    = "dashmap"
+version = "5"
+reason  = "governor 0.6 (mako-service rate limit) pins dashmap 5; datafusion and iceberg-datafusion use dashmap 6."
+
+[[bans.skip]]
+name    = "object"
+version = "0.39"
+reason  = "ar_archive_writer 0.5 (build dependency of psm, via stacker → cedar) pins object 0.39; backtrace uses 0.40."
+
+[[bans.skip]]
+name    = "base64"
+version = "0.23"
+reason  = "reqwest 0.13, rmcp, agentplane, object_store and opendal use base64 0.23; mako's own crates, sqlx, jsonwebtoken and arrow use 0.22."
+
+# ── rustix 0.38 / socket2 0.5 (prometheus, krafka) ───────────────────────────
+[[bans.skip]]
+name    = "rustix"
+version = "0.38"
+reason  = "prometheus 0.14 → procfs 0.17 (mako-service metrics) pins rustix 0.38; the rest of the graph uses rustix 1."
+
+[[bans.skip]]
+name    = "linux-raw-sys"
+version = "0.4"
+reason  = "Companion to rustix 0.38; rustix 1 uses linux-raw-sys 0.12."
+
+[[bans.skip]]
+name    = "socket2"
+version = "0.5"
+reason  = "krafka (edmd Kafka ingest) pins socket2 0.5; tokio uses 0.6."
+
+[[bans.skip]]
+name    = "windows-sys"
+version = "0.52"
+reason  = "socket2 0.5 (krafka) and ring use windows-sys 0.52; the rest of the graph uses 0.59/0.61."
+
+[[bans.skip]]
+name    = "windows-sys"
+version = "0.59"
+reason  = "rustix 0.38 (prometheus), fd-lock and fs4 use windows-sys 0.59; tokio and rustix 1 use 0.61."
+
+[[bans.skip]]
+name    = "windows-link"
+version = "0.1"
+reason  = "The windows 0.61 crate family uses windows-link 0.1; newer Windows crates use 0.2."
 
 [advisories]
 # Every ID below carries one statement in `release/vex.json` (OpenVEX), the
@@ -442,15 +641,16 @@ reason  = "windows_x86_64_msvc 0.48 legacy path alongside newer version."
 # advisory does.
 ignore = [
     # RUSTSEC-2025-0141: bincode 1.x unmaintained.
-    # Pulled transitively by slatedb → foyer. The crate is functionally complete
-    # (the authors declared v1.3.3 final); no security impact in our usage
-    # (serialization for internal SlateDB structures, not user-controlled input).
-    # Resolve when slatedb migrates to bincode 2.x or an alternative.
-    { id = "RUSTSEC-2025-0141", reason = "bincode 1.x pulled by slatedb/foyer; functionally complete, no CVE, no user-controlled input" },
+    # Pulled transitively by slatedb → foyer and by typst → syntect. The crate is
+    # functionally complete (the authors declared v1.3.3 final); it serializes
+    # foyer's internal cache entries and syntect's bundled syntax sets, never
+    # user-controlled input. Resolve when both move to bincode 2.x or away.
+    { id = "RUSTSEC-2025-0141", reason = "bincode 1.x pulled by slatedb/foyer and typst/syntect; functionally complete, no CVE, no user-controlled input" },
     # RUSTSEC-2024-0436: paste macro unmaintained (dtolnay archived the repo).
-    # The crate is syntactically stable; no security surface. Used by slatedb
-    # proc-macro machinery. Resolve when slatedb migrates away.
-    { id = "RUSTSEC-2024-0436", reason = "paste macro pulled by slatedb; no CVE, compile-time only, no runtime security surface" },
+    # The crate is syntactically stable; no security surface. Used by foyer
+    # (slatedb), parquet and typst's hayagriva/biblatex at compile time. Resolve
+    # when those migrate away.
+    { id = "RUSTSEC-2024-0436", reason = "paste macro pulled by foyer (slatedb), parquet and hayagriva (typst); no CVE, compile-time only, no runtime security surface" },
     # RUSTSEC-2026-0192: ttf-parser unmaintained (harfbuzz team migrating to skrifa).
     # No CVE, no security vulnerability — maintenance announcement only.
     # Pulled by outputd → typst: Typst's font reader. The fonts it reads are the
@@ -459,8 +659,8 @@ ignore = [
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser maintenance announcement only (no CVE); Typst's font reader in outputd, fed only the bundled typst-assets fonts" },
     # RUSTSEC-2026-0194 / RUSTSEC-2026-0195: quick-xml O(N²) attribute-dedup scan
     # and unbounded namespace-declaration allocation, both patched in 0.41.
-    # Every path that parses XML from a counterparty is on 0.41: mako's own crates,
-    # asx-rs (AS4 SOAP/ebMS3 envelopes), object_store and opendal (cloud API
+    # Every path that parses XML with quick-xml from a counterparty is on 0.41 or
+    # later: mako's own crates (redispatch-xml), sepa, object_store and opendal (cloud API
     # responses). What remains on an affected version is typst's citation
     # tooling (0.38), which parses bundled assets while rendering our own
     # document templates.
@@ -488,13 +688,16 @@ ignore = [
     # testcontainers moves off it.
     { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar unmaintained; dev-only dep via testcontainers — not in production binaries, no user-supplied archive input" },
     # RUSTSEC-2023-0071: rsa Marvin Attack timing side-channel.
-    # rsa is pulled by mako-service → jsonwebtoken (`rust_crypto`), which verifies
-    # RS256/384/512 OIDC tokens against the identity provider's public JWKS. The
-    # Marvin Attack recovers a private key from the timing of private-key
-    # operations; no release binary holds an RSA private key (only tests sign).
-    # AS4 cryptography runs on OpenSSL through asx-rs, not on this crate.
-    # Resolve when jsonwebtoken or rsa ships a constant-time implementation.
-    { id = "RUSTSEC-2023-0071", reason = "rsa Marvin timing attack; reached via jsonwebtoken for public-key JWT verification only — no private-key operation in a release binary" },
+    # The Marvin Attack recovers a private key from the timing of many
+    # private-key operations an attacker can trigger and observe. Two paths
+    # reach rsa: mako-service → jsonwebtoken verifies OIDC tokens against the
+    # identity provider's public JWKS (public key only); edmd's `gs://` cold tier
+    # → opendal → reqsign-google signs a service-account JWT with the operator's
+    # key, locally, about once per access-token lifetime, over a request no
+    # attacker shapes or times — and not at all under workload identity. AS4
+    # cryptography runs on OpenSSL through asx-rs. Resolve when rsa ships a
+    # constant-time implementation.
+    { id = "RUSTSEC-2023-0071", reason = "rsa Marvin timing attack; jsonwebtoken verifies with public keys only, and edmd's GCS cold tier signs a service-account JWT locally on a schedule no attacker can trigger or time" },
     # RUSTSEC-2024-0449: unsafe-libyaml unmaintained (no fixed version).
     # slatedb 0.14 turns on figment's `yaml` feature (figment → serde_yaml 0.9 →
     # unsafe-libyaml), and feature unification puts it in every graph that holds
@@ -504,297 +707,3 @@ ignore = [
     # Resolution: drops out when slatedb stops enabling figment's `yaml`.
     { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained (no CVE); enabled by slatedb through figment `yaml`, reached only by slatedb's Settings file loaders, which nothing here calls" },
 ]
-
-# ── Bans: duplicate-version skip entries ──────────────────────────────────────
-# Each entry allows a specific older version to coexist with a newer version.
-# iceberg and other ecosystem crates pull older versions of crypto/utility crates.
-
-[[bans.skip]]
-name    = "reqwest"
-version = "=0.12"
-reason  = "iceberg 0.10 (meterstore → edmd cold tier) pins reqwest 0.12; the workspace uses 0.13. Resolve when iceberg bumps to 0.13."
-
-[[bans.skip]]
-name    = "reqwest"
-version = "=0.13"
-reason  = "the workspace version; coexists with iceberg's reqwest 0.12."
-
-# ── darling two-way split ───────────────────────────────────────────────────
-# 0.20: iceberg-datafusion (edmd cold tier) → derive_builder.
-# 0.24: rmcp-macros (the MCP server SDK, all services) — the newest and
-#       therefore canonical version. Resolve when derive_builder bumps to 0.24.
-[[bans.skip]]
-name    = "darling"
-version = "=0.20"
-reason  = "iceberg-datafusion transitively requires darling 0.20; rmcp-macros uses darling 0.24."
-
-[[bans.skip]]
-name    = "darling_core"
-version = "=0.20"
-reason  = "paired with darling 0.20 skip above."
-
-[[bans.skip]]
-name    = "darling_macro"
-version = "=0.20"
-reason  = "paired with darling 0.20 skip above."
-
-
-
-
-[[bans.skip]]
-name    = "pem"
-version = "=3"
-reason  = "jsonwebtoken 11 (mako-service JWT/OIDC) pins pem 3; reqsign-azure-storage 3.2 (opendal → iceberg-storage-opendal → meterstore/edmd cold tier) pulls pem 4. Both only parse PEM at their own boundary — no shared key material. Resolve when jsonwebtoken bumps to pem 4."
-
-[[bans.skip]]
-name    = "itertools"
-version = "=0.13"
-reason  = "iceberg ecosystem requires itertools 0.13 alongside workspace 0.14/0.15."
-
-[[bans.skip]]
-name    = "itertools"
-version = "=0.14"
-reason  = "transitional: iceberg/slatedb ecosystem requires 0.14 alongside 0.15."
-
-[[bans.skip]]
-name    = "asyncband"
-version = "=0.6"
-reason  = "opendal 0.58 (iceberg-storage-opendal, edmd/meterstore cold tier) uses asyncband 0.6; slatedb's foyer uses 0.7."
-
-[[bans.skip]]
-name    = "quick-xml"
-version = "=0.42"
-reason  = "typst document rendering (outputd) → syntect → plist pins quick-xml 0.42; the workspace uses 0.41."
-
-[[bans.skip]]
-name    = "aes"
-version = "=0.8"
-reason  = "older crypto crates in the iceberg/tls ecosystem use aes 0.8; the workspace uses 0.9."
-
-# ── iceberg 0.10 vs asx-rs AES-GCM stack split ──────────────────────────────────
-# The cold tier (iceberg 0.10, via edmd/meterstore) pulls the aes-gcm 0.10 AEAD
-# stack; asx-rs (AS4 message security, via makod) pulls the 0.11 stack. Both are
-# transitive and cannot be unified without upstream releases. Skip the older
-# (iceberg-side) halves. Resolve when iceberg updates its aes-gcm dependency.
-[[bans.skip]]
-name    = "aes-gcm"
-version = "=0.10"
-reason  = "iceberg 0.10 (edmd/meterstore cold tier) pins aes-gcm 0.10; asx-rs (AS4) uses 0.11."
-
-[[bans.skip]]
-name    = "aead"
-version = "=0.5"
-reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses the aead 0.6 stack."
-
-[[bans.skip]]
-name    = "ctr"
-version = "=0.9"
-reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses ctr 0.10."
-
-[[bans.skip]]
-name    = "ghash"
-version = "=0.5"
-reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses ghash 0.6."
-
-[[bans.skip]]
-name    = "polyval"
-version = "=0.6"
-reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses polyval 0.7."
-
-[[bans.skip]]
-name    = "universal-hash"
-version = "=0.5"
-reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses universal-hash 0.6."
-
-[[bans.skip]]
-name    = "cipher"
-version = "=0.4"
-reason  = "paired with aes 0.8 skip — older cipher block cipher trait version."
-
-[[bans.skip]]
-name    = "block-padding"
-version = "=0.3"
-reason  = "paired with cipher 0.4 skip."
-
-[[bans.skip]]
-name    = "cbc"
-version = "=0.1"
-reason  = "paired with cipher 0.4 / aes 0.8 skip."
-
-[[bans.skip]]
-name    = "inout"
-version = "=0.1"
-reason  = "paired with cipher 0.4 skip."
-
-[[bans.skip]]
-name    = "sqlx"
-version = "=0.8"
-reason  = "mako is on sqlx 0.9; iceberg-catalog-sql 0.11 (meterstore's cold-tier SQL catalogue, its own pool) is still on 0.8. No sqlx type crosses meterstore's API."
-
-[[bans.skip]]
-name    = "sqlx-core"
-version = "=0.8"
-reason  = "the sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
-
-[[bans.skip]]
-name    = "sqlx-postgres"
-version = "=0.8"
-reason  = "the sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
-
-[[bans.skip]]
-name    = "etcetera"
-version = "=0.8"
-reason  = "the sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
-
-[[bans.skip]]
-name    = "hashlink"
-version = "=0.10"
-reason  = "the sqlx 0.8 side of the sqlx 0.8/0.9 pair above."
-
-[[bans.skip]]
-name    = "petgraph"
-version = "=0.7"
-reason  = "iceberg uses petgraph 0.7; workspace uses petgraph 0.8."
-
-[[bans.skip]]
-name    = "syn"
-version = "2.0"
-reason  = "async-trait (datafusion 53 via edmd, lance via agentd) uses syn 3; the rest of the proc-macro graph is still on syn 2."
-
-[[bans.skip]]
-name    = "phf"
-version = "=0.11"
-reason  = "some crates require phf 0.11; workspace uses phf 0.12."
-
-[[bans.skip]]
-name    = "phf_shared"
-version = "=0.11"
-reason  = "paired with phf 0.11 skip."
-
-[[bans.skip]]
-name    = "spin"
-version = "=0.9"
-reason  = "ring 0.17 (mako-as4) uses spin 0.9; newer deps use spin 0.10."
-
-[[bans.skip]]
-name    = "sha1"
-version = "0.10"
-reason  = "tungstenite 0.29 (energy-api/makod) uses sha1 0.10; reqsign/opendal (meterstore/edmd) use 0.11."
-
-[[bans.skip]]
-name    = "webpki-roots"
-version = "=0.26"
-reason  = "older rustls consumers use webpki-roots 0.26; newer use 1.0."
-
-[[bans.skip]]
-name    = "strum"
-version = "0.27"
-reason  = "strum three-way split: 0.27 pulled by mid-generation crates; 0.28 is current."
-
-[[bans.skip]]
-name    = "strum_macros"
-version = "0.27"
-reason  = "proc-macro companion of strum 0.27."
-
-# ── lz4_flex 0.11 vs 0.13 ─────────────────────────────────────────────────────
-# krafka pins lz4_flex 0.11; 0.13 is current.
-[[bans.skip]]
-name    = "lz4_flex"
-version = "0.11"
-reason  = "krafka pins lz4_flex 0.11 (visible in the all-features graph); 0.13 is current."
-
-# ── object_store 0.13 (three-way: 0.12 / 0.13 / 0.14) ───────────────────────────
-# 0.12 is skipped above.
-[[bans.skip]]
-name    = "object_store"
-version = "=0.13"
-reason  = "object_store split: datafusion 53 / lance pin 0.13; makod + slatedb use 0.14. Resolve when lance updates to 0.14."
-
-# ── toml ecosystem split (build-dep vs runtime) ───────────────────────────────
-# Build dependencies (cbindgen and friends) pull the toml 0.9 line; the workspace
-# runtime (figment, slatedb) uses toml 0.8. Build-time vs runtime — no shared
-# state. Resolve when the runtime stack reaches toml 0.9.
-
-[[bans.skip]]
-name    = "toml"
-version = "=0.8"
-reason  = "runtime side of the split: figment/slatedb use toml 0.8 while build-dependency crates (cbindgen chain) use toml 0.9. Build-time vs runtime — no shared state. Resolve when figment/slatedb reach toml 0.9."
-
-[[bans.skip]]
-name    = "toml_datetime"
-version = "=0.6"
-reason  = "companion to toml 0.8 (toml_edit 0.22 chain)."
-
-[[bans.skip]]
-name    = "serde_spanned"
-version = "=0.6"
-reason  = "companion to toml 0.8 (runtime figment/slatedb chain); toml 0.9 (build-dep chain) uses serde_spanned 1.1."
-
-# ── rustix 0.38 / linux-raw-sys 0.4 / socket2 0.5 (prometheus + krafka) ───────
-# These older versions are pulled by:
-# - prometheus 0.14 → procfs 0.17 → rustix 0.38 (mako-service metrics)
-# - krafka → socket2 0.5 (edmd kafka_ingest)
-# Modern stack (asx-rs, foyer/slatedb, tokio) uses rustix 1.x / socket2 0.6.
-
-[[bans.skip]]
-name    = "rustix"
-version = "0.38"
-reason  = "prometheus 0.14 (procfs chain) pins rustix 0.38; modern stack uses rustix 1.x."
-
-[[bans.skip]]
-name    = "linux-raw-sys"
-version = "0.4"
-reason  = "companion to rustix 0.38 (prometheus/procfs chain); modern stack pulls linux-raw-sys 0.12."
-
-[[bans.skip]]
-name    = "socket2"
-version = "0.5"
-reason  = "krafka (edmd kafka_ingest) pins socket2 0.5; tokio/modern stack uses 0.6."
-
-[[bans.skip]]
-name    = "windows-sys"
-version = "0.52"
-reason  = "socket2 0.5 (krafka) pulls windows-sys 0.52; modern stack uses 0.59/0.61."
-
-[[bans.skip]]
-name    = "dashmap"
-version = "5"
-reason  = "governor 0.6 (mako-service rate-limit) pins dashmap 5; asx-rs/datafusion use dashmap 6."
-
-# ── object split (backtrace vs ar_archive_writer) ─────────────────────────────
-
-[[bans.skip]]
-name    = "object"
-version = "0.39"
-reason  = "ar_archive_writer 0.5 (build dependency of psm, via stacker → cedar) pins object 0.39; backtrace 0.3.77 (miette/cedar chain) uses object 0.40 (canonical). Resolve when ar_archive_writer bumps object."
-
-# ── ordered-float 4.x (three-way: 2 / 4 / 5) ────────────────────────────────────
-# 2 is skipped above (petgraph 0.7).
-[[bans.skip]]
-name    = "ordered-float"
-version = "=4"
-reason  = "ordered-float three-way split: 2 (petgraph 0.7/iceberg), 4 (mid-generation crates), 5 (current). Resolve when all consumers align on 5."
-
-# ── phf 0.12 (three-way: 0.11 / 0.12 / 0.13) ────────────────────────────────────
-# 0.11 is skipped above.
-[[bans.skip]]
-name    = "phf"
-version = "=0.12"
-reason  = "phf three-way split: 0.11 (older crates), 0.12 (mid), 0.13 (current). Resolve when all consumers align on 0.13."
-
-[[bans.skip]]
-name    = "phf_shared"
-version = "=0.12"
-reason  = "paired with phf 0.12 skip."
-
-# ── miniz_oxide 0.8 (DEFLATE backend) ───────────────────────────────────────────
-# `flate2` — reached from `asx-rs` (mandatory AS4 gzip) and from datafusion's
-# `async-compression` — is on miniz_oxide 0.9. Two crates still hold 0.8:
-# `apache-avro` (iceberg → meterstore → edmd) and `png` (the image/Typst render
-# stack behind outputd's documents). Both are already at the newest version
-# their own parents admit, and neither is a direct workspace dependency, so
-# nothing here can move them. Resolve when apache-avro and png bump to 0.9.
-[[bans.skip]]
-name    = "miniz_oxide"
-version = "=0.8"
-reason  = "apache-avro (via iceberg) and png (via the Typst render stack) pin miniz_oxide 0.8; flate2 uses 0.9. No workspace crate depends on either directly."

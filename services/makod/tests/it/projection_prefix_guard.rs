@@ -9,9 +9,8 @@
 //!
 //! That failure is completely silent. The worker ticks, the heartbeat updates,
 //! `GET /health` reports it healthy, and `catch_up_persistent` returns an empty
-//! checkpoint every time. Two workers shipped in exactly that state, wired to
-//! `Some("gpke/")`, and the makod operations table described their failure mode
-//! as „read models serve stale data" — they served nothing at all.
+//! checkpoint every time: a worker wired to `Some("gpke/")` serves nothing at
+//! all, not stale data.
 
 use mako_engine::{
     envelope::NewEvent,

@@ -47,6 +47,9 @@ reqwest            = { workspace = true }
 # subscriber cannot stall a whole batch on the single-threaded worker.
 futures            = { version = "0.3", default-features = false, features = ["std"] }
 rust_decimal       = { workspace = true }
+# The Referenzreihen import is idempotent on the file's SHA-256.
+sha2               = "0.10"
+thiserror          = { workspace = true }
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
 prometheus         = "0.14"
 sqlx               = { workspace = true, features = ["rust_decimal"] }
@@ -66,6 +69,10 @@ serde_json = { workspace = true }
 mako-engine   = { workspace = true }
 mako-gpke     = { workspace = true }
 mako-geli-gas = { workspace = true }
+# A 55071 / 55072 reaches the store as the outbox entry its workflow writes,
+# and the NB's `E_0622` walk is held against what the store then answers.
+mako-mabis    = { workspace = true }
+mako-pruefung = { workspace = true, features = ["role-nb"] }
 
 [lints]
 workspace = true

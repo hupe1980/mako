@@ -82,6 +82,14 @@ pub enum TemplateKind {
     /// Bescheid über eine öffentlich-rechtliche Gebühr — the Abwassergebühr a
     /// municipal operator issues beside its taxable supply invoice.
     Gebuehrenbescheid,
+    /// § 41 Abs. 4 EnWG Vertragszusammenfassung — owed to every
+    /// Letztverbraucher after conclusion. Textform.
+    Vertragszusammenfassung,
+    /// § 312f Abs. 2 BGB Vertragsbestätigung with the Widerrufsbelehrung —
+    /// owed to a consumer in Fernabsatz. Textform.
+    Vertragsbestaetigung,
+    /// § 356a Abs. 4 BGB Eingangsbestätigung of a Widerruf. Textform.
+    Widerrufsbestaetigung,
 }
 
 impl TemplateKind {
@@ -93,7 +101,29 @@ impl TemplateKind {
             Self::Mahnung => "MAHNUNG",
             Self::Preisanpassung => "PREISANPASSUNG",
             Self::Gebuehrenbescheid => "GEBUEHRENBESCHEID",
+            Self::Vertragszusammenfassung => "VERTRAGSZUSAMMENFASSUNG",
+            Self::Vertragsbestaetigung => "VERTRAGSBESTAETIGUNG",
+            Self::Widerrufsbestaetigung => "WIDERRUFSBESTAETIGUNG",
         }
+    }
+
+    /// Every kind, in declaration order.
+    pub const ALL: [Self; 7] = [
+        Self::Invoice,
+        Self::Mahnung,
+        Self::Preisanpassung,
+        Self::Gebuehrenbescheid,
+        Self::Vertragszusammenfassung,
+        Self::Vertragsbestaetigung,
+        Self::Widerrufsbestaetigung,
+    ];
+
+    /// Whether this kind is a Textform letter rendered from its own view —
+    /// every kind but the ZUGFeRD invoice, which is rendered from the EN 16931
+    /// model and carries an embedded payload.
+    #[must_use]
+    pub const fn is_textform(self) -> bool {
+        !matches!(self, Self::Invoice)
     }
 }
 

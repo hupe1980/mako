@@ -49,6 +49,7 @@ use anyhow::{Context as _, Result, bail};
 use super::facturx;
 use super::render::{RenderRequest, render};
 use super::view::DocumentView;
+use crate::config::Anrede;
 use crate::template_store::TemplateKind;
 
 /// How thoroughly a stored template was proven before it was published.
@@ -60,7 +61,7 @@ pub enum Proof {
     RenderedPdfa,
     /// Rendered against the kind's specimen and the page carried its mandatory
     /// content — the full proof for a Textform document, which has no PDF/A to
-    /// meet and nothing to embed. What MAHNUNG and PREISANPASSUNG require.
+    /// meet and nothing to embed. What every kind but INVOICE requires.
     ///
     /// There is no weaker level: every kind has a specimen, so every template
     /// is proven against one.
@@ -120,7 +121,198 @@ pub fn prove(kind: TemplateKind, source: &str, pdf_standard: Option<&str>) -> Re
         TemplateKind::Mahnung => prove_mahnung(source),
         TemplateKind::Preisanpassung => prove_preisanpassung(source),
         TemplateKind::Gebuehrenbescheid => prove_gebuehrenbescheid(source),
+        TemplateKind::Vertragszusammenfassung => prove_vertragszusammenfassung(source),
+        TemplateKind::Vertragsbestaetigung => prove_vertragsbestaetigung(source),
+        TemplateKind::Widerrufsbestaetigung => prove_widerrufsbestaetigung(source),
     }
+}
+
+/// A letter's specimen, rendered, with its page text in [`page_text`]'s
+/// normalisation.
+struct Letter {
+    flat: String,
+    proven: Proven,
+}
+
+/// Render a letter's specimen and read its page back.
+fn render_letter(document: &str, source: &str, data: String) -> Result<Letter> {
+    let rendered = render(&RenderRequest {
+        template: source.to_owned(),
+        data: Some(data),
+        attachment: None,
+        standard: None,
+        date: SPECIMEN_DATE,
+        ident: format!("mako-publish-gate-{}", document.to_lowercase()),
+    })?;
+    if rendered.pages > 3 {
+        bail!(
+            "the specimen {document} came to {} pages; a letter over three pages has a layout \
+             fault",
+            rendered.pages,
+        );
+    }
+    let doc = lopdf::Document::load_mem(&rendered.pdf).context("reading back the render")?;
+    let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+    let text = doc
+        .extract_text(&pages)
+        .context("a Textform document must carry extractable text")?;
+    Ok(Letter {
+        flat: page_text(&text),
+        proven: Proven {
+            proof: Proof::RenderedTextform,
+            pages: rendered.pages,
+            warnings: rendered.warnings,
+        },
+    })
+}
+
+impl Letter {
+    /// Refuse the page unless it prints every `required` item, in its German
+    /// customer-facing form. `norm` is the statute that makes the items part
+    /// of the document. An empty needle is refused rather than skipped:
+    /// `contains("")` always holds, so it would pass a blank page.
+    fn require(&self, document: &str, norm: &str, required: &[(&str, String)]) -> Result<()> {
+        for (term, value) in required {
+            if value.is_empty() {
+                bail!("the {document} specimen carries no {term} — the check cannot run");
+            }
+            if !contains_standalone(&self.flat, &needle_text(value)) {
+                bail!(
+                    "the rendered {document} does not print the {term} (`{value}`, in its \
+                     German customer-facing form) — {norm} makes it part of the document"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The proof for a **Vertragszusammenfassung**: every item of § 41 Abs. 4
+/// Satz 2 Nr. 1–6 EnWG on the page ([`super::vertragszusammenfassung`]).
+///
+/// Nr. 1 asks for the supplier's Kontaktdaten: its name, and a way to reach
+/// it — a telephone number, an e-mail address or a postal address, any one.
+fn prove_vertragszusammenfassung(source: &str) -> Result<Proven> {
+    const DOC: &str = "Vertragszusammenfassung";
+    const NORM: &str = "§ 41 Abs. 4 Satz 2 EnWG";
+    let view = super::vertragszusammenfassung::specimen();
+    let letter = render_letter(DOC, source, super::specimen_data(&view, Anrede::Sie)?)?;
+    let a = &view.absender;
+    letter.require(
+        DOC,
+        NORM,
+        &[
+            (
+                "Name des Energielieferanten (Nr. 1)",
+                a.name.clone().unwrap_or_default(),
+            ),
+            ("Verbrauchsstelle (Nr. 2)", view.verbrauchsstelle.clone()),
+            ("Arbeitspreis (Nr. 3)", "34,90".to_owned()),
+            ("Grundpreis (Nr. 3)", "143,88".to_owned()),
+            (
+                "voraussichtlicher Belieferungsbeginn (Nr. 4)",
+                "01.02.2027".to_owned(),
+            ),
+            ("Kündigungsfrist (Nr. 5)", view.kuendigungsfrist.clone()),
+            (
+                "Bonusvereinbarung (Nr. 6)",
+                view.bonus.clone().unwrap_or_default(),
+            ),
+            (
+                "Mindestvertragslaufzeit (Nr. 6)",
+                view.mindestvertragslaufzeit.clone().unwrap_or_default(),
+            ),
+        ],
+    )?;
+    let kontakt: Vec<&String> = [&a.phone, &a.email, &a.line1]
+        .into_iter()
+        .flatten()
+        .collect();
+    if kontakt.is_empty() {
+        bail!("the {DOC} specimen carries no Kontaktdaten — the check cannot run");
+    }
+    if !kontakt
+        .iter()
+        .any(|k| contains_standalone(&letter.flat, &needle_text(k)))
+    {
+        bail!(
+            "the rendered {DOC} does not print the Kontaktdaten des Energielieferanten (Nr. 1) \
+             — neither its telephone number, its e-mail address nor its address — {NORM} makes \
+             them part of the document"
+        );
+    }
+    Ok(letter.proven)
+}
+
+/// The proof for a **Vertragsbestätigung** ([`super::vertragsbestaetigung`]):
+/// the contract's content and the Widerrufsbelehrung with the
+/// Muster-Widerrufsformular and the Wertersatz notice on the page.
+fn prove_vertragsbestaetigung(source: &str) -> Result<Proven> {
+    let view = super::vertragsbestaetigung::specimen();
+    let wr = &view.widerruf;
+    let required: Vec<(&str, String)> = vec![
+        (
+            "§ 126b declarant",
+            view.absender.name.clone().unwrap_or_default(),
+        ),
+        ("Vertragsnummer", view.vertragsnummer.clone()),
+        ("Datum des Vertragsschlusses", "15.11.2026".to_owned()),
+        ("Produkt", view.produkt.clone()),
+        ("Arbeitspreis", "34,90".to_owned()),
+        ("Grundpreis", "143,88".to_owned()),
+        ("Belieferungsbeginn", "01.02.2027".to_owned()),
+        ("Laufzeit", view.laufzeit.clone()),
+        ("Kündigungsfrist", view.kuendigungsfrist.clone()),
+        (
+            "Widerrufsfrist (Art. 246a § 1 Abs. 2 Satz 1 Nr. 1 EGBGB)",
+            wr.frist.clone(),
+        ),
+        (
+            "Widerrufsbelehrung (Art. 246a § 1 Abs. 2 Satz 1 Nr. 1 EGBGB)",
+            wr.belehrung_text.clone(),
+        ),
+        (
+            "Muster-Widerrufsformular (Art. 246a § 1 Abs. 2 Satz 1 Nr. 1 EGBGB)",
+            wr.muster_widerrufsformular.clone(),
+        ),
+        (
+            "Wertersatz-Hinweis (Art. 246a § 1 Abs. 2 Satz 1 Nr. 3 EGBGB)",
+            wr.wertersatz_hinweis.clone(),
+        ),
+    ];
+    let letter = render_letter(
+        "Vertragsbestätigung",
+        source,
+        super::specimen_data(&view, Anrede::Sie)?,
+    )?;
+    letter.require("Vertragsbestätigung", "§ 312f Abs. 2 BGB", &required)?;
+    Ok(letter.proven)
+}
+
+/// The proof for a **Widerrufsbestätigung** ([`super::widerrufsbestaetigung`]):
+/// the declaration's content and the date **and** time of receipt.
+fn prove_widerrufsbestaetigung(source: &str) -> Result<Proven> {
+    let view = super::widerrufsbestaetigung::specimen();
+    let e = &view.erklaerung;
+    let required: Vec<(&str, String)> = vec![
+        (
+            "§ 126b declarant",
+            view.absender.name.clone().unwrap_or_default(),
+        ),
+        ("Vertragsnummer", view.vertragsnummer.clone()),
+        ("Datum des Eingangs", "29.11.2026".to_owned()),
+        ("Uhrzeit des Eingangs", "00:03".to_owned()),
+        ("Name aus der Erklärung", e.name.clone()),
+        ("Vertrag aus der Erklärung", e.vertrag.clone()),
+        ("Adresse für die Bestätigung", e.bestaetigung_an.clone()),
+    ];
+    let letter = render_letter(
+        "Widerrufsbestätigung",
+        source,
+        super::specimen_data(&view, Anrede::Sie)?,
+    )?;
+    letter.require("Widerrufsbestätigung", "§ 356a Abs. 4 BGB", &required)?;
+    Ok(letter.proven)
 }
 
 /// The proof for a **Gebührenbescheid**: render the two-Gebühren specimen,
@@ -219,7 +411,7 @@ fn prove_preisanpassung(source: &str) -> Result<Proven> {
     let view = super::preisanpassung::specimen();
     let rendered = render(&RenderRequest {
         template: source.to_owned(),
-        data: Some(serde_json::to_string(&view)?),
+        data: Some(super::specimen_data(&view, Anrede::Sie)?),
         attachment: None,
         standard: None,
         date: SPECIMEN_DATE,
@@ -291,7 +483,7 @@ fn prove_mahnung(source: &str) -> Result<Proven> {
     let view = super::mahnung::specimen();
     let rendered = render(&RenderRequest {
         template: source.to_owned(),
-        data: Some(serde_json::to_string(&view)?),
+        data: Some(super::specimen_data(&view, Anrede::Sie)?),
         attachment: None,
         standard: None,
         date: SPECIMEN_DATE,
@@ -1147,6 +1339,288 @@ mod tests {
         )
         .expect("the shipped Preisanpassung layout must pass the gate");
         assert_eq!(proven.proof, Proof::RenderedTextform);
+    }
+
+    // ── The three post-conclusion letters ───────────────────────────────────
+
+    /// Prove `kind` against its reference layout with every `cut` removed, and
+    /// expect a refusal naming `term`. A `cut` that matches nothing would test
+    /// the reference itself, so each must occur.
+    fn refused_without(kind: TemplateKind, reference: &str, cuts: &[(&str, &str)], term: &str) {
+        let mut source = reference.to_owned();
+        for (from, to) in cuts {
+            assert!(
+                source.contains(from),
+                "`{from}` is not in the reference layout"
+            );
+            source = source.replace(from, to);
+        }
+        let err = prove(kind, &source, None)
+            .expect_err("a page without a mandated item is refused")
+            .to_string();
+        assert!(err.contains(term), "the refusal names {term}: {err}");
+    }
+
+    use crate::document::{
+        REFERENCE_VERTRAGSBESTAETIGUNG as VB, REFERENCE_VERTRAGSZUSAMMENFASSUNG as VZ,
+        REFERENCE_WIDERRUFSBESTAETIGUNG as WB,
+    };
+    const ZUS: TemplateKind = TemplateKind::Vertragszusammenfassung;
+    const BES: TemplateKind = TemplateKind::Vertragsbestaetigung;
+    const WID: TemplateKind = TemplateKind::Widerrufsbestaetigung;
+
+    #[test]
+    fn the_reference_vertragszusammenfassung_passes_its_own_gate() {
+        let proven = prove(ZUS, VZ, None).expect("the shipped layout must pass the gate");
+        assert_eq!(proven.proof, Proof::RenderedTextform);
+    }
+
+    #[test]
+    fn the_reference_vertragsbestaetigung_passes_its_own_gate() {
+        let proven = prove(BES, VB, None).expect("the shipped layout must pass the gate");
+        assert_eq!(proven.proof, Proof::RenderedTextform);
+    }
+
+    #[test]
+    fn the_reference_widerrufsbestaetigung_passes_its_own_gate() {
+        let proven = prove(WID, WB, None).expect("the shipped layout must pass the gate");
+        assert_eq!(proven.proof, Proof::RenderedTextform);
+    }
+
+    // § 41 Abs. 4 Satz 2 Nr. 1–6 EnWG, one item at a time.
+
+    #[test]
+    fn a_template_omitting_the_lieferant_name_is_refused() {
+        refused_without(
+            ZUS,
+            VZ,
+            &[("abs.name", "none")],
+            "Name des Energielieferanten",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_kontaktdaten_is_refused() {
+        refused_without(
+            ZUS,
+            VZ,
+            &[
+                ("abs.phone", "none"),
+                ("abs.email", "none"),
+                ("abs.line1", "none"),
+            ],
+            "Kontaktdaten",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_verbrauchsstelle_is_refused() {
+        refused_without(
+            ZUS,
+            VZ,
+            &[("#zusammenfassung.verbrauchsstelle", "")],
+            "Verbrauchsstelle",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_preise_is_refused() {
+        refused_without(ZUS, VZ, &[("[#money(p.wert)]", "[]")], "Arbeitspreis");
+    }
+
+    #[test]
+    fn a_template_omitting_the_belieferungsbeginn_is_refused() {
+        refused_without(
+            ZUS,
+            VZ,
+            &[("#date(zusammenfassung.belieferungsbeginn)", "")],
+            "Belieferungsbeginn",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_kuendigungsfrist_is_refused() {
+        refused_without(
+            ZUS,
+            VZ,
+            &[("[#zusammenfassung.kuendigungsfrist]", "[]")],
+            "Kündigungsfrist",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_bonus_is_refused() {
+        refused_without(
+            ZUS,
+            VZ,
+            &[("[#zusammenfassung.bonus]", "[]")],
+            "Bonusvereinbarung",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_mindestvertragslaufzeit_is_refused() {
+        refused_without(
+            ZUS,
+            VZ,
+            &[("[#zusammenfassung.mindestvertragslaufzeit]", "[]")],
+            "Mindestvertragslaufzeit",
+        );
+    }
+
+    // § 312f Abs. 2 BGB, Art. 246a § 1 Abs. 2 Satz 1 Nr. 1 and 3 EGBGB.
+
+    #[test]
+    fn a_template_omitting_the_declarant_of_the_vertragsbestaetigung_is_refused() {
+        refused_without(BES, VB, &[("abs.name", "none")], "§ 126b declarant");
+    }
+
+    #[test]
+    fn a_template_omitting_the_vertragsnummer_is_refused() {
+        refused_without(
+            BES,
+            VB,
+            &[("[#bestaetigung.vertragsnummer]", "[]")],
+            "Vertragsnummer",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_vertragsschluss_is_refused() {
+        refused_without(
+            BES,
+            VB,
+            &[("#datetime(bestaetigung.vertragsschluss_am)", "")],
+            "Vertragsschlusses",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_produkt_is_refused() {
+        refused_without(BES, VB, &[("[#bestaetigung.produkt", "[")], "Produkt");
+    }
+
+    #[test]
+    fn a_template_omitting_the_agreed_preise_is_refused() {
+        refused_without(BES, VB, &[("[#money(p.wert)]", "[]")], "Arbeitspreis");
+    }
+
+    #[test]
+    fn a_template_omitting_the_confirmed_belieferungsbeginn_is_refused() {
+        refused_without(
+            BES,
+            VB,
+            &[("#date(bestaetigung.belieferungsbeginn)", "")],
+            "Belieferungsbeginn",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_laufzeit_is_refused() {
+        refused_without(BES, VB, &[("[#bestaetigung.laufzeit]", "[]")], "Laufzeit");
+    }
+
+    #[test]
+    fn a_template_omitting_the_confirmed_kuendigungsfrist_is_refused() {
+        refused_without(
+            BES,
+            VB,
+            &[("[#bestaetigung.kuendigungsfrist]", "[]")],
+            "Kündigungsfrist",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_widerrufsfrist_is_refused() {
+        refused_without(BES, VB, &[("#wr.frist", "")], "Widerrufsfrist");
+    }
+
+    #[test]
+    fn a_template_omitting_the_widerrufsbelehrung_is_refused() {
+        refused_without(BES, VB, &[("#wr.belehrung_text", "")], "Widerrufsbelehrung");
+    }
+
+    #[test]
+    fn a_template_omitting_the_muster_widerrufsformular_is_refused() {
+        refused_without(
+            BES,
+            VB,
+            &[("#wr.muster_widerrufsformular", "")],
+            "Muster-Widerrufsformular",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_wertersatz_hinweis_is_refused() {
+        refused_without(BES, VB, &[("#wr.wertersatz_hinweis", "")], "Wertersatz");
+    }
+
+    // § 356a Abs. 4 BGB: the declaration's content, date and time of receipt.
+
+    #[test]
+    fn a_template_omitting_the_declarant_of_the_widerrufsbestaetigung_is_refused() {
+        refused_without(WID, WB, &[("abs.name", "none")], "§ 126b declarant");
+    }
+
+    #[test]
+    fn a_template_omitting_the_withdrawn_vertragsnummer_is_refused() {
+        refused_without(
+            WID,
+            WB,
+            &[("[#bestaetigung.vertragsnummer]", "[]")],
+            "Vertragsnummer",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_eingangsdatum_is_refused() {
+        refused_without(
+            WID,
+            WB,
+            &[(
+                "#datetime(bestaetigung.eingegangen_am)",
+                "#bestaetigung.eingegangen_am.slice(11, 16)",
+            )],
+            "Datum des Eingangs",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_eingangsuhrzeit_is_refused() {
+        refused_without(
+            WID,
+            WB,
+            &[(
+                "#datetime(bestaetigung.eingegangen_am)",
+                "#date(bestaetigung.eingegangen_am.slice(0, 10))",
+            )],
+            "Uhrzeit des Eingangs",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_declared_name_is_refused() {
+        refused_without(WID, WB, &[("[#erk.name]", "[]")], "Name aus der Erklärung");
+    }
+
+    #[test]
+    fn a_template_omitting_the_declared_vertrag_is_refused() {
+        refused_without(
+            WID,
+            WB,
+            &[("[#erk.vertrag]", "[]")],
+            "Vertrag aus der Erklärung",
+        );
+    }
+
+    #[test]
+    fn a_template_omitting_the_bestaetigung_an_is_refused() {
+        refused_without(
+            WID,
+            WB,
+            &[("[#erk.bestaetigung_an]", "[]")],
+            "Adresse für die Bestätigung",
+        );
     }
 
     /// The specimen's stamped terms match what billingd's production stamps.

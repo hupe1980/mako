@@ -76,12 +76,9 @@ pub struct PartnerAdminState {
 // body's own `mp_id` must match the `{mp_id}` path parameter, and a mismatch is
 // rejected with `400`.
 //
-// There was a one-field `UpsertRequest` wrapper here that flattened it. It
-// bought nothing and cost something: `serde` forbids `deny_unknown_fields`
-// beside `flatten`, and a `deny_unknown_fields` on the *inner* type sees the
-// outer's leftovers — so the wrapper worked only for as long as it stayed
-// empty, and adding one field to it would have made every request fail at run
-// time with nothing in the test suite to catch it.
+// No wrapper flattens it: `serde` forbids `deny_unknown_fields` beside
+// `flatten`, and a `deny_unknown_fields` on the *inner* type sees the outer's
+// leftovers, so one field added to a wrapper fails every request at run time.
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct PartnerResponse {

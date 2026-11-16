@@ -49,6 +49,9 @@ secrecy      = "0.10"
 tracing      = "0.1"
 anyhow       = "1"
 tokio-util   = { workspace = true }
+# The Endkunden-Angebot's content hash: SHA-256 over RFC 8785 canonical JSON.
+sha2         = "0.10"
+serde_jcs    = "0.1"
 
 [dev-dependencies]
 mako-service = { workspace = true, features = ["testing"] }

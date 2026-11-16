@@ -2,9 +2,9 @@
 //!
 //! The database tests in `settlement_integration.rs` prove what the schema
 //! permits. These prove the service actually issues that form — a distinction
-//! that matters, because both bugs they guard against were in the service's
-//! query text while the schema was correct all along. They need no database and
-//! so run on every `cargo test`.
+//! that matters, because a correct schema does not stop the service's query
+//! text from issuing a form it refuses. They need no database and so run on
+//! every `cargo test`.
 
 const PG: &str = include_str!("../../src/pg.rs");
 const HANDLERS: &str = include_str!("../../src/handlers.rs");
@@ -36,8 +36,8 @@ fn code_only(src: &str) -> String {
 /// `sr_unique_initial` is partial (`WHERE is_correction = false`). Postgres
 /// cannot infer a partial index from the column list, so the bare form raises
 /// "no unique or exclusion constraint matching the ON CONFLICT specification" at
-/// runtime. The award-expired settlement path shipped with the bare form and
-/// failed on every call.
+/// runtime, so a path that issues the bare form — the award-expired settlement
+/// among them — fails on every call.
 #[test]
 fn receipt_upserts_repeat_the_partial_index_predicate() {
     let code = code_only(PG);
@@ -261,12 +261,11 @@ fn check_in_values(schema: &str, col: &str) -> Vec<String> {
 /// `eeg_anlagen.erzeugungsart` CHECK must equal `ErzeugungsArt`'s canonical
 /// `to_db_str` vocabulary — in **both** directions.
 ///
-/// The two drifted: the enum emitted `BIOMETHAN` / `SOLAR_FREIFLAECHE` while the
-/// CHECK allowed `BIOMETHANE` / `SOLAR_FREFLAECHE` and an orphan `SONSTIGE` with
-/// no variant. Because `pg.rs` binds the raw caller string and reads back via
-/// `from_db_str(...).ok()`, a biomethane plant was either rejected by the CHECK
-/// or silently decoded to `erzeugungsart = None`. This pins the two lists equal
-/// so any future rename fails a DB-free test instead of losing data at runtime.
+/// `pg.rs` binds the raw caller string and reads back via
+/// `from_db_str(...).ok()`, so a token the enum emits and the CHECK lacks is
+/// refused on write, and a token the CHECK admits and the enum lacks decodes
+/// silently to `erzeugungsart = None`. Pinning the two lists equal makes a
+/// rename fail a DB-free test instead of losing data at runtime.
 #[test]
 fn erzeugungsart_check_list_equals_the_enum_vocabulary() {
     use eeg_billing::ErzeugungsArt;
@@ -374,11 +373,11 @@ fn check_tokens_after(anchor: &str) -> Vec<String> {
 
 /// `models::ALL` and the schema's `CHECK` list must name exactly the same tokens.
 ///
-/// The two drifted before: the schema accepted a German and an English spelling
-/// of every model, the service listed both in most gates and one in others, and
-/// the KWKG kWh counter silently stopped applying to any plant registered under
-/// the spelling it had missed. Asserting the two lists equal is what makes a
-/// third spelling impossible to add halfway.
+/// A second spelling of a model admitted by the schema reaches the gates that
+/// list one spelling and not those that list the other — the KWKG kWh counter
+/// would stop applying to any plant registered under the spelling it misses.
+/// Asserting the two lists equal makes a second spelling impossible to add
+/// halfway.
 #[test]
 fn the_settlement_model_vocabulary_is_single_sourced() {
     let mut from_schema = check_tokens_after("settlement_model   TEXT");
@@ -629,12 +628,12 @@ fn the_mcp_surface_takes_exact_decimals() {
 
 /// No prompt may teach a rule the engine does not implement.
 ///
-/// The six prompts shipped an additive Managementprämie of 0,4 ct/kWh — Anlage 1
-/// Nr. 3.1.2 defines `MP = AW − MW` and nothing else, and §20 EEG 2023 has no
-/// Absätze at all — a 20-year clock reset under "§22" (the Ausschreibung
-/// provision), a twelve-month advance-notice duty under "§21 Abs. 1" that no such
-/// provision contains, and MaStR maintenance under "§28a". A wrong instruction is
-/// worse than none: the model acts on it.
+/// Refused in the prompt text: an additive Managementprämie of 0,4 ct/kWh —
+/// Anlage 1 Nr. 3.1.2 defines `MP = AW − MW` and nothing else, and §20 EEG 2023
+/// has no Absätze at all — a 20-year clock reset under "§22" (the Ausschreibung
+/// provision), a twelve-month advance-notice duty under "§21 Abs. 1" that no
+/// such provision contains, and MaStR maintenance under "§28a". A wrong
+/// instruction is worse than none: the model acts on it.
 #[test]
 fn the_mcp_prompts_do_not_teach_refuted_rules() {
     // The prose that documents *why* these are wrong is allowed to name them;

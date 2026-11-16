@@ -6,20 +6,29 @@ import { useT } from "../i18n";
 import { Icon } from "./Icon";
 
 const LOOK: Record<Urgency, string> = {
-  lapsed: "bg-critical text-on-accent",
+  lapsed: "bg-critical-fill text-critical",
   critical: "bg-critical-fill text-critical",
   soon: "bg-soon-fill text-soon",
-  calm: "bg-fill text-text-2",
+  calm: "text-text-2",
 };
 
 /**
  * The Frist-Uhr: how far a deadline is, in words and colour, with the instant
  * in Berlin and UTC on hover or focus. `now` is injectable for the gallery.
  */
-export function FristUhr({ due, now }: { due: Instant; now?: number }) {
+export function FristUhr({
+  due,
+  now,
+  compact = false,
+}: {
+  due: Instant;
+  now?: number;
+  /** In a list that already says the Frist has lapsed: „vor 2 Tagen", not „abgelaufen vor …". */
+  compact?: boolean;
+}) {
   const t = useT();
   const ticking = useNow();
-  const { urgency, text } = distance(due, now ?? ticking);
+  const { urgency, text } = distance(due, now ?? ticking, compact);
   return (
     <TooltipTrigger delay={300}>
       <Focusable>
@@ -27,7 +36,7 @@ export function FristUhr({ due, now }: { due: Instant; now?: number }) {
           dateTime={due}
           // biome-ignore lint/a11y/noNoninteractiveTabindex: the tooltip with the exact instant must be reachable by keyboard
           tabIndex={0}
-          className={`focus-ring inline-flex h-6 items-center gap-1 rounded-full px-2 text-body font-medium whitespace-nowrap ${LOOK[urgency]}`}
+          className={`focus-ring inline-flex h-6 items-center gap-1 rounded-full px-2 text-body font-semibold whitespace-nowrap ${LOOK[urgency]}`}
         >
           <Icon name={urgency === "lapsed" ? "warn" : "clock"} size={14} />
           <span className="sr-only">{t.fristUhr[urgency]}: </span>
@@ -38,7 +47,7 @@ export function FristUhr({ due, now }: { due: Instant; now?: number }) {
         offset={6}
         className="rounded-control bg-surface-raised px-3 py-2 text-body text-text shadow-popover"
       >
-        <div className="font-medium">{t.zeit.uhr(formatInstant(due))}</div>
+        <div className="font-semibold">{t.zeit.uhr(formatInstant(due))}</div>
         <div className="text-caption text-text-2">{formatInstantUtc(due)}</div>
       </Tooltip>
     </TooltipTrigger>

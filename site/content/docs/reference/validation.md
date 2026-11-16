@@ -110,8 +110,9 @@ zone's `+`. The admissible formats are the place's own code list in `mig.json`;
 a qualifier with several places (`DTM+157` is `610` on a Clearingliste and
 `303` as „Änderung zum") has several places, each with its list.
 
-`MIG-{Nr}-DTM-2379-CODE` checks the code; `SEM-DTM-VALUE` checks that a value
-declaring `303` really carries `CCYYMMDDHHMMZZZ`.
+`MIG-{Nr}-DTM-2379-CODE` checks the code; `SEM-DTM-VALUE` checks that the value
+has the layout its code names — `303` `CCYYMMDDHHMMZZZ`, `104` `MMWWMMWW`, `610`
+`CCYYMM` — decoded by `edifact::DtmValue` for every UNCL 2379 code it supports.
 
 ---
 

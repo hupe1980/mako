@@ -77,7 +77,7 @@ export function QuickLook({ nachricht }: { nachricht: ProbeNachricht }) {
       aria-label={q.titel(nachricht.nachrichtentyp, pid(nachricht))}
     >
       <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h3 className="m-0 text-title font-semibold">
+        <h3 className="m-0 text-title2 font-semibold">
           {q.titel(nachricht.nachrichtentyp, pid(nachricht))}
         </h3>
         <span className="font-mono text-body text-text-2">
@@ -95,7 +95,7 @@ export function QuickLook({ nachricht }: { nachricht: ProbeNachricht }) {
           aria-label={q.befunde(anzahl, formatCount(anzahl))}
           className="flex flex-col gap-1.5"
         >
-          <p className="m-0 text-callout font-semibold text-critical">
+          <p className="m-0 text-body font-semibold text-critical">
             {q.befunde(anzahl, formatCount(anzahl))}
           </p>
           <ul className="m-0 flex list-none flex-col gap-1 p-0">
@@ -115,7 +115,7 @@ export function QuickLook({ nachricht }: { nachricht: ProbeNachricht }) {
           </ul>
           {nachricht.befunde.length > 0 && (
             <div>
-              <p className="m-0 text-caption font-medium text-text-2">{q.lose}</p>
+              <p className="m-0 text-caption text-text-2">{q.lose}</p>
               <Befunde befunde={nachricht.befunde} quelle={quelle} />
             </div>
           )}
@@ -202,7 +202,7 @@ function Wire({ text }: { text: string }) {
   const zeilen = text.replaceAll("'", "'\n").trimEnd();
   return (
     <details className="group">
-      <summary className="focus-ring cursor-default rounded-control text-callout font-medium text-text-2 marker:text-text-2">
+      <summary className="focus-ring cursor-default rounded-control text-body text-text-2 marker:text-text-2">
         {t.quickLook.wire}
       </summary>
       <div className="mt-2 flex flex-col gap-2">

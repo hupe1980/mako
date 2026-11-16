@@ -6,16 +6,16 @@
 //! positions, and the hand-authored layouts in `messages::layouts` — the ones
 //! the typed message readers address elements by — must agree with them.
 //!
-//! It had already gone wrong once: REQOTE's MIG was read as listing only
-//! `4451` and `C108` for `FTX`, `C108` landed at position 2 instead of 4, and
-//! mako rejected a correct `FTX+ACB+++Zusaetzliche Informationen`.
+//! A layout that numbers elements by the MIG's list order instead puts
+//! REQOTE's `FTX.C108` at position 2 instead of 4 and rejects a correct
+//! `FTX+ACB+++Zusaetzliche Informationen`.
 
 // The hand-authored layouts exist only when a message type is enabled.
 #![cfg(any_message)]
 
 use edi_energy::ReleaseRegistry;
 use edi_energy::messages::layouts;
-use edifact_rs::SegmentDefinition;
+use edifact::SegmentDefinition;
 
 /// Every hand-authored layout, by tag.
 fn hand_authored() -> Vec<(&'static str, &'static SegmentDefinition)> {

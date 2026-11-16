@@ -36,7 +36,7 @@
 //!
 //! # Design principles
 //!
-//! - **Format-agnostic**: zero dependency on `edifact-rs`. Operates solely on
+//! - **Format-agnostic**: zero dependency on `edifact`. Operates solely on
 //!   the BO4E domain model. EDIFACT → BO4E translation belongs in the `makod`
 //!   transport adapter (anti-corruption layer).
 //! - **Pure library** — no I/O, no async, no Tokio dependency.

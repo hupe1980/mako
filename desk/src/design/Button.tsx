@@ -24,7 +24,7 @@ export function Button({
   return (
     <AriaButton
       {...props}
-      className={`focus-ring squircle inline-flex h-7 items-center gap-1.5 rounded-control px-3 text-body font-medium transition-[background-color,filter] duration-100 data-[disabled]:opacity-40 ${VARIANTS[variant]} ${className}`}
+      className={`focus-ring squircle inline-flex h-7 items-center gap-1.5 rounded-control px-3 text-body transition-[background-color,filter] duration-100 data-[disabled]:opacity-40 ${VARIANTS[variant]} ${className}`}
     />
   );
 }

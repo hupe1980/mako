@@ -53,6 +53,9 @@ macro_rules! impl_edi_energy_message {
             fn message_ref(&self) -> &str {
                 &self.core.message_ref
             }
+            fn decimal_mark(&self) -> char {
+                self.core.decimal_mark
+            }
             fn detect_pruefidentifikator(&self) -> Result<crate::Pruefidentifikator, crate::Error> {
                 self.core.detect_pruefidentifikator()
             }
@@ -84,7 +87,7 @@ macro_rules! impl_edi_energy_message {
             fn serialize(&self) -> Result<Vec<u8>, crate::Error> {
                 self.core.serialize()
             }
-            fn segments(&self) -> &[edifact_rs::OwnedSegment] {
+            fn segments(&self) -> &[edifact::OwnedSegment] {
                 &self.core.segments
             }
         }
@@ -101,6 +104,9 @@ macro_rules! impl_edi_energy_message {
             }
             fn message_ref(&self) -> &str {
                 &self.core.message_ref
+            }
+            fn decimal_mark(&self) -> char {
+                self.core.decimal_mark
             }
             fn detect_pruefidentifikator(&self) -> Result<crate::Pruefidentifikator, crate::Error> {
                 self.core.detect_pruefidentifikator()
@@ -135,7 +141,7 @@ macro_rules! impl_edi_energy_message {
             fn serialize(&self) -> Result<Vec<u8>, crate::Error> {
                 self.core.serialize()
             }
-            fn segments(&self) -> &[edifact_rs::OwnedSegment] {
+            fn segments(&self) -> &[edifact::OwnedSegment] {
                 &self.core.segments
             }
         }
@@ -259,60 +265,68 @@ pub(super) mod common {
         is_valid_malo_id(id) || is_valid_melo_id(id)
     }
 
-    /// Emit a period-order error when DTM+163 (start) is lexicographically after
-    /// DTM+164 (end) in `segments`.
+    /// Emit a period-order error for every `DTM+163` (start) that is not before
+    /// the `DTM+164` (end) it pairs with.
     ///
-    /// Shared by MSCONS, ORDERS (flat message-level rule) and INSRPT (group rule
-    /// via `with_scoped_group_rule_fn`).  The `rule_id` parameter lets each
-    /// caller stamp their own `SEM-<TYPE>-PERIOD-ORDER` identifier.
+    /// The values are decoded by DE 2379 through `edifact::DtmValue`, so a
+    /// `303` start at `+02` is compared as the instant it names, not as a
+    /// string. A start pairs with the next end that follows it, before any
+    /// further start: in every EDI@Energy MIG a period's two `DTM` sit together
+    /// in one segment group, so an MSCONS carrying one period per `SG10` is
+    /// checked period by period rather than its last start against its last
+    /// end. A value its code does not decode is `SEM-DTM-VALUE`'s finding,
+    /// not this rule's.
+    ///
+    /// Shared by MSCONS, ORDERS, REMADV, INVOIC (message-level rules) and INSRPT
+    /// (group rule via `with_scoped_group_rule_fn`). The `rule_id` parameter
+    /// lets each caller stamp their own `SEM-<TYPE>-PERIOD-ORDER` identifier.
     #[cfg(any(
         feature = "insrpt",
         feature = "remadv",
         feature = "orders",
         feature = "invoic",
+        feature = "mscons",
     ))]
     pub(super) fn check_period_order(
-        segments: &[edifact_rs::Segment<'_>],
+        segments: &[edifact::Segment<'_>],
         rule_id: &'static str,
-        issues: &mut Vec<edifact_rs::ValidationIssue>,
+        issues: &mut Vec<edifact::ValidationIssue>,
     ) {
-        let mut start: Option<(&str, edifact_rs::Span)> = None;
-        let mut end: Option<(&str, edifact_rs::Span)> = None;
-
+        let decode = |seg: &edifact::Segment<'_>| {
+            edifact::DtmValue::parse(seg.component_str(0, 1)?, seg.component_str(0, 2)?).ok()
+        };
+        let mut start: Option<(edifact::DtmValue, edifact::Span)> = None;
         for seg in segments.iter().filter(|s| s.tag == "DTM") {
-            let Some(c507) = seg.get_element(0) else {
-                continue;
-            };
-            let qualifier = c507.get_component(0).unwrap_or("");
-            let value = c507.get_component(1).unwrap_or("");
-            match qualifier {
-                "163" => start = Some((value, seg.span)),
-                "164" => end = Some((value, seg.span)),
+            match seg.component_str(0, 0) {
+                Some("163") => start = decode(seg).map(|v| (v, seg.span)),
+                Some("164") => {
+                    let (Some((begin, span)), Some(end)) = (start.take(), decode(seg)) else {
+                        continue;
+                    };
+                    let reason = match begin.compare(&end) {
+                        edifact::DtmRelation::Before
+                        | edifact::DtmRelation::Equal
+                        | edifact::DtmRelation::Overlapping => continue,
+                        edifact::DtmRelation::Indeterminate => {
+                            "cannot be ordered against period-end (qualifier 164)"
+                        }
+                        _ => "is after period-end (qualifier 164)",
+                    };
+                    issues.push(
+                        edifact::ValidationIssue::new(
+                            edifact::ValidationSeverity::Error,
+                            format!("DTM: period-start (qualifier 163) {reason}"),
+                        )
+                        .with_span(span)
+                        .with_rule_id(rule_id)
+                        .with_segment("DTM")
+                        .with_suggestion(
+                            "Ensure DTM+163 (Beginn) is not later than DTM+164 (Ende) \
+                             \u{2014} compared as the instants their DE 2379 formats name",
+                        ),
+                    );
+                }
                 _ => {}
-            }
-        }
-
-        if let (Some((start_val, start_span)), Some((end_val, _))) = (start, end)
-            && !start_val.is_empty()
-            && !end_val.is_empty()
-            && start_val > end_val
-        {
-            {
-                issues.push(
-                    edifact_rs::ValidationIssue::new(
-                        edifact_rs::ValidationSeverity::Error,
-                        "DTM: period-start (qualifier 163) is after period-end (qualifier 164)"
-                            .to_owned(),
-                    )
-                    .with_span(start_span)
-                    .with_rule_id(rule_id)
-                    .with_segment("DTM")
-                    .with_suggestion(
-                        "Ensure DTM+163 (Beginn Lieferzeitraum) is not later than \
-                         DTM+164 (Ende Lieferzeitraum) \u{2014} date values must be in \
-                         ascending chronological order",
-                    ),
-                );
             }
         }
     }

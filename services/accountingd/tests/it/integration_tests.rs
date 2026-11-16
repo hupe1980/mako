@@ -258,7 +258,7 @@ fn test_pain008_creditor_id_validated() {
     );
 }
 
-// ── FR-1: config-selectable pain.008 / pain.001 schema version ────────────────
+// ── Config-selectable pain.008 / pain.001 schema version ──────────────────────
 
 #[test]
 fn test_schema_version_resolves_from_config() {

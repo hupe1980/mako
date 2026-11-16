@@ -198,13 +198,17 @@ The answer's shape picks the REMADV PID (REMADV AHB 1.0a): one code rides 33002
 `E_0264` has three levels with disjoint codes: Kopf 10–90 (`A01`–`A07`, `A90`),
 Position 300–430 (`A09`–`A15`, `A20`, `A99`), Summe 500–550 (`A21`–`A24`, `A96`).
 A Kopf refusal ends the walk; settlement is „ganz oder gar nicht" (WiM Teil 2 UC
-4.5.1). The invoice answers two Prüfschritte about itself: 10 (and the
+4.5.1).
+
+The invoice answers two Prüfschritte about itself: 10 (and the
 Storno's 17) checks that every § 14 Abs. 4 UStG Pflichtangabe is stated —
 `NAD+MS`/`NAD+MR` name and Anschrift, `SG3 RFF+FC`/`VA`, `DTM+137`, the `BGM`
 number, each position's Artikel-ID and `QTY`, the period, `SG52 TAX` with
 `MOA+125`/`MOA+161` — and an `A01` names each one missing; 330 holds a position
 of Steuerkategorie `S` to the § 12 Abs. 1 UStG rate of its period (16 % in the
-second half of 2020). Five need facts no INVOIC carries (50, 310, 370,
+second half of 2020).
+
+Five need facts no INVOIC carries (50, 310, 370,
 `E_0266` 1, and on Preisblatt B 80), and 330 does too for an `O` or `AE`
 position or one whose period crosses a change of the rate. A step the walk
 reaches with no answer — those facts, or a missing Leistungszeitraum,
@@ -212,7 +216,9 @@ Zahlungsziel or Angebot — is neither passed nor refused: the walk ends open, t
 receipt is recorded with outcome `Offen`, no REMADV is sent, no
 `de.invoic.receipt.*` event is enqueued, and `dispatch-answer` refuses it; a
 Leistungsnachweis or a statement on the receipt decides it (see *Deciding a
-held invoice*). A walk that refuses disputes the invoice even where the
+held invoice*).
+
+A walk that refuses disputes the invoice even where the
 plausibility report is clean: the REMADV carries the tree's codes. A
 `marktd` outage on the order lookup (Prüfschritt 40) answers `503`, so the
 sender redelivers once marktd answers.

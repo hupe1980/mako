@@ -22,6 +22,7 @@ just dev vertragd      # dev/config/vertragd.toml against the dev PostgreSQL
 | **Product assignment** | half-open `[gueltig_von, gueltig_bis)` slices, no overlap (`kp_no_overlap`, GiST); `GET /api/v1/malo/{malo_id}/produkte` is what `billingd` bills from |
 | **§ 14a module state** | Modul 1/2/3 per component as valid-time slices (`ks_no_overlap`); `GET`/`POST /api/v1/malo/{malo_id}/sect14a`, read by `billingd` to select the reductions it bills |
 | **Market side** | Anmeldung and Kündigung reach the market through `processd`; inbound `de.mako.*` and `de.tarif.angebot.angenommen` arrive at `POST /api/v1/events` / `/webhooks/angebot` (HMAC) |
+| **Online Vertragsschluss** | `POST /api/v1/bestellungen` concludes a contract only with its append-only Bestellnachweis (§ 312j Abs. 4 BGB), idempotent on `Idempotency-Key`; `[policy] vertragsschluss` (`mit_bestellung` / `mit_annahme`, no default) decides when; the consumer's Widerruf runs on `mako_fristen::vorlauf::widerrufsfrist` |
 | **MCP** | 20 read-only tools + 4 prompts at `/mcp` |
 
 ## The rules
@@ -38,6 +39,9 @@ just dev vertragd      # dev/config/vertragd.toml against the dev PostgreSQL
 | Erstlaufzeit Verbrauchervertrag | § 309 Nr. 9 lit. a BGB | ≤ 24 Monate |
 | Stillschweigende Verlängerung | § 309 Nr. 9 lit. b BGB | nur unbefristet, ≤ 1 Monat kündbar |
 | Ersatzversorgung | § 38 Abs. 4 EnWG | endet spätestens nach 3 Monaten |
+| Online-Vertrag nur mit Bestellnachweis | § 312j Abs. 4 BGB | Schaltfläche „zahlungspflichtig bestellen“ (Abs. 3 Satz 2), sonst `bestellbutton_beschriftungen` |
+| Widerrufsfrist | § 355 Abs. 2 Satz 1, § 356 Abs. 2 Nr. 2 BGB | 14 Tage ab Vertragsschluss, nicht vor der Belehrung; Absendung genügt (§ 355 Abs. 1 Satz 5) |
+| Wertersatz nach Widerruf | § 357a Abs. 2 Satz 1 Nr. 1 und 3 BGB | nur mit ausdrücklichem Verlangen und Wertersatz-Information |
 
 A Kündigung or Tarifwechsel that misses its Frist is refused with `422` naming
 `fruehestens` and the `rechtsgrundlage`; `GET /vertraege/{id}/kuendigungsfrist`
@@ -51,6 +55,7 @@ shows every reachable date first.
 | Verträge | `/api/v1/kunden/{id}/vertraege`, `/api/v1/vertraege` (+ `/{id}`, `/kuendigen`, `/widerruf-kuendigung`, `/stornieren`, `/tarifwechsel`, `/preisgarantie`, `/kuendigungsfrist`, `/expiring`, `/by-malo/{malo_id}`, `/billing-candidates`) |
 | Rahmenverträge | `/api/v1/kunden/{id}/rahmenvertraege`, `/api/v1/rahmenvertraege` (+ `/{id}`, `/kuendigen`, `/malos`) |
 | Other contracts | `/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`, `/aggregatorvertraege`, `/ggv/{ggv_id}/betreiber` |
+| Online Vertragsschluss | `PUT /api/v1/rechtsdokumente/{art}`, `GET /rechtsdokumente/{sha256}`, `POST /api/v1/bestellungen` (+ `/{id}/annehmen`, `/ablehnen`, `/nachweis`, `/widerruf`), `POST /api/v1/vertraege/{id}/widerruf` |
 | Operations | `GET /api/v1/outbound/dead`, `POST /outbound/dead/{id}/retry` |
 
 ## Configuration
@@ -76,6 +81,11 @@ inbound_secret  = "env:VERTRAGD_INBOUND_SECRET"
 outputd_url     = "http://outputd:9880"
 outputd_api_key = "env:VERTRAGD_OUTPUTD_SERVICE_KEY"
 
+# The frozen Endkunden-Angebot an online order accepts; required once
+# [policy] vertragsschluss is set, as are outputd_url and [absender] name.
+# productd_url     = "http://productd:9080"
+# productd_api_key = "env:VERTRAGD_PRODUCTD_SERVICE_KEY"
+
 max_identitaeten_per_kunde = 50
 
 [http]
@@ -94,6 +104,12 @@ post_code = "10115"
 city      = "Berlin"
 ```
 
+`[policy] vertragsschluss` (`mit_bestellung` / `mit_annahme`) has no default:
+unset, `POST /api/v1/bestellungen` refuses with `409 policy_nicht_gesetzt` and
+every other route runs. `lieferbeginn_in_widerrufsfrist` (`nur_auf_verlangen`
+by default, or `immer`) and `bestellbutton_beschriftungen` (by default only
+„zahlungspflichtig bestellen“) sit beside it.
+
 `[policy.dsr]` holds the data protection officer's readings for the DSGVO
 export: `portabel.<kategorie>` (Art. 20 Abs. 1) and `automatisiert.<prozess>`
 (Art. 15 Abs. 1 lit. h, Art. 22), each defaulting to `true`. The export states
@@ -106,5 +122,6 @@ findings are served at `GET /admin/einrichtung`.
 DB suite: `just test-vertragd-db`.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/vertragd/)
-covers the data model, authorization, Kündigung, Tarifwechsel, DSGVO erasure,
-background workers and the full configuration reference.
+covers the data model, authorization, online Vertragsschluss and Widerruf,
+Kündigung, Tarifwechsel, DSGVO erasure, background workers and the full
+configuration reference.

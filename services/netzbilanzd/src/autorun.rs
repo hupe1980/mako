@@ -241,7 +241,7 @@ pub struct GgvNneRequest {
     pub arbeitspreis_ct_per_kwh: Decimal,
     /// Konzessionsabgabe — rate and KAV §2 group together.
     #[serde(default)]
-    pub konzessionsabgabe: Option<grid_billing::Konzessionsabgabe>,
+    pub konzessionsabgabe: Option<crate::request::KonzessionsabgabeAngabe>,
     /// Per-tenant metered consumption, keyed by MaLo-ID.
     ///
     /// Required. §42b attributes the Netzentgelt to each tenant Marktlokation,

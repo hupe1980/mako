@@ -52,7 +52,7 @@ if report.is_sendable() { /* … */ }
 
 // `iter_issues()` walks every issue; `errors()`, `criticals()`, `warnings()`
 // and `infos()` take one bucket. `severity` and `rule_id` are **fields** on
-// `edifact_rs::ValidationIssue`, not methods.
+// `edifact::ValidationIssue`, not methods.
 for issue in report.iter_issues() {
     println!("{:?} {:?}: {}", issue.severity, issue.rule_id, issue.message);
 }

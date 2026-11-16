@@ -1,6 +1,6 @@
 use std::fmt;
 
-use edifact_rs::{ValidationIssue, ValidationReport};
+use edifact::{ValidationIssue, ValidationReport};
 
 /// Which layer of the validation stack produced a finding.
 ///
@@ -77,7 +77,7 @@ fn classify_rule_origin(rule_id: &str) -> Option<RuleOrigin> {
     Some(origin)
 }
 
-/// The mako-facing projection of a single [`edifact_rs::ValidationIssue`].
+/// The mako-facing projection of a single [`edifact::ValidationIssue`].
 ///
 /// `ValidationIssue` is already owned and serializable; this type exists to shape
 /// the *mako* serialization contract — camelCase field names, a curated field set,
@@ -113,7 +113,7 @@ pub struct ValidationIssueSummary {
     pub segment_position: Option<u32>,
     /// Segment group name in which the issue occurred (e.g. `"SG4"`), if available.
     ///
-    /// Populated from [`edifact_rs::ValidationIssue::segment_group`].
+    /// Populated from [`edifact::ValidationIssue::segment_group`].
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub segment_group: Option<String>,
     /// 0-based data-element index within the segment.
@@ -130,7 +130,7 @@ pub struct ValidationIssueSummary {
     pub suggestion: Option<String>,
     /// Byte offset of the first byte of the affected region in the source input.
     ///
-    /// The start of [`edifact_rs::ValidationIssue::span`].
+    /// The start of [`edifact::ValidationIssue::span`].
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub offset: Option<usize>,
     /// Exclusive byte offset of the end of the affected region in the source input.
@@ -214,7 +214,7 @@ impl ValidationIssueSummary {
 
 /// The result of validating an EDI@Energy message.
 ///
-/// Wraps [`edifact_rs::ValidationReport`] with a stable, ergonomic API.
+/// Wraps [`edifact::ValidationReport`] with a stable, ergonomic API.
 /// Issues are divided into three severity buckets: errors, warnings, and infos.
 ///
 /// A report is considered *valid* when it contains no error-level issues (warnings
@@ -243,7 +243,7 @@ pub struct EdiEnergyReport {
     ///
     /// `None` for bare messages (UNH…UNT only, no interchange wrapper).  Present
     /// when an interchange wrapper was detected and successfully validated by
-    /// `edifact_rs::validate_envelope`.
+    /// `edifact::validate_envelope`.
     ///
     /// Combines with the validation issues to provide a single comprehensive
     /// audit record (who sent it, when, control reference, and whether it was valid).
@@ -318,7 +318,7 @@ impl EdiEnergyReport {
 
     /// Error-level issues. Any entry here means the message is non-conformant.
     ///
-    /// In the underlying `edifact-rs` model, `Critical`-severity issues are also
+    /// In the underlying `edifact` model, `Critical`-severity issues are also
     /// stored here (both `Critical` and `Error` map to the same errors bucket).
     /// Use [`criticals`][Self::criticals] to distinguish them when needed.
     #[must_use]
@@ -330,14 +330,14 @@ impl EdiEnergyReport {
     ///
     /// `Critical` issues indicate a structural violation severe enough to abort
     /// further validation (e.g. a malformed `UNH` envelope segment).  They are
-    /// stored in the same bucket as `Error`-severity issues by `edifact-rs`, so
+    /// stored in the same bucket as `Error`-severity issues by `edifact`, so
     /// `is_valid()` already returns `false` when any `Critical` issue is present.
     ///
     /// This accessor filters `errors()` by `ValidationSeverity::Critical` and
     /// is useful when you need to distinguish abort-level failures from regular
     /// conformance errors in monitoring dashboards or audit logs.
     pub fn criticals(&self) -> impl Iterator<Item = &ValidationIssue> {
-        use edifact_rs::ValidationSeverity;
+        use edifact::ValidationSeverity;
         self.inner
             .errors()
             .iter()
@@ -517,7 +517,7 @@ impl EdiEnergyReport {
     /// Convert to `Result<Self, Self>`, consuming `self`.
     ///
     /// Returns `Ok(self)` when valid, `Err(self)` when not. Mirrors
-    /// `edifact_rs::ValidationReport::result()` so `?` works symmetrically
+    /// `edifact::ValidationReport::result()` so `?` works symmetrically
     /// across both types, and keeps the report in hand either way.
     ///
     /// Use [`into_error_result`](Self::into_error_result) to propagate the

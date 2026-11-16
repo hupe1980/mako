@@ -674,11 +674,10 @@ pub struct Stores {
     ///
     /// Not optional: seven specialists declare `memory_formation`, and a
     /// memory-forming agent on a plane without a memory store is a **build
-    /// refusal** — which is exactly how its absence was found. Every earlier
-    /// suite activated only `gabi-gas-agent` (no memory block), so the plane
-    /// assembled in tests and `enable_all` — the documented default — could
-    /// not boot. The all-specialist smoke test exists so a seam a manifest
-    /// declares can never again ship unwired.
+    /// refusal**, so a suite that activates only `gabi-gas-agent` (no memory
+    /// block) assembles while `enable_all` — the documented default — cannot
+    /// boot. The all-specialist smoke test holds every seam a manifest
+    /// declares to be wired.
     pub memory: Arc<dyn agentplane::memory::MemoryStore>,
 }
 
@@ -875,7 +874,6 @@ impl Plane {
         let tenant = cfg.tenant.clone();
         let keyring = cfg.keyring.clone();
         let memory = Arc::clone(&stores.memory);
-        let journal = Arc::clone(&stores.journal);
 
         let mut builder = Runtime::builder(stores.journal)
             .owner(cfg.owner.to_owned())
@@ -903,13 +901,10 @@ impl Plane {
         for (name, driver) in cfg.providers {
             builder = builder.provider(name, driver);
         }
+        // A stop needs no guard here: agentplane asks before every live
+        // dispatch, so a stopped run makes no further model turn or tool call.
         for (name, client) in cfg.tool_servers {
-            // Every server behind the stop: a call of a stopped run never
-            // leaves (`tools::StopGuard`).
-            builder = builder.tool_server(
-                name,
-                super::tools::StopGuard::guarding(client, Arc::clone(&journal)),
-            );
+            builder = builder.tool_server(name, client);
         }
         // Registrations are made at **admission**, so no run exists unwatched,
         // and delivery reads the run's own journal records past a cursor that
@@ -1434,7 +1429,7 @@ impl Plane {
     /// Ask `run` to stop, as the person `by`, with `reason` on the record.
     ///
     /// agentplane's `request_cancel`: the request is durable at once, and the
-    /// run's owner acts on it at the run's next step boundary — it journals
+    /// run's owner acts on it before the run's next effect — it journals
     /// `RunCancelled` with `by` and concludes `cancelled`. `Ok(false)` when a
     /// stop already stands, so the name on the record is the first asker's.
     ///

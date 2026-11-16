@@ -319,11 +319,11 @@ mako_service::policy_choice! {
         options: {
             /// No activated specialist holds a grant to a mutating tool; one
             /// that does refuses startup.
-            Advisory = "advisory" => "Regulation (EU) 2024/1689 Art. 6(1a), inserted by Regulation (EU) 2026/1744 Art. 1 point (8): AI systems solely used for non-safety related aspects of user assistance, performance optimisation, service efficiency, automation or convenience or quality control shall not qualify as safety components",
+            Advisory = "advisory" => "a plane used solely for non-safety aspects such as user assistance or automation is no safety component (Regulation (EU) 2024/1689 Art. 6(1a), inserted by Regulation (EU) 2026/1744 Art. 1 point (8))",
             /// A specialist may hold a mutating grant only with a person
             /// approving each call (`requires_approval`); one without refuses
             /// startup.
-            Supervised = "supervised" => "Regulation (EU) 2024/1689 Annex III point 2 (safety components in the supply of gas or electricity) and Art. 6(1b), inserted by Regulation (EU) 2026/1744 Art. 1 point (8): AI systems the failure or malfunctioning of which would endanger health and safety shall qualify as safety components",
+            Supervised = "supervised" => "a plane whose failure would endanger health and safety is a safety component of the gas or electricity supply (Regulation (EU) 2024/1689 Annex III point 2, Art. 6(1b))",
         }
     }
 }

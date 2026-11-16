@@ -533,6 +533,31 @@ pub async fn insert_versorgungsvertrag(
     input: &CreateVersorgungsvertragInput,
 ) -> Result<InsertedVertrag> {
     let mut tx = pool.begin().await?;
+    let inserted =
+        insert_versorgungsvertrag_tx(&mut tx, kunden_id, tenant, lf_mp_id, input, None).await?;
+    tx.commit().await?;
+    Ok(inserted)
+}
+
+/// [`insert_versorgungsvertrag`] inside the caller's transaction.
+///
+/// `online` is the only way a contract is written with `abschlussweg =
+/// 'ONLINE'`: an [`OnlineVertragsschluss`](super::bestellungen::OnlineVertragsschluss)
+/// cannot be built without a stored Bestellnachweis, so a consumer's online
+/// contract without one is unrepresentable in Rust as well as refused by the
+/// schema's `vv_online_verbraucher_nachweis` (§ 312j Abs. 4 BGB).
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn insert_versorgungsvertrag_tx(
+    tx: &mut sqlx::PgConnection,
+    kunden_id: Uuid,
+    tenant: &str,
+    lf_mp_id: &str,
+    input: &CreateVersorgungsvertragInput,
+    online: Option<&super::bestellungen::OnlineVertragsschluss>,
+) -> Result<InsertedVertrag> {
     let id = Uuid::new_v4();
     let row = sqlx::query(
         "INSERT INTO versorgungsvertraege
@@ -540,8 +565,9 @@ pub async fn insert_versorgungsvertrag(
           vertragsbeginn,vertragsende,kuendigungsfrist_monate,
           preisgarantie_bis,abrechnungszyklus,auto_renewal,renewal_monate,
           standort_bezeichnung,standort_adresse,zahlungsziel_tage,erp_contract_id,notizen,
-          verbraucher)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+          verbraucher,abschlussweg,bestellnachweis_id,vertragsschluss_am)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+                 $21,$22,$23)
          ON CONFLICT (tenant,erp_contract_id) WHERE erp_contract_id IS NOT NULL
            DO UPDATE SET updated_at=now()
          RETURNING id, vertrags_nr, id = $1 AS is_new_insert",
@@ -572,6 +598,13 @@ pub async fn insert_versorgungsvertrag(
     .bind(&input.erp_contract_id)
     .bind(&input.notizen)
     .bind(input.verbraucher)
+    .bind(if online.is_some() {
+        "ONLINE"
+    } else {
+        "SONSTIG"
+    })
+    .bind(online.map(super::bestellungen::OnlineVertragsschluss::nachweis_id))
+    .bind(online.map(super::bestellungen::OnlineVertragsschluss::am))
     .fetch_one(&mut *tx)
     .await?;
 
@@ -586,7 +619,7 @@ pub async fn insert_versorgungsvertrag(
     // components is registered at the NB.
     let kunde = if is_new && input.komponenten.iter().any(|k| k.wird_angemeldet()) {
         Some(
-            kunde_anmeldedaten(&mut tx, kunden_id, tenant, input.standort_adresse.as_ref())
+            kunde_anmeldedaten(&mut *tx, kunden_id, tenant, input.standort_adresse.as_ref())
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Kunde {kunden_id} not found"))?,
         )
@@ -595,7 +628,7 @@ pub async fn insert_versorgungsvertrag(
     };
     if is_new {
         for komp in &input.komponenten {
-            let komp_id = insert_komponente(&mut tx, actual_id, tenant, lf_mp_id, komp).await?;
+            let komp_id = insert_komponente(&mut *tx, actual_id, tenant, lf_mp_id, komp).await?;
             // Persist-before-dispatch: the registration intent commits with the
             // contract, so it survives a restart and can be retried.
             if komp.wird_angemeldet()
@@ -633,7 +666,7 @@ pub async fn insert_versorgungsvertrag(
                     strom.as_ref(),
                     gas.as_ref(),
                 )?;
-                if outbound::enqueue(&mut tx, tenant, &task).await? {
+                if outbound::enqueue(&mut *tx, tenant, &task).await? {
                     dispatched += 1;
                 }
             }
@@ -657,7 +690,6 @@ pub async fn insert_versorgungsvertrag(
             .await?;
         }
     }
-    tx.commit().await?;
     Ok(InsertedVertrag {
         id: actual_id,
         vertrags_nr,
@@ -995,14 +1027,14 @@ pub async fn list_portfolio_by_kunde(
 ///
 /// A late or replayed MaKo outcome re-derives the contract status from its
 /// components, and that derivation knows nothing about a Kündigung or a
-/// Stornierung — it happily returned AKTIV for a contract that had already
-/// ended. Terminal states are therefore not overwritten.
-const VERTRAG_TERMINAL: &str = "('GEKÜNDIGT','ABGELAUFEN','STORNIERT')";
+/// Stornierung, and would return AKTIV for a contract that has ended. Terminal
+/// states are therefore not overwritten.
+const VERTRAG_TERMINAL: &str = "('GEKÜNDIGT','ABGELAUFEN','STORNIERT','WIDERRUFEN')";
 
 /// Statuses a Vertragskomponente never leaves.
 ///
-/// A replayed rejection flipped an already-confirmed or already-ended component
-/// to ABGELEHNT, which took it out of the billing feed retroactively.
+/// A replayed rejection must not flip a confirmed or ended component to
+/// ABGELEHNT: that takes it out of the billing feed retroactively.
 const KOMPONENTE_TERMINAL: &str = "('BEENDET','ABGELEHNT','STORNIERT')";
 
 /// Component statuses a period may be **billed** for.
@@ -1052,7 +1084,10 @@ pub async fn update_vertrag_status(
         "UPDATE versorgungsvertraege SET status=$1, updated_at=now(),
          completed_at = CASE WHEN $1 IN ('ABGELAUFEN','STORNIERT') THEN now() ELSE completed_at END
          WHERE id=$2 AND tenant=$3
-           AND (status NOT IN {VERTRAG_TERMINAL} OR $1 IN {VERTRAG_TERMINAL})"
+           AND (status NOT IN {VERTRAG_TERMINAL} OR $1 IN {VERTRAG_TERMINAL})
+           -- a withdrawn contract stays withdrawn (§ 355 BGB); no NB answer
+           -- or closing worker moves it on
+           AND status <> 'WIDERRUFEN'"
     )))
     .bind(status)
     .bind(id)
@@ -1297,45 +1332,7 @@ pub async fn kuendige_vertrag(
     input: &KuendigungInput,
     eingang: Date,
 ) -> Result<KuendigungResult> {
-    let komponenten: Vec<VertragskomponenteRow> =
-        sqlx::query_as("SELECT * FROM vertragskomponenten WHERE vertrag_id=$1")
-            .bind(vertrag.id)
-            .fetch_all(&mut *tx)
-            .await?;
-
-    let mut dispatched = Vec::new();
-    let mut direkt_beendet = Vec::new();
-    for k in komponenten
-        .iter()
-        .filter(|k| matches!(k.status.as_str(), "AKTIV" | "BESTAETIGT"))
-    {
-        match (k.is_mako(), k.malo_id.as_deref(), k.nb_mp_id.as_deref()) {
-            (true, Some(malo_id), Some(_)) => {
-                // The Schlussablesung is the LF's own obligation and does not
-                // depend on the Lieferende reaching the NB, so it is its own
-                // task — a processd outage must not cost the customer the
-                // reading their Schlussrechnung is built from.
-                let ablesung = outbound::ablesung(k.id, malo_id, &k.sparte, true, input.lieferende);
-                // Superseding, not plain enqueue: a Kündigung widerrufen and
-                // re-issued to a different date must replace the reading order
-                // it scheduled, not sit behind it.
-                outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &ablesung).await?;
-                let task =
-                    outbound::lieferende(k.id, &k.sparte, malo_id, input.lieferende, input.grund);
-                // Superseding for the same reason: the key carries the date,
-                // and a task for another date that is still queued is obsolete.
-                outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &task).await?;
-                // The component leaves supply on the agreed date either way;
-                // the UTILMD tells the NB, it does not decide the contract.
-                schedule_lieferende(&mut *tx, k.id, input.lieferende).await?;
-                dispatched.push(k.id);
-            }
-            _ => {
-                schedule_lieferende(&mut *tx, k.id, input.lieferende).await?;
-                direkt_beendet.push(k.id);
-            }
-        }
-    }
+    let result = beende_komponenten(&mut *tx, vertrag, input.lieferende, input.grund).await?;
 
     sqlx::query(
         "UPDATE versorgungsvertraege
@@ -1359,6 +1356,62 @@ pub async fn kuendige_vertrag(
     .bind(&input.bemerkung)
     .execute(&mut *tx)
     .await?;
+
+    Ok(result)
+}
+
+/// End every live component of `vertrag` on `lieferende`: the Lieferende
+/// UTILMD and the Schlussablesung for a component registered at the NB, a
+/// direct end for any other. The supply half of a Kündigung, and the path a
+/// Widerruf after Lieferbeginn takes.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn beende_komponenten(
+    tx: &mut sqlx::PgConnection,
+    vertrag: &VersorgungsvertragRow,
+    lieferende: Date,
+    grund: domain::Kuendigungsgrund,
+) -> Result<KuendigungResult> {
+    let komponenten: Vec<VertragskomponenteRow> =
+        sqlx::query_as("SELECT * FROM vertragskomponenten WHERE vertrag_id=$1")
+            .bind(vertrag.id)
+            .fetch_all(&mut *tx)
+            .await?;
+
+    let mut dispatched = Vec::new();
+    let mut direkt_beendet = Vec::new();
+    for k in komponenten
+        .iter()
+        .filter(|k| matches!(k.status.as_str(), "AKTIV" | "BESTAETIGT"))
+    {
+        match (k.is_mako(), k.malo_id.as_deref(), k.nb_mp_id.as_deref()) {
+            (true, Some(malo_id), Some(_)) => {
+                // The Schlussablesung is the LF's own obligation and does not
+                // depend on the Lieferende reaching the NB, so it is its own
+                // task — a processd outage must not cost the customer the
+                // reading their Schlussrechnung is built from.
+                let ablesung = outbound::ablesung(k.id, malo_id, &k.sparte, true, lieferende);
+                // Superseding, not plain enqueue: a Kündigung widerrufen and
+                // re-issued to a different date must replace the reading order
+                // it scheduled, not sit behind it.
+                outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &ablesung).await?;
+                let task = outbound::lieferende(k.id, &k.sparte, malo_id, lieferende, grund);
+                // Superseding for the same reason: the key carries the date,
+                // and a task for another date that is still queued is obsolete.
+                outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &task).await?;
+                // The component leaves supply on the agreed date either way;
+                // the UTILMD tells the NB, it does not decide the contract.
+                schedule_lieferende(&mut *tx, k.id, lieferende).await?;
+                dispatched.push(k.id);
+            }
+            _ => {
+                schedule_lieferende(&mut *tx, k.id, lieferende).await?;
+                direkt_beendet.push(k.id);
+            }
+        }
+    }
 
     Ok(KuendigungResult {
         dispatched,
@@ -1515,6 +1568,22 @@ pub struct WiderrufResult {
 /// Refuses a contract already in supply.
 pub async fn storniere_vertrag(pool: &PgPool, id: Uuid, tenant: &str) -> Result<()> {
     let mut tx = pool.begin().await?;
+    storniere_vertrag_tx(&mut tx, id, tenant).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`storniere_vertrag`] inside the caller's transaction — the Widerruf
+/// before Lieferbeginn runs it beside its own record.
+///
+/// # Errors
+///
+/// Refuses a contract already in supply.
+pub async fn storniere_vertrag_tx(
+    tx: &mut sqlx::PgConnection,
+    id: Uuid,
+    tenant: &str,
+) -> Result<()> {
     let updated = sqlx::query(
         "UPDATE versorgungsvertraege SET status = 'STORNIERT', completed_at = now(), updated_at = now()
          WHERE id = $1 AND tenant = $2
@@ -1546,7 +1615,7 @@ pub async fn storniere_vertrag(pool: &PgPool, id: Uuid, tenant: &str) -> Result<
     // register. One that already reached processd is the operator's to cancel
     // there — which is exactly what the response says.
     outbound::park(
-        &mut tx,
+        &mut *tx,
         tenant,
         id,
         &[outbound::TaskKind::Lieferbeginn],
@@ -1554,7 +1623,6 @@ pub async fn storniere_vertrag(pool: &PgPool, id: Uuid, tenant: &str) -> Result<
         "Vertrag storniert vor Lieferbeginn",
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 

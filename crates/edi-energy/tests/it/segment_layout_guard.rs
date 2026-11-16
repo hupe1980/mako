@@ -126,7 +126,7 @@ const ADDRESSED_CODES: &[(&str, &str)] = &[
 fn the_shipped_layout_agrees_with_the_mig() {
     use edi_energy::messages::layouts;
 
-    fn definition(tag: &str) -> Option<&'static edifact_rs::SegmentDefinition> {
+    fn definition(tag: &str) -> Option<&'static edifact::SegmentDefinition> {
         Some(match tag {
             "BGM" => &layouts::BGM,
             "DTM" => &layouts::DTM,

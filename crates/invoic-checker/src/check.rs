@@ -36,7 +36,7 @@
 //!
 //! # Architecture
 //!
-//! This module has **zero dependency on `edifact-rs`**.  It operates solely on
+//! This module has **zero dependency on `edifact`**.  It operates solely on
 //! [`rubo4e::current::Rechnung`] — the industry-standard BO4E domain model.
 //! EDIFACT → BO4E translation is the responsibility of the `makod` transport
 //! adapter (anti-corruption layer).

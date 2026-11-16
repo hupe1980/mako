@@ -8,9 +8,8 @@
 //! `FromRequestParts` extractor a signature can simply omit, and a
 //! `CedarEnforcer` can be injected into a router that no handler ever consults.
 //!
-//! At the time this guard was written every routed handler was correct. That is
-//! precisely when a guard is worth writing — it is here to keep the 36th
-//! handler from being the exception, not to fix a defect.
+//! The guard holds every routed handler, so the next one added cannot be the
+//! exception.
 //!
 //! Three failure classes, none of which the compiler can see:
 //!
@@ -18,9 +17,9 @@
 //!    global auth middleware; a handler that does not name `Claims` is served
 //!    to anyone who can reach the port.
 //! 2. **A handler that takes `Claims` and never authorizes is authenticated and
-//!    unguarded** — any token the verifier accepts reaches every route. This is
-//!    the shape that shipped in two sibling services: 42 handlers took
-//!    `_claims: Claims`, extracted it, and discarded it.
+//!    unguarded** — any token the verifier accepts reaches every route. The
+//!    shape is a handler that takes `_claims: Claims`, extracts it, and
+//!    discards it.
 //! 3. **A Cedar action checked in code but named in no policy is a permanent
 //!    403**, because Cedar is default-deny. The reverse — a policy action
 //!    nothing checks — is a dead grant, which means either an endpoint lost its

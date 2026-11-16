@@ -54,9 +54,9 @@ pub async fn cloud_event(
     let ce: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| ApiError::bad_request(format!("malformed CloudEvent: {e}")))?;
 
-    // `id` is the inbox primary key. Defaulting it to "" made the first id-less
-    // event occupy that key and every later one look like its duplicate, so all
-    // of them were dropped in silence.
+    // `id` is the inbox primary key. A default of "" lets the first id-less
+    // event occupy that key and every later one look like its duplicate, so
+    // all of them would be dropped in silence.
     let ce_id = ce
         .get("id")
         .and_then(serde_json::Value::as_str)

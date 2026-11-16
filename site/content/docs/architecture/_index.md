@@ -65,7 +65,8 @@ policy through `mako_service::cedar::CedarEnforcer`; three do not:
 | `portald` | relays the customer's token to `vertragd`, which owns the customer record; `src/auth.rs` is the single gate |
 
 `productd`'s § 41c EnWG comparison feed (`GET /api/v1/comparison-feed`) is
-unauthenticated because the law obliges publication to comparison instruments.
+unauthenticated because § 41c Abs. 5 Satz 2 EnWG obliges a Stromlieferant to
+let comparison instruments use its offer-relevant information free of charge.
 It reads only `PUBLISHED` rows in an allow-listed set of categories. See
 [`productd`](@/docs/services/productd.md).
 
@@ -247,7 +248,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 | [`rubo4e`](https://crates.io/crates/rubo4e) | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
 | [`agentplane`](https://crates.io/crates/agentplane) | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
 | [`asx-rs`](https://crates.io/crates/asx-rs) | AS4/ebMS3 — `Profile::bdew()` fixes BDEW AS4-Profil 1.2's security and wire settings; one client per MP-ID, the `Inbound` service, token-fenced `DedupStore`, verified receipts |
-| [`edifact-rs`](https://crates.io/crates/edifact-rs) | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation, recovering scan for CONTRL fault locations |
+| [`edifact`](https://crates.io/crates/edifact) | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation, recovering scan for CONTRL fault locations |
 
 The pinned versions are in the root `Cargo.toml`.
 
@@ -489,7 +490,7 @@ sequenceDiagram
     processd->>marktd: GET /api/v1/versorgung/{malo_id}  (VersorgungsStatus)
     processd->>marktd: GET /api/v1/malos/{malo_id}/grid  (MaLo grid record)
     processd->>marktd: GET /api/v1/partners/{lf_mp_id}  (partner known?)
-    Note over processd: mako_pruefung::evaluate — E_0622 / G_0011<br/>grid record exists (else Escalate)<br/>15: Vorlauffrist (A07 Strom / E17 Gas)<br/>30: MaLo participates in MaKo (A02 / A16)<br/>60: Zuordnungsermächtigung, LF known (A05 / E13)<br/>70: no other Anmeldung in Bearbeitung (A06 / ZC5)<br/>→ Accept A51 (E_0623) · Reject · Escalate
+    Note over processd: mako_pruefung::evaluate — E_0622 / G_0011<br/>grid record exists (else Escalate)<br/>15: Vorlauffrist (A07 Strom / E17 Gas)<br/>30: MaLo participates in MaKo (A02 / A16)<br/>60: Zuordnungsermächtigung on file (marktd, 55071/55072), LF known (A05 / E13)<br/>70: no other Anmeldung in Bearbeitung (A06 / ZC5)<br/>→ Accept A51 (E_0623) · Reject · Escalate
     processd->>makod: POST /api/v1/commands  gpke.lieferbeginn.bestaetigen
     Note over makod: Process::run → events + UTILMD 55002 outbox<br/>AtomicAppend::append (single WriteBatch)
     makod-->>LF: UTILMD PID 55002 Bestätigung Anmeldung (via AS4/REST)

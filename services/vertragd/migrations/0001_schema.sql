@@ -211,6 +211,95 @@ COMMENT ON TABLE ggv_betreiber IS
     'The § 42b EnWG GGV operator as a Kunde — the BG-7 buyer of the bundled '
     'GGV Sammelrechnung. Keyed by the operator-assigned ggv_id billingd bills on.';
 
+-- ── Online-Vertragsschluss: legal documents and the Bestellnachweis ──────────
+--
+-- § 312j Abs. 4 BGB: „Ein Vertrag nach Absatz 2 kommt nur zustande, wenn der
+-- Unternehmer seine Pflicht aus Absatz 3 erfüllt." In the electronic retail
+-- channel the record of the order is therefore the contract's existence, and
+-- it is kept append-only: a row that could be edited proves nothing.
+
+-- Refuses UPDATE and DELETE on an append-only evidence table.
+CREATE OR REPLACE FUNCTION nur_anfuegen() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION '% is append-only: % refused', TG_TABLE_NAME, TG_OP
+        USING ERRCODE = 'restrict_violation';
+END
+$$;
+
+-- The operator's legal documents as shown to the consumer — § 312i Abs. 1
+-- Satz 1 Nr. 4 BGB: the Vertragsbestimmungen incl. AGB must be retrievable and
+-- storable „bei Vertragsschluss". An order cites them by SHA-256, and every
+-- hash it cites resolves here, so the words shown stay reproducible.
+CREATE TABLE rechtsdokumente (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant      TEXT        NOT NULL,
+    art         TEXT        NOT NULL CHECK (art IN (
+                    'AGB','WIDERRUFSBELEHRUNG','MUSTER_WIDERRUFSFORMULAR','DATENSCHUTZ'
+                )),
+    version     INTEGER     NOT NULL CHECK (version > 0),
+    inhalt      BYTEA       NOT NULL,
+    media_type  TEXT        NOT NULL,
+    sha256      TEXT        NOT NULL CHECK (sha256 = encode(sha256(inhalt), 'hex')),
+    gueltig_ab  DATE        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant, sha256),
+    UNIQUE (tenant, art, version)
+);
+
+CREATE TRIGGER rechtsdokumente_nur_anfuegen
+    BEFORE UPDATE OR DELETE ON rechtsdokumente
+    FOR EACH ROW EXECUTE FUNCTION nur_anfuegen();
+
+-- The Bestellnachweis: what the consumer was shown immediately before the
+-- order (§ 312j Abs. 2 BGB), the button's label (Abs. 3), the documents by
+-- hash, and the § 357a Abs. 2 Satz 1 Nr. 1 and Nr. 3 BGB facts the Wertersatz
+-- verdict reads. `kanonisch` is the RFC 8785 JSON of the record and `sha256`
+-- its hash; the CHECK ties the two so a stored hash cannot disagree with the
+-- bytes it claims to cover.
+CREATE TABLE bestellnachweise (
+    id                                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant                               TEXT        NOT NULL,
+    partner                              TEXT        NOT NULL,
+    endkunden_angebot_id                 UUID        NOT NULL,
+    angebot_sha256                       TEXT        NOT NULL,
+    angezeigte_informationen             JSONB       NOT NULL,
+    angezeigte_informationen_sha256      TEXT        NOT NULL,
+    button_beschriftung                  TEXT        NOT NULL,
+    dokumente                            JSONB       NOT NULL,
+    -- Art. 246a § 1 Abs. 2 Satz 1 Nr. 1 EGBGB (Widerrufsbelehrung) and Nr. 3
+    -- (Wertersatz) shown before the order.
+    belehrung_angezeigt                  BOOLEAN     NOT NULL,
+    wertersatz_info_angezeigt            BOOLEAN     NOT NULL,
+    -- § 357a Abs. 2 Satz 1 Nr. 1 BGB: the express request to start supply
+    -- inside the Widerrufsfrist, with the hash of the text confirmed.
+    lieferung_in_widerrufsfrist_verlangt BOOLEAN     NOT NULL,
+    verlangen_text_sha256                TEXT
+        CHECK (NOT lieferung_in_widerrufsfrist_verlangt OR verlangen_text_sha256 IS NOT NULL),
+    verbraucher                          BOOLEAN     NOT NULL,
+    kunde                                JSONB       NOT NULL,
+    gewuenschter_lieferbeginn            DATE        NOT NULL,
+    bestellt_am_gemeldet                 TIMESTAMPTZ NOT NULL,
+    eingegangen_am                       TIMESTAMPTZ NOT NULL,
+    kanal                                TEXT        NOT NULL CHECK (kanal IN (
+                                             'WEBSITE','PORTAL_PARTNER','PORTAL'
+                                         )),
+    kanonisch                            BYTEA       NOT NULL,
+    sha256                               TEXT        NOT NULL
+        CHECK (sha256 = encode(sha256(kanonisch), 'hex')),
+    created_at                           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON COLUMN bestellnachweise.kunde IS
+    'The ordering customer as declared on the order — personal data, retained '
+    'for the contract''s retention class.';
+
+CREATE INDEX bestellnachweise_tenant ON bestellnachweise (tenant, created_at DESC);
+
+CREATE TRIGGER bestellnachweise_nur_anfuegen
+    BEFORE UPDATE OR DELETE ON bestellnachweise
+    FOR EACH ROW EXECUTE FUNCTION nur_anfuegen();
+
 -- ── Versorgungsverträge (Individual Supply Contracts) ─────────────────────────
 
 CREATE SEQUENCE vertrags_nr_seq;
@@ -238,7 +327,9 @@ CREATE TABLE versorgungsvertraege (
                                 'ABGELEHNT',
                                 'GEKÜNDIGT',
                                 'ABGELAUFEN',
-                                'STORNIERT'
+                                'STORNIERT',
+                                -- withdrawn by the consumer (§ 355 BGB)
+                                'WIDERRUFEN'
                             )),
     vertragsbeginn          DATE        NOT NULL,
     -- NULL = unbefristet. § 309 Nr. 9 lit. b BGB makes this the *only* lawful
@@ -293,10 +384,24 @@ CREATE TABLE versorgungsvertraege (
     zahlungsziel_tage       INTEGER,    -- NULL = use kunden.zahlungsziel_tage
     erp_contract_id         TEXT,
     notizen                 TEXT,
+    -- How the contract came about. `ONLINE` is the order route's alone
+    -- (`pg::bestellungen`); the generic create route cannot write it.
+    abschlussweg            TEXT        NOT NULL DEFAULT 'SONSTIG'
+                                CHECK (abschlussweg IN ('ONLINE','SONSTIG')),
+    bestellnachweis_id      UUID        REFERENCES bestellnachweise(id),
+    -- The instant the contract came about — the Widerrufsfrist starts here
+    -- (§ 356 Abs. 2 Nr. 2 BGB).
+    vertragsschluss_am      TIMESTAMPTZ,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at            TIMESTAMPTZ,
-    UNIQUE (tenant, vertrags_nr)
+    UNIQUE (tenant, vertrags_nr),
+    -- § 312j Abs. 4 BGB: a consumer's online contract does not come about
+    -- without the Bestellnachweis, so it cannot be stored without one.
+    CONSTRAINT vv_online_verbraucher_nachweis CHECK (
+        NOT (abschlussweg = 'ONLINE' AND verbraucher IS TRUE)
+        OR (bestellnachweis_id IS NOT NULL AND vertragsschluss_am IS NOT NULL)
+    )
 );
 
 COMMENT ON COLUMN versorgungsvertraege.standort_adresse IS
@@ -634,6 +739,81 @@ CREATE TABLE komponenten_sect14a (
 );
 
 CREATE INDEX ks_komp ON komponenten_sect14a (komp_id, gueltig_von DESC);
+
+-- ── Bestellungen and Widerrufe (online Vertragsschluss) ──────────────────────
+
+-- One order per (partner, Idempotency-Key). `request_sha256` is compared on a
+-- replay; `antwort` is the first answer, returned unchanged to a replay.
+-- `auftrag` and `angebot` keep the order body and the frozen offer it accepted,
+-- so an acceptance under `mit_annahme` concludes exactly what was ordered.
+CREATE TABLE bestellungen (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant              TEXT        NOT NULL,
+    partner             TEXT        NOT NULL,
+    idempotency_key     TEXT        NOT NULL,
+    request_sha256      TEXT        NOT NULL,
+    bestellreferenz     TEXT        NOT NULL,
+    status              TEXT        NOT NULL CHECK (status IN (
+                            'EINGEGANGEN','ANGENOMMEN','ABGELEHNT','WIDERRUFEN'
+                        )),
+    bestellnachweis_id  UUID        NOT NULL REFERENCES bestellnachweise(id),
+    vertrag_id          UUID        REFERENCES versorgungsvertraege(id),
+    auftrag             JSONB       NOT NULL,
+    angebot             JSONB       NOT NULL,
+    -- The operator's own credit-check reference under `mit_annahme`: stored, never read.
+    bonitaet_ref        TEXT,
+    ablehnungsgrund     TEXT,
+    antwort             JSONB       NOT NULL,
+    antwort_status      INTEGER     NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant, partner, idempotency_key),
+    CHECK ((status = 'ANGENOMMEN') = (vertrag_id IS NOT NULL) OR status = 'WIDERRUFEN')
+);
+
+CREATE INDEX bestellungen_vertrag ON bestellungen (tenant, vertrag_id) WHERE vertrag_id IS NOT NULL;
+
+-- A Widerruf as received (§ 356a Abs. 2 BGB data), with the Frist it was
+-- decided against, stored as decided.
+CREATE TABLE widerrufe (
+    id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant                TEXT        NOT NULL,
+    vertrag_id            UUID        REFERENCES versorgungsvertraege(id),
+    bestellung_id         UUID        REFERENCES bestellungen(id),
+    kanal                 TEXT        NOT NULL CHECK (kanal IN (
+                              'WIDERRUFSFUNKTION','EMAIL','BRIEF','SONSTIG'
+                          )),
+    -- § 355 Abs. 1 Satz 5 BGB: the sending decides timeliness.
+    abgesendet_am         TIMESTAMPTZ NOT NULL,
+    eingegangen_am        TIMESTAMPTZ NOT NULL,
+    erklaerung            JSONB       NOT NULL,
+    -- The Frist decided against; all three NULL for the Widerruf of an order
+    -- not yet accepted, against which no Frist runs (no Vertragsschluss).
+    frist_beginn          DATE,
+    frist_ende            DATE,
+    erloeschen            DATE,
+    rechtzeitig           BOOLEAN     NOT NULL,
+    wirkung               TEXT        CHECK (wirkung IS NULL OR wirkung IN (
+                              'STORNIERT','LIEFERENDE','BESTELLUNG_GESCHLOSSEN'
+                          )),
+    lieferende            DATE,
+    -- § 357a Abs. 2 Satz 1 BGB; NULL before Lieferbeginn (nothing delivered).
+    wertersatz_geschuldet BOOLEAN,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((vertrag_id IS NULL) <> (bestellung_id IS NULL)),
+    CHECK (vertrag_id IS NULL OR (frist_ende IS NOT NULL AND erloeschen IS NOT NULL)),
+    CHECK (rechtzeitig = (wirkung IS NOT NULL))
+);
+
+-- A second timely Widerruf of the same contract is answered with the first.
+CREATE UNIQUE INDEX widerrufe_vertrag_einmal ON widerrufe (tenant, vertrag_id)
+    WHERE rechtzeitig AND vertrag_id IS NOT NULL;
+CREATE UNIQUE INDEX widerrufe_bestellung_einmal ON widerrufe (tenant, bestellung_id)
+    WHERE rechtzeitig AND bestellung_id IS NOT NULL;
+
+CREATE TRIGGER widerrufe_nur_anfuegen
+    BEFORE UPDATE OR DELETE ON widerrufe
+    FOR EACH ROW EXECUTE FUNCTION nur_anfuegen();
 
 -- ── CloudEvent inbox (idempotent) ─────────────────────────────────────────────
 

@@ -228,7 +228,7 @@ UNS+D'\
 NAD+DP'\
 LOC+172+51238696781'\
 DTM+492:202610:610'\
-DTM+293:202610010000:304'\
+DTM+293:20261001000000?+00:304'\
 LIN+1'\
 PIA+5+1-1?:1.8.0:SRW'\
 QTY+79:100'\
@@ -251,7 +251,7 @@ UNS+D'\
 NAD+DP'\
 LOC+172+BADID000'\
 DTM+492:202610:610'\
-DTM+293:202610010000:304'\
+DTM+293:20261001000000?+00:304'\
 LIN+1'\
 PIA+5+1-1?:1.8.0:SRW'\
 QTY+79:100'\
@@ -299,7 +299,7 @@ UNS+D'\
 NAD+DP'\
 LOC+172+DE00014559929E00856996N5139699L01'\
 DTM+492:202610:610'\
-DTM+293:202610010000:304'\
+DTM+293:20261001000000?+00:304'\
 LIN+1'\
 PIA+5+1-1?:1.8.0:SRW'\
 QTY+79:100'\
@@ -332,7 +332,7 @@ UNS+D'\
 NAD+DP'\
 LOC+172+51238696781'\
 DTM+492:202610:610'\
-DTM+293:202610010000:304'\
+DTM+293:20261001000000?+00:304'\
 LIN+1'\
 PIA+5+1-1?:1.8.0:SRW'\
 QTY+79:100'\
@@ -355,7 +355,7 @@ UNS+D'\
 NAD+DP'\
 LOC+172+51238696781'\
 DTM+492:202610:610'\
-DTM+293:202610010000:304'\
+DTM+293:20261001000000?+00:304'\
 LIN+1'\
 PIA+5+1-1?:1.8.0:SRW'\
 QTY+79:100'\
@@ -384,6 +384,113 @@ fn mscons_inverted_period_order_triggers_sem_rule() {
     assert_has_rule(&report, "SEM-MSCONS-PERIOD-ORDER");
 }
 
+/// `MSCONS_VALID_PERIOD` with its `SG10` periods replaced by `periods`, each a
+/// `(DTM+163, DTM+164)` value pair under its own `LIN`.
+#[cfg(feature = "mscons")]
+fn mscons_with_periods(periods: &[(&str, &str)]) -> edi_energy::EdiEnergyReport {
+    let base = std::str::from_utf8(MSCONS_VALID_PERIOD).unwrap();
+    let head = &base[..base.find("LIN+1'").unwrap()];
+    let mut body = String::new();
+    for (i, (start, end)) in periods.iter().enumerate() {
+        body.push_str(&format!(
+            "LIN+{}'PIA+5+1-1?:1.8.0:SRW'QTY+79:100'DTM+163:{start}:303'DTM+164:{end}:303'",
+            i + 1
+        ));
+    }
+    let message = format!("{}{body}", &head[head.find("UNH+").unwrap()..]);
+    let count = message.matches('\'').count() - message.matches("?'").count() + 1;
+    let wire = format!(
+        "{}{message}UNT+{count}+1'UNZ+1+1'",
+        &head[..head.find("UNH+").unwrap()]
+    );
+    Platform::with_all_profiles()
+        .parse(wire.as_bytes())
+        .unwrap()
+        .validate()
+        .unwrap()
+}
+
+/// The period is compared as the instants its `303` values name: 23:00 UTC is
+/// after 00:00 `+02` (22:00 UTC), whatever the strings say.
+#[cfg(feature = "mscons")]
+#[test]
+fn a_period_is_ordered_by_instant_not_by_string() {
+    let inverted = mscons_with_periods(&[("202609302300?+00", "202610010000?+02")]);
+    assert!(
+        inverted
+            .filter_by_rule_prefix("SEM-MSCONS-PERIOD-ORDER")
+            .has_errors(),
+        "{:#?}",
+        inverted.errors()
+    );
+    let ordered = mscons_with_periods(&[("202610010000?+02", "202609302230?+00")]);
+    assert!(
+        !ordered
+            .filter_by_rule_prefix("SEM-MSCONS-PERIOD-ORDER")
+            .has_errors(),
+        "{:#?}",
+        ordered.errors()
+    );
+}
+
+/// Each `DTM+163` is held to the `DTM+164` of its own period: an inverted first
+/// period is found although the last start precedes the last end.
+#[cfg(feature = "mscons")]
+#[test]
+fn every_period_of_an_mscons_is_checked() {
+    let report = mscons_with_periods(&[
+        ("202612310000?+00", "202610010000?+00"),
+        ("202610010000?+00", "202612310000?+00"),
+    ]);
+    assert_has_rule(&report, "SEM-MSCONS-PERIOD-ORDER");
+}
+
+// ── SEM-DTM-VALUE ────────────────────────────────────────────────────────────
+//
+// A DTM value must have the layout its DE 2379 code names, for every code —
+// `104` is `MMWWMMWW` (UTILMD MIG: `DTM+752:05010504:104'`), not `MMDD`.
+
+#[cfg(feature = "utilmd")]
+const VERPFLICHTUNGSANFRAGE: &str =
+    include_str!("../fixtures/utilmd/valid/beispiel_55168_verpflichtungsanfrage.edi");
+
+#[cfg(feature = "utilmd")]
+fn dtm_value_report(wire: &str) -> edi_energy::EdiEnergyReport {
+    Platform::with_all_profiles()
+        .parse(wire.as_bytes())
+        .unwrap()
+        .validate()
+        .unwrap()
+}
+
+#[cfg(feature = "utilmd")]
+#[test]
+fn a_104_value_in_its_layout_passes() {
+    let report = dtm_value_report(VERPFLICHTUNGSANFRAGE);
+    assert!(
+        !report.filter_by_rule_prefix("SEM-DTM-VALUE").has_errors(),
+        "{:#?}",
+        report.errors()
+    );
+}
+
+#[cfg(feature = "utilmd")]
+#[test]
+fn a_104_value_of_four_digits_is_refused() {
+    let wire = VERPFLICHTUNGSANFRAGE.replacen("DTM+752:10011004:104'", "DTM+752:1001:104'", 1);
+    assert_ne!(wire, VERPFLICHTUNGSANFRAGE);
+    assert_has_rule(&dtm_value_report(&wire), "SEM-DTM-VALUE");
+}
+
+#[cfg(feature = "utilmd")]
+#[test]
+fn a_303_value_without_its_zone_is_refused() {
+    let wire =
+        VERPFLICHTUNGSANFRAGE.replacen("DTM+137:202610010000?+00:303'", "DTM+137:20261001:303'", 1);
+    assert_ne!(wire, VERPFLICHTUNGSANFRAGE);
+    assert_has_rule(&dtm_value_report(&wire), "SEM-DTM-VALUE");
+}
+
 // ── MSCONS: SEM-MSCONS-UNIT-UNKNOWN ──────────────────────────────────────────
 
 /// MSCONS with an unknown unit code in QTY.
@@ -400,7 +507,7 @@ UNS+D'\
 NAD+DP'\
 LOC+172+51238696781'\
 DTM+492:202610:610'\
-DTM+293:202610010000:304'\
+DTM+293:20261001000000?+00:304'\
 LIN+1'\
 PIA+5+1-1?:1.8.0:SRW'\
 QTY+79:100:BADUNIT'\

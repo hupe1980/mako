@@ -245,6 +245,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
                 .map(|e| e.message.clone())
                 .collect(),
             bilanzierungsgebiet: None,
+            bilanzkreis: None,
             bilanzierungsmethode: None,
             transaktionsgrund: None,
             transaktionsgrund_ergaenzung: None,
@@ -498,6 +499,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
                 .map(|e| e.message.clone())
                 .collect(),
             bilanzierungsgebiet: None,
+            bilanzkreis: None,
             bilanzierungsmethode: None,
             transaktionsgrund: None,
             transaktionsgrund_ergaenzung: None,

@@ -12,6 +12,7 @@ mod dispatch_integration;
 mod identitaet_body;
 mod inbound_marker;
 mod mcp_round_trips;
+mod online_vertragsschluss;
 mod processd_supply_contract;
 mod router_builds;
 mod schema_enum_guard;

@@ -37,6 +37,10 @@ const NOT_QUEUED: &[(&str, &str)] = &[
         "the NB's Anfrage to the LFA, sent before the Anmeldung is decided",
     ),
     (
+        "GELI_BEENDIGUNG_ZUORDNUNG_ANFRAGEN",
+        "the GNB's Abmeldungsanfrage to the LFA, sent before the Anmeldung is decided",
+    ),
+    (
         "GPKE_ZUORDNUNG_INFORMIEREN",
         "a Meldepflicht: queued only as a follow-up with its body frozen",
     ),

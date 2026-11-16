@@ -52,49 +52,57 @@ impl From<&FormatVerdict> for Truth {
 /// `value` is the wire value of the data element the condition is attached to,
 /// already unescaped. An empty value never reaches here: whether a place may be
 /// empty is a Voraussetzung's question, not a Formatbedingung's.
+///
+/// `mark` is the decimal mark the interchange's `UNA` declares
+/// ([`crate::una_decimal_mark`]). Allgemeine Festlegungen 6.1d Kap. 2.18
+/// (S. 22): „Als Dezimaltrennzeichen ist immer das dafür im UNA-Segment
+/// definierte Zeichen zu verwenden." A numeric Formatbedingung reads the value
+/// under that mark and refuses the other one, as [`crate::wire_decimal`] does.
 #[must_use]
 #[expect(
     clippy::match_same_arms,
     reason = "two Bedingungen with the same bound are still two Bedingungen: \
               BDEW may restate either one, and merging the arms would hide that"
 )]
-pub fn evaluate(id: &str, value: &str) -> FormatVerdict {
+pub fn evaluate(id: &str, value: &str, mark: char) -> FormatVerdict {
     match id {
         // ── Numeric bounds ────────────────────────────────────────────────
-        "902" => at_least(value, "0"),
-        "903" => exactly(value, "1"),
-        "908" => at_least(value, "1"),
+        "902" => at_least(value, mark, "0"),
+        "903" => exactly(value, mark, "1"),
+        "908" => at_least(value, mark, "1"),
         // „Mögliche Werte: 0 bis n" — the same bound as [902] and a different
         // Bedingung; the AHB cites them at different places and BDEW may
         // restate either one, so they stay separate arms.
-        "909" => at_least(value, "0"),
+        "909" => at_least(value, mark, "0"),
         // „Möglicher Wert: < 0 oder ≥ 0" admits every number and no
         // non-number, so it is the numeric assertion on its own.
-        "910" => numeric(value).map_or_else(FormatVerdict::Violated, |_| FormatVerdict::Holds),
-        "913" => between(value, "1", "99999"),
-        "914" => greater_than(value, "0"),
-        "915" => not_exactly(value, "1"),
-        "926" => exactly(value, "0"),
-        "927" => exactly(value, "-1"),
-        "929" => exactly(value, "1000"),
-        "938" => at_most(value, "10"),
-        "955" => less_than(value, "100"),
-        "963" => at_most(value, "100"),
-        "968" => at_most(value, "0"),
-        "969" => at_most(value, "1"),
+        "910" => {
+            numeric(value, mark).map_or_else(FormatVerdict::Violated, |_| FormatVerdict::Holds)
+        }
+        "913" => between(value, mark, "1", "99999"),
+        "914" => greater_than(value, mark, "0"),
+        "915" => not_exactly(value, mark, "1"),
+        "926" => exactly(value, mark, "0"),
+        "927" => exactly(value, mark, "-1"),
+        "929" => exactly(value, mark, "1000"),
+        "938" => at_most(value, mark, "10"),
+        "955" => less_than(value, mark, "100"),
+        "963" => at_most(value, mark, "100"),
+        "968" => at_most(value, mark, "0"),
+        "969" => at_most(value, mark, "1"),
 
         // ── Nachkommastellen ──────────────────────────────────────────────
-        "906" => max_fraction_digits(value, 3),
-        "907" => max_fraction_digits(value, 4),
-        "912" => max_fraction_digits(value, 6),
-        "925" => max_fraction_digits(value, 5),
-        "930" => max_fraction_digits(value, 2),
-        "937" => max_fraction_digits(value, 0),
-        "946" => max_fraction_digits(value, 11),
+        "906" => max_fraction_digits(value, mark, 3),
+        "907" => max_fraction_digits(value, mark, 4),
+        "912" => max_fraction_digits(value, mark, 6),
+        "925" => max_fraction_digits(value, mark, 5),
+        "930" => max_fraction_digits(value, mark, 2),
+        "937" => max_fraction_digits(value, mark, 0),
+        "946" => max_fraction_digits(value, mark, 11),
 
         // ── Vorkommastellen ───────────────────────────────────────────────
-        "917" => max_integer_digits(value, 4),
-        "962" => max_integer_digits(value, 6),
+        "917" => max_integer_digits(value, mark, 4),
+        "962" => max_integer_digits(value, mark, 6),
 
         // ── Artikelnummern (DE 7140) ──────────────────────────────────────
         // The Bedingung prints the shape in the MIG's own representation
@@ -198,7 +206,7 @@ pub const REGISTERED: &[&str] = &[
 /// Whether a number has an evaluator.
 #[must_use]
 pub fn is_registered(id: &str) -> bool {
-    evaluate(id, "") != FormatVerdict::Unregistered
+    evaluate(id, "", '.') != FormatVerdict::Unregistered
 }
 
 /// A value satisfying `id`, for a skeleton or a fixture.
@@ -274,9 +282,11 @@ pub fn example(id: &str) -> Option<&'static str> {
 /// reading that permits.
 ///
 /// An unregistered number is `Unknown`, which propagates and never refuses.
+///
+/// `mark` is the interchange's decimal mark, as for [`evaluate`].
 #[must_use]
-pub fn truth(expr: &Expr, value: &str) -> Truth {
-    fold(expr, value, &mut Vec::new())
+pub fn truth(expr: &Expr, value: &str, mark: char) -> Truth {
+    fold(expr, value, mark, &mut Vec::new())
 }
 
 /// The Formatbedingungen `value` fails in `expr`, empty unless [`truth`] is
@@ -286,16 +296,16 @@ pub fn truth(expr: &Expr, value: &str) -> Truth {
 /// while another branch carries it: in `X [951] ∨ [950]` a Marktlokations-ID
 /// fails `[951]` and the place is still correct.
 #[must_use]
-pub fn violations(expr: &Expr, value: &str) -> Vec<(String, String)> {
+pub fn violations(expr: &Expr, value: &str, mark: char) -> Vec<(String, String)> {
     let mut failed = Vec::new();
-    if fold(expr, value, &mut failed) == Truth::False {
+    if fold(expr, value, mark, &mut failed) == Truth::False {
         failed
     } else {
         Vec::new()
     }
 }
 
-fn fold(expr: &Expr, value: &str, failed: &mut Vec<(String, String)>) -> Truth {
+fn fold(expr: &Expr, value: &str, mark: char, failed: &mut Vec<(String, String)>) -> Truth {
     match expr {
         Expr::Cond(id) => {
             if !matches!(
@@ -304,14 +314,14 @@ fn fold(expr: &Expr, value: &str, failed: &mut Vec<(String, String)>) -> Truth {
             ) {
                 return Truth::True;
             }
-            let v = evaluate(id, value);
+            let v = evaluate(id, value, mark);
             if let FormatVerdict::Violated(why) = &v {
                 failed.push((id.clone(), why.clone()));
             }
             Truth::from(&v)
         }
         Expr::Then(v) | Expr::And(v) => {
-            let vals: Vec<Truth> = v.iter().map(|e| fold(e, value, failed)).collect();
+            let vals: Vec<Truth> = v.iter().map(|e| fold(e, value, mark, failed)).collect();
             if vals.contains(&Truth::False) {
                 Truth::False
             } else if vals.contains(&Truth::Unknown) {
@@ -321,7 +331,7 @@ fn fold(expr: &Expr, value: &str, failed: &mut Vec<(String, String)>) -> Truth {
             }
         }
         Expr::Or(v) | Expr::Xor(v) => {
-            let vals: Vec<Truth> = v.iter().map(|e| fold(e, value, failed)).collect();
+            let vals: Vec<Truth> = v.iter().map(|e| fold(e, value, mark, failed)).collect();
             if vals.contains(&Truth::True) {
                 Truth::True
             } else if vals.contains(&Truth::Unknown) {
@@ -367,11 +377,11 @@ fn id_shape<T: BdewId>(value: &str, what: &str) -> FormatVerdict {
 
 // ── Decimals ──────────────────────────────────────────────────────────────────
 
-/// A wire number, kept as digits so a comparison is exact.
+/// A number, kept as digits so a comparison is exact.
 ///
-/// The decimal mark is `.`: UNA is not consulted because every EDI@Energy
-/// interchange uses the default service string advice, which
-/// [`crate::interchange`] pins.
+/// [`Dec::parse`] reads `.` as the decimal mark — the registry's own bounds
+/// are written that way. A wire value is read by [`Dec::read`], under the mark
+/// the interchange's `UNA` declares (Allgemeine Festlegungen 6.1d Kap. 2.18).
 #[derive(Debug, PartialEq, Eq)]
 struct Dec {
     negative: bool,
@@ -412,6 +422,12 @@ impl Dec {
         })
     }
 
+    /// A wire value under the interchange's decimal `mark`; `None` when it
+    /// carries the other mark or is no number.
+    fn read(value: &str, mark: char) -> Option<Self> {
+        Self::parse(&crate::wire_decimal(value, mark)?)
+    }
+
     fn is_integer(&self) -> bool {
         self.frac.is_empty()
     }
@@ -450,8 +466,8 @@ impl PartialOrd for Dec {
     }
 }
 
-fn numeric(value: &str) -> Result<Dec, String> {
-    Dec::parse(value).ok_or_else(|| "is not a number".to_owned())
+fn numeric(value: &str, mark: char) -> Result<Dec, String> {
+    Dec::read(value, mark).ok_or_else(|| format!("is not a number under the decimal mark `{mark}`"))
 }
 
 /// The bound as the registry writes it.
@@ -468,6 +484,7 @@ fn bound(literal: &str) -> Option<Dec> {
 
 fn compare(
     value: &str,
+    mark: char,
     literal: &str,
     ok: impl Fn(std::cmp::Ordering) -> bool,
     say: &str,
@@ -475,69 +492,73 @@ fn compare(
     let Some(limit) = bound(literal) else {
         return FormatVerdict::Unregistered;
     };
-    match numeric(value) {
+    match numeric(value, mark) {
         Err(e) => FormatVerdict::Violated(e),
         Ok(d) if ok(d.cmp(&limit)) => FormatVerdict::Holds,
         Ok(_) => FormatVerdict::Violated(format!("is {value}, not {say}")),
     }
 }
 
-fn at_least(value: &str, literal: &str) -> FormatVerdict {
+fn at_least(value: &str, mark: char, literal: &str) -> FormatVerdict {
     compare(
         value,
+        mark,
         literal,
         std::cmp::Ordering::is_ge,
         &format!("≥ {literal}"),
     )
 }
 
-fn at_most(value: &str, literal: &str) -> FormatVerdict {
+fn at_most(value: &str, mark: char, literal: &str) -> FormatVerdict {
     compare(
         value,
+        mark,
         literal,
         std::cmp::Ordering::is_le,
         &format!("≤ {literal}"),
     )
 }
 
-fn greater_than(value: &str, literal: &str) -> FormatVerdict {
+fn greater_than(value: &str, mark: char, literal: &str) -> FormatVerdict {
     compare(
         value,
+        mark,
         literal,
         std::cmp::Ordering::is_gt,
         &format!("> {literal}"),
     )
 }
 
-fn less_than(value: &str, literal: &str) -> FormatVerdict {
+fn less_than(value: &str, mark: char, literal: &str) -> FormatVerdict {
     compare(
         value,
+        mark,
         literal,
         std::cmp::Ordering::is_lt,
         &format!("< {literal}"),
     )
 }
 
-fn exactly(value: &str, literal: &str) -> FormatVerdict {
-    compare(value, literal, std::cmp::Ordering::is_eq, literal)
+fn exactly(value: &str, mark: char, literal: &str) -> FormatVerdict {
+    compare(value, mark, literal, std::cmp::Ordering::is_eq, literal)
 }
 
-fn not_exactly(value: &str, literal: &str) -> FormatVerdict {
+fn not_exactly(value: &str, mark: char, literal: &str) -> FormatVerdict {
     let Some(limit) = bound(literal) else {
         return FormatVerdict::Unregistered;
     };
-    match numeric(value) {
+    match numeric(value, mark) {
         Err(e) => FormatVerdict::Violated(e),
         Ok(d) if d == limit => FormatVerdict::Violated(format!("is {literal}")),
         Ok(_) => FormatVerdict::Holds,
     }
 }
 
-fn between(value: &str, low: &str, high: &str) -> FormatVerdict {
+fn between(value: &str, mark: char, low: &str, high: &str) -> FormatVerdict {
     let (Some(lo), Some(hi)) = (bound(low), bound(high)) else {
         return FormatVerdict::Unregistered;
     };
-    match numeric(value) {
+    match numeric(value, mark) {
         Err(e) => FormatVerdict::Violated(e),
         Ok(d) if d < lo || d > hi => {
             FormatVerdict::Violated(format!("is {value}, outside {low}–{high}"))
@@ -549,9 +570,9 @@ fn between(value: &str, low: &str, high: &str) -> FormatVerdict {
     }
 }
 
-fn max_fraction_digits(value: &str, max: usize) -> FormatVerdict {
-    let Some(d) = Dec::parse(value) else {
-        return FormatVerdict::Violated("is not a number".into());
+fn max_fraction_digits(value: &str, mark: char, max: usize) -> FormatVerdict {
+    let Some(d) = Dec::read(value, mark) else {
+        return FormatVerdict::Violated(format!("is not a number under the decimal mark `{mark}`"));
     };
     // Kap. 2.18.3 has the sender truncate rather than round, so a trailing
     // zero is padding and not a Nachkommastelle — `Dec::parse` drops it.
@@ -567,9 +588,9 @@ fn max_fraction_digits(value: &str, max: usize) -> FormatVerdict {
     }
 }
 
-fn max_integer_digits(value: &str, max: usize) -> FormatVerdict {
-    let Some(d) = Dec::parse(value) else {
-        return FormatVerdict::Violated("is not a number".into());
+fn max_integer_digits(value: &str, mark: char, max: usize) -> FormatVerdict {
+    let Some(d) = Dec::read(value, mark) else {
+        return FormatVerdict::Violated(format!("is not a number under the decimal mark `{mark}`"));
     };
     if d.int.len() <= max {
         FormatVerdict::Holds
@@ -774,14 +795,26 @@ mod tests {
     use super::*;
 
     fn holds(id: &str, v: &str) {
-        assert_eq!(evaluate(id, v), FormatVerdict::Holds, "[{id}] on {v:?}");
+        holds_under(id, v, '.');
     }
 
     fn violated(id: &str, v: &str) {
+        violated_under(id, v, '.');
+    }
+
+    fn holds_under(id: &str, v: &str, mark: char) {
+        assert_eq!(
+            evaluate(id, v, mark),
+            FormatVerdict::Holds,
+            "[{id}] on {v:?} under `{mark}`"
+        );
+    }
+
+    fn violated_under(id: &str, v: &str, mark: char) {
         assert!(
-            matches!(evaluate(id, v), FormatVerdict::Violated(_)),
-            "[{id}] should refuse {v:?}, got {:?}",
-            evaluate(id, v)
+            matches!(evaluate(id, v, mark), FormatVerdict::Violated(_)),
+            "[{id}] should refuse {v:?} under `{mark}`, got {:?}",
+            evaluate(id, v, mark)
         );
     }
 
@@ -793,7 +826,7 @@ mod tests {
         let answered: Vec<String> = (901..=999)
             .map(|n| n.to_string())
             .chain((1..=9).map(|n| format!("UB{n}")))
-            .filter(|id| evaluate(id, "") != FormatVerdict::Unregistered)
+            .filter(|id| evaluate(id, "", '.') != FormatVerdict::Unregistered)
             .collect();
         assert_eq!(answered, REGISTERED);
     }
@@ -802,7 +835,10 @@ mod tests {
     fn an_unregistered_number_is_unregistered_and_not_a_violation() {
         // `[952]` Gerätenummer nach DIN 43863-5 has no evaluator: the value
         // must permit, never refuse.
-        assert_eq!(evaluate("952", "anything"), FormatVerdict::Unregistered);
+        assert_eq!(
+            evaluate("952", "anything", '.'),
+            FormatVerdict::Unregistered
+        );
         assert_eq!(Truth::from(&FormatVerdict::Unregistered), Truth::Unknown);
         assert!(!is_registered("952"));
         assert!(is_registered("931"));
@@ -818,7 +854,7 @@ mod tests {
                 panic!("[{id}] is registered but has no example");
             };
             assert_eq!(
-                evaluate(id, v),
+                evaluate(id, v, '.'),
                 FormatVerdict::Holds,
                 "[{id}]'s example {v:?} does not satisfy it"
             );
@@ -867,6 +903,25 @@ mod tests {
         violated("938", "10.5");
         violated("955", "100");
         holds("955", "99.999");
+    }
+
+    #[test]
+    fn a_number_is_read_under_the_unas_decimal_mark() {
+        // Allgemeine Festlegungen 6.1d Kap. 2.18 binds the decimal mark to
+        // the one the UNA defines: under `,` the comma is the mark and the
+        // point is no number, under `.` the other way round.
+        holds_under("969", "1,0", ',');
+        holds_under("955", "99,999", ',');
+        holds_under("930", "42,25", ',');
+        violated_under("930", "42,255", ',');
+        holds_under("962", "123456,789", ',');
+        violated_under("969", "1,5", ',');
+        violated_under("955", "99.999", ',');
+        violated_under("910", "1.5", ',');
+        violated_under("910", "1,5", '.');
+        violated_under("930", "42,25", '.');
+        // A whole number carries no mark and reads the same under either.
+        holds_under("913", "99999", ',');
     }
 
     #[test]

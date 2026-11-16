@@ -16,12 +16,13 @@ just dev outputd       # dev/config/outputd.toml against the dev PostgreSQL
 
 | | |
 |---|---|
-| **Kinds** | `INVOICE` (the caller sends the EN 16931 model; outputd projects the view), `MAHNUNG` (§ 126b BGB) from `accountingd`, `PREISANPASSUNG` (§ 41 Abs. 5 EnWG) from `vertragd`, `GEBUEHRENBESCHEID` (§ 157 Abs. 1 AO content) from `billingd` |
+| **Kinds** | `INVOICE` (the caller sends the EN 16931 model; outputd projects the view), `MAHNUNG` (§ 126b BGB) from `accountingd`, `PREISANPASSUNG` (§ 41 Abs. 5 EnWG) from `vertragd`, `GEBUEHRENBESCHEID` (§ 157 Abs. 1 AO content) from `billingd`, `VERTRAGSZUSAMMENFASSUNG` (§ 41 Abs. 4 EnWG), `VERTRAGSBESTAETIGUNG` (§ 312f Abs. 2 BGB) and `WIDERRUFSBESTAETIGUNG` (§ 356a Abs. 4 BGB) from `vertragd` |
 | **Template store** | content-addressed per tenant, append-only; issuers pin the hash beside each document (`X-Mako-Template-Hash`). `document_template_current` is the one mutable pointer |
 | **Publish gate** | renders the candidate against a specimen, enforces PDF/A, reads the Factur-X payload back byte-identical and requires the § 14 Abs. 4 UStG terms on the page before a row is written |
+| **Anrede** | `[policy] anrede = "sie"` (default) or `"du"`: every letter and built-in mail subject is written in it and the document records it; the Widerrufsbelehrung and the Gebührenbescheid stay „Sie“ |
 | **Typst sandbox** | no filesystem, network, packages or clock; renders capped at cores − 1, 20 s budget |
 | **Delivery** | one track per (document, channel): `PORTAL`, `EMAIL`, `POST`, `ERP`; a pushed one is a signed `event_outbox` command under the shared retry policy. `SENT` ≠ `DELIVERED` — arrival is reported back |
-| **Auth** | OIDC + Cedar `policies/outputd.cedar`: reads and previews for the tenant; publish, rollout, render, issue and delivery reports for `LF`/`MSB`/`ESA` |
+| **Auth** | OIDC + Cedar `policies/outputd.cedar`: reads and previews for the tenant; publish, rollout, render, issue, delivery reports and the failed-delivery list for `LF`/`MSB`/`ESA` |
 | **Errors** | one envelope with a stable code; a template that does not compile returns its diagnostics as a list (`TEMPLATE_DID_NOT_COMPILE`) |
 
 ## Routes
@@ -31,6 +32,8 @@ just dev outputd       # dev/config/outputd.toml against the dev PostgreSQL
 | `POST /api/v1/render/{kind}` | stateless render → PDF + template hash |
 | `POST /api/v1/documents/issue/{kind}` | render, record and queue for delivery; idempotent on `subject_ref` |
 | `GET /api/v1/documents` · `/{document_id}` · `/{document_id}/content` | the inbox; content is the bytes as issued, never a re-render |
+| `GET /api/v1/documents/by-subject/{kind}/{subject_ref}` | one document by what it is about, with its delivery tracks |
+| `GET /api/v1/deliveries?status=FAILED&kind=` | the deliveries that ended `FAILED`, each naming its document's `subject_ref` |
 | `GET\|POST /api/v1/templates`, `/templates/preview`, `/templates/{kind}/current`, `/templates/by-hash/{hash}`, `/templates/reference/{kind}` | template store |
 | `POST /api/v1/deliveries/{delivery_id}/status` · `/read`, `GET /api/v1/spool` | delivery evidence; print services may pull the spool |
 
@@ -66,6 +69,10 @@ from_address       = "rechnung@example.de"
 
 [delivery.subjects]
 MAHNUNG = "Zahlungserinnerung"
+
+# How letters address the reader — see the operator guide's [policy] anrede.
+[policy]
+anrede = "sie"
 ```
 
 ## Tests

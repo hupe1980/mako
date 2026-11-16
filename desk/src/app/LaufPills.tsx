@@ -50,7 +50,7 @@ export function LaufPill({ lauf, onPress }: { lauf: Lauf; onPress: () => void })
     <Button
       onPress={onPress}
       aria-description={t.laufPills.frage(lauf.frage)}
-      className="morph focus-ring flex h-7 max-w-72 items-center gap-1.5 rounded-full border border-ai-border bg-ai-fill px-2.5 text-caption font-medium text-ai data-[hovered]:border-ai"
+      className="morph focus-ring flex h-7 max-w-72 items-center gap-1.5 rounded-full border border-ai-border bg-ai-fill px-2.5 text-caption text-ai data-[hovered]:border-ai"
     >
       {beendet(lauf) ? (
         <Icon name={lauf.antwort ? "check" : "stop"} size={12} className="shrink-0" />

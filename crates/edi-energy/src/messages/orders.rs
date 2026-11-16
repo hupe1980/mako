@@ -1,4 +1,4 @@
-use edifact_rs::{OwnedSegment, ProfileRulePack, ValidationIssue};
+use edifact::{OwnedSegment, ProfileRulePack, ValidationIssue};
 
 use crate::{
     MessageType,
@@ -103,7 +103,7 @@ fn orders_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("ORDERS-SEM")
         .for_message_type("ORDERS")
         .with_rule_fn(
-            |segs: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>| {
+            |segs: &[edifact::Segment<'_>], issues: &mut Vec<ValidationIssue>| {
                 super::common::check_period_order(segs, "SEM-ORDERS-PERIOD-ORDER", issues);
             },
         )

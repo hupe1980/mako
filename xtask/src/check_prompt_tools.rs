@@ -354,14 +354,12 @@ mod tests {
         assert!(unreachable_calls(&src).is_empty());
     }
 
-    /// **The shape that shipped.** A second tool joined onto one instruction, so
-    /// the verb is nowhere near the backtick that matters.
+    /// A second tool joined onto one instruction, so the verb is nowhere near
+    /// the backtick that matters.
     ///
-    /// `check-prompt-tools` looked at a fixed window before each backtick, and
-    /// `accountingd/list_ledger` — instructed by
-    /// `invoice-reconciliation-agent`, granted to a different specialist — was
-    /// eleven words past the end of it. The model asked, was refused, and the
-    /// reconciliation ran without the ledger behind the balance.
+    /// A fixed window before each backtick misses it: the model asks for a tool
+    /// its specialist is not granted, is refused, and the reconciliation runs
+    /// without the ledger behind the balance.
     #[test]
     fn a_conjoined_second_tool_is_still_a_call() {
         let src = manifest(

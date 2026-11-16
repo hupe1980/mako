@@ -1,4 +1,4 @@
-use edifact_rs::{
+use edifact::{
     EdifactDeserialize, EdifactSerialize, EventEmitter, OwnedSegment, ProfileRulePack,
     ValidationIssue, ValidationSeverity,
 };
@@ -211,14 +211,14 @@ impl MsconsMessage {
 
 impl EdifactDeserialize for MsconsMessage {
     fn edifact_deserialize(
-        segments: &[edifact_rs::Segment<'_>],
-    ) -> Result<Self, edifact_rs::EdifactError> {
+        segments: &[edifact::Segment<'_>],
+    ) -> Result<Self, edifact::EdifactError> {
         let (message_ref, assoc_code) = MessageCore::extract_unh_fields(segments)?;
         let pid = MessageCore::extract_bgm_pid(segments);
         let owned: Vec<OwnedSegment> = segments
             .iter()
             .cloned()
-            .map(edifact_rs::Segment::into_owned)
+            .map(edifact::Segment::into_owned)
             .collect();
         Ok(Self::from_parts(owned, message_ref, assoc_code, pid))
     }
@@ -230,7 +230,7 @@ impl EdifactSerialize for MsconsMessage {
     fn edifact_serialize<E: EventEmitter>(
         &self,
         emitter: &mut E,
-    ) -> Result<(), edifact_rs::EdifactError> {
+    ) -> Result<(), edifact::EdifactError> {
         self.core.emit_segments(emitter)
     }
 }
@@ -239,7 +239,7 @@ impl_edi_energy_message!(MsconsMessage, sem = mscons_semantic_pack());
 // ── segment group parsers ─────────────────────────────────────────────────────
 
 /// Collect DTM segments from the header section only (before `UNS`).
-fn collect_dtm_header(segments: &[edifact_rs::Segment<'_>]) -> Vec<Dtm> {
+fn collect_dtm_header(segments: &[edifact::Segment<'_>]) -> Vec<Dtm> {
     let end = segments
         .iter()
         .position(|s| s.tag == "UNS")
@@ -248,7 +248,7 @@ fn collect_dtm_header(segments: &[edifact_rs::Segment<'_>]) -> Vec<Dtm> {
 }
 
 /// Parse SG1 reference groups (RFF + optional DTM) from the header section.
-fn parse_references(segments: &[edifact_rs::Segment<'_>]) -> Vec<MsconsReference> {
+fn parse_references(segments: &[edifact::Segment<'_>]) -> Vec<MsconsReference> {
     let end = segments
         .iter()
         .position(|s| s.tag == "UNS")
@@ -282,7 +282,7 @@ fn parse_references(segments: &[edifact_rs::Segment<'_>]) -> Vec<MsconsReference
 
 /// Parse SG5 delivery-point groups (NAD + SG6 time-series) from the detail
 /// section (after `UNS+D`).
-fn parse_delivery_points(segments: &[edifact_rs::Segment<'_>]) -> Vec<MsconsDeliveryPoint> {
+fn parse_delivery_points(segments: &[edifact::Segment<'_>]) -> Vec<MsconsDeliveryPoint> {
     let start = match segments.iter().position(|s| s.tag == "UNS") {
         Some(pos) => pos + 1,
         None => return Vec::new(),
@@ -322,7 +322,7 @@ const SG10_TERMINATORS: &[&str] = &["QTY", "LIN", "LOC", "NAD", "UNT"];
 /// Parse all SG6 time-series groups from `detail[from..]` until a top-level
 /// boundary (NAD or UNT).  Returns `(groups, next_index)`.
 fn parse_sg6_groups(
-    detail: &[edifact_rs::Segment<'_>],
+    detail: &[edifact::Segment<'_>],
     from: usize,
 ) -> (Vec<MsconsTimeSeries>, usize) {
     let mut series = Vec::new();
@@ -390,10 +390,7 @@ fn parse_sg6_groups(
 
 /// Parse all SG9 line-item groups from `detail[from..]` until an SG6 boundary.
 /// Returns `(items, next_index)`.
-fn parse_sg9_items(
-    detail: &[edifact_rs::Segment<'_>],
-    from: usize,
-) -> (Vec<MsconsLineItem>, usize) {
+fn parse_sg9_items(detail: &[edifact::Segment<'_>], from: usize) -> (Vec<MsconsLineItem>, usize) {
     let mut items = Vec::new();
     let mut i = from;
 
@@ -438,7 +435,7 @@ fn parse_sg9_items(
 /// Parse all SG10 quantity groups from `detail[from..]` until an SG9 boundary.
 /// Returns `(quantities, next_index)`.
 fn parse_sg10_quantities(
-    detail: &[edifact_rs::Segment<'_>],
+    detail: &[edifact::Segment<'_>],
     from: usize,
 ) -> (Vec<MsconsQuantity>, usize) {
     let mut quantities = Vec::new();
@@ -491,15 +488,19 @@ fn parse_sg10_quantities(
 /// Rules:
 /// - [`rule_sem_location_format`]: the `LOC+172` Meldepunkt must carry either an
 ///   11-character Marktlokations-ID or a 33-character Messlokations-ID.
-/// - [`rule_sem_period_order`]: when both a start-of-period (`DTM 163`) and an
-///   end-of-period (`DTM 164`) are present, the start must not be after the end.
+/// - `SEM-MSCONS-PERIOD-ORDER`: each start-of-period (`DTM 163`) must not be
+///   after the end-of-period (`DTM 164`) it pairs with.
 /// - [`rule_sem_unit_unknown`]: the unit-of-measure code in `QTY C186` component 2
 ///   must be from the EDI@Energy approved set.
 fn mscons_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("MSCONS-SEM")
         .for_message_type("MSCONS")
         .with_rule_fn(rule_sem_location_format)
-        .with_rule_fn(rule_sem_period_order)
+        .with_rule_fn(
+            |segs: &[edifact::Segment<'_>], issues: &mut Vec<ValidationIssue>| {
+                super::common::check_period_order(segs, "SEM-MSCONS-PERIOD-ORDER", issues);
+            },
+        )
         .with_rule_fn(rule_sem_unit_unknown)
 }
 
@@ -510,10 +511,7 @@ fn mscons_semantic_pack() -> ProfileRulePack {
 /// describes SG6 LOC as "ID der Messlokation oder ID der Marktlokation oder ID
 /// des Netzkopplungspunktes", so the qualifier fixes the role of the point while
 /// the value may follow either ID scheme.
-fn rule_sem_location_format(
-    segments: &[edifact_rs::Segment<'_>],
-    issues: &mut Vec<ValidationIssue>,
-) {
+fn rule_sem_location_format(segments: &[edifact::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
     for seg in segments.iter().filter(|s| s.tag == "LOC") {
         // LOC: element[0] = 3227 (location qualifier), element[1] = C517 composite.
         // C517 component[0] = 3225 (location id code).
@@ -550,59 +548,6 @@ fn rule_sem_location_format(
     }
 }
 
-/// `SEM-MSCONS-PERIOD-ORDER` — When both a period-start (`DTM+163`) and a
-/// period-end (`DTM+164`) are present in the message, the start date must not
-/// be lexicographically greater than the end date.
-///
-/// Date strings are in `YYYYMMDD` (format 102) or `YYYYMMDDHHmm` (format 203),
-/// both of which sort chronologically as strings.
-fn rule_sem_period_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
-    // Track both value and source span so we can point diagnostics at the
-    // out-of-order start segment.
-    let mut start: Option<(&str, edifact_rs::Span)> = None;
-    let mut end: Option<(&str, edifact_rs::Span)> = None;
-
-    for seg in segments.iter().filter(|s| s.tag == "DTM") {
-        // DTM element[0] = C507 composite:
-        //   component[0] = 2005 (date/time qualifier)
-        //   component[1] = date/time value
-        let Some(c507) = seg.get_element(0) else {
-            continue;
-        };
-        let qualifier = c507.get_component(0).unwrap_or("");
-        let value = c507.get_component(1).unwrap_or("");
-        match qualifier {
-            "163" => start = Some((value, seg.span)),
-            "164" => end = Some((value, seg.span)),
-            _ => {}
-        }
-    }
-
-    if let (Some((start_val, start_span)), Some((end_val, _))) = (start, end)
-        && !start_val.is_empty()
-        && !end_val.is_empty()
-        && start_val > end_val
-    {
-        {
-            issues.push(
-                ValidationIssue::new(
-                    ValidationSeverity::Error,
-                    "DTM: period-start (qualifier 163) is after period-end (qualifier 164)"
-                        .to_owned(),
-                )
-                .with_span(start_span)
-                .with_rule_id("SEM-MSCONS-PERIOD-ORDER")
-                .with_segment("DTM")
-                .with_suggestion(
-                    "Ensure DTM+163 (Beginn Lieferzeitraum) is not later than \
-                     DTM+164 (Ende Lieferzeitraum) — date values must be in \
-                     ascending chronological order",
-                ),
-            );
-        }
-    }
-}
-
 /// EDI@Energy approved unit-of-measure codes for MSCONS metering values.
 ///
 /// Source: BDEW MSCONS Application Handbook, Appendix A — Code List 6411.
@@ -619,7 +564,7 @@ const APPROVED_UNITS: &[&str] = &[
 
 /// `SEM-MSCONS-UNIT-UNKNOWN` — The unit-of-measure code in `QTY C186`
 /// component 2 (data element 6411) must be from the EDI@Energy approved set.
-fn rule_sem_unit_unknown(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
+fn rule_sem_unit_unknown(segments: &[edifact::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
     for seg in segments.iter().filter(|s| s.tag == "QTY") {
         // QTY element[0] = C186 composite:
         //   component[0] = 6063 (quantity type qualifier)

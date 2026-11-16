@@ -5,6 +5,7 @@ import { nichtErreichbar } from "../app/dienste";
 import { ServiceUnavailable } from "../data/mcp";
 import { Icon } from "../design/Icon";
 import { Kbd } from "../design/Kbd";
+import { Page } from "../design/Page";
 import { EmptyState, Notice, Panel } from "../design/Panel";
 import { SearchField } from "../design/SearchField";
 import { useT } from "../i18n";
@@ -24,12 +25,7 @@ export function KundenView() {
   const short = typed.trim().length < 3;
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">{k.titel}</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">{k.untertitel}</p>
-      </header>
-
+    <Page width="reading" title={k.titel} subtitle={k.untertitel}>
       <SearchField
         aria-label={k.feld}
         placeholder={k.platzhalter}
@@ -71,15 +67,11 @@ export function KundenView() {
                     {monogram(treffer.name)}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-callout font-medium text-text">
+                    <span className="block truncate text-body text-text">
                       {treffer.name ?? k.ohneNamen}
                     </span>
                     <span className="block text-body text-text-2">
-                      {treffer.kunden_nr ? (
-                        <span className="font-mono">{treffer.kunden_nr}</span>
-                      ) : (
-                        k.ohneNummer
-                      )}
+                      {treffer.kunden_nr ? <span>{treffer.kunden_nr}</span> : k.ohneNummer}
                       {" · "}
                       {k.lieferstellen(treffer.lieferstellen, `${treffer.lieferstellen}`)}
                     </span>
@@ -96,6 +88,6 @@ export function KundenView() {
           )}
         </Panel>
       )}
-    </div>
+    </Page>
   );
 }

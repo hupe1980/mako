@@ -233,11 +233,10 @@ pub struct AccountingdConfig {
     /// `outputd` base URL — the customer-communications daemon that renders
     /// and delivers the Mahnung.
     ///
-    /// Absent → dunning cases escalate as before and **no document is
-    /// produced**. That is the state this platform shipped in: a deployment
-    /// without an ERP webhook walked customers to Mahnstufe 3 and on into the
-    /// §§ 41f/41g disconnection sequence with nothing ever having been sent to
-    /// them. Configure it, or configure `erp_webhook_url` and let the ERP send
+    /// Absent → dunning cases still escalate and **no document is
+    /// produced**: a deployment without an ERP webhook then walks customers to
+    /// Mahnstufe 3 and on into the §§ 41f/41g disconnection sequence with
+    /// nothing ever sent to them. Configure it, or configure `erp_webhook_url` and let the ERP send
     /// the letters off the CloudEvent.
     pub outputd_url: Option<String>,
 

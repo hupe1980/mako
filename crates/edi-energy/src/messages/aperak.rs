@@ -1,4 +1,4 @@
-use edifact_rs::{EdifactDeserialize, EdifactSerialize, EventEmitter, OwnedSegment};
+use edifact::{EdifactDeserialize, EdifactSerialize, EventEmitter, OwnedSegment};
 
 use crate::{
     MessageType,
@@ -151,14 +151,14 @@ impl AperakMessage {
 
 impl EdifactDeserialize for AperakMessage {
     fn edifact_deserialize(
-        segments: &[edifact_rs::Segment<'_>],
-    ) -> Result<Self, edifact_rs::EdifactError> {
+        segments: &[edifact::Segment<'_>],
+    ) -> Result<Self, edifact::EdifactError> {
         let (message_ref, assoc_code) = MessageCore::extract_unh_fields(segments)?;
         let pid = MessageCore::extract_bgm_pid(segments);
         let owned: Vec<OwnedSegment> = segments
             .iter()
             .cloned()
-            .map(edifact_rs::Segment::into_owned)
+            .map(edifact::Segment::into_owned)
             .collect();
         Ok(Self::from_parts(owned, message_ref, assoc_code, pid))
     }
@@ -170,7 +170,7 @@ impl EdifactSerialize for AperakMessage {
     fn edifact_serialize<E: EventEmitter>(
         &self,
         emitter: &mut E,
-    ) -> Result<(), edifact_rs::EdifactError> {
+    ) -> Result<(), edifact::EdifactError> {
         self.core.emit_segments(emitter)
     }
 }
@@ -182,7 +182,7 @@ impl_edi_energy_message!(AperakMessage);
 ///
 /// Each `ERC` segment starts a new [`AperakError`].  Any `FTX` or `RFF`
 /// segments that follow (before the next `ERC` or `UNT`) belong to it.
-fn parse_errors(segments: &[edifact_rs::Segment<'_>]) -> Vec<AperakError> {
+fn parse_errors(segments: &[edifact::Segment<'_>]) -> Vec<AperakError> {
     let mut result = Vec::new();
     let mut i = 0;
 

@@ -36,10 +36,10 @@ export function MarktpartnerAntwort({ processId }: { processId: string }) {
   if (!p || !antwort) return null;
   return (
     <div className="px-6 pb-4">
-      <p className="m-0 text-caption font-medium text-text-2">{t.prozess.antwort.titel}</p>
+      <p className="m-0 text-caption text-text-2">{t.prozess.antwort.titel}</p>
       <p className="m-0 mt-0.5 flex flex-wrap items-baseline gap-x-2 text-body text-text">
         <span>
-          <span className="font-mono font-semibold">{antwort.code}</span>
+          <span className="font-semibold">{antwort.code}</span>
           {" — "}
           <span className={p.bedeutung ? undefined : "text-text-2"}>{antwort.text}</span>
         </span>

@@ -1,4 +1,4 @@
-use edifact_rs::OwnedSegment;
+use edifact::OwnedSegment;
 
 use crate::{EdiEnergyMessage, EdiEnergyReport, Error, MessageType, Pruefidentifikator, Release};
 
@@ -352,6 +352,18 @@ impl AnyMessage {
         }
     }
 
+    /// Record the interchange's decimal mark (`UNA` position 3).
+    ///
+    /// Applied after dispatch, as [`Self::set_reference_date`] is.
+    pub(crate) fn set_decimal_mark(&mut self, mark: char) {
+        #[cfg(any_message)]
+        if let Some(core) = self.message_core_mut() {
+            core.decimal_mark = mark;
+        }
+        #[cfg(not(any_message))]
+        let _ = mark;
+    }
+
     /// Record the date `validate()` resolves profiles against.
     ///
     /// Applied after dispatch rather than threaded through seventeen
@@ -430,7 +442,7 @@ macro_rules! delegate_any {
 /// conform — reporting it valid makes a vacuous pass indistinguishable from a
 /// real one.
 fn unknown_type_report(message_type_code: &str) -> EdiEnergyReport {
-    use edifact_rs::{ValidationIssue, ValidationReport, ValidationSeverity};
+    use edifact::{ValidationIssue, ValidationReport, ValidationSeverity};
     let mut inner = ValidationReport::default();
     inner.add_error(
         ValidationIssue::new(
@@ -468,6 +480,13 @@ impl EdiEnergyMessage for AnyMessage {
         }
     }
 
+    fn decimal_mark(&self) -> char {
+        match self {
+            AnyMessage::Unknown { .. } => '.',
+            _ => delegate_any!(self, m => m.decimal_mark()),
+        }
+    }
+
     fn detect_pruefidentifikator(&self) -> Result<Pruefidentifikator, Error> {
         match self {
             AnyMessage::Unknown { .. } => Err(Error::MissingPruefidentifikator),
@@ -500,7 +519,7 @@ impl EdiEnergyMessage for AnyMessage {
     fn serialize(&self) -> Result<Vec<u8>, Error> {
         match self {
             AnyMessage::Unknown { segments, .. } => {
-                edifact_rs::segments_to_bytes(segments).map_err(Error::Parse)
+                edifact::segments_to_bytes(segments).map_err(Error::Parse)
             }
             _ => delegate_any!(self, m => m.serialize()),
         }

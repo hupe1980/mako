@@ -753,8 +753,7 @@ fn redact_url_password(s: &str) -> String {
 /// merely loud (a 401). For an **HMAC secret it is silent and worse than having
 /// no secret at all**: `verify_request` runs the full comparison against the
 /// literal string `env:SVC_INBOUND_SECRET`, which is a constant published in
-/// this repository, so a forged webhook *verifies*. Nine services shipped that
-/// way while their own READMEs taught the `env:` syntax.
+/// this repository, so a forged webhook *verifies*.
 ///
 /// Resolving here makes the indirection a property of the loader rather than a
 /// convention each service has to remember, and an unset variable fails startup

@@ -183,3 +183,18 @@ fn a_processing_start_date_is_not_a_lieferbeginn() {
          the Lieferbeginn with it"
     );
 }
+
+/// The Bilanzkreis of the Produktpaket — `SG8 SEQ+Z79` /
+/// `PIA+5+9991000002082:Z11` / `SG10 CAV+ZV4` (UTILMD AHB Strom 2.2 Kap. 5.3)
+/// — reaches the command. processd holds it against the
+/// Zuordnungsermächtigungen on file (`E_0622` Prüfschritt 60); dropped here,
+/// the walk would have no Bilanzkreis to check.
+#[test]
+fn the_anmeldung_carries_its_bilanzkreis() {
+    let SupplierChangeCommand::ReceiveUtilmd { bilanzkreis, .. } =
+        adapt("SEQ+Z79+1'PIA+5+9991000002082:Z11'CCI+Z66'CAV+ZV4:::11XBK-LF-------9'")
+    else {
+        panic!("expected ReceiveUtilmd");
+    };
+    assert_eq!(bilanzkreis.as_deref(), Some("11XBK-LF-------9"));
+}

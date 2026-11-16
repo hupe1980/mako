@@ -677,7 +677,7 @@ impl SegmentPattern {
 
     /// Whether `seg` matches this pattern.
     #[must_use]
-    pub fn matches(&self, seg: &edifact_rs::Segment<'_>) -> bool {
+    pub fn matches(&self, seg: &edifact::Segment<'_>) -> bool {
         if seg.tag != self.tag {
             return false;
         }
@@ -1536,8 +1536,10 @@ impl ValueShape {
     #[must_use]
     pub fn holds(&self, value: &str) -> bool {
         match self {
+            // The shapes a Voraussetzung names are identifiers ([950],
+            // [951], [960], [961]), which carry no decimal mark.
             Self::Format(id) => {
-                super::formatbedingung::evaluate(id, value)
+                super::formatbedingung::evaluate(id, value, '.')
                     == super::formatbedingung::FormatVerdict::Holds
             }
             Self::Length(n) => value.chars().count() == *n,
@@ -2044,8 +2046,8 @@ mod tests {
         assert_eq!(ConditionKind::of("1P0..1"), ConditionKind::Paket);
     }
 
-    fn seg(edi: &str) -> edifact_rs::OwnedSegment {
-        edifact_rs::from_bytes(edi.as_bytes())
+    fn seg(edi: &str) -> edifact::OwnedSegment {
+        edifact::from_bytes(edi.as_bytes())
             .next()
             .unwrap()
             .unwrap()

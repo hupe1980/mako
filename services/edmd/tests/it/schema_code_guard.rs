@@ -527,7 +527,7 @@ fn every_on_conflict_target_has_a_matching_unique_constraint() {
 
     // `ON CONFLICT ON CONSTRAINT <name>` only accepts a *table constraint*.
     // Naming a `CREATE UNIQUE INDEX` there makes PostgreSQL reject the whole
-    // statement — which is how the billing-period cache came to never populate.
+    // statement, so the billing-period cache never populates.
     for (file, source) in source_files() {
         for (idx, _) in source.match_indices("ON CONFLICT ON CONSTRAINT ") {
             let rest = &source[idx + "ON CONFLICT ON CONSTRAINT ".len()..];
@@ -553,11 +553,10 @@ fn every_on_conflict_target_has_a_matching_unique_constraint() {
 /// `quality_assessments.source` must admit every `IngestionSource`.
 ///
 /// The column records which ingest family produced a verdict, and every door
-/// now scores its batch. A variant the CHECK omits fails the insert — and the
+/// scores its batch. A variant the CHECK omits fails the insert — and the
 /// insert failure is deliberately only a warning, because the readings are
 /// already stored — so the audit history goes silently missing for exactly the
-/// door that believed it was recording one. That is how the Kafka and bulk doors
-/// would have behaved the moment they started scoring.
+/// door that believed it was recording one.
 #[test]
 fn quality_assessment_source_check_covers_every_ingestion_source() {
     let ddl = ddl_of(&migration(), "quality_assessments");

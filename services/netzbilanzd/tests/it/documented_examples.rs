@@ -9,6 +9,21 @@ fn parse(body: serde_json::Value) -> BillingRunRequest {
     serde_json::from_value(body).expect("the documented body must parse")
 }
 
+/// Fill the KAV Grenzpreis in as `Resolver` does from marktd's
+/// `kav_grenzpreis_strom` — the documented bodies leave it to netzbilanzd.
+/// The figure is a test value, not a published one.
+fn grenzpreis_aufgeloest(mut run: BillingRunRequest) -> BillingRunRequest {
+    for p in &mut run.positions {
+        if let SettlementRequest::Nne(nne) = &mut p.settlement
+            && let Some(ka) = nne.konzessionsabgabe.as_mut()
+        {
+            ka.grenzpreis_ct_per_kwh
+                .get_or_insert(rust_decimal::dec!(18.20));
+        }
+    }
+    run
+}
+
 /// Draft `position` and require that nothing the INVOIC needs is missing.
 fn issuable(position: &netzbilanzd::request::BillingPositionRequest) {
     use netzbilanzd::billing::{self, DocumentFacts};
@@ -29,7 +44,7 @@ fn issuable(position: &netzbilanzd::request::BillingPositionRequest) {
 /// The README quick-start and the operator guide's fuller NNE example.
 #[test]
 fn the_documented_nne_examples_parse() {
-    let readme = parse(serde_json::json!({
+    let readme = grenzpreis_aufgeloest(parse(serde_json::json!({
         "invoice_date": "2026-02-01",
         "due_date": "2026-03-03",
         "rechnungskreis": "NNE",
@@ -45,7 +60,7 @@ fn the_documented_nne_examples_parse() {
                 "sparte": "Strom",
                 "arbeitspreis": { "Einheitlich": { "menge_kwh": "1500", "preis_ct_per_kwh": "3.5" } },
                 "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde",
-                    "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" } },
+                    "durchschnittspreis_ct_per_kwh": "24.80" },
                 "netzebene": "Niederspannung",
                 "artikel_ids": {
                     "NneArbeit": "1-02-0-002",
@@ -57,10 +72,10 @@ fn the_documented_nne_examples_parse() {
                 "lieferschein_ref": "LS-2026-000417"
             }
         }]
-    }));
+    })));
     assert_eq!(readme.positions.len(), 1);
 
-    let guide = parse(serde_json::json!({
+    let guide = grenzpreis_aufgeloest(parse(serde_json::json!({
         "invoice_date": "2026-02-01",
         "due_date": "2026-03-03",
         "rechnungskreis": "NNE",
@@ -93,7 +108,7 @@ fn the_documented_nne_examples_parse() {
                     "system": { "MONAT": { "monate": "1" } }
                 },
                 "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde",
-                    "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" } },
+                    "durchschnittspreis_ct_per_kwh": "24.80" },
                 "netzebene": "Niederspannung",
                 "jahresarbeit_kwh": "18000",
                 "tariff_sheet_id": "Preisblatt-NNE-2026-Q1",
@@ -108,7 +123,7 @@ fn the_documented_nne_examples_parse() {
                 "lieferschein_ref": "LS-2026-000417"
             }
         }]
-    }));
+    })));
     let SettlementRequest::Nne(nne) = &guide.positions[0].settlement else {
         panic!("expected an NNE settlement");
     };
@@ -256,7 +271,7 @@ fn the_smoke_test_body_parses() {
                 "sparte": "Strom",
                 "arbeitspreis": { "Einheitlich": { "menge_kwh": "1500.000", "preis_ct_per_kwh": "3.500" } },
                 "konzessionsabgabe": { "satz_ct_per_kwh": "0.110", "klasse": "Sondervertragskunde",
-                    "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" } }
+                    "durchschnittspreis_ct_per_kwh": "24.80" }
             }
         }]
     }));

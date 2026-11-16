@@ -12,6 +12,7 @@
 #         NOTE: processd self-registers its own subscription on startup via
 #         PROCESSD_SELF_REGISTER_WEBHOOK_URL — no P4 script step required.
 #   1-5. makod health/OpenAPI/partner/UTILMD-submit
+#   4b.  the BKV's UTILMD 55071 — the Zuordnungsermächtigung E_0622 Prüfschritt 60 needs
 #   6.   makod processes UTILMD 55001 → pushes process.initiated to marktd
 #   6b.  marktd fans out to processd (webhook subscription)
 #   6c.  processd validates (MaLo ✓, preisblatt ✓) → dispatches bestaetigen
@@ -387,6 +388,31 @@ resp=$(get "/admin/partners")
 COUNT=$(body "$resp" | jq '.count')
 pass "GET /admin/partners → $COUNT partner(s) registered"
 
+# ── 4b. The BKV's Zuordnungsermächtigung (UTILMD 55071) ───────────────────────
+#
+# E_0622 Prüfschritt 60 refuses an Anmeldung whose Bilanzkreis no
+# Zuordnungsermächtigung covers (BK6-24-174 Anlage 3 Kap. 10.2.1: „je ZRT, BG,
+# BK und LF"). The BKV gives it by 55071; makod records it and marktd keeps it
+# for processd. It names the 55001's Bilanzkreis 11XBK-STD------Y, the grid
+# record's Bilanzierungsgebiet and the LFN, from 01.08.2026.
+
+info "[4b/9] Register the BKV and POST its UTILMD 55071 (Zuordnungsermächtigung)"
+resp=$(put_json "/admin/partners/9900000000019" "$(cat "$SCRIPT_DIR/fixtures/partner-bkv.json")")
+code=$(status "$resp")
+[[ "$code" == "200" || "$code" == "201" ]] || \
+    fail "PUT /admin/partners/9900000000019 returned $code: $(body "$resp")"
+sed \
+    -e "s/DEMO-ZE-001/SMOKE-ZE-$SMOKE_RUN_ID/g" \
+    -e "s/MSG-ZE-001/MSG-ZE-$SMOKE_RUN_ID/g" \
+    -e "s/ZE0001/ZE$SMOKE_RUN_ID/g" \
+    "$SCRIPT_DIR/fixtures/utilmd-55071.edi" > "$EDI_TMP"
+resp=$(post_edifact "$EDI_TMP")
+code=$(status "$resp")
+[[ "$code" == "200" ]] || fail "POST /edifact (55071) returned $code: $(body "$resp")"
+ZE_STATUS=$(body "$resp" | jq -r '.messages[0].status')
+[[ "$ZE_STATUS" == "routed" ]] || fail "55071 not routed: $(body "$resp")"
+pass "POST /edifact 55071 → routed (Zuordnungsermächtigung for 11XBK-STD------Y)"
+
 # ── 5. Submit UTILMD EDIFACT interchange (PID 55001 — Lieferbeginn Strom) ─────
 #
 # LFN 4012345000023 → NB 9900357000004: Anmeldung Lieferbeginn für MaLo $SMOKE_MALO_ID,
@@ -648,6 +674,11 @@ code=$(status "$resp")
 [[ "$code" == "200" || "$code" == "204" ]] || \
     fail "DELETE /admin/partners/4012345000023 returned $code: $(body "$resp")"
 pass "DELETE /admin/partners/4012345000023 → $code"
+resp=$(delete_resource "/admin/partners/9900000000019")
+code=$(status "$resp")
+[[ "$code" == "200" || "$code" == "204" ]] || \
+    fail "DELETE /admin/partners/9900000000019 returned $code: $(body "$resp")"
+pass "DELETE /admin/partners/9900000000019 → $code"
 
 # ── marktd smoke tests (extended — requires MARKTD_URL) ───────────────────────────
 

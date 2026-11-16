@@ -51,9 +51,10 @@ formats and check digits, and
 [Dates and days](@/docs/architecture/domain-model.md#dates-and-days) for what
 "today" means in a market date.
 
-### The four market roles
+### The five market roles a deployment plays
 
-Every process is a conversation between two of these
+A deployment plays one or more of these; its counterparties include the
+others of the Rollenmodell — the ÜNB and the BIKO among them
 ([full role table](@/docs/architecture/domain-model.md#party-roles-marktrollen)):
 
 | Role | Marktrolle | Answers for |
@@ -61,6 +62,7 @@ Every process is a conversation between two of these
 | **LF** | Lieferant | Supplying the customer — the retail contract, the Bilanzkreis, the invoice |
 | **NB** | Netzbetreiber | The grid the MaLo hangs on — access, grid charges, and most of the confirmations |
 | **MSB** | Messstellenbetreiber | The meter — installing it, reading it, and delivering the values |
+| **ESA** | Energieserviceanbieter | Services on metered values — ordering them from the MSB under the § 34 MsbG Wertebestellung |
 | **BKV** | Bilanzkreisverantwortlicher | A Bilanzkreis's balance against the ÜNB |
 
 A deployment is scoped to the roles it plays: makod registers the modules of

@@ -47,7 +47,7 @@ mako-redispatch  = { path = "../../crates/mako-redispatch" }
 # EDIFACT). makod is the only crate depending on both halves; the canonical
 # DocumentType → RedispatchDocumentKind mapping lives in redispatch_xml_ingest.
 redispatch-xml   = { path = "../../crates/redispatch-xml" }
-edifact-rs       = { workspace = true }
+edifact          = { workspace = true }
 mako-as4     = { path = "../../crates/mako-as4" }
 energy-api   = { path = "../../crates/energy-api", features = ["server", "client"] }
 rubo4e       = { workspace = true }

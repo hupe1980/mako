@@ -32,6 +32,7 @@ import { call, ServiceUnavailable } from "../data/mcp";
 import { useVerweigert, Verweigert } from "../data/verweigert";
 import { FristUhr } from "../design/FristUhr";
 import { Icon } from "../design/Icon";
+import { Page } from "../design/Page";
 import { EmptyState, Notice, Panel } from "../design/Panel";
 import type { Instant } from "../format/brands";
 import { formatCount } from "../format/count";
@@ -170,7 +171,7 @@ export function Entscheiden({
     return (
       <>
         <Panel className="flex flex-col gap-4 p-5">
-          <h3 className="m-0 text-callout font-semibold">{k.entscheidung}</h3>
+          <h3 className="m-0 text-body font-semibold">{k.entscheidung}</h3>
           <Notice tone="refusal" title={k.verweigert(DIENST.processd)}>
             {verweigert}
           </Notice>
@@ -183,7 +184,7 @@ export function Entscheiden({
   return (
     <>
       <Panel className="flex flex-col gap-4 p-5">
-        <h3 className="m-0 text-callout font-semibold">{k.entscheidung}</h3>
+        <h3 className="m-0 text-body font-semibold">{k.entscheidung}</h3>
         {wartet && !herkunft && wartend && (
           <VorschlagKarte
             v={wartet.v}
@@ -221,7 +222,7 @@ export function Entscheiden({
                   key={a}
                   value={a}
                   isDisabled={a === "freigeben" ? !f.kann_freigeben : !f.kann_ablehnen}
-                  className="focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body font-medium text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent"
+                  className="focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent"
                 >
                   {a === "freigeben" ? k.freigeben : k.ablehnen}
                 </Radio>
@@ -229,8 +230,8 @@ export function Entscheiden({
             </RadioGroup>
 
             {gewaehlt === "freigeben" && f.art === "gehalten" && f.antwort && (
-              <p className="m-0 text-callout text-text">
-                {k.festgehalten} <span className="font-mono">{f.antwort.code}</span>
+              <p className="m-0 text-body text-text">
+                {k.festgehalten} <span>{f.antwort.code}</span>
                 {f.antwort.bedeutung && <> — {f.antwort.bedeutung}</>}
               </p>
             )}
@@ -238,7 +239,7 @@ export function Entscheiden({
             {brauchtCode && codes && (
               <RadioGroup value={code} onChange={setCode} className="flex flex-col gap-1.5">
                 <Label className="text-caption text-text-2">
-                  {k.antwortcodeAus} <span className="font-mono">{codes.ebd}</span>
+                  {k.antwortcodeAus} <span>{codes.ebd}</span>
                 </Label>
                 {codes.codes.map((c) => (
                   <Radio
@@ -246,7 +247,7 @@ export function Entscheiden({
                     value={c.code}
                     className="focus-ring flex cursor-default items-start gap-3 rounded-[10px] border border-separator px-3 py-2 data-[hovered]:bg-fill data-[selected]:border-accent"
                   >
-                    <span className="font-mono text-body font-semibold text-text">{c.code}</span>
+                    <span className="text-body font-semibold text-text">{c.code}</span>
                     <span className="text-body text-text-2">{c.bedeutung}</span>
                   </Radio>
                 ))}
@@ -328,10 +329,10 @@ function Detail({ f }: { f: Freigabe }) {
       <Panel className="flex flex-col gap-3 p-5">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <p className="m-0 text-caption font-semibold tracking-wide text-text-2 uppercase">
-              {eintrag(k.art, f.art)} · PID <span className="font-mono">{f.pid}</span>
+            <p className="m-0 text-caption font-semibold text-text-2">
+              {eintrag(k.art, f.art)} · PID <span>{f.pid}</span>
             </p>
-            <h2 className="m-0 mt-1 text-title font-semibold">{f.grund}</h2>
+            <h2 className="m-0 mt-1 text-title2 font-semibold">{f.grund}</h2>
           </div>
           <span className="flex flex-col items-end gap-1 text-caption text-text-2">
             {k.entscheidenBis}
@@ -346,7 +347,7 @@ function Detail({ f }: { f: Freigabe }) {
             onPress={() => router.navigate({ to: "/prozess", search: { key: f.malo_id ?? "" } })}
             className="focus-ring inline-flex h-7 w-fit items-center gap-1 rounded-full border border-separator px-3 text-body text-text data-[hovered]:bg-fill"
           >
-            MaLo <span className="font-mono">{f.malo_id}</span>
+            MaLo <span>{f.malo_id}</span>
             <Icon name="chevron" size={12} />
           </AriaButton>
         )}
@@ -416,11 +417,7 @@ export function FreigabenView() {
   }, [rows, selected?.id, router]);
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">{k.titel}</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">{k.untertitel(DIENST.processd)}</p>
-      </header>
+    <Page width="work" title={k.titel} subtitle={k.untertitel(DIENST.processd)}>
       {list.isError && (
         <Notice
           tone="failure"
@@ -460,15 +457,13 @@ export function FreigabenView() {
                 {rows.map((f) => (
                   <GridListItem key={f.id} id={f.id} textValue={f.grund} className={ROW}>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-body font-medium text-text">
-                        {f.grund}
-                      </span>
+                      <span className="block truncate text-body text-text">{f.grund}</span>
                       <span className="block text-caption text-text-2">
-                        {eintrag(k.art, f.art)} · PID <span className="font-mono">{f.pid}</span>
+                        {eintrag(k.art, f.art)} · PID <span>{f.pid}</span>
                         {f.malo_id && (
                           <>
                             {" · "}
-                            <span className="font-mono">{f.malo_id}</span>
+                            <span>{f.malo_id}</span>
                           </>
                         )}
                       </span>
@@ -493,6 +488,6 @@ export function FreigabenView() {
           <Detail key={selected.id} f={selected} />
         </div>
       )}
-    </div>
+    </Page>
   );
 }

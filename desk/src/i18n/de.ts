@@ -7,6 +7,8 @@
 // of the Marktrollen stay German in every catalogue, because they
 // are the words the Festlegungen and the counterparty use.
 
+import type { RolleAntwort } from "../data/gen/makod";
+
 export const de = {
   shell: {
     ansichten: "Ansichten",
@@ -16,6 +18,9 @@ export const de = {
     kunden: "Kunden",
     prozesse: "Prozesse",
     assistent: "Assistent",
+    groupWork: "Arbeit",
+    groupLookUp: "Nachschlagen",
+    groupSystem: "System",
     gallery: "Gallery",
     suchen: "Suchen oder Befehl",
     menue: "Ansichten öffnen",
@@ -59,6 +64,7 @@ export const de = {
     tage: (n: number, text: string) => (n === 1 ? "1 Tag" : `${text} Tagen`),
     in: (span: string) => `in ${span}`,
     abgelaufenVor: (span: string) => `abgelaufen vor ${span}`,
+    vor: (span: string) => `vor ${span}`,
     seit: (span: string) => `seit ${span}`,
   },
   fristUhr: {
@@ -239,7 +245,7 @@ export const de = {
     },
     befragung: {
       titel: "Vorschlag",
-      text: "Ein paar Fragen zur Bereitstellung — daraus schlägt die Marktkommunikation je Dienst die Konfiguration vor, jede Zeile mit ihrer Quelle. Was offen bleibt, steht als Lücke darin. Angewendet wird nichts: Sie kopieren oder laden die Datei und setzen sie selbst ein.",
+      text: "Ein paar Fragen zur Bereitstellung — daraus schlägt die Marktkommunikation je Dienst die Konfiguration vor, jede Zeile mit ihrer Quelle. Was offen bleibt, steht als Lücke darin. Angewendet wird nichts: Du kopierst oder lädst die Datei und setzt sie selbst ein.",
       satz: {
         titel: "Aus einem Satz",
         feld: "Die Bereitstellung in einem Satz",
@@ -248,10 +254,9 @@ export const de = {
         vorbelegen: "Vorbelegen",
         liest: "liest …",
         hinweis:
-          "Der Assistent schlägt Antworten vor, jede übernehmen Sie selbst. Ohne ihn funktioniert die Befragung genauso.",
+          "Der Assistent schlägt Antworten vor, jede übernimmst du selbst. Ohne ihn funktioniert die Befragung genauso.",
         nichtErreichbar: "Der Assistent ist nicht erreichbar",
-        nichtErreichbarText:
-          "Die Befragung funktioniert ohne ihn — beantworten Sie die Fragen direkt.",
+        nichtErreichbarText: "Die Befragung funktioniert ohne ihn — beantworte die Fragen direkt.",
         abgelehnt: "Der Assistent hat den Satz nicht gelesen",
         keine: "Der Satz enthielt keine Antwort, die sich übernehmen ließe.",
         vorgeschlagen: "Vorgeschlagene Antworten",
@@ -278,7 +283,8 @@ export const de = {
           "msb-strom": "Messstellenbetreiber Strom",
           "msb-gas": "Messstellenbetreiber Gas",
           "esa-strom": "Energieserviceanbieter",
-        } as Record<string, string>,
+          "bkv-strom": "Bilanzkreisverantwortlicher (Strom)",
+        } satisfies Record<RolleAntwort["rolle"], string>,
       },
       primaer: {
         titel: "Primäre MP-ID",
@@ -328,7 +334,7 @@ export const de = {
         titel: "Vorgeschlagene Konfiguration",
         rechnet: "aktualisiert …",
         leer: "Noch keine Antwort.",
-        leerText: "Wählen Sie eine Rolle — der Vorschlag erscheint hier.",
+        leerText: "Wähl eine Rolle — der Vorschlag erscheint hier.",
         vollstaendig: "Vollständig",
         vollstaendigText: "Keine Lücke und keine abgelehnte Antwort.",
         unvollstaendig: "Noch nicht vollständig",
@@ -397,6 +403,7 @@ export const de = {
   },
   hinweise: {
     titel: "Hinweise des Assistenten",
+    count: (n: number, text: string) => (n === 1 ? "1 Hinweis" : `${text} Hinweise`),
     assistent: "Assistent",
     dringend: "dringend",
     prozess: (wert: string) => `Prozess ${wert}`,
@@ -416,7 +423,7 @@ export const de = {
     hilfreich: "Als hilfreich bewertet",
     nichtHilfreich: "Als nicht hilfreich bewertet",
     nichtGespeichert: "Nicht gespeichert — der Assistent ist nicht erreichbar.",
-    nichtErlaubt: (grund: string) => `Bewerten ist Ihnen nicht erlaubt: ${grund}`,
+    nichtErlaubt: (grund: string) => `Bewerten ist dir nicht erlaubt: ${grund}`,
     wasFehlte: "Was fehlte?",
     wasFehltePlatzhalter: "Was fehlte? (optional, ↵ sendet)",
     danke: "Danke — das bleibt beim Lauf.",
@@ -459,7 +466,7 @@ export const de = {
     aktiv: "aktiv",
     nichtAktiviert: "nicht aktiviert",
     nurLesend: "liest nur",
-    aufFrage: "startet auf Ihre Frage",
+    aufFrage: "startet auf deine Frage",
     beiEreignis: (n: number, text: string) =>
       `startet bei ${text} Ereignisart${n === 1 ? "" : "en"}`,
     modell: "Modell",
@@ -473,7 +480,7 @@ export const de = {
   fragen: {
     titel: "Fragen",
     feld: "Frage an den Assistenten",
-    platzhalter: "Fragen Sie den Assistenten …  ⌘J",
+    platzhalter: "Frag den Assistenten …  ⌘J",
     senden: "Fragen",
     vorschlaege: {
       freigabe: {
@@ -505,7 +512,7 @@ export const de = {
     },
     antwortetMit: (modell: string) => `Antwortet mit ${modell} · liest nur, handelt nie`,
     nichtStoppbar: (grund: string) => `Der Assistent ließ sich nicht stoppen: ${grund}`,
-    nichtErlaubt: (grund: string) => `Den Assistenten zu fragen ist Ihnen nicht erlaubt: ${grund}`,
+    nichtErlaubt: (grund: string) => `Den Assistenten zu fragen ist dir nicht erlaubt: ${grund}`,
     nichtAngenommen: (grund: string) => `Der Assistent hat die Frage nicht angenommen: ${grund}`,
     nichtErreichbar:
       "Der Assistent ist nicht erreichbar. Alles andere im Desk funktioniert weiter.",
@@ -530,9 +537,9 @@ export const de = {
     stoppen: "Stoppen",
     wirdGestoppt: "Wird gestoppt …",
     esc: "esc",
-    verborgen: "Quelle für Sie verborgen",
+    verborgen: "Quelle für dich verborgen",
     verborgenTitel:
-      "Diese Quelle dürfen Sie nicht lesen; der Schritt bleibt sichtbar, ihr Inhalt nicht.",
+      "Diese Quelle darfst du nicht lesen; der Schritt bleibt sichtbar, ihr Inhalt nicht.",
     nichtBeantwortet: "nicht beantwortet",
     abgebrochen: "abgebrochen",
     quittung: (n: number, text: string) => `${text} ${n === 1 ? "Quelle" : "Quellen"} gelesen`,
@@ -561,9 +568,9 @@ export const de = {
     abgelehntFuer: "Abgelehnt für",
     code: (code: string) => ` (Code ${code})`,
     geparkt: "Geparkt",
-    nichtErlaubt: (dienst: string) => `${dienst}: Sie dürfen hier nicht buchen`,
+    nichtErlaubt: (dienst: string) => `${dienst}: Du darfst hier nicht buchen`,
     uebernommen:
-      "In die Entscheidung übernommen — gebucht oder verworfen wird erst, wenn Sie senden.",
+      "In die Entscheidung übernommen — gebucht oder verworfen wird erst, wenn du sendest.",
     prueft: "Der Assistent prüft die Buchung …",
     neuBuchen: "Neu buchen",
     verwerfen: "Verwerfen",
@@ -573,13 +580,13 @@ export const de = {
     ersterOffenAm: (datum: string) => `Der erste offene Tag ist der ${datum}.`,
     warumVerworfen: "Warum wird sie verworfen? (Grund, Pflicht)",
     grundVorgeschlagen:
-      "Grund vom Assistenten vorgeschlagen — gesendet steht er unter Ihrem Namen im Prüfpfad.",
+      "Grund vom Assistenten vorgeschlagen — gesendet steht er unter deinem Namen im Prüfpfad.",
     buchungVerwerfen: "Buchung verwerfen",
   },
   rechnungen: {
-    nichtGesendet: (grund: string) => `${grund} Ihre Entscheidung wurde nicht gesendet.`,
+    nichtGesendet: (grund: string) => `${grund} Deine Entscheidung wurde nicht gesendet.`,
     nichtAngenommen: (dienst: string) => `${dienst} hat die Entscheidung nicht angenommen`,
-    disputVerweigert: "Der Rechnungseingang lässt Sie hier nicht entscheiden",
+    disputVerweigert: "Der Rechnungseingang lässt dich hier nicht entscheiden",
     befunde: "Befunde",
     abgesendet: "Die Ablehnung (REMADV) ist beim Rechnungssteller.",
     nichtAbgesendet: "Die Ablehnung (REMADV) ist noch nicht versandt.",
@@ -589,12 +596,12 @@ export const de = {
     beilegen: "Beilegen",
     ablehnungSenden: "Ablehnung senden",
     wieGeklaert: "Wie wurde er geklärt? (Bemerkung, optional)",
-    pruefungVerweigert: "Die Abrechnung lässt Sie hier nicht entscheiden",
+    pruefungVerweigert: "Die Abrechnung lässt dich hier nicht entscheiden",
     angehalten: "Angehalten: die Rechnung ist nicht ausgestellt, bis sie freigegeben wird.",
     ausgestellt: "Ausgestellt und zur Prüfung vorgelegt; eine Korrektur geht als Stornorechnung.",
     freigeben: "Freigeben",
     geprueft: "Geprüft",
-    gehaltenVerweigert: "Der Rechnungseingang lässt Sie hier nichts feststellen",
+    gehaltenVerweigert: "Der Rechnungseingang lässt dich hier nichts feststellen",
     offeneSchritte: "Offene Prüfschritte",
     nichtFeststellbar: "Hier nicht festzustellen — es fehlt ein Datensatz, kein Urteil",
     gehaltenText:
@@ -641,6 +648,8 @@ export const de = {
     wechseln: "Rolle wechseln",
   },
   aiNote: {
+    /** The disclosure every model-written text opens with (Verordnung (EU) 2024/1689 Art. 50). */
+    disclosure: "KI-generiert.",
     verfasst: "Von einem Modell verfasst",
     agent: "Agent",
   },
@@ -668,20 +677,21 @@ export const de = {
     vorschlag: "Vorschlag",
     keineAktion: (filter: string) => `Keine Aktion passt zu „${filter}“.`,
     parameter: (verb: string) => `Parameter: ${verb}`,
-    verweigert: (dienst: string) => `${dienst} lässt Sie hier nicht entscheiden`,
+    verweigert: (dienst: string) => `${dienst} lässt dich hier nicht entscheiden`,
     vorgeschlagen: "Vom Assistenten vorgeschlagen — Tab übernimmt, Tippen ersetzt.",
     zurueck: "zurück",
   },
   heute: {
+    takeIn: "übernehmen",
     titel: "Heute",
-    untertitel: "Was auf Sie wartet — die nächste Frist zuerst.",
+    untertitel: "Was auf dich wartet — die nächste Frist zuerst.",
     ueberfaellig: (n: string) => `${n} überfällig`,
     heuteFaellig: (n: string) => `${n} heute fällig`,
     insgesamt: (n: string) => `${n} insgesamt`,
     mitVorschlag: (n: string) => `${n} mit Vorschlag`,
     laedt: "Lädt …",
     erledigt: "Alles erledigt.",
-    erledigtText: "Nichts wartet auf Sie.",
+    erledigtText: "Nichts wartet auf dich.",
     ersten: (n: string, gesamt: string) =>
       `Die ersten ${n} von ${gesamt} — der Rest folgt, sobald diese erledigt sind.`,
     fragenZu: (titel: string) => `Fragen zu ${titel}`,
@@ -721,7 +731,7 @@ export const de = {
       `Die ${dienst} hat die Antwort an die ${an} gegeben.`,
     entscheidenBis: "entscheiden bis",
     entscheidung: "Entscheidung",
-    verweigert: (dienst: string) => `Die ${dienst} lässt Sie hier nicht entscheiden`,
+    verweigert: (dienst: string) => `Die ${dienst} lässt dich hier nicht entscheiden`,
     vorgeschlagen: "Vom Assistenten vorgeschlagen — prüfen, dann senden.",
     freigeben: "Freigeben",
     ablehnen: "Ablehnen",
@@ -730,7 +740,7 @@ export const de = {
     bemerkung: "Bemerkung (optional)",
     schonEntschieden: "Schon entschieden",
     schonText: (wer: string, am: string | null, abgelehnt: boolean) =>
-      `${wer} hat diese Freigabe${am ? ` am ${am} Uhr` : ""} ${abgelehnt ? "abgelehnt" : "freigegeben"}. Ihre Entscheidung wurde nicht gesendet.`,
+      `${wer} hat diese Freigabe${am ? ` am ${am} Uhr` : ""} ${abgelehnt ? "abgelehnt" : "freigegeben"}. Deine Entscheidung wurde nicht gesendet.`,
     nichtAngenommen: (dienst: string) => `Die ${dienst} hat die Entscheidung nicht angenommen`,
   },
   kundenAnsicht: {
@@ -738,7 +748,7 @@ export const de = {
     untertitel: "Einen Kunden über Namen, Kundennummer oder die MaLo-ID einer Lieferstelle finden.",
     feld: "Kunde",
     platzhalter: "Name, Kundennummer oder MaLo-ID",
-    wen: "Wen suchen Sie?",
+    wen: "Wen suchst du?",
     dreiZeichen: "Drei Zeichen genügen — oder von überall",
     fehler: "Die Suche ist fehlgeschlagen",
     keiner: "Kein Kunde gefunden.",
@@ -757,6 +767,7 @@ export const de = {
       B2B_RLM: "Gewerbe (RLM)",
       B2B_HV: "Hochspannung",
     } as Record<string, string>,
+    unknownStatus: (code: string) => `Vertragsstatus „${code}“`,
     anmeldungLaeuft: "Anmeldung läuft",
     bestaetigtAb: (ab: string) => `bestätigt ab ${ab}`,
     beliefertBis: (bis: string) => `beliefert bis ${bis}`,
@@ -850,7 +861,7 @@ export const de = {
       feststellen: "Feststellen",
       begruendung: "Worauf stützt sich die Feststellung? (Begründung, Pflicht)",
       feststellenWas:
-        "Hält die Antworten mit Ihrer Begründung fest und prüft die Rechnung sofort neu — erreicht der Entscheidungsbaum ein Ergebnis, geht die Antwort wie automatisch hinaus.",
+        "Hält die Antworten mit deiner Begründung fest und prüft die Rechnung sofort neu — erreicht der Entscheidungsbaum ein Ergebnis, geht die Antwort wie automatisch hinaus.",
       festgestellt: "Feststellung erfasst",
       nachweis: "Leistungsnachweis",
       nachweisText: "Worauf stützt sich der Nachweis? (Pflicht)",
@@ -951,6 +962,7 @@ export const de = {
     pruefposten: "Rechnungsprüfung",
     geparkt: "Geparkte Buchungen",
     prozess: (id: string) => `Prozess ${id}`,
+    fristOverdue: (familie: string) => `Antwortfrist überschritten · ${familie}`,
     antwortFestgehalten: "Antwort festgehalten",
     antwortOffen: "Antwort offen",
     anmeldungWartet: "Anmeldung wartet auf den Netzbetreiber",
@@ -1005,6 +1017,73 @@ export const de = {
       unvollstaendig: "Buchung unvollständig",
       abgelehnt: "vom Hauptbuch abgelehnt",
     },
+  },
+  values: {
+    /** processd's process families, as the market names them. */
+    family: {
+      gpke: "GPKE",
+      wim: "WiM Strom",
+      "geli-gas": "GeLi Gas",
+      "wim-gas": "WiM Gas",
+      "gabi-gas": "GaBi Gas",
+      mabis: "MaBiS",
+      emob: "E-Mobilität",
+      redispatch: "Redispatch 2.0",
+      "invoic-storno": "Rechnungsstorno",
+      unknown: "ohne Prozessfamilie",
+    } as Record<string, string>,
+    sparte: { STROM: "Strom", GAS: "Gas" } as Record<string, string>,
+    /** edmd's reading-order states and reasons. */
+    readingStatus: {
+      OFFEN: "offen",
+      BEAUFTRAGT: "beauftragt",
+      FEHLGESCHLAGEN: "fehlgeschlagen",
+    } as Record<string, string>,
+    readingReason: {
+      JAHRESABLESUNG: "Jahresablesung",
+      ZWISCHENABLESUNG: "Zwischenablesung",
+      LIEFERBEGINN: "Ablesung zum Lieferbeginn",
+      LIEFERENDE: "Ablesung zum Lieferende",
+      SPERRUNG: "Ablesung zur Sperrung",
+      ENTSPERRUNG: "Ablesung zur Entsperrung",
+      SONDERABLESUNG: "Sonderablesung",
+      INSRPT_STOERUNG: "Ablesung zur Störungsmeldung",
+      ISMS_AUSLESUNG: "Auslesung des iMSys",
+    } as Record<string, string>,
+    /** How an assistant's run ended, as agentd states it. */
+    run: {
+      running: "läuft noch",
+      succeeded: "beantwortet",
+      failed: "fehlgeschlagen",
+      cancelled: "abgebrochen",
+      stopped: "gestoppt",
+      timed_out: "Zeit überschritten",
+      budget_exceeded: "Budget aufgebraucht",
+    } as Record<string, string>,
+  },
+  /** A service's stable refusal code, said as a sentence; the service's own text sits under „Details“. */
+  codes: {
+    process_not_found:
+      "Unter diesem Schlüssel ist kein Prozess bekannt. Prüf die Schreibweise — oder die Nachricht ist noch nicht eingegangen.",
+    malo_not_found: "Diese MaLo ist nicht bekannt.",
+    partner_not_found: "Dieser Marktpartner ist nicht bekannt.",
+    ambiguous_process:
+      "Der Schlüssel passt auf mehr als einen Prozess. Such genauer, etwa nach der Prozess-ID.",
+    duplicate_process: "Für diesen Vorgang läuft schon ein Prozess.",
+    role_not_configured: "Diese Rolle ist in der Bereitstellung nicht eingerichtet.",
+    invalid_payload: "Die Angaben passen nicht zu dem, was der Prozess verlangt.",
+    not_implemented: "Das kann die Marktkommunikation noch nicht.",
+    engine_error: "Die Marktkommunikation konnte die Anfrage nicht verarbeiten.",
+  } as Record<string, string>,
+  problem: {
+    error: "Fehler",
+    http: (was: string, status: string) => `${was} (HTTP ${status})`,
+    withErrorId: (satz: string, id: string) => `${satz} · Fehler-ID ${id}`,
+  },
+  refusal: {
+    details: "Details",
+    unknown: "Der Dienst hat die Anfrage abgelehnt.",
+    newSearch: "Neue Suche",
   },
   warumFrage: {
     frage: "Warum steht das auf meiner Liste, und was entscheidet es?",

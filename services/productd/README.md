@@ -16,7 +16,7 @@ just dev productd      # dev/config/productd.toml against the dev PostgreSQL
 
 | | |
 |---|---|
-| **Database** | PostgreSQL — `products`, `product_history`, `epex_prices`, `nehs_prices`, `angebote` |
+| **Database** | PostgreSQL — `products`, `product_history`, `epex_prices`, `nehs_prices`, `angebote`, `endkunden_angebote` (append-only) |
 | **Auth** | OIDC + Cedar `policies/productd.cedar`: reads for the tenant; setting prices and the Angebot lifecycle for LF, MSB, ESA, ADMIN. The two § 41c feed routes are public by statute |
 | **Identities** | `tenant` is the data-isolation key, `lf_mp_id` the market identity products are sold under (defaults to `tenant`) |
 | **Versioning** | one row per price version, `[valid_from, valid_to]`, no overlap (GiST); `PUT` of a future version end-dates the running one; `DELETE` withdraws, never deletes (§ 147 AO) |
@@ -30,6 +30,7 @@ just dev productd      # dev/config/productd.toml against the dev PostgreSQL
 | Catalogue | `GET /api/v1/products/{lf_mp_id}`, `PUT`/`DELETE /{product_code}`, `/history`, `/energiemix`, `POST /products/{lf_mp_id}/resolve` (many `(code, as_of)` in one call; `null` in place for an unpriceable leg) |
 | Market prices | `PUT /api/v1/epex-prices/{date}`, `GET /epex-prices/{date}/quarter-hourly`, `/epex-prices/{year}/{month}/average`, `PUT /nehs-prices/{date}`, `GET /nehs-prices/latest` |
 | § 41c feed | `GET /api/v1/comparison-feed`, `/comparison-feed/bo4e` — `PUBLISHED` products of the comparison categories only |
+| Endkunden-Angebot | `POST /api/v1/products/{lf_mp_id}/endkunden-angebote`, `GET /api/v1/endkunden-angebote/{id}` — the frozen, all-in priced B2C offer an online order cites by id and `content_sha256`; a missing Preisblatt, position or series year refuses `422 eingabe_fehlt` naming each (Cedar `quote-endkunde` / `read-endkunden-angebot`, LF and ADMIN) |
 | Angebote | `/api/v1/angebote` (+ `/{id}`, `/comparison`, `/versenden`, `/annehmen`, `/ablehnen`, `/expire`) — `ANGELEGT → VERSANDT → ANGENOMMEN \| ABGELEHNT \| ABGELAUFEN`; an unpriceable position refuses the whole quotation (`422`, `unpreisbare_positionen`) |
 
 Acceptance emits `de.tarif.angebot.angenommen`; `vertragd` creates the
@@ -51,6 +52,12 @@ erp_hmac_secret = "env:PRODUCTD_ERP_HMAC_SECRET"
 # is refused BEHG_PREIS_FEHLT. A behg_regime key here is refused at startup.
 billingd_url     = "http://billingd:9280"
 billingd_api_key = "env:PRODUCTD_BILLINGD_API_KEY"
+
+# An Endkunden-Angebot reads the NB's Preisblätter (Netznutzung, Messung,
+# Konzessionsabgabe) and a MaLo's NB from marktd. Without it that route
+# answers 503 marktd_nicht_konfiguriert.
+marktd_url     = "http://marktd:8180"
+marktd_api_key = "env:PRODUCTD_MARKTD_API_KEY"
 
 [http]
 addr = "0.0.0.0:9080"

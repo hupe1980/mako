@@ -1,4 +1,4 @@
-use edifact_rs::{
+use edifact::{
     EdifactDeserialize, EdifactSerialize, EventEmitter, OwnedSegment, ProfileRulePack,
     ValidationIssue, ValidationSeverity,
 };
@@ -125,13 +125,13 @@ impl ContrlMessage {
 
 impl EdifactDeserialize for ContrlMessage {
     fn edifact_deserialize(
-        segments: &[edifact_rs::Segment<'_>],
-    ) -> Result<Self, edifact_rs::EdifactError> {
+        segments: &[edifact::Segment<'_>],
+    ) -> Result<Self, edifact::EdifactError> {
         let (message_ref, assoc_code) = MessageCore::extract_unh_fields(segments)?;
         let owned: Vec<OwnedSegment> = segments
             .iter()
             .cloned()
-            .map(edifact_rs::Segment::into_owned)
+            .map(edifact::Segment::into_owned)
             .collect();
         Ok(Self::from_parts(owned, message_ref, assoc_code, None))
     }
@@ -143,7 +143,7 @@ impl EdifactSerialize for ContrlMessage {
     fn edifact_serialize<E: EventEmitter>(
         &self,
         emitter: &mut E,
-    ) -> Result<(), edifact_rs::EdifactError> {
+    ) -> Result<(), edifact::EdifactError> {
         self.core.emit_segments(emitter)
     }
 }
@@ -156,6 +156,9 @@ impl EdiEnergyMessage for ContrlMessage {
     }
     fn message_ref(&self) -> &str {
         &self.core.message_ref
+    }
+    fn decimal_mark(&self) -> char {
+        self.core.decimal_mark
     }
     /// CONTRL is the EDIFACT syntax acknowledgement message.
     ///
@@ -176,7 +179,7 @@ impl EdiEnergyMessage for ContrlMessage {
     fn serialize(&self) -> Result<Vec<u8>, Error> {
         self.core.serialize()
     }
-    fn segments(&self) -> &[edifact_rs::OwnedSegment] {
+    fn segments(&self) -> &[edifact::OwnedSegment] {
         &self.core.segments
     }
     fn validate_on_date_with_rollen(
@@ -203,7 +206,7 @@ impl EdiEnergyMessage for ContrlMessage {
 /// Each `UCM` segment triggers a new [`ContrlMessageResponse`].  Within it,
 /// `UCS` segments trigger [`ContrlSegmentError`] sub-groups (SG2), and each
 /// `UCD` after a `UCS` is wrapped in a [`ContrlElementError`] (SG3).
-fn parse_message_responses(segments: &[edifact_rs::Segment<'_>]) -> Vec<ContrlMessageResponse> {
+fn parse_message_responses(segments: &[edifact::Segment<'_>]) -> Vec<ContrlMessageResponse> {
     let mut result = Vec::new();
     let mut i = 0;
 
@@ -288,7 +291,7 @@ fn contrl_semantic_pack() -> ProfileRulePack {
 ///
 /// Any other value indicates a malformed CONTRL message.
 fn rule_sem_contrl_syntax_code(
-    segments: &[edifact_rs::Segment<'_>],
+    segments: &[edifact::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
     for seg in segments.iter().filter(|s| s.tag == "UCI") {

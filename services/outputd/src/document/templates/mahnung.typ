@@ -69,6 +69,11 @@
   let abs = mahnung.absender
   let emp = mahnung.empfaenger
 
+  // The form of address: `anrede` is outputd's `[policy] anrede`, "sie" or
+  // "du", set on every view. `form[Sie text][du text]` picks the phrase.
+  let du = mahnung.anrede == "du"
+  let form(sie, du-text) = if du { du-text } else { sie }
+
   set text(font: "Libertinus Serif", size: 10pt, lang: "de", hyphenate: false)
   set par(justify: false, leading: 0.62em)
   set page(
@@ -165,11 +170,12 @@
   ]
 
   v(4mm)
-  [Bitte überweisen Sie den Gesamtbetrag bis zum
+  [#form[Bitte überweisen Sie][Bitte überweise] den Gesamtbetrag bis zum
    *#date(mahnung.zahlungsfrist)*#if mahnung.iban != none [
      #h(0pt) auf das Konto IBAN #iban(mahnung.iban)].
-   Sollten Sie zwischenzeitlich gezahlt haben, betrachten Sie dieses Schreiben
-   als gegenstandslos.]
+   #form[Sollten Sie zwischenzeitlich gezahlt haben, betrachten Sie dieses
+   Schreiben als gegenstandslos.][Falls du zwischenzeitlich gezahlt hast,
+   betrachte dieses Schreiben als gegenstandslos.]]
 
   // § 41f Abs. 1 EnWG — the Stufe-3 threat block. Visually set apart: a
   // disconnection threat buried in body text fails its purpose and, arguably,
@@ -193,14 +199,17 @@
         #if mahnung.geplantes_sperrdatum != none [
           \ Frühester Sperrtermin: *#date(mahnung.geplantes_sperrdatum)*.
         ]
-        \ Die Unterbrechung unterbleibt, wenn Sie den rückständigen Betrag
-        begleichen oder eine Abwendungsvereinbarung (§ 41g EnWG) mit uns
-        treffen. Bitte wenden Sie sich dazu umgehend an
+        \ #form[Die Unterbrechung unterbleibt, wenn Sie den rückständigen
+        Betrag begleichen oder eine Abwendungsvereinbarung (§ 41g EnWG) mit
+        uns treffen. Bitte wenden Sie sich dazu umgehend an][Die Unterbrechung
+        unterbleibt, wenn du den rückständigen Betrag begleichst oder eine
+        Abwendungsvereinbarung (§ 41g EnWG) mit uns triffst. Bitte wende dich
+        dazu umgehend an]
         #opt(abs.contact_name, prefix: "unser ")#opt(abs.phone, prefix: ", Telefon ").
       ],
     )
   }
 
   v(6mm)
-  [Mit freundlichen Grüßen \ #opt(abs.name)#opt(abs.contact_name, prefix: " — ")]
+  [#form[Mit freundlichen Grüßen][Viele Grüße] \ #opt(abs.name)#opt(abs.contact_name, prefix: " — ")]
 }

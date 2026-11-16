@@ -71,6 +71,10 @@ impl Daemon for Outputd {
         out
     }
 
+    fn policy(cfg: &config::OutputdConfig) -> mako_service::policy::PolicyReport {
+        cfg.policy_report()
+    }
+
     async fn build(cfg: Arc<config::OutputdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
@@ -122,6 +126,11 @@ impl Daemon for Outputd {
                 post(handlers::post_document),
             )
             .route("/api/v1/documents", get(handlers::list_documents))
+            .route(
+                "/api/v1/documents/by-subject/{kind}/{subject_ref}",
+                get(handlers::get_document_by_subject),
+            )
+            .route("/api/v1/deliveries", get(handlers::list_deliveries))
             .route(
                 "/api/v1/documents/{document_id}",
                 get(handlers::get_document),

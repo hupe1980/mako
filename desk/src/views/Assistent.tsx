@@ -3,6 +3,7 @@ import { Switch } from "react-aria-components";
 import { DIENST, dienstVon } from "../app/dienste";
 import type { Bilanz, Faehigkeit } from "../data/agent";
 import { Icon } from "../design/Icon";
+import { Page } from "../design/Page";
 import { EmptyState, Notice, Panel } from "../design/Panel";
 import {
   entschieden,
@@ -17,7 +18,7 @@ import { useKatalog } from "./Bilanz";
 function Merkmal({ ok, children }: { ok: boolean; children: ReactNode }) {
   return (
     <span
-      className={`inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-caption font-medium ${
+      className={`inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-caption ${
         ok ? "bg-done-fill text-done" : "bg-fill text-text-2"
       }`}
     >
@@ -54,7 +55,7 @@ function Record({ b }: { b: Bilanz }) {
   const n = entschieden(b.vorschlag);
   return (
     <section aria-label={a.bilanz(formatCount(b.tage))}>
-      <h3 className="m-0 mb-1.5 text-caption font-semibold tracking-wide text-text-2 uppercase">
+      <h3 className="m-0 mb-1.5 text-caption font-semibold text-text-2">
         {a.inTagen(formatCount(b.tage))}
       </h3>
       <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-body">
@@ -89,7 +90,7 @@ function Karte({ f }: { f: Faehigkeit }) {
   return (
     <Panel className={`flex flex-col gap-3 p-5 ${f.aktiv ? "" : "opacity-70"}`}>
       <header>
-        <h2 className="m-0 text-callout font-semibold text-text">{f.titel ?? f.name}</h2>
+        <h2 className="m-0 text-body font-semibold text-text">{f.titel ?? f.name}</h2>
         {f.zweck && <p className="m-0 mt-1 text-body text-text-2">{f.zweck}</p>}
       </header>
       <div className="flex flex-wrap gap-1.5">
@@ -156,12 +157,11 @@ export function AssistentView() {
   const alleLesen = (list.data ?? []).every((f) => f.nur_lesend);
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <header className="flex items-end gap-4">
-        <div className="flex-1">
-          <h1 className="m-0 text-large font-bold tracking-tight">{a.titel}</h1>
-          <p className="m-0 mt-1 text-callout text-text-2">{a.untertitel(DIENST.agentd)}</p>
-        </div>
+    <Page
+      width="work"
+      title={a.titel}
+      subtitle={a.untertitel(DIENST.agentd)}
+      trailing={
         <Switch
           isSelected={nurAktive}
           onChange={setNurAktive}
@@ -172,8 +172,8 @@ export function AssistentView() {
           </span>
           {a.nurAktive}
         </Switch>
-      </header>
-
+      }
+    >
       {list.data && alleLesen && (
         <Notice tone="info" title={a.liestNur}>
           {a.liestNurText}
@@ -190,6 +190,6 @@ export function AssistentView() {
           <Karte key={f.name} f={f} />
         ))}
       </div>
-    </div>
+    </Page>
   );
 }

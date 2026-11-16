@@ -20,12 +20,12 @@ overrides any key, and a `*_FILE` variable reads a value from a file.
 | | |
 |---|---|
 | **Database** | PostgreSQL 15+ with `btree_gist` — validity is half-open `[valid_from, valid_to)`, enforced by `EXCLUDE` constraints |
-| **Auth** | OIDC + Cedar `policies/marktd.cedar`: reads and writes for the tenant; NB-published data (Preisblatt, NeLo, Tranche, Grundversorger) needs `NB`; ESA consent needs `MSB`/`ESA`; subscriptions need `ADMIN` |
+| **Auth** | OIDC + Cedar `policies/marktd.cedar`: reads and writes for the tenant; NB-published data (Preisblatt, NeLo, Tranche, Grundversorger) needs `NB`; ESA consent needs `MSB`/`ESA`; subscriptions and the Referenzreihen import need `ADMIN` |
 | **BO4E** | `GET` returns `rubo4e::current` types; every `PUT` validates `_typ` and refuses out-of-schema values (`422`) |
 | **Supply status** | `de.mako.process.*` events drive `lf_zuordnung` (one row per assignment: supplier, share, Tranche, `Angekuendigt`/`Aktiv`); every transition writes history (`?at=YYYY-MM-DD`) and emits `de.markt.versorgung.changed` |
 | **Events** | CloudEvents 1.0 from `urn:mako:marktd:tenant:{tenant}`, HMAC-signed, durable two-phase fan-out ordered per aggregate |
 | **API spec** | OpenAPI 3.1 at `/api/v1/openapi.json` — open it in any Swagger UI or Redoc |
-| **MCP** | 19 read-only tools and 4 prompts at `/mcp` |
+| **MCP** | 21 read-only tools and 4 prompts at `/mcp` |
 
 Startup refuses a missing `[oidc]` or `webhook.inbound_secret` unless
 `allow_insecure_no_auth = true`.
@@ -36,9 +36,10 @@ Startup refuses a missing `[oidc]` or `webhook.inbound_secret` unless
 |---|---|
 | Marktlokation | `/api/v1/malos` (+ `/{id}`, `/lastprofil`, `/bundesland`, `/grid`, `/bilanzierung`, `/lokationen`, `/buendel`), `/api/v1/versorgung/{malo_id}` (+ `/history`) |
 | Messlokation & devices | `/api/v1/melos/{id}` (+ `/msb`, `/zaehler`, `/sharing-eligibility`), `/api/v1/zaehler/{id}/…`, `/geraete/{id}`, `/steuerbare-ressourcen/{sr_id}`, `/technische-ressourcen/{tr_id}`, `/lokationszuordnungen` |
-| Counterparties & registries | `/api/v1/partners`, `/nb-contracts`, `/grundversorger/{nb_mp_id}`, `/energiemix/{nb_mp_id}`, `/nelos`, `/tranchen`, `/mabis-zp`, `/bilanzierungsgebiete/{eic}/mabis-zp`, `/netzzugang/antraege`, `/msb-rahmenvertraege` (+ `/check`), `/correlations` |
+| Counterparties & registries | `/api/v1/partners`, `/nb-contracts`, `/grundversorger/{nb_mp_id}`, `/energiemix/{nb_mp_id}`, `/nelos`, `/tranchen`, `/mabis-zp`, `/bilanzierungsgebiete/{eic}/mabis-zp`, `/zuordnungsermaechtigungen/{lf_mp_id}`, `/netzzugang/antraege`, `/msb-rahmenvertraege` (+ `/check`), `/correlations` |
 | ESA | `/api/v1/esa/einwilligungen`, `/framework`, `/preise`, `/messprodukte`, `/subscriptions/{bestellung_ref}`, `/consent-check` |
 | Price sheets | `/api/v1/preisblaetter{,-messung,-ka,-dienstleistung,-hardware}/{mp_id}`, `/mmma-preise/gas`, `/mmm-preise/strom/{year}/{month}`, `/pricat/{nb_mp_id}/…` |
+| Referenzreihen | `/api/v1/referenzreihen` (+ `/{reihe}/werte`, `/{reihe}/wert`, `/{reihe}/import`) — published figures billing reads, bitemporal, `422 referenzwert_fehlt` when missing |
 | Fan-out & admin | `/api/v1/subscriptions` (+ `/{id}/test`), inbound at `webhook.inbound_path`, `/admin/fanout/dlq…`, `/admin/events` |
 
 A `404` from `/bilanzierungsgebiete/{eic}/mabis-zp` means *refuse the

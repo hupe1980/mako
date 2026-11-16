@@ -3,14 +3,12 @@
 //! `approve_queue_entry` and `reject_queue_entry` do not call a Rust function —
 //! they issue an HTTP request back into this service's own router, so that the
 //! REST handler's Cedar check runs rather than being bypassed. Nothing in the
-//! type system connects a `format!`-built path to a `.route()` string, and the
-//! two drifted: the tools built `PUT /api/v1/approval-queue/{id}/…` while the
-//! router registers `POST /api/v1/queue/{id}/…`. Both the method and the path
-//! were wrong, so every call to either tool returned 404 and the operator
-//! override they exist for had never once worked.
+//! type system connects a `format!`-built path to a `.route()` string, so a
+//! tool whose method or path differs from the router's answers every call with
+//! 404 and the operator override it exists for never works.
 //!
-//! Pinning the tools' path with a second string literal would have been no
-//! guard at all — the wrong path written twice still agrees with itself. So the
+//! Pinning the tools' path with a second string literal would be no guard at
+//! all — the wrong path written twice still agrees with itself. So the
 //! method and path now live in one `QueueRoute` constant that the router
 //! registers and the tools build their request from, and this suite checks the
 //! two ends against each other:

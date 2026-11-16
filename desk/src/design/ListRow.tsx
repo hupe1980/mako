@@ -37,7 +37,7 @@ export function ListRow({
       />
       {leading}
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-callout font-medium text-text">{title}</span>
+        <span className="block truncate text-body text-text">{title}</span>
         {subtitle && (
           <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-body text-text-2">
             {subtitle}

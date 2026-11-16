@@ -80,7 +80,8 @@ pub struct MahnungView {
     pub iban: Option<String>,
     /// Stufe 3 only: the § 41f Abs. 1 EnWG Sperrandrohung. `Some` makes a
     /// template print the threat block; the 4-Wochen-Frist lives in
-    /// [`Self::geplantes_sperrdatum`].
+    /// [`Self::geplantes_sperrdatum`]. Printed verbatim in whichever `anrede`
+    /// the letter is written in, so phrased without „Sie“ or „du“.
     pub sperrandrohung: Option<String>,
     /// Stufe 3 only: the earliest lawful disconnection date, ISO 8601.
     pub geplantes_sperrdatum: Option<String>,
@@ -151,7 +152,7 @@ pub fn specimen() -> MahnungView {
         iban: Some("DE89370400440532013000".to_owned()),
         sperrandrohung: Some(
             "Sollte der Gesamtbetrag nicht bis zum genannten Termin eingehen, drohen wir \
-             hiermit gemäß § 41f Abs. 1 EnWG die Unterbrechung Ihrer Stromversorgung an."
+             hiermit gemäß § 41f Abs. 1 EnWG die Unterbrechung der Stromversorgung an."
                 .to_owned(),
         ),
         geplantes_sperrdatum: Some("2026-04-01".to_owned()),

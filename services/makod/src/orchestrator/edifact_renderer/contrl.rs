@@ -117,26 +117,32 @@ pub(super) fn render_contrl(
 }
 
 /// Insert the `SG1 UCM` / `SG2 UCS` / `UCD` report before the `UNT` of a
-/// rendered `UNH`…`UCI`…`UNT` message, and recount `UNT` DE 0074.
+/// rendered `UNH`…`UCI`…`UNT` message, and let the writer recount `UNT` DE 0074.
+///
+/// The message is read back as segments, not searched as text: `UCI` DE 0020
+/// echoes the inbound interchange reference, which may carry a released
+/// terminator (`?'`), so counting terminator bytes overstates DE 0074 and a
+/// text search for `UNT+` can land inside a value.
 fn splice_message_reports(
     message: &[u8],
     fehler: &[crate::contrl_ack::NachrichtenFehler],
 ) -> Result<Vec<u8>, RenderError> {
     use crate::contrl_ack::Fehlerort;
-    use edifact_rs::{OwnedElement, OwnedSegment};
+    use edifact::{OwnedElement, OwnedSegment, Segment};
 
-    let text =
-        std::str::from_utf8(message).map_err(|e| RenderError::BuilderError(e.to_string()))?;
-    let unt = text
-        .rfind("UNT+")
-        .ok_or_else(|| RenderError::BuilderError("rendered CONTRL has no UNT".into()))?;
-    let head = &text[..unt];
-    let reference = text[unt..]
-        .trim_end_matches('\'')
-        .rsplit('+')
-        .next()
-        .unwrap_or_default()
-        .to_owned();
+    let builder_error = |e: edifact::EdifactError| RenderError::BuilderError(e.to_string());
+    let mut head: Vec<OwnedSegment> = edifact::from_bytes(message)
+        .map(|s| s.map(Segment::into_owned))
+        .collect::<Result<_, _>>()
+        .map_err(builder_error)?;
+    let reference = match head.pop() {
+        Some(unt) if unt.tag == "UNT" => unt.component_str(1, 0).unwrap_or_default().to_owned(),
+        _ => {
+            return Err(RenderError::BuilderError(
+                "rendered CONTRL has no UNT".into(),
+            ));
+        }
+    };
 
     let mut report: Vec<OwnedSegment> = Vec::new();
     for f in fehler {
@@ -191,15 +197,9 @@ fn splice_message_reports(
             }
         }
     }
-    let head_segments = head.matches('\'').count();
-    let count = (head_segments + report.len() + 1).to_string();
-    report.push(OwnedSegment::new(
-        "UNT",
-        vec![OwnedElement::of(&[count]), OwnedElement::of(&[reference])],
-    ));
-    let tail = edifact_rs::segments_to_bytes(&report)
-        .map_err(|e| RenderError::BuilderError(e.to_string()))?;
-    let mut out = head.as_bytes().to_vec();
-    out.extend_from_slice(&tail);
-    Ok(out)
+    let mut w = edifact::Writer::new(Vec::new());
+    for segment in head.iter().chain(&report) {
+        w.write_segment(segment).map_err(builder_error)?;
+    }
+    w.finish_unt(&reference).map_err(builder_error)
 }

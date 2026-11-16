@@ -79,18 +79,8 @@ const FRIST_UNREAD: &[Unread] = &[
 /// Meldepflicht rows (by PID) nothing reads. May only shrink.
 const MELDUNG_UNREAD: &[Unread] = &[
     Unread {
-        name: "44036←44001",
-        reason: "GeLi Gas 3.0 Kap. 3.2.3 (S. 9) owes it beside the Abmeldungsanfrage 44010, and no GNB door sends a 44010 yet, so nothing declares it owed",
-        milestone: "M11",
-    },
-    Unread {
-        name: "44037←44001",
-        reason: "GeLi Gas 3.0 Kap. 3.2.3 (S. 9) owes it beside the Abmeldungsanfrage 44010, and no GNB door sends a 44010 yet, so nothing declares it owed",
-        milestone: "M11",
-    },
-    Unread {
         name: "44038←44001",
-        reason: "whether a LFZ is displaced is decided by no source processd reads (nb_module.rs: the 55038/44038 is not derived from the Anmeldung decision), so no process can know it is owed",
+        reason: "whether a LFZ is displaced is decided by no source processd reads (nb_module.rs: the 55038/44038 is not derived from the Anmeldung decision); the Abmeldungsanfrage door names it `nicht_entschieden`",
         milestone: "M11",
     },
     Unread {

@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use mako_engine::{ids::TenantId, store_slatedb::SlateDbStore};
+use mako_engine::{ids::TenantId, registry::ProcessRegistry, store_slatedb::SlateDbStore};
 use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004";
@@ -476,4 +476,59 @@ async fn a_deaktivierung_takes_the_series_of_its_activation() {
         matches!(outcome, Ok(IngestOutcome::Spawned { .. })),
         "the Deaktivierung names its series through the activation: {outcome:?}"
     );
+}
+
+/// A 55071 reaches the Zuordnungsermächtigung adapter, not the MaBiS-ZP one.
+///
+/// The message names no Lokation: spawned through the generic Anfrage arm it
+/// would be keyed on an empty MaLo and refused as a MaBiS-ZP Anfrage, and the
+/// NB would hold no Ermächtigung to check an Anmeldung against (`E_0622`
+/// Prüfschritt 60). Its process is keyed on the BKV and its `IDE+24`
+/// Vorgangsnummer and records the Zuordnungsermächtigung series.
+#[tokio::test]
+async fn a_55071_is_received_as_a_zuordnungsermaechtigung() {
+    use mako_engine::process::Process;
+    use mako_mabis::{MabisZpLifecycleWorkflow, ZpSerie, ZpVorgang};
+
+    let edi = include_str!("../../../../demos/nb-stp/fixtures/utilmd-55071.edi");
+    let msg = edi_energy::parse(edi.as_bytes()).expect("the 55071 fixture parses");
+    let store = Arc::new(
+        SlateDbStore::open_in_memory()
+            .await
+            .expect("in-memory store"),
+    );
+    let tenant = TenantId::from_party_id(OWN_MP);
+    let dispatcher =
+        EdifactIngestDispatcher::new(Arc::clone(&store), store.as_snapshot_store(), 100, tenant);
+    let outcome = dispatcher
+        .dispatch(
+            &msg,
+            "mabis-zp-lifecycle",
+            55071,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect("the 55071 dispatches");
+    let IngestOutcome::Spawned { process_id, .. } = outcome else {
+        panic!("a 55071 spawns its own process, got {outcome:?}");
+    };
+
+    let identity = store
+        .as_process_registry()
+        .lookup_correlated(tenant, "zuordnungsermaechtigung|9900000000019|ZE0001")
+        .await
+        .expect("correlation lookup")
+        .into_iter()
+        .find(|id| id.process_id == process_id)
+        .expect("the process is keyed on the BKV and its Vorgangsnummer");
+    let state = Process::<MabisZpLifecycleWorkflow, Arc<SlateDbStore>>::from_identity(
+        Arc::clone(&store),
+        identity,
+    )
+    .state()
+    .await
+    .expect("state");
+    let data = state.data().expect("the Ermächtigung was recorded");
+    assert_eq!(data.serie, ZpSerie::Zuordnungsermaechtigung);
+    assert_eq!(data.vorgang, ZpVorgang::Aktivierung);
 }

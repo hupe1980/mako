@@ -155,7 +155,7 @@ fn an_aperak_without_the_acknowledged_reference_is_refused() {
 /// The two Anwendungsfälle differ only in whether an error is reported, so the
 /// constructors — not the caller — decide the PID and the `BGM` code. A
 /// rejection stamped 29002, or an Anerkennung stamped 29001, is refused by the
-/// AHB, and both were shipping before this test existed.
+/// AHB.
 #[test]
 fn the_constructors_pair_the_pid_with_the_bgm_code() {
     let ack = PendingOutbox::aperak_anerkennung(NB, LF, ORIG_REF);
@@ -170,7 +170,7 @@ fn the_constructors_pair_the_pid_with_the_bgm_code() {
     assert_eq!(nak.payload["error_code"], "Z29");
 
     // Neither states `document_code`: it follows from the Anwendungsfall, and
-    // two independent spellings of one fact is how they drifted apart.
+    // two independent spellings of one fact drift apart.
     assert!(ack.payload.get("document_code").is_none());
     assert!(nak.payload.get("document_code").is_none());
 }
@@ -199,6 +199,7 @@ fn the_supplier_change_workflow_enqueues_a_renderable_aperak() {
             document_date: "20260701".to_owned(),
             process_date: "20261001".to_owned(),
             bilanzierungsgebiet: None,
+            bilanzkreis: None,
             bilanzierungsmethode: None,
             fallgruppe: None,
             transaktionsgrund: Some("E01".to_owned()),

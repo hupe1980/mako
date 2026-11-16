@@ -31,7 +31,7 @@ use mako_service::oidc::Claims;
 use serde::Deserialize;
 use sqlx::PgPool;
 
-use crate::config::OutputdConfig;
+use crate::config::{Anrede, OutputdConfig};
 use crate::document::gate::{self, DEFAULT_PDF_STANDARD};
 use crate::error::{OutputError, OutputResult};
 use crate::template_store::{self, TemplateKind};
@@ -179,22 +179,46 @@ pub async fn post_template_preview(
         return Err(OutputError::bad_request("EMPTY_SOURCE", "source is empty"));
     }
     // Its own specimen, no carrier: a Mahnung and a Gebührenbescheid are
-    // letters, and the preview is the letter itself.
+    // letters, and the preview is the letter itself — in the form of address
+    // this deployment's letters are written in.
+    let anrede = cfg.policy.anrede.get();
     let letter = match req.kind {
         TemplateKind::Mahnung => Some((
-            serde_json::to_string(&crate::document::mahnung::specimen()),
+            crate::document::specimen_data(&crate::document::mahnung::specimen(), anrede),
             "mahnung",
         )),
         TemplateKind::Gebuehrenbescheid => Some((
-            serde_json::to_string(&crate::document::gebuehrenbescheid::specimen()),
+            serde_json::to_string(&crate::document::gebuehrenbescheid::specimen())
+                .map_err(anyhow::Error::from),
             "gebuehrenbescheid",
         )),
-        _ => None,
+        TemplateKind::Vertragszusammenfassung => Some((
+            crate::document::specimen_data(
+                &crate::document::vertragszusammenfassung::specimen(),
+                anrede,
+            ),
+            "vertragszusammenfassung",
+        )),
+        TemplateKind::Vertragsbestaetigung => Some((
+            crate::document::specimen_data(
+                &crate::document::vertragsbestaetigung::specimen(),
+                anrede,
+            ),
+            "vertragsbestaetigung",
+        )),
+        TemplateKind::Widerrufsbestaetigung => Some((
+            crate::document::specimen_data(
+                &crate::document::widerrufsbestaetigung::specimen(),
+                anrede,
+            ),
+            "widerrufsbestaetigung",
+        )),
+        TemplateKind::Invoice | TemplateKind::Preisanpassung => None,
     };
     if let Some((data, name)) = letter {
         let request = crate::document::RenderRequest {
             template: req.source,
-            data: Some(data.map_err(|e| OutputError::Internal(e.into()))?),
+            data: Some(data.map_err(OutputError::Internal)?),
             attachment: None,
             standard: None,
             date: gate::SPECIMEN_DATE,
@@ -260,6 +284,9 @@ pub async fn get_reference_template(
         TemplateKind::Mahnung => crate::document::REFERENCE_MAHNUNG_TEMPLATE,
         TemplateKind::Preisanpassung => crate::document::REFERENCE_PREISANPASSUNG,
         TemplateKind::Gebuehrenbescheid => crate::document::REFERENCE_GEBUEHRENBESCHEID,
+        TemplateKind::Vertragszusammenfassung => crate::document::REFERENCE_VERTRAGSZUSAMMENFASSUNG,
+        TemplateKind::Vertragsbestaetigung => crate::document::REFERENCE_VERTRAGSBESTAETIGUNG,
+        TemplateKind::Widerrufsbestaetigung => crate::document::REFERENCE_WIDERRUFSBESTAETIGUNG,
     };
     Ok((
         StatusCode::OK,
@@ -440,19 +467,20 @@ pub(crate) fn pdf_response(filename: &str, pdf: Vec<u8>) -> axum::response::Resp
 /// `400` naming the kinds that exist, rather than a bare "unknown template
 /// kind" that leaves the caller guessing the spelling.
 fn parse_kind(s: &str) -> OutputResult<TemplateKind> {
-    match s.to_ascii_uppercase().as_str() {
-        "INVOICE" => Ok(TemplateKind::Invoice),
-        "MAHNUNG" => Ok(TemplateKind::Mahnung),
-        "PREISANPASSUNG" => Ok(TemplateKind::Preisanpassung),
-        "GEBUEHRENBESCHEID" => Ok(TemplateKind::Gebuehrenbescheid),
-        other => Err(OutputError::bad_request(
-            "UNKNOWN_TEMPLATE_KIND",
-            format!(
-                "`{other}` is not a template kind — expected INVOICE, MAHNUNG, PREISANPASSUNG \
-                 or GEBUEHRENBESCHEID"
-            ),
-        )),
-    }
+    let upper = s.to_ascii_uppercase();
+    TemplateKind::ALL
+        .into_iter()
+        .find(|k| k.as_str() == upper)
+        .ok_or_else(|| {
+            let known: Vec<&str> = TemplateKind::ALL.iter().map(|k| k.as_str()).collect();
+            OutputError::bad_request(
+                "UNKNOWN_TEMPLATE_KIND",
+                format!(
+                    "`{upper}` is not a template kind — expected one of {}",
+                    known.join(", ")
+                ),
+            )
+        })
 }
 
 #[cfg(test)]
@@ -463,12 +491,7 @@ mod tests {
     fn every_stored_kind_parses_back_from_its_path_segment() {
         // The `kind` in the URL and the `kind` in the CHECK constraint are the
         // same vocabulary; a mismatch would make a kind unreachable over HTTP.
-        for k in [
-            TemplateKind::Invoice,
-            TemplateKind::Mahnung,
-            TemplateKind::Preisanpassung,
-            TemplateKind::Gebuehrenbescheid,
-        ] {
+        for k in TemplateKind::ALL {
             assert_eq!(parse_kind(k.as_str()).expect("round-trips"), k);
         }
         assert_eq!(
@@ -566,6 +589,11 @@ pub struct RenderApiRequest {
     pub date: String,
     /// Stable identity for the PDF `/ID` — the caller's record id, typically.
     pub ident: String,
+    /// The form of address, `sie` or `du`, pinned for a re-print the way
+    /// `template_hash` pins the layout: the value an issued document records.
+    /// `None` takes the deployment's `[policy] anrede`.
+    #[serde(default)]
+    pub anrede: Option<String>,
 }
 
 impl RenderApiRequest {
@@ -661,10 +689,7 @@ fn render_admissible(
             "ATTACHMENT_REQUIRED",
             "an INVOICE render requires the attachment (the CII payload and its BT-24)",
         )),
-        (
-            TemplateKind::Mahnung | TemplateKind::Preisanpassung | TemplateKind::Gebuehrenbescheid,
-            true,
-        ) => Err(OutputError::unprocessable(
+        (k, true) if k.is_textform() => Err(OutputError::unprocessable(
             "ATTACHMENT_NOT_ALLOWED",
             format!(
                 "a {} is Textform and carries no embedded invoice — omit the attachment",
@@ -696,6 +721,7 @@ pub async fn post_render(
         [
             ("Content-Type", rendered.media_type.to_owned()),
             ("X-Mako-Template-Hash", rendered.template_hash.clone()),
+            ("X-Mako-Anrede", rendered.anrede.as_str().to_owned()),
         ],
         rendered.bytes,
     ))
@@ -706,6 +732,9 @@ pub struct RenderedDocument {
     pub bytes: Vec<u8>,
     pub template_hash: String,
     pub media_type: &'static str,
+    /// The form of address the document is written in — recorded with it, so
+    /// a re-print can pin it.
+    pub anrede: Anrede,
 }
 
 /// Render `req` with the tenant's stored template — the body both
@@ -731,6 +760,7 @@ pub async fn render_with_stored_template(
         &time::format_description::well_known::Iso8601::DATE,
     )
     .map_err(|e| OutputError::bad_request("INVALID_DATE", format!("date: {e}")))?;
+    let anrede = anrede_of(cfg, kind, req.anrede.as_deref())?;
 
     // The subject and the kind must agree: an invoice is rendered from the
     // semantic model, a Textform document from its own view. Mixing them would
@@ -741,10 +771,6 @@ pub async fn render_with_stored_template(
             serde_json::to_string(&crate::document::DocumentView::of(model))
                 .map_err(|e| OutputError::Internal(e.into()))?
         }
-        (
-            TemplateKind::Mahnung | TemplateKind::Preisanpassung | TemplateKind::Gebuehrenbescheid,
-            RenderSubject::View(view),
-        ) => view.to_string(),
         (TemplateKind::Invoice, RenderSubject::View(_)) => {
             return Err(OutputError::unprocessable(
                 "SUBJECT_MUST_BE_A_MODEL",
@@ -753,10 +779,26 @@ pub async fn render_with_stored_template(
                  about what a template may print",
             ));
         }
-        (
-            TemplateKind::Mahnung | TemplateKind::Preisanpassung | TemplateKind::Gebuehrenbescheid,
-            RenderSubject::Model(_),
-        ) => {
+        // A Gebührenbescheid is a Verwaltungsakt, written in „Sie“ whatever
+        // the setting; its template reads no `anrede`.
+        (TemplateKind::Gebuehrenbescheid, RenderSubject::View(view)) => {
+            refuse_anrede_in_view(view)?;
+            view.to_string()
+        }
+        // Every other kind is a Textform letter rendered from its view, in the
+        // deployment's form of address.
+        (_, RenderSubject::View(view)) => {
+            refuse_anrede_in_view(view)?;
+            crate::document::mit_anrede(view, anrede)
+                .ok_or_else(|| {
+                    OutputError::unprocessable(
+                        "VIEW_NOT_AN_OBJECT",
+                        format!("a {} view is a JSON object", kind.as_str()),
+                    )
+                })?
+                .to_string()
+        }
+        (_, RenderSubject::Model(_)) => {
             return Err(OutputError::unprocessable(
                 "SUBJECT_MUST_BE_A_VIEW",
                 format!(
@@ -836,7 +878,58 @@ pub async fn render_with_stored_template(
         bytes: pdf,
         template_hash: template.hash.clone(),
         media_type: "application/pdf",
+        anrede,
     })
+}
+
+/// The form of address a document of `kind` is written in: a pinned `sie` or
+/// `du`, or the deployment's `[policy] anrede` — and „Sie“ for a
+/// Gebührenbescheid either way.
+///
+/// # Errors
+///
+/// `422 ANREDE_UNKNOWN` for a pin that is neither `sie` nor `du`, and
+/// `422 ANREDE_FIXED` for a `du` pin on a Gebührenbescheid.
+pub fn anrede_of(
+    cfg: &OutputdConfig,
+    kind: TemplateKind,
+    pin: Option<&str>,
+) -> OutputResult<Anrede> {
+    let chosen = match pin {
+        None => cfg.policy.anrede.get(),
+        Some(name) => Anrede::parse(name).ok_or_else(|| {
+            OutputError::unprocessable(
+                "ANREDE_UNKNOWN",
+                format!("anrede `{name}` is neither `sie` nor `du`"),
+            )
+        })?,
+    };
+    let anrede = chosen.fuer(kind.as_str());
+    if pin.is_some() && anrede != chosen {
+        return Err(OutputError::unprocessable(
+            "ANREDE_FIXED",
+            format!(
+                "a {} is a Verwaltungsakt and always addresses its reader with „Sie“ — omit \
+                 the anrede",
+                kind.as_str()
+            ),
+        ));
+    }
+    Ok(anrede)
+}
+
+/// A producer's view carries no `anrede`: the form of address is the
+/// operator's setting, and a second source for it would decide some letters
+/// one way and the rest the other.
+fn refuse_anrede_in_view(view: &serde_json::Value) -> OutputResult<()> {
+    if view.get("anrede").is_some() {
+        return Err(OutputError::unprocessable(
+            "ANREDE_IN_VIEW",
+            "the view carries `anrede`; outputd sets it from [policy] anrede — omit it, or pin \
+             a re-print with the request's top-level `anrede`",
+        ));
+    }
+    Ok(())
 }
 
 // ── The document API ──────────────────────────────────────────────────────────
@@ -920,6 +1013,8 @@ impl IssueDocumentRequest {
             attachment: self.attachment.take(),
             date: std::mem::take(&mut self.date),
             ident: std::mem::take(&mut self.ident),
+            // An issue follows the deployment's setting; only a re-print pins.
+            anrede: None,
         }
     }
 }
@@ -1091,6 +1186,7 @@ pub async fn post_document(
             kunden_nr: req.kunden_nr.as_deref(),
             content: &rendered.bytes,
             media_type: rendered.media_type,
+            anrede: rendered.anrede,
             recipient: req.recipient.clone(),
             issued_by: Some(claims.sub()),
         },
@@ -1183,6 +1279,80 @@ pub async fn list_documents(
         .await
         .map(Json)
         .map_err(OutputError::Internal)
+}
+
+/// `GET /api/v1/documents/by-subject/{kind}/{subject_ref}` — the document
+/// a `(kind, subject_ref)` was issued as, with every delivery track.
+///
+/// The issuer's own question, asked in its own terms: `vertragd` reads the
+/// Vertragsbestätigung of a contract this way and takes the § 356 Abs. 3 BGB
+/// Belehrung instant from its `DELIVERED` row's `delivered_at`.
+pub async fn get_document_by_subject(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
+    Path((kind, subject_ref)): Path<(String, String)>,
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-document", &cfg.tenant)?;
+    let kind = parse_kind(&kind)?;
+    crate::delivery::store::by_subject(&pool, &cfg.tenant, kind.as_str(), &subject_ref)
+        .await
+        .map_err(OutputError::Internal)?
+        .map(Json)
+        .ok_or_else(|| {
+            OutputError::not_found(
+                "DOCUMENT_NOT_FOUND",
+                format!("no {} document for {subject_ref}", kind.as_str()),
+            )
+        })
+}
+
+/// `GET /api/v1/deliveries` query.
+#[derive(Debug, Deserialize)]
+pub struct DeliveriesQuery {
+    /// Which deliveries — `FAILED`, the only status this list answers.
+    pub status: String,
+    /// Restrict to one document kind.
+    pub kind: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// `GET /api/v1/deliveries?status=FAILED&kind=…` — the documents that never
+/// reached their recipient, each with its `subject_ref`.
+///
+/// The operator's work list: a terminal failure is otherwise visible only on
+/// the document, which nobody opens unless they already know to. Tenant-wide,
+/// so it is an operator action (`read-delivery-failures`), not the scoped
+/// `read-document` a portal inbox runs on.
+pub async fn list_deliveries(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
+    Query(q): Query<DeliveriesQuery>,
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-delivery-failures", &cfg.tenant)?;
+    if q.status != "FAILED" {
+        return Err(OutputError::bad_request(
+            "UNSUPPORTED_DELIVERY_STATUS",
+            format!(
+                "`status={}` is not a list this API answers — `FAILED` is the operator's \
+                 work list; a document's own tracks are on GET /api/v1/documents/{{id}}",
+                q.status
+            ),
+        ));
+    }
+    let kind = q.kind.as_deref().map(parse_kind).transpose()?;
+    crate::delivery::store::failed_deliveries(
+        &pool,
+        &cfg.tenant,
+        kind.map(TemplateKind::as_str),
+        q.limit.unwrap_or(100),
+    )
+    .await
+    .map(Json)
+    .map_err(OutputError::Internal)
 }
 
 /// `POST /api/v1/deliveries/{delivery_id}/read` — the customer opened it.

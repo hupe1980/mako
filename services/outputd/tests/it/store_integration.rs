@@ -252,11 +252,7 @@ async fn the_database_refuses_an_unproven_invoice_template() {
     // that established merely that the template compiled would let a
     // PREISANPASSUNG layout printing none of what § 41 Abs. 5 EnWG requires be
     // rolled out.
-    for kind in [
-        TemplateKind::Mahnung,
-        TemplateKind::Preisanpassung,
-        TemplateKind::Gebuehrenbescheid,
-    ] {
+    for kind in TemplateKind::ALL.into_iter().filter(|k| k.is_textform()) {
         let hash = template_store::publish(
             &pool,
             tenant,
@@ -596,6 +592,7 @@ fn a_document<'a>(subject: &'a str, content: &'a [u8]) -> docs::NewDocument<'a> 
         kunden_nr: Some("K-4711"),
         content,
         media_type: "application/pdf",
+        anrede: outputd::config::Anrede::Sie,
         recipient: docs::Recipient {
             name: Some("Erika Mustermann".to_owned()),
             email: Some("erika@example.test".to_owned()),
@@ -810,6 +807,117 @@ async fn a_delivery_the_outbox_gave_up_on_is_failed() {
     assert_eq!(rows[0].attempts, 8);
     assert_eq!(rows[0].last_error.as_deref(), Some("relay answered 503"));
     assert!(rows[0].next_attempt_at.is_none());
+}
+
+/// A Vertragsbestätigung is found by the contract it confirms, with the
+/// delivery row whose `delivered_at` vertragd reads as the § 356 Abs. 3 BGB
+/// Belehrung instant.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_vertragsbestaetigung_is_found_by_its_contract() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let mut doc = a_document("vertrag-4711", b"%PDF-1.7".as_slice());
+    doc.kind = "VERTRAGSBESTAETIGUNG";
+    let (issued, created) = docs::issue(&pool, &doc, &[Channel::Email], &cfg())
+        .await
+        .expect("the schema admits the kind");
+    assert!(created);
+    let delivery_id = issued.deliveries[0].delivery_id;
+    docs::record_success(&pool, TENANT, delivery_id, true, None)
+        .await
+        .expect("delivered");
+
+    let found = docs::by_subject(&pool, TENANT, "VERTRAGSBESTAETIGUNG", "vertrag-4711")
+        .await
+        .unwrap()
+        .expect("found by its contract");
+    assert_eq!(found.document.document_id, issued.document.document_id);
+    assert_eq!(found.deliveries[0].status, "DELIVERED");
+    assert!(found.deliveries[0].delivered_at.is_some());
+    assert!(
+        docs::by_subject(&pool, TENANT, "VERTRAGSZUSAMMENFASSUNG", "vertrag-4711")
+            .await
+            .unwrap()
+            .is_none(),
+        "the kind is part of the key"
+    );
+    assert!(
+        docs::by_subject(
+            &pool,
+            "9900000000002",
+            "VERTRAGSBESTAETIGUNG",
+            "vertrag-4711"
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "and so is the tenant"
+    );
+}
+
+/// A Vertragsbestätigung whose delivery the outbox gave up on is listed for
+/// the operator with the contract it confirms — and nothing delivered is.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_failed_vertragsbestaetigung_is_visible_with_its_contract() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let mut doc = a_document("vertrag-0815", b"%PDF-1.7".as_slice());
+    doc.kind = "VERTRAGSBESTAETIGUNG";
+    let (issued, _) = docs::issue(&pool, &doc, &[Channel::Email], &cfg())
+        .await
+        .expect("issue");
+    let mut ok = a_document("vertrag-0816", b"%PDF-1.7".as_slice());
+    ok.kind = "VERTRAGSBESTAETIGUNG";
+    let (delivered, _) = docs::issue(&pool, &ok, &[Channel::Email], &cfg())
+        .await
+        .expect("issue");
+    docs::record_success(
+        &pool,
+        TENANT,
+        delivered.deliveries[0].delivery_id,
+        true,
+        None,
+    )
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "UPDATE event_outbox SET dead_lettered_at = now(), attempts = 8, \
+         last_error = 'relay answered 550' WHERE event_id = $1",
+    )
+    .bind(docs::delivery_key(issued.deliveries[0].delivery_id))
+    .execute(&pool)
+    .await
+    .unwrap();
+    outputd::delivery::worker::sweep(&pool, TENANT)
+        .await
+        .unwrap();
+
+    let failed = docs::failed_deliveries(&pool, TENANT, Some("VERTRAGSBESTAETIGUNG"), 100)
+        .await
+        .unwrap();
+    assert_eq!(failed.len(), 1, "only the failed one: {failed:?}");
+    assert_eq!(failed[0].subject_ref, "vertrag-0815");
+    assert_eq!(failed[0].document_id, issued.document.document_id);
+    assert_eq!(failed[0].last_error.as_deref(), Some("relay answered 550"));
+    assert!(
+        docs::failed_deliveries(&pool, TENANT, Some("MAHNUNG"), 100)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the kind filter holds"
+    );
+    assert!(
+        docs::failed_deliveries(&pool, "9900000000002", None, 100)
+            .await
+            .unwrap()
+            .is_empty(),
+        "another tenant sees none of it"
+    );
 }
 
 /// A bounce on a delivered notice turns it into the failure it was.
@@ -1109,4 +1217,47 @@ async fn a_relay_outage_delays_the_mahnung_and_never_loses_it() {
             .and_then(|e| e["message_id"].as_str()),
         Some("relay-1")
     );
+}
+
+/// A document records the form of address it was written in, and its mail
+/// subject is written in the same one: a `du` letter does not arrive under
+/// „Bestätigung Ihres Vertrags“.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_du_document_records_its_anrede_and_its_subject_follows() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let mut doc = a_document("vertrag-du", b"%PDF-1.7".as_slice());
+    doc.kind = "VERTRAGSBESTAETIGUNG";
+    doc.anrede = outputd::config::Anrede::Du;
+    let (issued, _) = docs::issue(&pool, &doc, &[Channel::Email], &cfg())
+        .await
+        .expect("issue");
+    assert_eq!(issued.document.anrede, "du");
+    let found = docs::by_id(&pool, TENANT, issued.document.document_id)
+        .await
+        .unwrap()
+        .expect("stored");
+    assert_eq!(found.document.anrede, "du", "read back as recorded");
+
+    let (up, seen) = relay(200).await;
+    outputd::delivery::worker::relay_worker(
+        pool.clone(),
+        TENANT.to_owned(),
+        Channel::Email,
+        up,
+        Some(secrecy::SecretString::from("relay-shared-secret")),
+    )
+    .with_config(mako_service::outbox::OutboxConfig {
+        backoff: vec![std::time::Duration::ZERO],
+        lease: std::time::Duration::ZERO,
+        ..Default::default()
+    })
+    .flush_once()
+    .await
+    .unwrap();
+    let pushes = seen.lock().unwrap().clone();
+    let pushed: serde_json::Value = serde_json::from_slice(&pushes[0].1).unwrap();
+    assert_eq!(pushed["subject"], "Bestätigung deines Vertrags");
 }

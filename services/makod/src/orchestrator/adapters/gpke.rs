@@ -116,6 +116,14 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 // message that omits it falls back to marktd's own record for
                 // the Marktlokation.
                 bilanzierungsgebiet: extract_bilanzierungsgebiet(u.segments()),
+                // `SG8 SEQ+Z79` / `SG10 CAV+ZV4` — the Bilanzkreis processd
+                // holds against the Zuordnungsermächtigungen (E_0622
+                // Prüfschritt 60).
+                bilanzkreis: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.bilanzkreis())
+                    .map(ToOwned::to_owned),
                 // Bilanzierungsmethode from UTILMD TM+EM segment.
                 // TM qualifier Z01 = SLP, Z02 = RLM, Z04 = IMS.
                 // Extracted from the message-level raw segments: TM segment
@@ -310,7 +318,7 @@ pub fn gpke_abrechnung_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
                     .to_owned(),
                 validation_passed,
                 validation_errors,
-                rechnung: Some(Box::new(build_rechnung(inv.segments()))),
+                rechnung: Some(Box::new(build_rechnung(inv.segments(), inv.decimal_mark()))),
                 // `SG1 RFF+ACE` and `IMD+7081` — Muss on the wire, and BO4E
                 // has no field for either. The first is what `E_0264`
                 // Prüfschritt 40 compares against the order on record; the

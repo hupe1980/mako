@@ -67,5 +67,39 @@ script (`allowScripts` in `package.json`).
 - **Design tokens are the only place a colour, size, radius or duration is
   written** (`src/design/tokens.css`). A new control appears in
   `/dev/gallery` in every state, in light and dark.
+- **Every word addresses the operator as „du"**: short, verbs first
+  („Prüf die Schreibweise"). `src/i18n/i18n.test.tsx` refuses a formal „Sie"
+  or „Ihr" in `de.ts`.
 - **Dependencies are few on purpose.** A new runtime package needs a reason
   in the pull request, and its licence must already be in `deny.toml`.
+
+## Building a view
+
+The next view is right by default when it follows these five, each of them
+held by `cargo xtask check-desk` or a test:
+
+1. **Page.** Wrap it in `design/Page.tsx`: `width="reading"` for a
+   document-like view (≈720 px), `width="work"` for a list, table or grid.
+   `title`, an optional one-line `subtitle`, an optional `trailing` action. A
+   view sets no width of its own (`max-w-*`, `mx-auto` are refused) — a
+   paragraph that needs a line length takes `.measure`.
+2. **Type.** The macOS ramp in `design/tokens.css`: `text-large-title`
+   (page title), `text-title2` (a card's or detail's head), `text-headline`
+   (a section head, a row's first line), `text-body`, `text-callout`,
+   `text-caption`. Regular and `font-semibold` only; no all-caps, no
+   tracking, no `text-[NNpx]`. A secondary label is sentence case in
+   `text-text-2`. Mono is for EDIFACT, segment text and config paths; an ID
+   is system font with tabular figures.
+3. **Status.** Tinted text on its own fill — `bg-critical-fill text-critical`,
+   `soon` (a Frist is near, nothing else), `info` (in progress), `done`. A
+   solid fill is the one primary `Button`'s.
+4. **Codes.** A status or enum a service returns goes through its catalogue
+   table (`src/app/codes.ts`, `eintrag(…)`); a tool's refusal renders through
+   `design/Refusal.tsx` — the catalogue's sentence for the `code`, the
+   service's text under „Details", one action.
+5. **The assistant follows the work.** Hinweise and the Fragen composer sit
+   below the view's content, the Hinweise folded to one line; a model's text
+   is upright, set off by a 2px `--ai` rule and the sparkle only.
+
+A key/value block is `AngabenListe` + `Angabe` (`design/ListDetail.tsx`):
+Get Info's two columns, names trailing-aligned, an empty value left out.

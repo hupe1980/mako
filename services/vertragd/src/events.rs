@@ -21,6 +21,10 @@
 //! | `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal |
 //! | `de.vertrag.ablauf.ankuendigung` | 30 days before vertragsende / preisgarantie_bis |
 //! | `de.vertrag.abgeschlossen` | Every component's Lieferende has passed; supply is over and the contract is `ABGELAUFEN` (`workers::ablauf`) |
+//! | `de.vertrag.bestellung.eingegangen` | An online order and its Bestellnachweis are stored (`subject` = `bestellreferenz`) |
+//! | `de.vertrag.bestellung.angenommen` | The order became a contract — at the click (`mit_bestellung`) or at acceptance (`mit_annahme`) |
+//! | `de.vertrag.bestellung.abgelehnt` | The operator refused the order (`mit_annahme`) |
+//! | `de.vertrag.widerruf.eingegangen` | A consumer's Widerruf was recorded, with `rechtzeitig`, `wirkung` and `wertersatz_geschuldet` |
 //!
 //! `abgeschlossen` is not `gekuendigt`. A Kündigung is *accepted* on the day it
 //! is filed and `gekuendigt` fires then — months before supply stops, with
@@ -55,6 +59,28 @@ pub fn build_cloud_event(
     )
     .extension("tenantid", tenant)
     .extension("correlationid", vertrag_id.to_string())
+}
+
+/// Build a `de.vertrag.bestellung.*` / `de.vertrag.widerruf.*` CloudEvent.
+///
+/// `subject` is the partner's own `bestellreferenz` — the reference the front
+/// end that posted the order knows it by — and `correlationid` the
+/// Bestellung, so every event of one order correlates without parsing `data`.
+pub fn build_bestell_event(
+    event_type: &str,
+    bestellreferenz: &str,
+    bestellung_id: Uuid,
+    tenant: &str,
+    data: Value,
+) -> mako_service::CloudEvent {
+    mako_service::CloudEvent::new(
+        mako_service::source("vertragd", tenant),
+        event_type,
+        bestellreferenz.to_owned(),
+        data,
+    )
+    .extension("tenantid", tenant)
+    .extension("correlationid", bestellung_id.to_string())
 }
 
 /// Read a MaKo process outcome off an inbound CloudEvent.

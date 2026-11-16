@@ -285,7 +285,7 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
         "konzessionsabgabe": {
           "satz_ct_per_kwh": "0.11",
           "klasse": "Sondervertragskunde",
-          "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" }
+          "durchschnittspreis_ct_per_kwh": "24.80"
         },
         "netzebene": "Niederspannung",
         "jahresarbeit_kwh": "18000",
@@ -407,7 +407,7 @@ Leistung des Kunden überschreitet in mindestens zwei Monaten des Abrechnungsjah
   "satz_ct_per_kwh": "0.11",
   "klasse": "Sondervertragskunde",
   "niederspannung": { "monate_ueber_leistungsgrenze": 5, "jahresverbrauch_kwh": "90000" },
-  "grenzpreis": { "durchschnittspreis_ct_per_kwh": "24.80", "grenzpreis_ct_per_kwh": "18.20" }
+  "durchschnittspreis_ct_per_kwh": "24.80"
 }
 ```
 
@@ -420,13 +420,23 @@ Neither is a ceiling — a rate inside the Höchstbetrag is still unlawful:
 
 | Warning | Rule | Fact it needs |
 |---|---|---|
-| `KA_UNTER_GRENZPREIS` | § 2 Abs. 4 (Strom) resp. Abs. 5 Nr. 2 (Gas) — a Sondervertragskunde whose Durchschnittspreis im Kalenderjahr lies **under** the Grenzpreis | `konzessionsabgabe.grenzpreis`, both figures in ct/kWh ohne USt |
+| `KA_UNTER_GRENZPREIS` | § 2 Abs. 4 (Strom) resp. Abs. 5 Nr. 2 (Gas) — a Sondervertragskunde whose Durchschnittspreis im Kalenderjahr lies **under** the Grenzpreis | `konzessionsabgabe.durchschnittspreis_ct_per_kwh`; the Grenzpreis from marktd (Strom) or `grenzpreis_ct_per_kwh` (Gas), ct/kWh ohne USt |
 | `KA_GAS_UEBER_GRENZMENGE` | § 2 Abs. 5 Nr. 1 — Gas above **5 Millionen kWh** je Jahr und Abnahmefall | none — read off `jahresarbeit_kwh` |
 
-The Grenzpreis (Strom: the Durchschnittserlös of the *vorletzte* Kalenderjahr) and the
-customer's price are supplied. A Sondervertragskunde charged a Konzessionsabgabe without
-`konzessionsabgabe.grenzpreis` is refused (`GrenzpreisvergleichFehlt`): the prohibition cannot
-be ruled out without it. `KA_UNTER_GRENZPREIS` is an `Error`.
+The customer's Durchschnittspreis is the caller's (`durchschnittspreis_ct_per_kwh`, „unter
+Einschluß des Netznutzungsentgelts"). The **Strom** Grenzpreis is read from marktd: KAV § 2
+Abs. 4 makes „der in der amtlichen Statistik des Bundes jeweils für das vorletzte Kalenderjahr
+veröffentlichte Wert ohne Umsatzsteuer" maßgeblich, so a 2027 settlement reads
+`kav_grenzpreis_strom` for 2025 ([marktd Referenzreihen](@/docs/services/marktd.md#referenzreihen)).
+With no value loaded the run is refused `422 referenzwert_fehlt`, naming the series and the
+year; a period spanning 1 January is refused `grenzpreis_jahr_uneindeutig`. A
+`grenzpreis_ct_per_kwh` stated for Strom is a Grenzpreis the Versorgungsunternehmen and the
+Gemeinde agreed — Satz 3 admits only „höhere Grenzpreise", so one below the published value is
+refused `grenzpreis_unter_veroeffentlichtem`. The **Gas** Grenzpreis (Abs. 5 Nr. 2: 1,50 ct/kWh
+scaled by Durchschnittserlöse) is not derived here and stays the caller's
+`grenzpreis_ct_per_kwh`. A Sondervertragskunde charged a Konzessionsabgabe without both figures
+is refused (`GrenzpreisvergleichFehlt`): the prohibition cannot be ruled out without them.
+`KA_UNTER_GRENZPREIS` is an `Error`.
 
 ### §14a EnWG
 

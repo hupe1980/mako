@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import {
   SearchField as AriaSearchField,
   Button,
@@ -11,8 +12,14 @@ import { Icon } from "./Icon";
 export function SearchField({
   placeholder,
   size = "large",
+  inputRef,
   ...props
-}: SearchFieldProps & { placeholder: string; size?: "large" | "compact" }) {
+}: SearchFieldProps & {
+  placeholder: string;
+  size?: "large" | "compact";
+  /** The field itself, for a view that hands focus back to it. */
+  inputRef?: Ref<HTMLInputElement>;
+}) {
   const t = useT();
   const large = size === "large";
   return (
@@ -23,9 +30,10 @@ export function SearchField({
         className={`pointer-events-none absolute text-text-2 ${large ? "left-3.5" : "left-2.5"}`}
       />
       <Input
+        ref={inputRef}
         placeholder={placeholder}
         className={`focus-ring squircle w-full rounded-control border border-separator bg-surface text-text placeholder:text-text-2 [&::-webkit-search-cancel-button]:hidden ${
-          large ? "h-11 pl-11 pr-10 text-callout" : "h-7 pl-8 pr-8 text-body"
+          large ? "h-11 pl-11 pr-10 text-body" : "h-7 pl-8 pr-8 text-body"
         }`}
       />
       <Button

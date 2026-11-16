@@ -3,7 +3,9 @@
 // only for the Rollen that read it, so a hidden one costs no request.
 
 import { useQuery } from "@tanstack/react-query";
+import { family, readingReason, readingStatus, sparte, zustand } from "../app/codes";
 import { nichtErreichbar } from "../app/dienste";
+import { disclosed } from "../app/disclosure";
 import { ROLLEN, type Rolle, useRolle } from "../app/rollen";
 import { type Answer, type Hinweis, hinweise, type VorschlagArt, vorschlaege } from "../data/agent";
 import { abgelehntWeil, buchungsart } from "../data/buchung";
@@ -107,12 +109,13 @@ function useUeberfaellig(aktiv: boolean): Stand {
     quelle: "ueberfaellig",
     titel: p.malo_id ?? p.process_id,
     kennung: true,
-    detail: `PID ${p.pid} · ${p.state}`,
-    grund: p.deadline_source ?? p.family,
+    detail: `PID ${p.pid} · ${zustand(p.state)}`,
+    // The task, in the operator's words; the Fundstelle is the detail's, in Fristen.
+    grund: wort().fristOverdue(family(p.family)),
     frist: p.deadline_at ?? null,
     bezug: [p.process_id, ...(p.malo_id ? [p.malo_id] : [])],
     anker: p.malo_id ? { malo: p.malo_id } : { process: p.process_id },
-    ziel: { to: "/prozess", search: { key: p.malo_id ?? p.process_id } },
+    ziel: { to: "/fristen", search: { id: p.process_id } },
   }));
   return stand("ueberfaellig", wort().ueberfaellig, q, eintraege, q.data?.saturated ?? false);
 }
@@ -161,7 +164,7 @@ function useNichtUebermittelt(aktiv: boolean): Stand {
     quelle: "nicht_uebermittelt",
     titel: a.name ?? a.malo_id,
     kennung: !a.name,
-    detail: `${a.malo_id} · ${a.sparte} · ${wort().vertrag(a.vertrags_nr)}`,
+    detail: `${a.malo_id} · ${sparte(a.sparte)} · ${wort().vertrag(a.vertrags_nr)}`,
     grund: wort().nichtUebermitteltGrund,
     frist: null,
     bezug: [a.malo_id],
@@ -216,8 +219,10 @@ function useAbleseauftraege(aktiv: boolean): Stand {
     quelle: "ableseauftraege",
     titel: a.malo_id,
     kennung: true,
-    detail: `${wort().faellig(formatBusinessDate(a.ausfuehrt_bis))} · ${a.status}`,
-    grund: a.fehlschlag_grund ? `${a.anlass} — ${a.fehlschlag_grund}` : wort().stehtAus(a.anlass),
+    detail: `${wort().faellig(formatBusinessDate(a.ausfuehrt_bis))} · ${readingStatus(a.status)}`,
+    grund: a.fehlschlag_grund
+      ? `${readingReason(a.anlass)} — ${a.fehlschlag_grund}`
+      : wort().stehtAus(readingReason(a.anlass)),
     frist: a.frist,
     bezug: [a.malo_id],
     anker: { malo: a.malo_id },
@@ -442,7 +447,7 @@ export function alsEintrag(h: Hinweis): Eintrag {
     titel: h.titel ?? h.skill ?? wort().hinweis,
     kennung: false,
     detail: h.anker.map((a) => a.wert).join(" · "),
-    grund: h.text,
+    grund: disclosed(h.text),
     frist: (h.faellig as Instant | null) ?? null,
     bezug: h.anker.map((a) => a.wert),
     anker: malo ? { malo } : prozess ? { process: prozess } : null,

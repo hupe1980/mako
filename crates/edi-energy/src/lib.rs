@@ -48,6 +48,7 @@
 
 mod agency_code;
 mod any_message;
+mod decimal;
 mod error;
 mod interchange;
 mod light_message;
@@ -77,6 +78,7 @@ include!(concat!(env!("OUT_DIR"), "/profiles.rs"));
 
 pub use agency_code::AgencyCode;
 pub use any_message::AnyMessage;
+pub use decimal::{una_decimal_mark, wire_decimal};
 pub use error::{Error, ProfileError};
 pub use interchange::{InterchangeHeader, MessageEnvelope, ParsedInterchange, ReceiptContext};
 pub use light_message::LightMessage;
@@ -96,8 +98,8 @@ pub use registry::{
 pub use release::{Release, ReleaseKind, ReleaseTrack};
 pub use report::{EdiEnergyReport, RuleOrigin};
 
-// Re-export edifact-rs types users may need
-pub use edifact_rs::{
+// Re-export `edifact` types users may need
+pub use edifact::{
     EdifactDeserialize, EdifactSerialize, ReaderConfig, ValidationIssue, ValidationReport,
     ValidationSeverity,
 };
@@ -151,8 +153,8 @@ pub fn validate_and_check_pid(
         Ok(actual) => {
             let mut inner = report.into_inner();
             inner.add_error(
-                edifact_rs::ValidationIssue::new(
-                    edifact_rs::ValidationSeverity::Error,
+                edifact::ValidationIssue::new(
+                    edifact::ValidationSeverity::Error,
                     format!("expected Pruefidentifikator {expected}, found {actual}"),
                 )
                 .with_rule_id("EE-PID-001")
@@ -163,8 +165,8 @@ pub fn validate_and_check_pid(
         Err(_) => {
             let mut inner = report.into_inner();
             inner.add_error(
-                edifact_rs::ValidationIssue::new(
-                    edifact_rs::ValidationSeverity::Error,
+                edifact::ValidationIssue::new(
+                    edifact::ValidationSeverity::Error,
                     format!("expected Pruefidentifikator {expected}, but none was found"),
                 )
                 .with_rule_id("EE-PID-001")

@@ -559,11 +559,10 @@ proptest! {
 proptest! {
     /// **Consumption that reaches the engine is always priced.**
     ///
-    /// The generalisation of every silent-zero defect this crate has had: a
-    /// priceless product, an indexed tariff with no index value, a Zweitarif
-    /// product against an unsplit meter, HT/NT registers with no stated total.
-    /// Each billed the levies and nothing for the electricity, each looked like
-    /// an ordinary invoice, and each was found by hand.
+    /// The silent-zero shapes: a priceless product, an indexed tariff with no
+    /// index value, a Zweitarif product against an unsplit meter, HT/NT
+    /// registers with no stated total. Each bills the levies and nothing for
+    /// the electricity, and each looks like an ordinary invoice.
     ///
     /// The property is the invariant behind all of them: whenever `bill()`
     /// *succeeds* and there is consumption, an Arbeitspreis position exists and

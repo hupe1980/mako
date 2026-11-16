@@ -187,6 +187,31 @@ curl -s -X PUT http://localhost:8080/admin/partners/4012345000023 \
 > PARTIN record (`channels`, `roles`, `contacts`). Both refuse a field they do
 > not have, so a body sent to the wrong one is a `422` naming the field.
 
+### 4d — The BKV's Zuordnungsermächtigung (E_0622 Prüfschritt 60)
+
+The NB confirms an Anmeldung only into a Bilanzkreis a BKV has authorised the
+LF for — „je ZRT, BG, BK und LF" (BK6-24-174 Anlage 3 Kap. 10.2.1). The BKV
+does that with a UTILMD 55071; `marktd` keeps it and `processd` reads it. The
+fixture authorises the 55001's Bilanzkreis `11XBK-STD------Y` in the grid
+record's Bilanzierungsgebiet from 01.08.2026.
+
+```bash
+curl -s -X PUT http://localhost:8080/admin/partners/9900000000019 \
+  -H "Authorization: Bearer demo-secret-change-me" \
+  -H "Content-Type: application/json" \
+  --data-binary @fixtures/partner-bkv.json | jq '.'
+
+curl -s -X POST http://localhost:8080/edifact \
+  -H "Authorization: Bearer demo-secret-change-me" \
+  -H "Content-Type: text/plain; charset=utf-8" \
+  --data-binary @fixtures/utilmd-55071.edi | jq '.messages[0].status'
+# → "routed"
+
+curl -s http://localhost:8180/api/v1/zuordnungsermaechtigungen/4012345000023 | jq .
+```
+
+Without it the 55001 below is refused `A05` at Prüfschritt 60.
+
 ---
 
 ## Step 5 — Submit a UTILMD 55001

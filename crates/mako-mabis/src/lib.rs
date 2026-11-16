@@ -147,9 +147,10 @@ pub use summenzeitreihe::{
 pub use zp_lifecycle::{
     MabisZpLifecycleWorkflow, TAEGLICHE_AAUEZ_ENDE, WORKFLOW_NAME as ZP_LIFECYCLE_WORKFLOW_NAME,
     ZP_FAMILIEN, ZpFamilie, ZpLifecycleCommand, ZpLifecycleData, ZpLifecycleEvent,
-    ZpLifecycleState, ZpSerie, ZpVorgang, all_pids as zp_lifecycle_pids,
-    antwort_ist_zustimmung as zp_antwort_ist_zustimmung, familie_for, ist_antwort_pid,
-    ist_weiterleitung_pid, serien_fuer_pid,
+    ZpLifecycleState, ZpSerie, ZpVorgang, ZuordnungsermaechtigungAngaben,
+    all_pids as zp_lifecycle_pids, antwort_ist_zustimmung as zp_antwort_ist_zustimmung,
+    familie_for, ist_antwort_pid, ist_weiterleitung_pid, serien_fuer_pid,
+    zuordnungsermaechtigung_payload,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
@@ -205,6 +206,48 @@ pub const LF_PIDS: &[(u32, &str)] = &[
     (17_210, anforderung::WORKFLOW_NAME),
 ];
 
+/// The MaBiS Prüfidentifikatoren a Bilanzkreisverantwortlicher is party to,
+/// each under the workflow the whole family routes it to.
+///
+/// Read off the *Anwendungsübersicht der Prüfidentifikatoren 4.0* (sheet
+/// „Prüf-ID Prozessschritt", columns „Kommunikation von" / „an"): every row
+/// with BKV on either side whose Prozessschritt this module can take as the
+/// BKV.
+///
+/// | PID | Lfd. Nr. | Kommunikation |
+/// |---|---|---|
+/// | 13003 | 7640, 7940, 8350, 8590 | BIKO · ÜNB → BKV (BK-SZR, Abrechnungssummenzeitreihe) |
+/// | 13020 | 9760, 9960, 10040, 10050 | BIKO → BKV (Ausfallarbeitsüberführungszeitreihe) |
+/// | 21005 | 7650, 7950, 9770, 9970 | BKV → BIKO (Prüfmitteilung) |
+/// | 21004 | 7660, 7680, 7960, 7980, 9780, 9800, 9980, 10000 | BIKO → BKV (Abweisung, Datenstatus) |
+/// | 55067 | 7600, 7820 | NB · ÜNB → BKV (Bilanzkreiszuordnungsliste) |
+/// | 55070 | 8430 | BIKO → BKV (Clearingliste BAS) |
+/// | 17203 | 7590, 7610, 7810, 7830 | BKV → NB · ÜNB (Anforderung Bilanzkreiszuordnungsliste) |
+/// | 17204 | 8410 | BKV → BIKO (Anforderung Clearingliste BAS) |
+/// | 17207 / 19204 | 7840, 7880 / 7850, 7890 | BKV → ÜNB / ÜNB → BKV (Ab-/Bestellung BK-SZR auf Aggregationsebene) |
+///
+/// Not here, though the BKV is party to them: the Weiterleitungen 55062 /
+/// 55063 / 55205 / 55208 / 55211 / 55214 (BIKO · ÜNB → BKV) and the
+/// Zuordnungsermächtigung 55071 / 55072 (BKV → NB). `mabis-zp-lifecycle`
+/// takes an inbound 55062 / 55063 as an Anfrage it answers and a
+/// Weiterleitung as addressed to nobody it deploys, so routing them to a BKV
+/// would answer the BIKO's forward as the BIKO's counterparty.
+pub const BKV_PIDS: &[(u32, &str)] = &[
+    (
+        bilanzkreisabrechnung::SUMMENZEITREIHE_PID,
+        bilanzkreisabrechnung::WORKFLOW_NAME,
+    ),
+    (13_020, bilanzkreisabrechnung::WORKFLOW_NAME),
+    (21_004, bilanzkreisabrechnung::WORKFLOW_NAME),
+    (21_005, bilanzkreisabrechnung::WORKFLOW_NAME),
+    (55_067, clearingliste::WORKFLOW_NAME),
+    (55_070, clearingliste::WORKFLOW_NAME),
+    (17_203, anforderung::WORKFLOW_NAME),
+    (17_204, anforderung::WORKFLOW_NAME),
+    (17_207, anforderung::WORKFLOW_NAME),
+    (ABLEHNUNG_PID, anforderung::WORKFLOW_NAME),
+];
+
 /// Engine module for the MaBiS process family.
 ///
 /// # PID ownership
@@ -248,28 +291,29 @@ impl mako_engine::builder::EngineModule for MabisModule {
         ]
     }
 
-    /// A Netzbetreiber, ÜNB, BKV or BIKO registers the whole family; a
-    /// deployment that is only a Lieferant registers [`LF_PIDS`] and nothing
-    /// else, so a MaBiS message addressed to another role is refused as an
-    /// unknown PID instead of being answered as the Netzbetreiber.
+    /// A Netzbetreiber, ÜNB or BIKO registers the whole family; a deployment
+    /// that is neither registers [`LF_PIDS`] for a Lieferant and [`BKV_PIDS`]
+    /// for a Bilanzkreisverantwortlicher and nothing else, so a MaBiS message
+    /// addressed to another role is refused as an unknown PID instead of being
+    /// answered as the Netzbetreiber.
     fn register_pids_with_roles(
         &self,
         router: &mut mako_engine::pid_router::PidRouter,
         roles: &mako_engine::marktrolle::DeploymentRoles,
     ) {
         use mako_engine::marktrolle::Marktrolle;
-        let ganze_familie = [
-            Marktrolle::Nb,
-            Marktrolle::Uenb,
-            Marktrolle::Bkv,
-            Marktrolle::Biko,
-        ];
+        let ganze_familie = [Marktrolle::Nb, Marktrolle::Uenb, Marktrolle::Biko];
         if ganze_familie.into_iter().any(|r| roles.contains(r)) {
             self.register_pids(router);
             return;
         }
         if roles.contains(Marktrolle::Lf) {
             for &(pid, workflow) in LF_PIDS {
+                router.register(pid, workflow);
+            }
+        }
+        if roles.contains(Marktrolle::Bkv) {
+            for &(pid, workflow) in BKV_PIDS {
                 router.register(pid, workflow);
             }
         }
@@ -464,6 +508,37 @@ mod module_tests {
                 "{pid} is not addressed to a Lieferant"
             );
             assert!(nb.iter().any(|(p, _)| *p == pid), "{pid} is the NB's");
+        }
+    }
+
+    /// A Bilanzkreisverantwortlicher registers exactly the MaBiS PIDs it is
+    /// party to, under the workflow the Netzbetreiber's registration names —
+    /// none of the NB's or the LF's.
+    #[test]
+    fn a_bkv_registers_only_its_own_mabis_pids() {
+        use mako_engine::marktrolle::{DeploymentRoles, Marktrolle};
+        let bkv = routes(&DeploymentRoles::from_roles([Marktrolle::Bkv]));
+        let mut expected: Vec<(u32, String)> = BKV_PIDS
+            .iter()
+            .map(|(pid, wf)| (*pid, (*wf).to_owned()))
+            .collect();
+        expected.sort();
+        assert_eq!(bkv, expected);
+
+        let nb = routes(&DeploymentRoles::nb());
+        for entry in &bkv {
+            assert!(nb.contains(entry), "{entry:?} routes elsewhere for the NB");
+        }
+        // NB → LF / LF → NB / NB → BIKO / ÜNB → NB — never the BKV's.
+        for pid in [
+            55_065, 55_066, 55_201, 55_202, 55_069, 55_073, 55_195, 55_223, 55_064, 55_197, 55_199,
+            13_010, 13_023, 21_000, 21_001, 21_003, 17_201, 17_202, 17_205, 17_206, 17_208, 17_210,
+            17_211,
+        ] {
+            assert!(
+                !bkv.iter().any(|(p, _)| *p == pid),
+                "{pid} is not addressed to a BKV"
+            );
         }
     }
 

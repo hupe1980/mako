@@ -106,7 +106,7 @@ fn utilmd_round_trip_serialize() {
 #[test]
 fn utilmd_deserialize_from_segments() {
     // EdifactDeserialize impl: parse from raw segments slice.
-    use edifact_rs::from_bytes;
+    use edifact::from_bytes;
     let segs: Vec<_> = from_bytes(UTILMD_TYPED).collect::<Result<_, _>>().unwrap();
     let u = edi_energy::messages::utilmd::UtilmdMessage::edifact_deserialize(&segs)
         .expect("EdifactDeserialize must succeed");
@@ -633,7 +633,7 @@ fn dtm_period_qualifiers() {
     feature = "utilts",
 ))]
 #[test]
-fn qty_value_f64_parses_dot_and_comma() {
+fn qty_value_f64_reads_the_interchanges_decimal_mark() {
     use edi_energy::messages::segments::Qty;
     let q_dot = Qty {
         qualifier: "220".into(),
@@ -650,9 +650,13 @@ fn qty_value_f64_parses_dot_and_comma() {
         value: None,
         unit: None,
     };
-    assert!((q_dot.value_f64().unwrap() - 1234.56_f64).abs() < 1e-6);
-    assert!((q_comma.value_f64().unwrap() - 1234.56_f64).abs() < 1e-6);
-    assert_eq!(q_none.value_f64(), None);
+    assert!((q_dot.value_f64('.').unwrap() - 1234.56_f64).abs() < 1e-6);
+    assert!((q_comma.value_f64(',').unwrap() - 1234.56_f64).abs() < 1e-6);
+    // The other mark is no number of the interchange (Allgemeine Festlegungen
+    // V6.1d Kap. 2.18).
+    assert_eq!(q_comma.value_f64('.'), None);
+    assert_eq!(q_dot.value_f64(','), None);
+    assert_eq!(q_none.value_f64('.'), None);
 }
 
 #[cfg(any(

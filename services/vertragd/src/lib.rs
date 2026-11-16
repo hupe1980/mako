@@ -25,7 +25,10 @@
 //! | [`handlers`] | HTTP surface |
 //! | [`mcp_server`] | Read-only MCP tools and prompts |
 //! | [`angebot_bo4e`] | Reading an accepted quotation out of its BO4E `Angebot` |
-//! | [`dokumente`] | The § 41 Abs. 5 EnWG price-change notice, rendered and delivered through `outputd` |
+//! | [`dokumente`] | The documents issued through `outputd`: the § 41 Abs. 5 EnWG price-change notice, the Vertragszusammenfassung, the Vertragsbestätigung, the Widerrufsbestätigung |
+//! | [`bestellung`] | An online order: its body, completeness, label, canonical hash and idempotency comparison |
+//! | [`endkunden_angebot`] | Reading and checking the frozen offer from `productd` |
+//! | [`widerruf`] | The Wertersatz verdict of a Widerruf |
 //!
 //! ## The two durability rails
 //!
@@ -42,16 +45,19 @@
 //! A crash therefore costs a retry, never an obligation.
 
 pub mod angebot_bo4e;
+pub mod bestellung;
 pub mod config;
 pub mod daemon;
 pub mod dokumente;
 pub mod domain;
 pub mod dsr_policy;
+pub mod endkunden_angebot;
 pub mod events;
 pub mod handlers;
 pub mod mcp_server;
 pub mod outbound;
 pub mod pg;
+pub mod widerruf;
 pub mod workers;
 
 pub use daemon::Vertragd;

@@ -73,6 +73,16 @@
 //   "read-outbound-tasks"          — GET  /api/v1/outbound/dead
 //   "retry-outbound-task"          — POST /api/v1/outbound/dead/{id}/retry
 //
+// Operator, online Vertragsschluss (LF and ADMIN only — the supplier's own
+// sales channel, not a metering role's):
+//   "bestellen"                    — POST /api/v1/bestellungen
+//   "annehmen-bestellung"          — POST /api/v1/bestellungen/{id}/annehmen, /ablehnen
+//   "read-bestellung"              — GET  /api/v1/bestellungen/{id}/nachweis
+//   "widerrufen"                   — POST /api/v1/vertraege/{id}/widerruf,
+//                                    POST /api/v1/bestellungen/{id}/widerruf
+//   "pflegen-rechtsdokument"       — PUT  /api/v1/rechtsdokumente/{art}
+//   "read-rechtsdokument"          — GET  /api/v1/rechtsdokumente/{sha256}
+//
 // Operator, MCP:
 //   "use-mcp"                      — the whole `/mcp` surface, gated once by the
 //                                    shared `McpAuth` middleware rather than per
@@ -160,6 +170,29 @@ permit(
     (context.principal_roles.contains("LF") ||
      context.principal_roles.contains("MSB") ||
      context.principal_roles.contains("ESA") ||
+     context.principal_roles.contains("ADMIN"))
+};
+
+// ── Online Vertragsschluss ───────────────────────────────────────────────────
+// Taking an order, deciding it, recording a consumer's Widerruf and the legal
+// documents an order cites. The Lieferant's own business: an MSB or ESA
+// credential concludes no supply contract. The consumer's Widerruf reaches
+// this route through `portald` with a service credential, never with the
+// customer's own token.
+permit(
+    principal,
+    action in [
+        Action::"bestellen",
+        Action::"annehmen-bestellung",
+        Action::"read-bestellung",
+        Action::"widerrufen",
+        Action::"pflegen-rechtsdokument",
+        Action::"read-rechtsdokument"
+    ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("LF") ||
      context.principal_roles.contains("ADMIN"))
 };
 

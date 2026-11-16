@@ -97,7 +97,7 @@ const TENANT: &str = "9900357000004";
 /// Every action the router enforces must be decidable by the policy. A typo in
 /// either place — a renamed action, a handler wired to a string no policy
 /// mentions — turns into an endpoint nobody can reach.
-const ALL_ACTIONS: [&str; 10] = [
+const ALL_ACTIONS: [&str; 11] = [
     "read-config",
     "read-policy",
     "read-template",
@@ -107,6 +107,7 @@ const ALL_ACTIONS: [&str; 10] = [
     "render-document",
     "issue-document",
     "read-document",
+    "read-delivery-failures",
     "report-delivery",
 ];
 
@@ -156,6 +157,8 @@ fn a_foreign_market_role_looks_but_does_not_publish_or_render() {
         "render-document",
         "issue-document",
         "report-delivery",
+        // Tenant-wide, unlike `read-document`, whose query is the scope.
+        "read-delivery-failures",
     ] {
         assert!(
             e.check(&nb, action, TENANT).is_err(),

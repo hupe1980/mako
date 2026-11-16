@@ -1,6 +1,6 @@
 //! [`DvgwMessage`] — a parsed DVGW message and the walk that builds it.
 
-use edifact_rs::OwnedSegment;
+use edifact::OwnedSegment;
 use time::{OffsetDateTime, UtcOffset};
 
 use crate::{
@@ -213,7 +213,7 @@ impl DvgwMessage {
     ///
     /// Returns [`Error::Serialize`] when a segment value cannot be encoded.
     pub fn serialize(&self) -> Result<Vec<u8>, Error> {
-        edifact_rs::segments_to_bytes(&self.segments).map_err(|e| Error::Serialize(e.to_string()))
+        edifact::segments_to_bytes(&self.segments).map_err(|e| Error::Serialize(e.to_string()))
     }
 
     // ── Construction ─────────────────────────────────────────────────────────

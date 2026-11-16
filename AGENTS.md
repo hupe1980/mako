@@ -47,6 +47,39 @@ neither is restated here. This file is what an agent needs before touching code.
   feature list. `check-sql` needs a database and runs in
   `just test-db`.
 
+## Language
+
+The split is **who reads it**, not frontend vs. backend.
+
+- **English** for what developers read: identifiers, files, tables, columns,
+  routes, config keys, comments, docs, specs, commit messages, log lines,
+  test names.
+- **German BDEW and statutory terms stay German** inside English — `Frist`,
+  `Marktlokation`, `Anmeldung`, `Befund`, `Werktag` — because they are the
+  documents' own vocabulary and have no exact English equivalent. A German
+  word that is not a domain term (`sagen`, `Szene`) is translated when the
+  code around it is touched.
+- **German for what a user sees**: Desk and portal labels, buttons, empty
+  states, dialogs, validation and error messages, addressed with „du". Dates
+  `31.12.2026`, numbers `1.234,56 €`. The Desk is German first with English
+  selectable, every string from `desk/src/i18n/{de,en}.ts`.
+- **A letter to an end customer** takes its address from the operator's
+  `outputd [policy] anrede` (`sie`, the default, or `du`), so every letter
+  template carries both forms. Two documents are always „Sie": the
+  Widerrufsbelehrung, because the statutory Muster keeps its effect only as
+  published, and the Gebührenbescheid, a Verwaltungsakt.
+- **A service answers with a stable English `code`**
+  (`process_not_found`); its `message` is for the developer. The user-facing
+  surface renders the German sentence for that `code` from its catalogue and
+  shows the raw service text only under „Details". A status or enum a
+  service returns (`running`) goes through the catalogue too — never onto the
+  screen as it arrived.
+- Reply to the user in their language; write artefacts by these rules.
+
+Comments state the *why* the code cannot (a constraint, a source, an `FR-`).
+A doc comment is one line of contract unless the interface is non-obvious. No
+new Markdown file unless the task needs one.
+
 ## Build and test
 
 `just ci` is the gate. It is the whole suite plus every guard, and nothing is
@@ -607,6 +640,7 @@ engine it silently becomes money.
 | "An EIC party's NAD DE3055 is ZEW (or 305, ETSO)" | Every MIG's NAD lists **`9` GS1, `293` BDEW, `332` DVGW** and nothing else (UTILMD MIG Strom S2.2 S. 32–33, UTILMD MIG Gas G1.2 S. 17–18). An EIC is not an MP-ID (Identifikatoren AWH V1.2 Kap. 2.1, S. 4) and travels in `CCI` DE7037 / `LOC` DE3225, which carry no DE3055. Derive from `edi_energy::AgencyCode::for_mp_id` |
 | "An Antwortcode has one meaning" („A02 = MaLo not in the NB's grid") | A code is defined only by the **Entscheidungsbaum or Codeliste that publishes it**: `A02` is four unrelated refusals across `E_0607`, `E_0622`, `E_0249` and `E_0250`, and in `E_0622` it is „Marktlokation … nimmt nicht an der Marktkommunikation teil (Prüfschritt 30)". A prompt or description that glosses a bare code hands a model a confident wrong reason. Read the wording with `mako_pruefung::codes::lookup(tree, code)` — processd returns it as `bedeutung` |
 | "Compile-time role features enforce § 6a EnWG" (or „a role build contains no other role's code, in support of § 6a") | A role feature buys one thing: a `processd` or `mako-pruefung` build **cannot answer as a role it was not built for**, so a misconfiguration fails closed. No unbundling duty is discharged by a build flag, and makod has no role features — it registers the modules of its `[deployment] rollen` and every build links every domain crate. The § 6a Abs. 1 EnWG duty — „die Vertraulichkeit wirtschaftlich sensibler Informationen … gewahrt wird" — is an access-control duty, met by Cedar (`ReadProcess` carries the workflow name) |
+| "§ 41c EnWG obliges suppliers to publish tariff data for Haushaltskunden and Kleinstunternehmen below 100 000 kWh" | **Abs. 1** is the BNetzA's duty: it „stellt … sicher, dass Haushaltskunden und Kleinstunternehmen, die einen voraussichtlichen Jahresverbrauch von weniger als 100 000 Kilowattstunden haben, unentgeltlich Zugang zu mindestens einem unabhängigen Vergleichsinstrument haben". The supplier's duty is **Abs. 5 Satz 2**, Strom only and without a threshold: „Stromlieferanten müssen eine kostenlose Nutzung unmittelbar angebotsrelevanter Informationen in offenen Datenformaten ermöglichen." A Gas feed is the operator's choice; Abs. 2 is the Vergleichsinstrument's own requirements, not a feed |
 
 ## Licenses
 

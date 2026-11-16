@@ -225,7 +225,7 @@ pub async fn put_malo(
         IfMatch::Malformed => return malformed_if_match(),
     };
 
-    // L4 hard cut: validate and normalise the incoming BO4E payload.
+    // Validate and normalise the incoming BO4E payload.
     // Returns 422 on wrong _typ or invalid enum values (bilanzierungsmethode, netzebene, …).
     // Re-serialises to canonical camelCase form before storage.
     let malo = match normalize_marktlokation(req.data) {

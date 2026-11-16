@@ -420,6 +420,89 @@ mod tests {
         );
     }
 
+    /// A loaded `bkv-strom` deployment survives the interview: the answers it
+    /// pre-fills name the role and its `BKV` MP-ID, and the makod.toml they
+    /// propose declares `rollen = ["bkv-strom"]` and the `BKV` party, and
+    /// passes makod's own identity checks. A role the interview cannot name
+    /// would drop out of the proposal, and the operator who pastes it loses
+    /// the deployment's only role.
+    #[test]
+    fn a_loaded_bkv_deployment_keeps_its_role_and_mp_id_in_the_proposal() {
+        use mako_service::befund::Bereich;
+
+        use crate::config::{As4Config, ConfigFile, EinrichtungConfig, MakodPolicy, PartyConfig};
+
+        let pruefe = |parties: &[PartyConfig], rollen: &[crate::deployment::Rolle]| {
+            crate::einrichtung::pruefe(&crate::einrichtung::Eingabe {
+                parties,
+                rollen,
+                preflight: None,
+                cedar_policy_dir_fehler: None,
+                as4: &As4Config::default(),
+                policy: &MakodPolicy::default(),
+                marktd_url: None,
+                marktd_webhook_url: None,
+                http_enabled: true,
+                webdienste_signing_key: false,
+                webdienste_signing_cert: false,
+                posture: &[],
+                jetzt: time::macros::datetime!(2026-11-09 09:00 UTC),
+                einrichtung: &EinrichtungConfig::default(),
+            })
+        };
+        let geladen = [PartyConfig {
+            mp_id: "9900001000001".to_owned(),
+            roles: vec!["BKV".to_owned()],
+            primary: true,
+            agency: None,
+            as4: None,
+        }];
+        let rollen: Vec<crate::deployment::Rolle> =
+            toml::from_str::<ConfigFile>("[deployment]\nrollen = [\"bkv-strom\"]\n")
+                .expect("bkv-strom is a deployment role")
+                .deployment
+                .expect("[deployment]")
+                .rollen;
+        let bericht = pruefe(&geladen, &rollen);
+        let berichte = berichte(&bericht.einrichtung, Vec::new());
+
+        let vorbelegt = vorschlag(&Antworten::default(), &berichte).vorbelegt;
+        let vorbelegt_json = serde_json::to_value(&vorbelegt).unwrap();
+        assert_eq!(
+            vorbelegt_json["rollen"],
+            serde_json::json!([{ "rolle": "bkv-strom", "mp_id": "9900001000001" }]),
+            "{vorbelegt_json:#}"
+        );
+
+        let v = vorschlag(&vorbelegt, &berichte);
+        let makod = v.dateien.iter().find(|d| d.dienst == "makod").unwrap();
+        assert!(
+            makod.toml.contains("rollen = [\"bkv-strom\"]"),
+            "{}",
+            makod.toml
+        );
+        assert!(
+            makod.toml.contains("mp_id = \"9900001000001\"\n")
+                && makod.toml.contains("roles = [\"BKV\"]"),
+            "{}",
+            makod.toml
+        );
+        assert!(!makod.diff.contains("\n-"), "{}", makod.diff);
+
+        let cfg: ConfigFile =
+            toml::from_str(&makod.toml).expect("the proposal parses as makod.toml");
+        let parties = cfg.party.expect("[[party]]");
+        let rollen = cfg.deployment.expect("[deployment]").rollen;
+        let nachher = pruefe(&parties, &rollen);
+        let identitaet: Vec<_> = nachher
+            .einrichtung
+            .befunde
+            .iter()
+            .filter(|b| b.bereich == Bereich::Identitaeten)
+            .collect();
+        assert!(identitaet.is_empty(), "{identitaet:#?}\n{}", makod.toml);
+    }
+
     /// makod's own report is a line of the checklist, beside the daemons it
     /// asked; a daemon that names another MP-ID for makod's role is a finding
     /// across both, and an unreachable one is unknown.

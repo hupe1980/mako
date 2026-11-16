@@ -51,8 +51,12 @@ blocked, and how many findings block or warn.
 The setup interview asks only what changes the configuration: the Rollen and
 the MP-ID each plays under, the primary MP-ID where there are several, a
 Lieferant's Bilanzkreise per Sparte, the affiliated Lieferanten, the AS4 key
-material as paths, and where the other daemons run. From the answers
-`mako_service::einrichtung::vorschlag` proposes one file per daemon:
+material as paths, and where the other daemons run. The Rollen it offers are
+the type makod parses `[deployment] rollen` into
+(`mako_service::einrichtung::befragung::Rolle`), so every role makod loads —
+`bkv-strom` among them — is one the interview names and the proposal keeps.
+From the answers `mako_service::einrichtung::vorschlag` proposes one file per
+daemon:
 
 - every line marked against what the daemons report as loaded — new,
   unchanged, or to remove — and naming the rule or document it satisfies
@@ -135,7 +139,7 @@ The report:
 ```json
 {
   "dienst": "processd",
-  "version": "0.31.0",
+  "version": "0.34.0",
   "bereit": false,
   "befunde": [
     {
@@ -162,7 +166,7 @@ Sparte requires), `[deployment] rollen`, the adapter coverage per format
 version, the AS4 key material and partner certificates, authentication and
 Cedar, and the callback and marktd endpoints. A certificate that has expired
 blocks; one that expires within `[as4] zertifikat_warnfenster_tage` (default
-30) warns with its expiry date.
+30, at least 14) warns with its expiry date.
 
 ```toml
 [[einrichtung.dienst]]

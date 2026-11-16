@@ -536,3 +536,143 @@ async fn a_combined_deployment_runs_the_gas_eog_to_its_answer() {
         "the 44014 must not reach the LF's own process"
     );
 }
+
+// ── Abmeldungsanfrage 44010 (SD Lieferbeginn Nr. 3) ──────────────────────────
+
+/// The Neulieferant of the Anmeldung the 44010 serves.
+const LFN_MP: &str = "9870111000002";
+/// The Anmeldung 44001 the 44010 serves.
+const ANMELDUNG: &str = "11111111-1111-1111-1111-111111111111";
+
+fn abmeldungsanfrage() -> serde_json::Value {
+    serde_json::json!({
+        "malo_id": MALO,
+        "lfa_mp_id": LF_MP,
+        "lfn_mp_id": LFN_MP,
+        "process_date": "2026-04-01",
+        "transaktionsgrund": "E03",
+        "anmeldung_process_id": ANMELDUNG,
+        "anmeldung_eingang": "2026-03-02T08:00:00Z",
+        "kunde_name": "Mustermann",
+        "kunde_namensformat": "Z01",
+    })
+}
+
+/// **The GNB sends its Abmeldungsanfrage 44010** (GeLi Gas 3.0 Kap. 3.2.3,
+/// S. 9) as a UTILMD its AHB profile accepts, and the process carries the
+/// LFA's answer window and the Information 44036's window.
+#[tokio::test]
+async fn geli_beendigung_zuordnung_anfragen_renders_a_44010_its_profile_accepts() {
+    use edi_energy::EdiEnergyMessage as _;
+    use mako_engine::deadline::DeadlineStore as _;
+    let c = combined().await;
+    let gnb = match dispatch_command(
+        &c.state,
+        "geli.beendigung-zuordnung.anfragen",
+        &abmeldungsanfrage(),
+    )
+    .await
+    .expect("the 44010 is sent")
+    {
+        DispatchOutcome::Spawned { process_id } => process_id,
+        other => panic!("the Anfrage must spawn, got {other:?}"),
+    };
+    let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+    let pending = OutboxStore::pending(&*c.store, 100, now)
+        .await
+        .expect("pending outbox");
+    let utilmd: Vec<_> = pending
+        .iter()
+        .filter(|om| &*om.message_type == "UTILMD")
+        .collect();
+    let [om] = utilmd.as_slice() else {
+        panic!("one UTILMD is written, got {}", utilmd.len());
+    };
+    assert_eq!(&*om.recipient, LF_MP, "the 44010 goes to the LFA");
+    let msg = gated(om, &c.registry);
+    assert_eq!(
+        msg.detect_pruefidentifikator().map(|p| p.as_u32()).ok(),
+        Some(44010)
+    );
+
+    let labels: Vec<String> = c
+        .store
+        .as_deadline_store()
+        .for_stream(&StreamId::for_process(c.state.tenant_id, &gnb))
+        .await
+        .expect("deadlines load")
+        .iter()
+        .map(|d| d.label().to_owned())
+        .collect();
+    for label in [
+        mako_geli_gas::LIEFERBEGINN_RESPONSE_WINDOW_LABEL,
+        mako_geli_gas::lieferbeginn::MELDEPFLICHT_INFORMATION_LABEL,
+    ] {
+        assert!(labels.iter().any(|l| l == label), "{label}: {labels:?}");
+    }
+    assert!(
+        !labels
+            .iter()
+            .any(|l| l == mako_geli_gas::lieferbeginn::MELDEPFLICHT_BEENDIGUNG_LABEL),
+        "the 44037 runs from the Bestätigung, not from the Anfrage: {labels:?}"
+    );
+}
+
+/// **The LFA's Widerspruch resumes the Anmeldung.** On a combined deployment
+/// the 44010 reaches the LF side, the LF refuses it out of `E_3020`, and the
+/// 44012 resumes the GNB's process, which hands `processd` the
+/// `LfaAntwortAufAbmeldeanfrage` naming the Anmeldung it serves.
+#[tokio::test]
+async fn the_lfa_widerspruch_resumes_the_gas_anmeldung() {
+    let c = combined().await;
+    let gnb = match dispatch_command(
+        &c.state,
+        "geli.beendigung-zuordnung.anfragen",
+        &abmeldungsanfrage(),
+    )
+    .await
+    .expect("the 44010 is sent")
+    {
+        DispatchOutcome::Spawned { process_id } => process_id,
+        other => panic!("the Anfrage must spawn, got {other:?}"),
+    };
+    let delivered = c.loopback().await;
+    let lf = match delivered.as_slice() {
+        [(44010, IngestOutcome::Spawned { process_id, .. })] => *process_id,
+        other => panic!("the LF's copy of the 44010 opens the LF's process, got {other:?}"),
+    };
+    assert_ne!(lf, gnb);
+
+    dispatch_command(
+        &c.state,
+        "geli.beendigung-zuordnung.ablehnen",
+        &serde_json::json!({ "malo_id": MALO, "antwort_code": "Z12" }),
+    )
+    .await
+    .expect("the LF refuses the Abmeldungsanfrage");
+    let delivered = c.loopback().await;
+    match delivered.as_slice() {
+        [(44012, IngestOutcome::Dispatched { process_id, .. })] => assert_eq!(*process_id, gnb),
+        other => panic!("the 44012 must resume the GNB's process, got {other:?}"),
+    }
+
+    let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+    let pending = OutboxStore::pending(&*c.store, 100, now)
+        .await
+        .expect("pending outbox");
+    let resumed: Vec<_> = pending
+        .iter()
+        .filter(|om| &*om.message_type == "LfaAntwortAufAbmeldeanfrage")
+        .collect();
+    let [n] = resumed.as_slice() else {
+        panic!("one LfaAntwortAufAbmeldeanfrage, got {}", resumed.len());
+    };
+    assert_eq!(n.payload["anmeldung_process_id"], ANMELDUNG);
+    assert_eq!(n.payload["lfa_mp_id"], LF_MP);
+    assert_eq!(n.payload["zustimmung"], false);
+    assert_eq!(n.payload["antwortcode"], "Z12");
+    assert!(
+        matches!(c.state_of(gnb).await, GasSupplierChangeState::Completed(_)),
+        "an answered Abmeldungsanfrage is complete"
+    );
+}

@@ -26,7 +26,7 @@ const APPEARANCES: [Appearance, (k: Katalog["konto"]) => string][] = [
   ["dark", (k) => k.dunkel],
 ];
 
-const SECTION = "px-2.5 pt-1 pb-1 text-caption font-semibold uppercase tracking-wide text-text-2";
+const SECTION = "px-2.5 pt-1 pb-1 text-caption font-semibold text-text-2";
 
 /**
  * The person at the foot of the sidebar: who they are, how the Desk looks for
@@ -54,7 +54,7 @@ export function AccountMenu({ onShortcuts }: { onShortcuts: () => void }) {
             <Icon name="person" size={14} />
           )}
         </span>
-        <span className="min-w-0 flex-1 truncate text-body font-medium text-text">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-body text-text">{name}</span>
         <Icon name="chevron" size={12} className="-rotate-90 text-text-2" />
       </Button>
       <Popover

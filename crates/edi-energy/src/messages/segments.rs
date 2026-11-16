@@ -12,10 +12,10 @@
 //! For composite data elements (e.g. C507 in DTM) you need multiple fields
 //! sharing the same `element = N` but with different `component` indices.
 //!
-//! [`EdifactDeserialize`]: edifact_rs::EdifactDeserialize
-//! [`EdifactSerialize`]: edifact_rs::EdifactSerialize
+//! [`EdifactDeserialize`]: edifact::EdifactDeserialize
+//! [`EdifactSerialize`]: edifact::EdifactSerialize
 
-use edifact_rs::{EdifactDeserialize, EdifactSerialize};
+use edifact::{EdifactDeserialize, EdifactSerialize};
 
 // ── BGM ───────────────────────────────────────────────────────────────────────
 
@@ -325,16 +325,16 @@ pub struct Qty {
 }
 
 impl Qty {
-    /// Parse `value` as an `f64`.
+    /// Parse `value` as an `f64`, read under the interchange's `decimal_mark`
+    /// ([`crate::EdiEnergyMessage::decimal_mark`]).
     ///
-    /// Returns `None` when the field is absent or the string is not a valid
-    /// decimal number.  The EDIFACT decimal mark may be either `.` or `,`.
+    /// Returns `None` when the field is absent, carries the other decimal mark
+    /// ([`crate::wire_decimal`]), or is not a valid decimal number.
     #[must_use]
-    pub fn value_f64(&self) -> Option<f64> {
-        self.value
-            .as_deref()
-            .map(|s| s.replace(',', "."))
-            .and_then(|s| s.parse::<f64>().ok())
+    pub fn value_f64(&self, decimal_mark: char) -> Option<f64> {
+        crate::wire_decimal(self.value.as_deref()?, decimal_mark)?
+            .parse::<f64>()
+            .ok()
     }
 
     /// Returns `true` when this is a metered quantity (`qualifier == "220"`).
@@ -358,7 +358,7 @@ impl Qty {
 /// | 2       | 0         | 0010 | Recipient identification             |
 /// | 3       | 0         | 0083 | Action, coded (4/7/8)                |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UCI", layout = edifact_rs::service::UCI)]
+#[edifact(segment = "UCI", layout = edifact::service::UCI)]
 pub struct Uci {
     /// DE 0020 — interchange control reference.
     #[edifact(element = "0020")]
@@ -387,7 +387,7 @@ pub struct Uci {
 /// | 1       | 0         | 0065 | Message type identifier              |
 /// | 1       | 4         | 0057 | Association assigned code (release)  |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UNH", layout = edifact_rs::service::UNH)]
+#[edifact(segment = "UNH", layout = edifact::service::UNH)]
 pub struct Unh {
     /// DE 0062 — message reference number.
     #[edifact(element = "0062")]
@@ -410,7 +410,7 @@ pub struct Unh {
 /// | 0       | 0         | 0074 | Number of segments in message        |
 /// | 1       | 0         | 0062 | Message reference number             |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UNT", layout = edifact_rs::service::UNT)]
+#[edifact(segment = "UNT", layout = edifact::service::UNT)]
 pub struct Unt {
     /// DE 0074 — number of segments in the message (including UNH and UNT).
     #[edifact(element = "0074")]
@@ -443,7 +443,7 @@ pub struct Unt {
     feature = "utilmd",
     feature = "utilts",
 ))]
-pub(crate) fn find_nad(segments: &[edifact_rs::Segment<'_>], qualifier: &str) -> Option<Nad> {
+pub(crate) fn find_nad(segments: &[edifact::Segment<'_>], qualifier: &str) -> Option<Nad> {
     segments
         .iter()
         .filter(|s| s.tag == "NAD")
@@ -470,7 +470,7 @@ pub(crate) fn find_nad(segments: &[edifact_rs::Segment<'_>], qualifier: &str) ->
     feature = "utilmd",
     feature = "utilts",
 ))]
-pub(crate) fn collect_dtm(segments: &[edifact_rs::Segment<'_>]) -> Vec<Dtm> {
+pub(crate) fn collect_dtm(segments: &[edifact::Segment<'_>]) -> Vec<Dtm> {
     segments
         .iter()
         .filter(|s| s.tag == "DTM")
@@ -497,7 +497,7 @@ pub(crate) fn collect_dtm(segments: &[edifact_rs::Segment<'_>]) -> Vec<Dtm> {
     feature = "utilmd",
     feature = "utilts",
 ))]
-pub(crate) fn find_bgm(segments: &[edifact_rs::Segment<'_>]) -> Option<Bgm> {
+pub(crate) fn find_bgm(segments: &[edifact::Segment<'_>]) -> Option<Bgm> {
     segments
         .iter()
         .filter(|s| s.tag == "BGM")
@@ -506,7 +506,7 @@ pub(crate) fn find_bgm(segments: &[edifact_rs::Segment<'_>]) -> Option<Bgm> {
 
 /// Find the first `UCI` segment.
 #[cfg(feature = "contrl")]
-pub(crate) fn find_uci(segments: &[edifact_rs::Segment<'_>]) -> Option<Uci> {
+pub(crate) fn find_uci(segments: &[edifact::Segment<'_>]) -> Option<Uci> {
     segments
         .iter()
         .filter(|s| s.tag == "UCI")
@@ -515,7 +515,7 @@ pub(crate) fn find_uci(segments: &[edifact_rs::Segment<'_>]) -> Option<Uci> {
 
 /// Find the first `RFF` segment with the given qualifier.
 #[cfg(feature = "aperak")]
-pub(crate) fn find_rff(segments: &[edifact_rs::Segment<'_>], qualifier: &str) -> Option<Rff> {
+pub(crate) fn find_rff(segments: &[edifact::Segment<'_>], qualifier: &str) -> Option<Rff> {
     segments
         .iter()
         .filter(|s| s.tag == "RFF")
@@ -528,7 +528,7 @@ pub(crate) fn find_rff(segments: &[edifact_rs::Segment<'_>], qualifier: &str) ->
 /// Used by `PartinMessage` to extract communication channels
 /// (AS4 endpoint, email, phone) declared by the described party.
 #[cfg(feature = "partin")]
-pub(crate) fn collect_com(segments: &[edifact_rs::Segment<'_>]) -> Vec<Com> {
+pub(crate) fn collect_com(segments: &[edifact::Segment<'_>]) -> Vec<Com> {
     segments
         .iter()
         .filter(|s| s.tag == "COM")
@@ -550,7 +550,7 @@ pub(crate) fn collect_com(segments: &[edifact_rs::Segment<'_>]) -> Vec<Com> {
 /// | 2       | 0         | 0083 | Action, coded (`"4"` = rejected — the only value the CONTRL MIG 2.0b admits here, S. 8) |
 /// | 3       | 0         | 0085 | Syntax error code (if rejected)      |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UCM", layout = edifact_rs::service::UCM)]
+#[edifact(segment = "UCM", layout = edifact::service::UCM)]
 pub struct Ucm {
     /// DE 0062 — message reference number (matches the `UNH`).
     #[edifact(element = "0062")]
@@ -584,7 +584,7 @@ pub struct Ucm {
 /// | 1       | 0096 | Segment position in message body (`UNH` is 1)  |
 /// | 2       | 0085 | Syntax error, coded                            |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UCS", layout = edifact_rs::service::UCS)]
+#[edifact(segment = "UCS", layout = edifact::service::UCS)]
 pub struct Ucs {
     /// DE 0096 — segment position in message body, counting the `UNH` as 1.
     #[edifact(element = "0096")]
@@ -604,7 +604,7 @@ pub struct Ucs {
 /// | 1       | 0         | 0098 | Data element position               |
 /// | 1       | 1         | 0104 | Component position (optional)       |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UCD", layout = edifact_rs::service::UCD)]
+#[edifact(segment = "UCD", layout = edifact::service::UCD)]
 pub struct Ucd {
     /// DE 0085 — syntax error, coded.
     #[edifact(element = "0085")]
@@ -667,7 +667,7 @@ pub struct Lin {
 ///                     ^^ unescaped colon → component separator → DE 7143 = "SRW"
 /// ```
 ///
-/// `edifact-rs` correctly processes release characters: after parsing,
+/// `edifact` correctly processes release characters: after parsing,
 /// `item_number` contains the full clean OBIS string (`"1-1:1.9.1"`)
 /// and `item_type` contains the DE 7143 qualifier (`"SRW"` or `"Z12"`).
 ///
@@ -685,7 +685,7 @@ pub struct Pia {
     ///
     /// This field contains the complete OBIS identifier because the BDEW AHB
     /// requires the `:` inside OBIS values to be escaped with `?:`.
-    /// `edifact-rs` strips the release character during parsing.
+    /// `edifact` strips the release character during parsing.
     #[edifact(element = "7140")]
     pub item_number: Option<String>,
     /// DE 7143 — item type code (e.g. `"Z12"` for OBIS, `"SRW"` for
@@ -698,7 +698,7 @@ impl Pia {
     /// Return the OBIS code from DE 7140.
     ///
     /// Convenience accessor for `item_number`.  Returns the full OBIS string
-    /// (e.g. `"1-0:1.8.0"`) after release-character processing by `edifact-rs`.
+    /// (e.g. `"1-0:1.8.0"`) after release-character processing by `edifact`.
     ///
     /// # Example
     ///
@@ -881,7 +881,7 @@ impl Sts {
 /// |---------|-----------|------|-------------------------------------|
 /// | 0       | 0         | 0081 | Section identification              |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UNS", layout = edifact_rs::service::UNS)]
+#[edifact(segment = "UNS", layout = edifact::service::UNS)]
 pub struct Uns {
     /// DE 0081 — section identification (`"D"` = detail section).
     #[edifact(element = "0081")]
@@ -938,8 +938,8 @@ pub struct Com {
     feature = "ordrsp",
     feature = "utilmd",
 ))]
-pub(crate) fn try_deserialize<T: edifact_rs::EdifactDeserialize>(
-    seg: &edifact_rs::Segment<'_>,
+pub(crate) fn try_deserialize<T: edifact::EdifactDeserialize>(
+    seg: &edifact::Segment<'_>,
 ) -> Option<T> {
     T::edifact_deserialize(std::slice::from_ref(seg)).ok()
 }

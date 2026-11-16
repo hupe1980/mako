@@ -90,8 +90,10 @@ pub enum ProfileError {
 #[non_exhaustive]
 pub enum Error {
     /// The underlying EDIFACT parser rejected the input.
+    ///
+    /// Only for input: a refusal of the writer is [`Serialize`](Self::Serialize).
     #[error("EDIFACT parse error: {0}")]
-    Parse(#[from] edifact_rs::EdifactError),
+    Parse(#[from] edifact::EdifactError),
 
     /// Writing an EDIFACT structure failed (envelope or segment serialization).
     ///
@@ -372,5 +374,20 @@ impl miette::Diagnostic for Error {
             Error::Parse(e) => Some(e as &dyn miette::Diagnostic),
             _ => None,
         }
+    }
+}
+
+impl Error {
+    /// A refusal of the EDIFACT writer: the output could not be rendered.
+    ///
+    /// Never [`Error::Parse`] — that reports input the parser refused, and a
+    /// caller answering it with a CONTRL would blame the counterparty for
+    /// mako's own output.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the signature fits the `map_err` it is passed to"
+    )]
+    pub(crate) fn write(error: edifact::EdifactError) -> Self {
+        Self::Serialize(error.to_string())
     }
 }

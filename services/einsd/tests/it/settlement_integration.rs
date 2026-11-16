@@ -5,8 +5,8 @@
 //! the seams the pure tests cannot reach: a column named in a query but absent
 //! from the schema, an `ON CONFLICT` that cannot match a partial index, a state
 //! written without recording the transition, an audit field accepted from the
-//! caller and then dropped. Each of those shipped and was invisible until the
-//! query actually ran.
+//! caller and then dropped. Each of those compiles and passes the pure tests,
+//! and shows only when the query runs.
 //!
 //! PostgreSQL is self-managed via testcontainers (only a Docker daemon is
 //! required); the tests skip gracefully when Docker is unavailable:

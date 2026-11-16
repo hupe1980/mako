@@ -28,13 +28,10 @@ use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
 
 /// A conformant MSCONS 13002, taken from the validated fixture corpus.
 ///
-/// Included rather than inlined, and that is the point. This example carried
-/// its own hand-written interchange, and it was wrong in eleven ways at once —
-/// no SG1 Prüfidentifikator, no SG7 Referenzangaben, `KWH` where the
-/// Prüfschablone admits no Maßeinheit, an OBIS whose colon was never released
-/// so the code silently truncated to `1-1`. None of it showed, because the
-/// example parsed and printed without ever validating. A fixture the test suite
-/// already holds to the AHB cannot drift that way on its own.
+/// Included rather than inlined: an example parses and prints without ever
+/// validating, so a hand-written interchange here can be wrong in many ways
+/// at once without showing it. A fixture the test suite already holds to the
+/// AHB cannot drift that way on its own.
 const MSCONS_BYTES: &[u8] =
     include_bytes!("../tests/fixtures/mscons/valid/beispiel_13002_release_2_4c.edi");
 
@@ -102,7 +99,10 @@ fn main() -> Result<(), edi_energy::Error> {
                     println!("    [LI {li_i}] OBIS: {obis}");
 
                     for qty_entry in &item.quantities {
-                        let value_f64 = qty_entry.qty.value_f64().unwrap_or(f64::NAN);
+                        let value_f64 = qty_entry
+                            .qty
+                            .value_f64(msg.decimal_mark())
+                            .unwrap_or(f64::NAN);
                         let unit = qty_entry.qty.unit.as_deref().unwrap_or("-");
                         let metered = qty_entry.qty.is_metered();
 

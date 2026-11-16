@@ -1,4 +1,4 @@
-use edifact_rs::OwnedSegment;
+use edifact::OwnedSegment;
 
 use crate::{
     MessageType,

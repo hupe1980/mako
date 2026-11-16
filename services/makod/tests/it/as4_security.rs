@@ -114,7 +114,6 @@ impl Pki {
                 endpoint: Some(PARTNER_URL.to_owned()),
                 encryption_cert: Some(self.partner.encryption.certificate()),
                 signing_certs: vec![self.partner.signing.certificate()],
-                quirks: Vec::new(),
             })
             .unwrap();
         As4Setup {

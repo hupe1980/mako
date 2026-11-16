@@ -169,7 +169,7 @@ are refused) with these claims:
 ### Cedar policy
 
 `policies/marktd.cedar` is compiled into the binary and has **five `permit`
-statements over 53 actions**, each starting from tenant equality:
+statements over 56 actions**, each starting from tenant equality:
 
 | Group | Actions | Extra condition |
 |---|---|---|
@@ -177,7 +177,7 @@ statements over 53 actions**, each starting from tenant equality:
 | Ordinary writes | `write-malo`, `write-melo`, `write-nb-contract`, `write-partner`, `write-versorgungsstatus`, `write-device`, `write-sr`, `write-netzzugang`, `write-msb-rv`, `write-melo-msb`, `write-bilanzierung`, `write-mabis-zp`, `write-lokationszuordnung` | none |
 | Grid-operator writes | `write-preisblatt`, `write-nelo`, `write-tranche`, `write-malo-grid`, `write-grundversorger`, `write-energiemix`, `write-mmma-preis`, `write-netznutzungsdaten`, `dispatch-pricat` | `mako_roles` contains `NB` |
 | ESA consent | `read-einwilligung`, `write-einwilligung` | `MSB` **or** `ESA` |
-| Operations | `manage-subscription`, `manage-fanout` | `ADMIN` |
+| Operations | `manage-subscription`, `manage-fanout`, `import-referenzreihen` | `ADMIN` |
 
 Tenant and roles arrive in the **context** — `context.principal_tenant`
 (`mako_tenant`), `context.principal_roles` (`mako_roles`),
@@ -277,6 +277,10 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/mmma-preise/gas` | `read-mmma-preis` | List Gas MMM prices (`?limit=`) |
 | `POST` | `/api/v1/mmma-preise/import-trigger` | `write-mmma-preis` | Run the monthly import now |
 | `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read-mmma-preis` / `write-mmma-preis` | Strom MMM prices (one nationwide series) |
+| `GET` | `/api/v1/referenzreihen` | `read-referenzreihen` | The [Referenzreihen](#referenzreihen) catalogue, each series with its newest value |
+| `GET` | `/api/v1/referenzreihen/{reihe}/werte` | `read-referenzreihen` | Values overlapping `?von=&bis=` (Berlin days), `?dim=`, as known at `?stand=` |
+| `GET` | `/api/v1/referenzreihen/{reihe}/wert` | `read-referenzreihen` | The value of `?jahr=` (`&monat=`), as known at `?stand=`; none is `422 referenzwert_fehlt` |
+| `POST` | `/api/v1/referenzreihen/{reihe}/import` | `import-referenzreihen` | A publisher's file as the body; `?vorschau=true` writes nothing; idempotent on the file's SHA-256 |
 | `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | `write-preisblatt` | Upsert a Netznutzung sheet, snapshot it, emit `de.markt.pricat.published` |
 | `GET` | `/api/v1/preisblaetter/{nb_mp_id}` | `read-preisblatt` | Sheet valid on `?date=` |
 | `GET` | `/api/v1/pricat/{nb_mp_id}/history` | `read-pricat` | PRICAT versions, newest first |
@@ -299,6 +303,7 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/mabis-zp` | `read-mabis-zp` | Every Bilanzierungsgebiet → MaBiS-Zählpunkt |
 | `GET` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `read-mabis-zp` | MaBiS-Zählpunkt (`LOC+172`); `404` makes `netzbilanzd` refuse the MaBiS filing, never fall back to the EIC |
 | `PUT` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `write-mabis-zp` | Assign it; `400` for a value equal to the EIC or not 33 characters |
+| `GET` | `/api/v1/zuordnungsermaechtigungen/{lf_mp_id}` | `read-zuordnungsermaechtigung` | Every Zuordnungsermächtigung (BKV, BK, BG, ZRT, `[valid_from, valid_to)`) naming the LF, from the UTILMD 55071/55072 the event ingest recorded; processd's `E_0622` Prüfschritt 60 reads it. No write route — only the BKV's message sets one |
 | `PUT` | `/api/v1/netzzugang/antraege` | `write-netzzugang` | Upsert a §20b EnWG request; emits `de.markt.netzzugang.antrag.updated` |
 | `GET` | `/api/v1/netzzugang/antraege` · `/{id}` | `read-netzzugang` | List (`?status=&netzanschluss_id=`); one |
 | `PATCH` | `/api/v1/netzzugang/antraege/{id}/status` | `write-netzzugang` | `erfasst → uebermittelt → bestaetigt/abgelehnt`; optional `platform_ref`, `expected_version` (→ `412`) |
@@ -598,6 +603,72 @@ Without the month's prices `netzbilanzd` needs them in the request and
 
 ---
 
+## Referenzreihen
+
+A Referenzreihe is a figure a publication sets, not a statute — billing reads
+it and a release should not have to carry it. The catalogue is
+`mako_markt::referenzreihen::Reihe`; marktd stores the values.
+
+| `reihe` | Value | Period | Dimensions | Publisher | Anchor | Licence | Reader |
+|---|---|---|---|---|---|---|---|
+| `kav_grenzpreis_strom` | Durchschnittserlös Strom aller Sondervertragskunden, ct/kWh | Kalenderjahr | — | Statistisches Bundesamt | KAV § 2 Abs. 4 | DL-DE/BY 2.0 (frei) | netzbilanzd, for the vorletzte Kalenderjahr |
+| `kav_durchschnittserloes_gas` | Durchschnittserlös Gas aller Letztverbraucher, ct/kWh | Kalenderjahr | — | Statistisches Bundesamt | KAV § 2 Abs. 5 Nr. 2 | DL-DE/BY 2.0 (frei) | none yet — the Gas Grenzpreis stays the caller's |
+| `eeg_monatsmarktwert` | Monatsmarktwert, ct/kWh | Kalendermonat | `spot` · `wind_an_land` · `wind_auf_see` · `solar` | Übertragungsnetzbetreiber | EEG 2023 Anlage 1 Nr. 3 | Betreiber | none yet |
+| `eeg_jahresmarktwert` | Jahresmarktwert, ct/kWh | Kalenderjahr | as above | Übertragungsnetzbetreiber | EEG 2023 Anlage 1 Nr. 4 | Betreiber | none yet |
+| `day_ahead_de_lu` | Spotmarktpreis, ct/kWh | Viertelstunde | — | Strombörsen | EEG 2023 § 3 Nr. 42a | Betreiber | none yet |
+
+**Bitemporal, append-only.** `referenzwerte` keeps `gilt` (when the value holds
+— an annual or monthly value between the Berlin midnights that bound it) and
+`erfasst` (when marktd knew it). A correction — the final Grenzpreis after the
+provisional one, a corrected file — closes the current row's `erfasst` and
+inserts the new row; nothing is updated in place or deleted. A read with
+`?stand=<RFC 3339>` returns what marktd knew then, so a settlement computed on a
+provisional value can be reproduced after the final one has arrived. An
+`EXCLUDE … USING gist (reihe, dim, gilt &&, erfasst &&)` makes „the value for
+this period as known then" a single answer.
+
+**Missing is a refusal.** `GET …/{reihe}/wert` without a value answers
+`422 referenzwert_fehlt` with `reihe`, `dim`, `zeitraum` and `faelligkeit` —
+the series' publication rule (`KAV § 2 Abs. 4 nennt keinen
+Veröffentlichungstermin`; the EEG Marktwerte are due „bis zum Ablauf des
+zehnten Werktags des Folgemonats", EEG 2023 Anlage 1 Nr. 5.2). Never a zero and
+never the neighbouring period.
+
+**Licence.** mako seeds a series only when its licence allows redistribution
+(`frei`) and the value was read from a document mirrored in the repository; it
+seeds none today. A `Betreiber` series — the EPEX day-ahead price, the
+netztransparenz Marktwerte whose terms are unverified — is loaded by the
+operator under its own licence. `cargo xtask check-referenzreihen` refuses a
+seed row for a `Betreiber` series, a series nothing reads that is not listed as
+waiting for its reader, and a series without source or licence.
+
+**Import.** `POST /api/v1/referenzreihen/{reihe}/import` takes the file as the
+request body:
+
+| `format` | File | Series |
+|---|---|---|
+| `generisch` | `zeitraum;dim;wert` with a header row; `zeitraum` is `YYYY`, `YYYY-MM` or the RFC 3339 start of a quarter hour; `,` or `.` as decimal mark | every series |
+| `smard` | SMARD `chart_data` JSON (`series: [[ms, EUR/MWh]]`), converted to ct/kWh; `null` entries are skipped | `day_ahead_de_lu` |
+| `energy_charts` | energy-charts `/price` JSON (`unix_seconds`, `price`, `unit` = `EUR / MWh`) | `day_ahead_de_lu` |
+
+The query names `status` (`vorlaeufig` \| `endgueltig`), `quelle_url`
+(`https://` only) and optionally `veroeffentlicht_am`. The import is one
+transaction; a file the reader refuses — an unknown dimension, a period twice,
+a decimal with both marks — is refused whole (`422 datei_unlesbar`). The same
+file twice is answered `bereits_importiert` with the earlier import and adds
+nothing. `?vorschau=true` runs the same transaction and rolls it back, so the
+preview lists exactly the rows (`neu`, `ersetzt`, `unveraendert`) the import
+would write. The netztransparenz Marktwert CSV and the Destatis GENESIS table
+have no reader yet; load them as `generisch`.
+
+```bash
+curl -s -X POST "http://marktd:8180/api/v1/referenzreihen/kav_grenzpreis_strom/import?format=generisch&status=endgueltig&quelle_url=https://www-genesis.destatis.de/&vorschau=true" \
+  -H "Authorization: Bearer <token>" \
+  --data-binary @grenzpreis.csv
+```
+
+---
+
 ## Trading partners
 
 `partners` is keyed on `mp_id` (BDEW- or DVGW-Codenummer).
@@ -834,6 +905,7 @@ before deciding an Anmeldung.
 | `malo` · `melo` | Location BOs — JSONB, `bo4e_version`, typed columns |
 | `rollenzuordnungen` | Dated NB/LF/MSB roles per MaLo |
 | `melo_msb_zuordnungen` | Dated MSB per MeLo, from IFTSTA 21012 — never from the vorläufige Anmeldebestätigung 55043 |
+| `zuordnungsermaechtigungen` | Per (LF, BK, BG, ZRT), half-open `[valid_from, valid_to)` under a GiST exclusion: a 55071 opens a row on its Bilanzierungsbeginn, a 55072 ends it on its Deaktivierungsdatum and records the day it was sent (MaBiS Kap. 10.2–10.3) |
 | `bilanzierungen` | BO4E `Bilanzierung` per MaLo; a currently effective one derives `malo.fallgruppe` |
 | `malo_netznutzungsdaten` | The NB's facts of a MaLo's UTILMD record no BO4E object carries — Gruppenzuordnung, Betriebszustand, Termine and Intervall der Netznutzungsabrechnung, Abrechnungsvariante, Gemeinderabatt, Turnusablesung, Netznutzungsvertrag and Zahler; dated, half-open, non-overlapping |
 | `lokationszuordnungen` | Location graph edges, typed `Lokationstyp` (`MALO`/`MELO`/`NELO`/`SR`/`TR`) |
@@ -844,6 +916,7 @@ before deciding an Anmeldung.
 | `pricat_versions` · `pricat_dispatch_log` | PRICAT snapshots and dispatch attempts |
 | `nb_energiemix` | §42 EnWG energy mix per NB and year |
 | `mmma_preise_gas` · `mmm_preise_strom` | MMM prices |
+| `referenzwerte` · `referenz_importe` | [Referenzreihen](#referenzreihen) values, bitemporal and append-only; one row per imported document |
 | `versorgungsstatus` · `lf_zuordnung` · `versorgungsstatus_history` | Supply state, the supplier list, the append-only history |
 | `grundversorger` | §36 Abs. 2 EnWG Feststellung per (NB, Sparte) and `default_bilanzkreis` |
 | `mabis_zaehlpunkte` | Bilanzierungsgebiet → MaBiS-Zählpunkt |
@@ -1464,7 +1537,7 @@ Inbound delivery is idempotent on `event_id`.
 credential layer, `[mcp]` (API key or OIDC), independent of the REST `[oidc]`;
 the principal is then checked against the single Cedar action `use-mcp`.
 
-**Tools (19)**, every one a read:
+**Tools (21)**, every one a read:
 
 | Tool | Description |
 |---|---|
@@ -1481,6 +1554,7 @@ the principal is then checked against the single Cedar action `use-mcp`.
 | `get_nb_energiemix` | §42 EnWG energy mix |
 | `get_correlation` | Process correlation |
 | `get_technische_ressource` / `get_steuerbare_ressource` | §14a device registry |
+| `list_referenzreihen` / `get_referenzwert` | The [Referenzreihen](#referenzreihen) catalogue; one value as known at `stand`, or `referenzwert_fehlt` |
 
 **Prompts (4):** `lookup-malo`, `investigate-supply-gap`,
 `versorgungswechsel-tracking`, `grid-topology`.

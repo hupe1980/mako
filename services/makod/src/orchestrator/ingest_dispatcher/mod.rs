@@ -233,7 +233,7 @@ impl IngestOutcome {
 /// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
 ///
 /// A parameter rather than a `W::State: OccupiesBusinessKey` bound because only
-/// 56 of the 65 workflow names dispatched here supply a verdict at all — 40
+/// 57 of the 65 workflow names dispatched here supply a verdict at all — 41
 /// through that trait, 16 through an inherent terminal-state closure — and the
 /// verdict is domain knowledge that belongs in the workflow's own crate — makod
 /// only *consumes* what a crate has already published (that trait, or an
@@ -2345,7 +2345,7 @@ pub fn extract_invoice_ref_from_comdis(msg: &AnyMessage) -> String {
     }
 }
 
-fn dokumentennummer(segments: &[edifact_rs::Segment]) -> String {
+fn dokumentennummer(segments: &[edifact::Segment]) -> String {
     segments
         .iter()
         .find(|s| s.tag == "DOC")

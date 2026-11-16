@@ -193,8 +193,7 @@ impl ProductdClient {
 /// Decode a JSON value as `rust_decimal::Decimal`.
 ///
 /// Accepts both string (`"25.5"`) and JSON number (`25.5`) representations.
-/// Rejects nested objects — the old non-BO4E `{"wert": "25.5"}` form is no
-/// longer accepted after the `productd` hard-cut.
+/// A nested object such as `{"wert": "25.5"}` is not BO4E and is refused.
 fn decimal_from_json(v: Option<&serde_json::Value>) -> Option<Decimal> {
     match v? {
         serde_json::Value::String(s) => s.parse().ok(),
@@ -205,7 +204,7 @@ fn decimal_from_json(v: Option<&serde_json::Value>) -> Option<Decimal> {
 
 /// Extract `TariffInput` from a `ProductRow.data` JSONB and the product metadata.
 ///
-/// ## Preistyp — canonical ALLCAPS (hard-cut)
+/// ## Preistyp — canonical ALLCAPS
 ///
 /// `productd` normalises all `preistyp` values to canonical ALLCAPS on PUT
 /// (enforced by `normalize_tarifpreisblatt()`).  Commodity disambiguation uses

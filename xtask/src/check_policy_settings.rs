@@ -229,6 +229,12 @@ fn read_findings(root: &Path, d: &PolicyDecl) -> Vec<Finding> {
 /// A `Required` setting has a test showing its absence refuses: a test file
 /// or test module of the service naming the key beside `PolicyRequired` or
 /// the loader's „missing policy setting".
+///
+/// A `Required` setting the config holds as `Option<Policy<T>>` deserializes
+/// when absent, so the service starts; its absence is refused where it is
+/// read instead, as `policy_nicht_gesetzt`. For such a setting a test naming
+/// the key beside that code shows the refusal — and only for such a setting,
+/// because a non-optional one that never refuses startup has no other door.
 fn required_test_findings(root: &Path, d: &PolicyDecl) -> Vec<Finding> {
     if d.default != PolicyDefault::Required {
         return Vec::new();
@@ -237,28 +243,50 @@ fn required_test_findings(root: &Path, d: &PolicyDecl) -> Vec<Finding> {
     let mut files = Vec::new();
     rust_files(&svc.join("src"), &mut files);
     rust_files(&svc.join("tests"), &mut files);
-    let shown = files.iter().any(|f| {
-        std::fs::read_to_string(f).is_ok_and(|src| {
-            let tests = src.find("#[cfg(test)]").map_or(
-                if f.components().any(|c| c.as_os_str() == "tests") {
-                    src.as_str()
-                } else {
-                    ""
-                },
-                |i| &src[i..],
-            );
-            tests.contains(&format!("\"{}\"", d.key))
-                && (tests.contains("PolicyRequired") || tests.contains("missing policy setting"))
+    let sources: Vec<(bool, String)> = files
+        .iter()
+        .filter_map(|f| {
+            let in_tests = f.components().any(|c| c.as_os_str() == "tests");
+            std::fs::read_to_string(f).ok().map(|src| (in_tests, src))
         })
+        .collect();
+    let optional = sources.iter().any(|(in_tests, src)| {
+        !in_tests && held_as_option(src.split("#[cfg(test)]").next().unwrap_or(""), &d.enum_name)
+    });
+    let shown = sources.iter().any(|(in_tests, src)| {
+        let tests = src
+            .find("#[cfg(test)]")
+            .map_or(if *in_tests { src.as_str() } else { "" }, |i| &src[i..]);
+        refusal_shown(&d.key, optional, tests)
     });
     if shown {
         Vec::new()
     } else {
         vec![(
             at(d),
-            "a required setting with no test showing that its absence refuses startup".to_owned(),
+            "a required setting with no test showing that its absence refuses startup (or, held \
+             as `Option<Policy<_>>`, that it refuses with `policy_nicht_gesetzt`)"
+                .to_owned(),
         )]
     }
+}
+
+/// Whether production source declares a field `Option<Policy<{enum_name}>>`.
+fn held_as_option(src: &str, enum_name: &str) -> bool {
+    let compact: String = src.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains(&format!("Option<Policy<{enum_name}>>"))
+        || compact.contains(&format!(
+            "Option<mako_service::policy::Policy<{enum_name}>>"
+        ))
+}
+
+/// Whether `tests` shows the absence of the setting `key` refused: at startup,
+/// or — for a setting held as an `Option` — by the route that reads it.
+fn refusal_shown(key: &str, optional: bool, tests: &str) -> bool {
+    let startup = tests.contains(&format!("\"{key}\""))
+        && (tests.contains("PolicyRequired") || tests.contains("missing policy setting"));
+    let route = optional && tests.contains("policy_nicht_gesetzt") && tests.contains(key);
+    startup || route
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -513,5 +541,29 @@ pub struct C {
         let f =
             defaulted_enum_findings("services/x/src/config.rs", src, &enums, &policies, &allowed);
         assert!(f.is_empty(), "{f:?}");
+    }
+
+    /// A route-level refusal shows a required setting only when the config
+    /// holds it as an `Option`; a startup refusal shows any.
+    #[test]
+    fn a_route_refusal_shows_only_an_optional_required_setting() {
+        let route_test = r#"
+async fn an_unset_vertragsschluss_policy_refuses_the_route() {
+    assert_eq!(body["code"], "policy_nicht_gesetzt");
+}"#;
+        assert!(refusal_shown("vertragsschluss", true, route_test));
+        assert!(!refusal_shown("vertragsschluss", false, route_test));
+        assert!(!refusal_shown("anderer_schluessel", true, route_test));
+        let startup_test = r#"assert!(problems.contains(&ConfigProblem::PolicyRequired { path: "policy.p".into() })); let k = "p";"#;
+        assert!(refusal_shown("p", false, startup_test));
+
+        assert!(held_as_option(
+            "pub vertragsschluss: Option<Policy<Vertragsschluss>>,",
+            "Vertragsschluss"
+        ));
+        assert!(!held_as_option(
+            "pub vertragsschluss: Policy<Vertragsschluss>,",
+            "Vertragsschluss"
+        ));
     }
 }

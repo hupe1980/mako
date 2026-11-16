@@ -1,4 +1,4 @@
-use edifact_rs::OwnedSegment;
+use edifact::OwnedSegment;
 
 use crate::{EdiEnergyReport, Error, MessageType, Pruefidentifikator, Release};
 
@@ -52,6 +52,14 @@ pub trait EdiEnergyMessage: Send + Sync {
     /// This is the sender-assigned reference string that correlates UNH/UNT pairs
     /// and is mirrored in acknowledgement messages (APERAK, CONTRL).
     fn message_ref(&self) -> &str;
+
+    /// The decimal mark of the interchange this message arrived in: `,` when
+    /// its `UNA` declares it, `.` otherwise.
+    ///
+    /// Allgemeine Festlegungen V6.1d Kap. 2.18 (S. 22) binds every number to
+    /// the decimal mark the `UNA` defines, so a value is read with
+    /// [`crate::wire_decimal`] under this mark — never with either mark.
+    fn decimal_mark(&self) -> char;
 
     /// Extracts the Pruefidentifikator from the BGM document-identifier field (DE 1004).
     ///

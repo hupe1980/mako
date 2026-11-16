@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use edifact_rs::Writer;
+use edifact::Writer;
 
 use crate::AgencyCode;
 use crate::{Error, Release};
@@ -420,7 +420,7 @@ impl<S, R> RemadvBuilder<S, R> {
             .map_or("0", |r| r.ueberweisungsbetrag.as_str());
         emit_comp!(w, "MOA", ["12", summe]);
         w.finish_unt(&self.inner.message_ref)
-            .map_err(Error::Parse)?;
+            .map_err(Error::write)?;
         Ok(buf)
     }
     /// Build and serialize the message to EDIFACT bytes.

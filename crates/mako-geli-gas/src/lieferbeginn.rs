@@ -75,6 +75,105 @@ pub const WORKFLOW_NAME: &str = "geli-gas-supplier-change";
 /// duration, because there is no single one to name.
 pub const RESPONSE_WINDOW_LABEL: &str = "geli-gas-antwortfrist";
 
+/// Deadline label for the Informationsmeldung über existierende Zuordnung
+/// (44036) the GNB owes the LFN beside its Abmeldungsanfrage 44010 —
+/// „Unverzüglich, jedoch spätestens bis zum Ablauf des 4. WT nach Eingang der
+/// Anmeldung" (AWH GeLi Gas V1.2 Kap. 2.5.2 SD Lieferbeginn Nr. 2, S. 40).
+///
+/// Owed exactly where the Abmeldungsanfrage is: Nr. 3 goes out „Zeitgleich zu
+/// Prozessschritt 2" (S. 41), and both follow from the one Prüfung that the
+/// Marktlokation is still assigned. So the 44010 process carries the window,
+/// and the Meldung's own door discharges it.
+pub const MELDEPFLICHT_INFORMATION_LABEL: &str = "geli-gas-abmeldungsanfrage-meldepflicht-44036";
+
+/// Deadline label for the Informationsmeldung zur Beendigung der Zuordnung
+/// (44037) the GNB owes the LFA — „Am selben Tag wie in Prozessschritt 5, wenn
+/// die Anmeldung bestätigt wurde" (Nr. 6, S. 45). Registered when the
+/// Bestätigung 44002 goes out, because that is the day it counts from.
+pub const MELDEPFLICHT_BEENDIGUNG_LABEL: &str = "geli-gas-abmeldungsanfrage-meldepflicht-44037";
+
+/// The Abmeldungsanfrage des NB (GNB → LFA), answered 44011 / 44012.
+pub const ABMELDUNGSANFRAGE_PID: u32 = 44_010;
+/// The Informationsmeldung über existierende Zuordnung (GNB → LFN).
+pub const INFORMATION_PID: u32 = 44_036;
+/// The Informationsmeldung zur Beendigung der Zuordnung (GNB → LFA).
+pub const BEENDIGUNG_PID: u32 = 44_037;
+
+/// The deadline label of the Meldepflicht `pid` an Abmeldungsanfrage carries.
+#[must_use]
+pub fn meldepflicht_label(pid: u32) -> Option<&'static str> {
+    match pid {
+        INFORMATION_PID => Some(MELDEPFLICHT_INFORMATION_LABEL),
+        BEENDIGUNG_PID => Some(MELDEPFLICHT_BEENDIGUNG_LABEL),
+        _ => None,
+    }
+}
+
+/// What a GNB's Abmeldungsanfrage 44010 carries beside the facts every
+/// GNB-initiated Anfrage carries.
+///
+/// UTILMD AHB Gas 1.2 Kap. 5.7 (column 44010): `SG12 NAD+Z09` „Kundenname aus
+/// Anmeldung Lieferant neu" (Bedingung `[572]`) and `SG12 NAD+VY` „Neulieferant"
+/// (`[567]`). The Anmeldung it serves is what the LFA's answer resumes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GnbAbmeldungsanfrage {
+    /// The GNB's own process answering the Anmeldung 44001 this Anfrage serves.
+    pub anmeldung_process_id: String,
+    /// The Neulieferant, `SG12 NAD+VY`.
+    pub lfn_mp_id: String,
+    /// The Letztverbraucher the LFN named, `SG12 NAD+Z09` DE 3036.
+    pub kunde_name: Option<String>,
+    /// `NAD` DE 3045 — `Z01` Personenname, `Z02` Firmenbezeichnung.
+    pub kunde_namensformat: Option<String>,
+    /// `SG4 IDE+24` of the outbound Anfrage.
+    pub vorgangsnummer: String,
+}
+
+/// Where a GNB's Abmeldungsanfrage stands: the LFA's answer and the two
+/// Meldepflichten it carries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AbmeldungsanfrageStand {
+    /// The Anmeldung 44001 this Anfrage serves.
+    pub anmeldung_process_id: String,
+    /// The Neulieferant.
+    pub lfn_mp_id: String,
+    /// `None` while unanswered; `Some(true)` once the LFA released the
+    /// Marktlokation — silence included, „wird die Zuordnung des Altlieferanten
+    /// zum Tag vor dem Anmeldedatum beendet" (GeLi Gas 3.0 Kap. 3.2.3, S. 9);
+    /// `Some(false)` on a Widerspruch.
+    #[serde(default)]
+    pub zustimmung: Option<bool>,
+    /// The Bestätigung 44002 of the Anmeldung went out.
+    #[serde(default)]
+    pub anmeldung_bestaetigt: bool,
+    /// The Meldungen (44036 / 44037) sent.
+    #[serde(default)]
+    pub gesendet: Vec<u32>,
+}
+
+impl AbmeldungsanfrageStand {
+    /// Whether the Meldung `pid` is owed and unsent, `lfa` being the
+    /// Altlieferant this Anfrage went to.
+    ///
+    /// 44036 is owed from the Anfrage on (Nr. 2 and Nr. 3 share their
+    /// condition). 44037 is owed once the Anmeldung was confirmed after the LFA
+    /// released the Marktlokation (Nr. 6) — unless the LFA is the LFN, whose
+    /// Zuordnung does not end.
+    #[must_use]
+    pub fn meldung_offen(&self, pid: u32, lfa: &str) -> bool {
+        if self.gesendet.contains(&pid) {
+            return false;
+        }
+        match pid {
+            INFORMATION_PID => true,
+            BEENDIGUNG_PID => {
+                self.anmeldung_bestaetigt && self.zustimmung == Some(true) && self.lfn_mp_id != lfa
+            }
+            _ => false,
+        }
+    }
+}
+
 // ── PID sets ──────────────────────────────────────────────────────────────────
 
 /// All inbound **Anfrage** PIDs that start a new GeLi Gas process stream.
@@ -345,6 +444,10 @@ pub struct GasSupplierChangeData {
     /// Kap. 5.9.
     #[serde(default)]
     pub vorgang: LfVorgangsdaten,
+    /// A GNB's Abmeldungsanfrage 44010: the Anmeldung it serves, the LFA's
+    /// answer and the Meldepflichten it carries. `None` on every other process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abmeldungsanfrage: Option<AbmeldungsanfrageStand>,
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -421,6 +524,10 @@ pub enum GasSupplierChangeEvent {
         message_ref: MessageRef,
         /// BDEW Prüfidentifikator of the outbound Anfrage.
         pruefidentifikator: Pruefidentifikator,
+        /// On an Abmeldungsanfrage 44010: the Anmeldung it serves and the
+        /// Neulieferant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        abmeldungsanfrage: Option<AbmeldungsanfrageStand>,
     },
     /// GNB received the Antwort to its initiated Anfrage.
     GnbAntwortErhalten {
@@ -456,6 +563,21 @@ pub enum GasSupplierChangeEvent {
         /// Label of the lapsed deadline.
         label: Box<str>,
     },
+    /// **Abmeldungsanfrage.** The Meldung `pid` (44036 / 44037) went out from
+    /// its own door; the window this Anfrage carries for it is discharged.
+    MeldungGesendet {
+        /// 44036 or 44037.
+        pid: u32,
+    },
+    /// **Abmeldungsanfrage.** The Anmeldung this Anfrage serves was confirmed
+    /// (44002) — from now the Beendigung 44037 is owed to the LFA.
+    AnmeldungBestaetigt,
+    /// **Abmeldungsanfrage.** A Meldepflicht's window closed with its Meldung
+    /// owed and unsent.
+    MeldepflichtVerstrichen {
+        /// The window's label.
+        label: Box<str>,
+    },
     /// Process rejected.
     Rejected {
         /// Human-readable rejection reason.
@@ -481,6 +603,9 @@ impl EventPayload for GasSupplierChangeEvent {
             Self::GnbAntwortErhalten { .. } => "GasSupplierChangeGnbAntwortErhalten",
             Self::Activated => "GasSupplierChangeActivated",
             Self::SchweigenWirksam { .. } => "GasSupplierChangeSchweigenWirksam",
+            Self::MeldungGesendet { .. } => "GasSupplierChangeMeldungGesendet",
+            Self::AnmeldungBestaetigt => "GasSupplierChangeAnmeldungBestaetigt",
+            Self::MeldepflichtVerstrichen { .. } => "GasSupplierChangeMeldepflichtVerstrichen",
             Self::Rejected { .. } => "GasSupplierChangeRejected",
             Self::DeadlineExpired { .. } => "GasSupplierChangeDeadlineExpired",
         }
@@ -517,9 +642,13 @@ impl EventPayload for GasSupplierChangeEvent {
                 pid: Some(response_pid.as_u32()),
                 message_ref: None,
             }),
+            // The Meldung's own process records its Ausgang.
             Self::ValidationPassed { .. }
             | Self::Activated
             | Self::SchweigenWirksam { .. }
+            | Self::MeldungGesendet { .. }
+            | Self::AnmeldungBestaetigt
+            | Self::MeldepflichtVerstrichen { .. }
             | Self::DeadlineExpired { .. } => None,
             // Emitted only beside the APERAK 313 Verarbeitbarkeitsfehlermeldung
             // `handle` queues for it; an APERAK carries no Prüfidentifikator.
@@ -822,6 +951,9 @@ pub enum GasSupplierChangeCommand {
         /// Marktlokation (`SG6 RFF+Z18`), the `SG8` groups and the `SG12`
         /// Marktlokationsanschrift a 44013 makes Muss.
         stammdaten: Stammdaten,
+        /// What only an Abmeldungsanfrage 44010 carries — Muss on 44010 and
+        /// refused on every other PID.
+        abmeldungsanfrage: Option<Box<GnbAbmeldungsanfrage>>,
     },
     /// GNB received the Antwort to its initiated Anfrage.
     ReceiveGnbAntwort {
@@ -834,6 +966,29 @@ pub enum GasSupplierChangeCommand {
         /// `SG4 STS+E01` DE 9013, as the message carried it — kept raw, so an
         /// answer with a code its tree does not publish is still recorded.
         antwort_code: Option<String>,
+        /// **Fall b** on a 44011 — the earlier Abmeldedatum the LFA confirmed
+        /// (`SG4 DTM+93`, AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 4, S. 41), as the
+        /// Gastag it ends before (`YYYYMMDD`).
+        zuordnungsende: Option<String>,
+    },
+    /// **Abmeldungsanfrage.** The Meldung `pid` (44036 / 44037) went out from
+    /// its own door.
+    MeldungGesendet {
+        /// 44036 or 44037.
+        pid: u32,
+    },
+    /// **Abmeldungsanfrage.** The Anmeldung this Anfrage serves was confirmed;
+    /// the Beendigung 44037 is owed „Am selben Tag wie in Prozessschritt 5"
+    /// (AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 6, S. 45), by `beendigung_faellig`.
+    AnmeldungBestaetigt {
+        /// The end of the 44037's window, resolved by the caller from
+        /// `mako_fristen::meldung` on the instant the 44002 went out.
+        beendigung_faellig: OffsetDateTime,
+    },
+    /// **Abmeldungsanfrage.** A Meldepflicht window fired.
+    MeldepflichtVerstrichen {
+        /// The window's label.
+        label: Box<str>,
     },
     /// Mark supply as active (Lieferbeginn Gas 44001 only).
     Activate,
@@ -863,14 +1018,163 @@ const GNB_INITIATOR_PIDS: &[u32] = &[44007, 44010, 44013, 44019];
 /// GNB sent (`GnbPending`). Once the answer is out the window is closed: an
 /// `AntwortGesendet` process waits for the Lieferbeginn, not for an answer. A
 /// lapsed window does not lapse twice.
+///
+/// The two Meldepflicht windows of an Abmeldungsanfrage
+/// ([`MELDEPFLICHT_INFORMATION_LABEL`], [`MELDEPFLICHT_BEENDIGUNG_LABEL`]) are
+/// open while their Meldung is owed and unsent
+/// ([`AbmeldungsanfrageStand::meldung_offen`]), whatever the LFA answered.
 fn window_open(label: &str, state: &GasSupplierChangeState) -> bool {
-    label == RESPONSE_WINDOW_LABEL
-        && matches!(
+    match label {
+        RESPONSE_WINDOW_LABEL => matches!(
             state,
             GasSupplierChangeState::Initiated(_)
                 | GasSupplierChangeState::ValidationPassed(_)
                 | GasSupplierChangeState::GnbPending(_)
-        )
+        ),
+        MELDEPFLICHT_INFORMATION_LABEL | MELDEPFLICHT_BEENDIGUNG_LABEL => {
+            let pid = if label == MELDEPFLICHT_INFORMATION_LABEL {
+                INFORMATION_PID
+            } else {
+                BEENDIGUNG_PID
+            };
+            state.data().is_some_and(|d| {
+                d.abmeldungsanfrage
+                    .as_ref()
+                    .is_some_and(|a| a.meldung_offen(pid, d.receiver.as_str()))
+            })
+        }
+        _ => false,
+    }
+}
+
+/// The notification `processd` resumes the Anmeldung decision from — the
+/// Gas twin of GPKE's, on the same `LfaAntwortAufAbmeldeanfrage` type, so one
+/// consumer reads both Sparten.
+///
+/// To this GNB's own ERP fan-out, not to the market: the LFA's answer is an
+/// input to `E_3007`, and the process that has to act on it is the
+/// Anmeldung's.
+fn lfa_antwort_notification(
+    data: &GasSupplierChangeData,
+    stand: &AbmeldungsanfrageStand,
+    antwortcode: Option<&str>,
+    zustimmung: bool,
+    grund: Option<&str>,
+    zuordnungsende: Option<&str>,
+    fristablauf: bool,
+) -> PendingOutbox {
+    let mut payload = serde_json::json!({
+        "type":                 "LfaAntwortAufAbmeldeanfrage",
+        "pid":                  data.pruefidentifikator.as_u32(),
+        "malo_id":              data.malo_id.as_str(),
+        "grid_operator":        data.sender.as_str(),
+        "lfa_mp_id":            data.receiver.as_str(),
+        "anmeldung_process_id": stand.anmeldung_process_id,
+        "zustimmung":           zustimmung,
+        "fristablauf":          fristablauf,
+    });
+    let obj = payload.as_object_mut().expect("json! built an object");
+    if let Some(c) = antwortcode {
+        obj.insert("antwortcode".into(), c.into());
+    }
+    if let Some(g) = grund {
+        obj.insert("grund".into(), g.into());
+    }
+    if let Some(ende) = zuordnungsende {
+        obj.insert("zuordnungsende".into(), ende.into());
+    }
+    PendingOutbox::new("LfaAntwortAufAbmeldeanfrage", data.sender.as_str(), payload)
+}
+
+/// The `SG4 STS+7` codes the Abmeldungsanfrage 44010 admits (UTILMD AHB Gas
+/// 1.2 Kap. 5.7): the Anmeldung's own Grund, with `E02` „Einzug in
+/// Neuanlage" written as `E01` (Bedingung `[644]`).
+pub const ABMELDUNGSANFRAGE_TRANSAKTIONSGRUENDE: &[&str] = &["E01", "E03", "ZD2"];
+
+/// The `SG4 STS+7` an Abmeldungsanfrage restates for an Anmeldung that carried
+/// `grund`: Bedingung `[644]` — „Wenn in der zugehörigen Anmeldung (44001) in
+/// diesem Segmente ‚Einzug in Neuanlage' (SG4 STS+7++E02) enthalten ist, wird in
+/// diesem Geschäftsvorfall der Code E01 verwendet".
+#[must_use]
+pub fn abmeldungsanfrage_transaktionsgrund(grund: &str) -> &str {
+    if grund == "E02" { "E01" } else { grund }
+}
+
+/// Hold the 44010's own facts to their column, and every other PID to having
+/// none.
+fn abmeldungsanfrage_pruefen(
+    variant: GasProcessVariant,
+    abmeldungsanfrage: Option<Box<GnbAbmeldungsanfrage>>,
+    process_date: &str,
+    transaktionsgrund: Option<&str>,
+) -> Result<Option<Box<GnbAbmeldungsanfrage>>, WorkflowError> {
+    if variant != GasProcessVariant::Abmeldungsanfrage {
+        return match abmeldungsanfrage {
+            None => Ok(None),
+            Some(_) => Err(WorkflowError::rejected(format!(
+                "only an Abmeldungsanfrage 44010 carries the Anmeldung it serves; this is a \
+                 {variant:?}"
+            ))),
+        };
+    }
+    let Some(a) = abmeldungsanfrage else {
+        return Err(WorkflowError::validation(
+            "an Abmeldungsanfrage 44010 names the Anmeldung it serves and its Neulieferant \
+             (SG12 NAD+VY, UTILMD AHB Gas 1.2 Kap. 5.7 Bedingung [567])"
+                .to_owned(),
+        ));
+    };
+    let missing: Vec<&str> = [
+        (
+            "anmeldung_process_id",
+            a.anmeldung_process_id.trim().is_empty(),
+        ),
+        ("lfn_mp_id", a.lfn_mp_id.trim().is_empty()),
+        ("vorgangsnummer", a.vorgangsnummer.trim().is_empty()),
+        ("process_date", process_date.trim().is_empty()),
+    ]
+    .into_iter()
+    .filter_map(|(field, empty)| empty.then_some(field))
+    .collect();
+    if !missing.is_empty() {
+        return Err(WorkflowError::validation(format!(
+            "an Abmeldungsanfrage 44010 carries {} — UTILMD AHB Gas 1.2 Kap. 5.7 makes \
+             SG4 IDE+24, SG4 DTM+93 and SG12 NAD+VY Muss",
+            missing.join(", ")
+        )));
+    }
+    match transaktionsgrund {
+        Some(g) if ABMELDUNGSANFRAGE_TRANSAKTIONSGRUENDE.contains(&g) => {}
+        other => {
+            return Err(WorkflowError::validation(format!(
+                "an Abmeldungsanfrage 44010 carries SG4 STS+7 with one of \
+                 {ABMELDUNGSANFRAGE_TRANSAKTIONSGRUENDE:?} (UTILMD AHB Gas 1.2 Kap. 5.7, \
+                 Bedingung [644]); got {other:?}"
+            )));
+        }
+    }
+    // An LFN that is the LFA is asked all the same — Nr. 3 „gilt auch für den
+    // Fall, dass der LFN potenziell personenidentisch mit dem LFA ist" (AWH
+    // GeLi Gas V1.2 Kap. 2.5.2, S. 41); only the 44037 is then not owed.
+    Ok(Some(a))
+}
+
+/// Record `f` on the Abmeldungsanfrage the state's data carries.
+fn mit_stand(
+    state: GasSupplierChangeState,
+    f: impl FnOnce(&mut AbmeldungsanfrageStand),
+) -> GasSupplierChangeState {
+    let touch = |mut d: GasSupplierChangeData| {
+        if let Some(a) = d.abmeldungsanfrage.as_mut() {
+            f(a);
+        }
+        d
+    };
+    match state {
+        GasSupplierChangeState::GnbPending(d) => GasSupplierChangeState::GnbPending(touch(d)),
+        GasSupplierChangeState::Completed(d) => GasSupplierChangeState::Completed(touch(d)),
+        other => other,
+    }
 }
 
 /// What a lapsed window comes to: the outcome the Festlegung gives the
@@ -898,12 +1202,26 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
     type Event = GasSupplierChangeEvent;
     type Command = GasSupplierChangeCommand;
 
-    const DEADLINE_LABELS: &'static [&'static str] = &[RESPONSE_WINDOW_LABEL];
+    const DEADLINE_LABELS: &'static [&'static str] = &[
+        RESPONSE_WINDOW_LABEL,
+        MELDEPFLICHT_INFORMATION_LABEL,
+        MELDEPFLICHT_BEENDIGUNG_LABEL,
+    ];
 
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        window_open(deadline.label(), state).then(|| GasSupplierChangeCommand::TimeoutExpired {
-            deadline_id: deadline.deadline_id(),
-            label: deadline.label().into(),
+        let label = deadline.label();
+        if !window_open(label, state) {
+            return None;
+        }
+        Some(if label == RESPONSE_WINDOW_LABEL {
+            GasSupplierChangeCommand::TimeoutExpired {
+                deadline_id: deadline.deadline_id(),
+                label: label.into(),
+            }
+        } else {
+            GasSupplierChangeCommand::MeldepflichtVerstrichen {
+                label: label.into(),
+            }
         })
     }
 
@@ -935,6 +1253,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 pruefidentifikator: *pruefidentifikator,
                 message_ref: message_ref.clone(),
                 vorgang: (**vorgang).clone(),
+                abmeldungsanfrage: None,
             }),
 
             GasSupplierChangeEvent::ValidationPassed { .. } => {
@@ -981,6 +1300,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 process_date,
                 message_ref,
                 pruefidentifikator,
+                abmeldungsanfrage,
             } => {
                 let data = GasSupplierChangeData {
                     variant: *variant,
@@ -992,6 +1312,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     pruefidentifikator: *pruefidentifikator,
                     message_ref: message_ref.clone(),
                     vorgang: LfVorgangsdaten::default(),
+                    abmeldungsanfrage: abmeldungsanfrage.clone(),
                 };
                 if variant.is_one_way() {
                     GasSupplierChangeState::Completed(data)
@@ -1003,6 +1324,18 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
             GasSupplierChangeEvent::GnbAntwortErhalten {
                 accepted, reason, ..
             } => match state {
+                // The LFA's answer — Zustimmung or Widerspruch — ends the
+                // Abmeldungsanfrage as asked and answered; the Anmeldung is
+                // decided on it elsewhere, and the Meldepflichten this process
+                // carries outlive it.
+                GasSupplierChangeState::GnbPending(mut data)
+                    if data.abmeldungsanfrage.is_some() =>
+                {
+                    if let Some(a) = data.abmeldungsanfrage.as_mut() {
+                        a.zustimmung = Some(*accepted);
+                    }
+                    GasSupplierChangeState::Completed(data)
+                }
                 GasSupplierChangeState::GnbPending(data) => {
                     if *accepted {
                         GasSupplierChangeState::Completed(data)
@@ -1026,9 +1359,26 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
             }
 
             GasSupplierChangeEvent::SchweigenWirksam { .. } => match state {
-                GasSupplierChangeState::GnbPending(data) => GasSupplierChangeState::Completed(data),
+                GasSupplierChangeState::GnbPending(mut data) => {
+                    if let Some(a) = data.abmeldungsanfrage.as_mut() {
+                        a.zustimmung = Some(true);
+                    }
+                    GasSupplierChangeState::Completed(data)
+                }
                 other => other,
             },
+
+            GasSupplierChangeEvent::MeldungGesendet { pid } => mit_stand(state, |a| {
+                if !a.gesendet.contains(pid) {
+                    a.gesendet.push(*pid);
+                }
+            }),
+
+            GasSupplierChangeEvent::AnmeldungBestaetigt => {
+                mit_stand(state, |a| a.anmeldung_bestaetigt = true)
+            }
+
+            GasSupplierChangeEvent::MeldepflichtVerstrichen { .. } => state,
 
             GasSupplierChangeEvent::Rejected { reason } => GasSupplierChangeState::Rejected {
                 reason: reason.clone(),
@@ -1288,6 +1638,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 transaktionsgrund,
                 bilanzierungsbeginn,
                 stammdaten,
+                abmeldungsanfrage,
             } => {
                 if !matches!(state, GasSupplierChangeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
@@ -1321,22 +1672,39 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     }
                 }
 
-                let outbox = vec![PendingOutbox::typed(
-                    receiver.as_str(),
-                    &UtilmdPayload {
-                        pid: pid.as_u32(),
-                        sender: sender.as_str().to_owned(),
-                        receiver: Some(receiver.as_str().to_owned()),
-                        malo: Some(malo_id.as_str().to_owned()),
-                        document_date: Some(document_date.clone()),
-                        process_date: Some(process_date.clone()),
-                        message_ref: Some(message_ref.as_str().to_owned()),
-                        transaktionsgrund,
-                        bilanzierungsbeginn,
-                        stammdaten,
-                        ..UtilmdPayload::default()
-                    },
-                )];
+                let abmeldungsanfrage = abmeldungsanfrage_pruefen(
+                    variant,
+                    abmeldungsanfrage,
+                    &process_date,
+                    transaktionsgrund.as_deref(),
+                )?;
+
+                let mut payload = UtilmdPayload {
+                    pid: pid.as_u32(),
+                    sender: sender.as_str().to_owned(),
+                    receiver: Some(receiver.as_str().to_owned()),
+                    malo: Some(malo_id.as_str().to_owned()),
+                    document_date: Some(document_date.clone()),
+                    process_date: Some(process_date.clone()),
+                    message_ref: Some(message_ref.as_str().to_owned()),
+                    transaktionsgrund,
+                    bilanzierungsbeginn,
+                    stammdaten,
+                    ..UtilmdPayload::default()
+                };
+                if let Some(a) = abmeldungsanfrage.as_deref() {
+                    // `SG4 IDE+24`, `SG12 NAD+Z09` „Kundenname aus Anmeldung
+                    // Lieferant neu" ([572]) and `SG12 NAD+VY` „Neulieferant"
+                    // ([567]) — UTILMD AHB Gas 1.2 Kap. 5.7, column 44010.
+                    payload.vorgangsnummer = Some(a.vorgangsnummer.clone());
+                    payload.kunde_name = a.kunde_name.clone().filter(|n| !n.trim().is_empty());
+                    payload.kunde_namensformat = a
+                        .kunde_namensformat
+                        .clone()
+                        .filter(|f| !f.trim().is_empty());
+                    payload.beteiligte_marktpartner = vec![a.lfn_mp_id.clone()];
+                }
+                let outbox = vec![PendingOutbox::typed(receiver.as_str(), &payload)];
 
                 let event = GasSupplierChangeEvent::GnbProcessInitiated {
                     variant,
@@ -1347,6 +1715,11 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     process_date,
                     message_ref,
                     pruefidentifikator: pid,
+                    abmeldungsanfrage: abmeldungsanfrage.map(|a| AbmeldungsanfrageStand {
+                        anmeldung_process_id: a.anmeldung_process_id,
+                        lfn_mp_id: a.lfn_mp_id,
+                        ..AbmeldungsanfrageStand::default()
+                    }),
                 };
                 Ok(WorkflowOutput::with_outbox(vec![event], outbox))
             }
@@ -1356,6 +1729,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 accepted,
                 reason,
                 antwort_code,
+                zuordnungsende,
             } => {
                 let data = match state {
                     GasSupplierChangeState::GnbPending(d) => d,
@@ -1376,18 +1750,89 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         "response PID {response_pid} does not match anfrage PID {anfrage_pid}"
                     )));
                 }
-                Ok(WorkflowOutput::events(vec![
-                    GasSupplierChangeEvent::GnbAntwortErhalten {
-                        response_pid,
+                // The Abmeldungsanfrage's answer resumes the Anmeldung it
+                // serves: `processd` decides the 44001 on it (`E_3007`).
+                // **Fall b** rides only a Zustimmung.
+                let notification = data.abmeldungsanfrage.as_ref().map(|stand| {
+                    lfa_antwort_notification(
+                        data,
+                        stand,
+                        antwort_code.as_deref(),
                         accepted,
-                        reason,
-                        antwort_ebd: antwort_code
-                            .as_ref()
-                            .and_then(|_| data.variant.antwort_tree(None).ok().flatten())
-                            .map(str::to_owned),
-                        antwort_code,
-                    },
-                ]))
+                        reason.as_deref(),
+                        zuordnungsende.as_deref().filter(|_| accepted),
+                        false,
+                    )
+                });
+                let event = GasSupplierChangeEvent::GnbAntwortErhalten {
+                    response_pid,
+                    accepted,
+                    reason,
+                    antwort_ebd: antwort_code
+                        .as_ref()
+                        .and_then(|_| data.variant.antwort_tree(None).ok().flatten())
+                        .map(str::to_owned),
+                    antwort_code,
+                };
+                Ok(WorkflowOutput::with_outbox(
+                    vec![event],
+                    notification.into_iter().collect(),
+                ))
+            }
+
+            GasSupplierChangeCommand::MeldungGesendet { pid } => {
+                // Recorded whenever the Anfrage carries the Meldung and has not
+                // recorded it yet — also before it is owed, so a 44037 that
+                // overtakes the Bestätigung's own record is not owed twice. A
+                // redelivered door call changes nothing.
+                let fresh = meldepflicht_label(pid).is_some()
+                    && state
+                        .data()
+                        .and_then(|d| d.abmeldungsanfrage.as_ref())
+                        .is_some_and(|a| !a.gesendet.contains(&pid));
+                Ok(if fresh {
+                    vec![GasSupplierChangeEvent::MeldungGesendet { pid }].into()
+                } else {
+                    vec![].into()
+                })
+            }
+
+            GasSupplierChangeCommand::AnmeldungBestaetigt { beendigung_faellig } => {
+                let Some((data, stand)) = state
+                    .data()
+                    .and_then(|d| d.abmeldungsanfrage.as_ref().map(|a| (d, a)))
+                else {
+                    return Err(WorkflowError::rejected(
+                        "AnmeldungBestaetigt is recorded on an Abmeldungsanfrage 44010 only"
+                            .to_owned(),
+                    ));
+                };
+                // Only an Anfrage the LFA released can have its Anmeldung
+                // confirmed; once recorded, a repeat changes nothing.
+                if stand.zustimmung != Some(true) || stand.anmeldung_bestaetigt {
+                    return Ok(vec![].into());
+                }
+                let mut after = stand.clone();
+                after.anmeldung_bestaetigt = true;
+                let deadlines = after
+                    .meldung_offen(BEENDIGUNG_PID, data.receiver.as_str())
+                    .then(|| {
+                        PendingDeadline::new(MELDEPFLICHT_BEENDIGUNG_LABEL, beendigung_faellig)
+                    })
+                    .into_iter()
+                    .collect();
+                Ok(WorkflowOutput::with_outbox_and_deadlines(
+                    vec![GasSupplierChangeEvent::AnmeldungBestaetigt],
+                    vec![],
+                    deadlines,
+                ))
+            }
+
+            GasSupplierChangeCommand::MeldepflichtVerstrichen { label } => {
+                if label.as_ref() == RESPONSE_WINDOW_LABEL || !window_open(&label, lapsed) {
+                    return Ok(vec![].into());
+                }
+                Ok(vec![GasSupplierChangeEvent::MeldepflichtVerstrichen { label }].into())
             }
 
             GasSupplierChangeCommand::Activate => match state {
@@ -1412,7 +1857,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
             },
 
             GasSupplierChangeCommand::TimeoutExpired { deadline_id, label } => {
-                if !window_open(&label, lapsed) {
+                if label.as_ref() != RESPONSE_WINDOW_LABEL || !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 let mut outbox: Vec<PendingOutbox> = vec![];
@@ -1432,6 +1877,19 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     ));
                 }
                 let event = lapse(state, deadline_id, label);
+                // A silent Altlieferant released the Marktlokation: „Beantwortet
+                // der Altlieferant die Abmeldungsanfrage des Netzbetreibers
+                // nicht fristgerecht, wird die Zuordnung des Altlieferanten zum
+                // Tag vor dem Anmeldedatum beendet" (GeLi Gas 3.0 Kap. 3.2.3,
+                // S. 9). The Anmeldung is decided on that.
+                if let (GasSupplierChangeEvent::SchweigenWirksam { .. }, Some(data)) =
+                    (&event, state.data())
+                    && let Some(stand) = data.abmeldungsanfrage.as_ref()
+                {
+                    outbox.push(lfa_antwort_notification(
+                        data, stand, None, true, None, None, true,
+                    ));
+                }
                 if outbox.is_empty() {
                     Ok(WorkflowOutput::events(vec![event]))
                 } else {
@@ -1624,6 +2082,11 @@ impl Projection for GasSupplierChangeProjection {
                     *status = "Rejected";
                 }
             }
+            // The Meldepflichten an Abmeldungsanfrage carries do not move its
+            // status.
+            GasSupplierChangeEvent::MeldungGesendet { .. }
+            | GasSupplierChangeEvent::AnmeldungBestaetigt
+            | GasSupplierChangeEvent::MeldepflichtVerstrichen { .. } => {}
             GasSupplierChangeEvent::DeadlineExpired { .. } => {
                 if let GasSupplierChangeRecord::Active { status, .. } = record {
                     *status = "FristAbgelaufen";
@@ -1790,13 +2253,32 @@ mod tests {
             document_date: "20250115".to_owned(),
             process_date: "20250301".to_owned(),
             message_ref: MessageRef::new("MSG-GNB-001"),
-            transaktionsgrund: (p == 44013).then(|| "Z36".to_owned()),
+            transaktionsgrund: match p {
+                44013 => Some("Z36".to_owned()),
+                44010 => Some("E03".to_owned()),
+                _ => None,
+            },
             bilanzierungsbeginn: (p == 44013).then(|| "20250301".to_owned()),
             stammdaten: if p == 44013 {
                 eog_stammdaten()
             } else {
                 Stammdaten::default()
             },
+            abmeldungsanfrage: (p == 44010).then(|| Box::new(abmeldungsanfrage(LFN))),
+        }
+    }
+
+    /// The Neulieferant of the Anmeldung a 44010 serves — not the LFA it is
+    /// sent to (`receiver()`).
+    const LFN: &str = "9870111000002";
+
+    fn abmeldungsanfrage(lfn: &str) -> GnbAbmeldungsanfrage {
+        GnbAbmeldungsanfrage {
+            anmeldung_process_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+            lfn_mp_id: lfn.to_owned(),
+            kunde_name: Some("Mustermann".to_owned()),
+            kunde_namensformat: Some("Z01".to_owned()),
+            vorgangsnummer: "ANF-1".to_owned(),
         }
     }
 
@@ -2014,6 +2496,7 @@ mod tests {
                 accepted: true,
                 reason: None,
                 antwort_code: None,
+                zuordnungsende: None,
             },
         )
         .unwrap();
@@ -2033,6 +2516,7 @@ mod tests {
                 accepted: false,
                 reason: Some("abgelehnt".to_owned()),
                 antwort_code: None,
+                zuordnungsende: None,
             },
         )
         .unwrap();
@@ -2052,6 +2536,7 @@ mod tests {
                 accepted: true,
                 reason: None,
                 antwort_code: None,
+                zuordnungsende: None,
             },
         )
         .expect_err("PID mismatch must be rejected");
@@ -2075,6 +2560,7 @@ mod tests {
                 accepted: true,
                 reason: None,
                 antwort_code: None,
+                zuordnungsende: None,
             },
         )
         .unwrap();
@@ -2094,6 +2580,7 @@ mod tests {
                 accepted: true,
                 reason: None,
                 antwort_code: None,
+                zuordnungsende: None,
             },
         )
         .unwrap();
@@ -2150,6 +2637,7 @@ mod tests {
                 transaktionsgrund: None,
                 bilanzierungsbeginn: Some(" ".to_owned()),
                 stammdaten: Stammdaten::default(),
+                abmeldungsanfrage: None,
             },
         )
         .expect_err("refused");
@@ -2683,6 +3171,7 @@ mod tests {
                     accepted,
                     reason: None,
                     antwort_code: Some(code.to_owned()),
+                    zuordnungsende: None,
                 },
             )
             .unwrap();
@@ -2693,6 +3182,295 @@ mod tests {
                 mako_pruefung::codes::lies(tree, code).is_some(),
                 "{tree} {code} has its wording"
             );
+        }
+    }
+
+    // ── Abmeldungsanfrage 44010: the Anmeldung it serves ─────────────────────
+
+    fn deadline(label: &str) -> Deadline {
+        Deadline::new(
+            mako_engine::ids::StreamId::new("test-stream-44010"),
+            mako_engine::ids::ProcessId::new(),
+            mako_engine::ids::TenantId::from_party_id("9900357000004"),
+            mako_engine::version::WorkflowId::new(WORKFLOW_NAME, "FV2026-10-01"),
+            label,
+            RECEIVED_AT,
+        )
+    }
+
+    fn anfrage_gesendet() -> GasSupplierChangeState {
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &GasSupplierChangeState::default(),
+            gnb_cmd(44010),
+        )
+        .expect("the 44010 is accepted");
+        apply_all(GasSupplierChangeState::default(), &out.events)
+    }
+
+    fn antwort(
+        state: &GasSupplierChangeState,
+        p: u32,
+        code: &str,
+        ende: Option<&str>,
+    ) -> (
+        GasSupplierChangeState,
+        WorkflowOutput<GasSupplierChangeEvent>,
+    ) {
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            state,
+            GasSupplierChangeCommand::ReceiveGnbAntwort {
+                response_pid: pid(p),
+                accepted: p == 44011,
+                reason: (p == 44012).then(|| "Vertrag läuft".to_owned()),
+                antwort_code: Some(code.to_owned()),
+                zuordnungsende: ende.map(ToOwned::to_owned),
+            },
+        )
+        .expect("the answer is taken");
+        (apply_all(state.clone(), &out.events), out)
+    }
+
+    fn notification(out: &WorkflowOutput<GasSupplierChangeEvent>) -> serde_json::Value {
+        let [n] = out
+            .outbox
+            .iter()
+            .filter(|o| &*o.message_type == "LfaAntwortAufAbmeldeanfrage")
+            .collect::<Vec<_>>()[..]
+        else {
+            panic!("one LfaAntwortAufAbmeldeanfrage, got {:?}", out.outbox);
+        };
+        n.payload.clone()
+    }
+
+    /// The 44010 carries its column: `STS+7`, `DTM+93`, `IDE+24`, the
+    /// Kundenname (`NAD+Z09`, [572]) and the Neulieferant (`NAD+VY`, [567]).
+    #[test]
+    fn an_abmeldungsanfrage_carries_its_column() {
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &GasSupplierChangeState::default(),
+            gnb_cmd(44010),
+        )
+        .unwrap();
+        let [utilmd] = out.outbox.as_slice() else {
+            panic!("one UTILMD, got {}", out.outbox.len());
+        };
+        assert_eq!(utilmd.recipient.as_ref(), receiver().as_str());
+        let p: UtilmdPayload = serde_json::from_value(utilmd.payload.clone()).unwrap();
+        assert_eq!(p.pid, 44010);
+        assert_eq!(p.transaktionsgrund.as_deref(), Some("E03"));
+        assert_eq!(p.process_date.as_deref(), Some("20250301"));
+        assert_eq!(p.vorgangsnummer.as_deref(), Some("ANF-1"));
+        assert_eq!(p.kunde_name.as_deref(), Some("Mustermann"));
+        assert_eq!(p.beteiligte_marktpartner, vec![LFN.to_owned()]);
+    }
+
+    /// A 44010 without the Anmeldung it serves, or with a Grund its column does
+    /// not admit, is refused; no other PID carries one.
+    #[test]
+    fn an_abmeldungsanfrage_is_held_to_its_column() {
+        let mit = |p: u32, grund: Option<&str>, a: Option<GnbAbmeldungsanfrage>| {
+            let GasSupplierChangeCommand::InitiateGnbProcess {
+                pid,
+                sender,
+                receiver,
+                malo_id,
+                document_date,
+                process_date,
+                message_ref,
+                bilanzierungsbeginn,
+                stammdaten,
+                ..
+            } = gnb_cmd(p)
+            else {
+                unreachable!()
+            };
+            GeliGasSupplierChangeWorkflow::handle(
+                &GasSupplierChangeState::default(),
+                GasSupplierChangeCommand::InitiateGnbProcess {
+                    pid,
+                    sender,
+                    receiver,
+                    malo_id,
+                    document_date,
+                    process_date,
+                    message_ref,
+                    transaktionsgrund: grund.map(ToOwned::to_owned),
+                    bilanzierungsbeginn,
+                    stammdaten,
+                    abmeldungsanfrage: a.map(Box::new),
+                },
+            )
+        };
+        assert!(mit(44010, Some("E03"), None).is_err(), "no Anmeldung named");
+        assert!(
+            mit(44010, Some("E02"), Some(abmeldungsanfrage(LFN))).is_err(),
+            "[644]"
+        );
+        assert!(
+            mit(44010, None, Some(abmeldungsanfrage(LFN))).is_err(),
+            "STS+7 is Muss"
+        );
+        assert!(
+            mit(44010, Some("E03"), Some(abmeldungsanfrage(""))).is_err(),
+            "NAD+VY is Muss"
+        );
+        assert!(
+            mit(44007, None, Some(abmeldungsanfrage(LFN))).is_err(),
+            "44007 carries none"
+        );
+        assert_eq!(abmeldungsanfrage_transaktionsgrund("E02"), "E01");
+        assert_eq!(abmeldungsanfrage_transaktionsgrund("E03"), "E03");
+    }
+
+    /// **The LFA's answer resumes the Anmeldung.** A 44012 Widerspruch reaches
+    /// `processd` with its code and Grund, under the Anmeldung's process id;
+    /// a 44011 Fall b with the Abmeldedatum the LFA confirmed.
+    #[test]
+    fn the_lfa_answer_resumes_the_anmeldung_it_serves() {
+        let (state, out) = antwort(&anfrage_gesendet(), 44012, "Z12", None);
+        let n = notification(&out);
+        assert_eq!(
+            n["anmeldung_process_id"],
+            "11111111-1111-1111-1111-111111111111"
+        );
+        assert_eq!(n["lfa_mp_id"], receiver().as_str());
+        assert_eq!(n["zustimmung"], false);
+        assert_eq!(n["fristablauf"], false);
+        assert_eq!(n["antwortcode"], "Z12");
+        assert_eq!(n["grund"], "Vertrag läuft");
+        let GasSupplierChangeState::Completed(d) = &state else {
+            panic!("an answered Abmeldungsanfrage is complete, got {state:?}");
+        };
+        assert_eq!(
+            d.abmeldungsanfrage.as_ref().unwrap().zustimmung,
+            Some(false)
+        );
+
+        let (_, out) = antwort(&anfrage_gesendet(), 44011, "E15", Some("20250215"));
+        let n = notification(&out);
+        assert_eq!(n["zustimmung"], true);
+        assert_eq!(n["zuordnungsende"], "20250215");
+    }
+
+    /// **Silence releases the Marktlokation and resumes the Anmeldung** — GeLi
+    /// Gas 3.0 Kap. 3.2.3 (S. 9).
+    #[test]
+    fn a_silent_lfa_releases_and_resumes_the_anmeldung() {
+        let state = anfrage_gesendet();
+        let cmd =
+            GeliGasSupplierChangeWorkflow::on_deadline(&deadline(RESPONSE_WINDOW_LABEL), &state)
+                .expect("the LFA's window is open");
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, cmd).unwrap();
+        assert!(matches!(
+            out.events[..],
+            [GasSupplierChangeEvent::SchweigenWirksam { .. }]
+        ));
+        let n = notification(&out);
+        assert_eq!(n["zustimmung"], true);
+        assert_eq!(n["fristablauf"], true);
+        assert!(n.get("antwortcode").is_none());
+        let state = apply_all(state, &out.events);
+        assert!(
+            GeliGasSupplierChangeWorkflow::on_deadline(&deadline(RESPONSE_WINDOW_LABEL), &state)
+                .is_none()
+        );
+    }
+
+    /// **44036** is owed from the Anfrage on and fires while unsent, whatever
+    /// the LFA answered; its own door discharges it.
+    #[test]
+    fn the_information_is_owed_from_the_anfrage_until_it_is_sent() {
+        let state = anfrage_gesendet();
+        let info = deadline(MELDEPFLICHT_INFORMATION_LABEL);
+        let cmd = GeliGasSupplierChangeWorkflow::on_deadline(&info, &state)
+            .expect("an unsent 44036 is owed");
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, cmd).unwrap();
+        assert!(matches!(
+            out.events[..],
+            [GasSupplierChangeEvent::MeldepflichtVerstrichen { .. }]
+        ));
+
+        let (answered, _) = antwort(&state, 44012, "Z12", None);
+        assert!(GeliGasSupplierChangeWorkflow::on_deadline(&info, &answered).is_some());
+
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &answered,
+            GasSupplierChangeCommand::MeldungGesendet { pid: 44_036 },
+        )
+        .unwrap();
+        let sent = apply_all(answered, &out.events);
+        assert!(GeliGasSupplierChangeWorkflow::on_deadline(&info, &sent).is_none());
+        let again = GeliGasSupplierChangeWorkflow::handle(
+            &sent,
+            GasSupplierChangeCommand::MeldungGesendet { pid: 44_036 },
+        )
+        .unwrap();
+        assert!(
+            again.events.is_empty(),
+            "a redelivered door call changes nothing"
+        );
+    }
+
+    /// **44037** is owed once the Anmeldung was confirmed after the LFA
+    /// released it — on the day of the 44002 — and never to an LFA that
+    /// objected or is the LFN itself.
+    #[test]
+    fn the_beendigung_is_owed_once_the_anmeldung_is_confirmed() {
+        let faellig = RECEIVED_AT + time::Duration::days(1);
+        let bestaetigt = GasSupplierChangeCommand::AnmeldungBestaetigt {
+            beendigung_faellig: faellig,
+        };
+        let ende = deadline(MELDEPFLICHT_BEENDIGUNG_LABEL);
+
+        let (released, _) = antwort(&anfrage_gesendet(), 44011, "E15", None);
+        assert!(GeliGasSupplierChangeWorkflow::on_deadline(&ende, &released).is_none());
+        let out = GeliGasSupplierChangeWorkflow::handle(&released, bestaetigt.clone()).unwrap();
+        assert_eq!(out.deadlines.len(), 1);
+        assert_eq!(&*out.deadlines[0].label, MELDEPFLICHT_BEENDIGUNG_LABEL);
+        assert_eq!(out.deadlines[0].due_at, faellig);
+        let owed = apply_all(released, &out.events);
+        assert!(GeliGasSupplierChangeWorkflow::on_deadline(&ende, &owed).is_some());
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &owed,
+            GasSupplierChangeCommand::MeldungGesendet { pid: 44_037 },
+        )
+        .unwrap();
+        let sent = apply_all(owed, &out.events);
+        assert!(GeliGasSupplierChangeWorkflow::on_deadline(&ende, &sent).is_none());
+
+        let (refused, _) = antwort(&anfrage_gesendet(), 44012, "Z12", None);
+        let out = GeliGasSupplierChangeWorkflow::handle(&refused, bestaetigt.clone()).unwrap();
+        assert!(out.events.is_empty() && out.deadlines.is_empty());
+
+        // The LFN asked to release its own Marktlokation: nothing ends.
+        let mut selbst = gnb_cmd(44010);
+        if let GasSupplierChangeCommand::InitiateGnbProcess {
+            abmeldungsanfrage: a,
+            ..
+        } = &mut selbst
+        {
+            *a = Some(Box::new(abmeldungsanfrage(receiver().as_str())));
+        }
+        let state = apply_all(
+            GasSupplierChangeState::default(),
+            &GeliGasSupplierChangeWorkflow::handle(&GasSupplierChangeState::default(), selbst)
+                .unwrap()
+                .events,
+        );
+        let (released, _) = antwort(&state, 44011, "E15", None);
+        let out = GeliGasSupplierChangeWorkflow::handle(&released, bestaetigt).unwrap();
+        assert!(
+            out.deadlines.is_empty(),
+            "an LFA that is the LFN is owed no 44037"
+        );
+    }
+
+    /// Every label the Abmeldungsanfrage registers is one the workflow lists.
+    #[test]
+    fn the_meldepflicht_labels_are_listed() {
+        for pid in [44_036, 44_037] {
+            let label = meldepflicht_label(pid).expect("a label");
+            assert!(GeliGasSupplierChangeWorkflow::DEADLINE_LABELS.contains(&label));
         }
     }
 }

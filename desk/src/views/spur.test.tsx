@@ -159,7 +159,10 @@ describe("the trail", () => {
 
     act(() => strom.alle());
     const a = antwortVon(BEANTWORTET);
-    expect(screen.getByText(a.disclosure)).toBeTruthy();
+    // agentd's English marker is said in the Desk's words, never shown as sent.
+    expect(a.disclosure).toBe("AI-generated.");
+    expect(screen.getByText("KI-generiert.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("AI-generated");
     const saetze = within(screen.getByRole("list", { name: "Antwort" }))
       .getAllByRole("listitem")
       .map((li) => li.querySelector("p")?.textContent);
@@ -232,7 +235,7 @@ describe("the trail", () => {
     expect(zeilen()).toHaveLength(3);
     const verborgen = zeilen()[1] as HTMLElement;
     expect(verborgen.textContent).toContain("Gelesen · Kunde k-1");
-    expect(within(verborgen).getByText("Quelle für Sie verborgen")).toBeTruthy();
+    expect(within(verborgen).getByText("Quelle für dich verborgen")).toBeTruthy();
     expect(within(verborgen).queryByRole("button", { name: /^Quelle: / })).toBeNull();
   });
 });

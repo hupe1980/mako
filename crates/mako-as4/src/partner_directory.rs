@@ -2,7 +2,10 @@
 //!
 //! [`PartnerDirectory`] holds one [`asx::Partner`] per counterparty MP-ID:
 //! its party type, its inbox endpoint, its encryption certificate, the signing
-//! certificates pinned for it and the quirks it needs. The same directory feeds
+//! certificates pinned for it. Every receipt is verified with its
+//! NonRepudiationInformation — Regelungen zum Übertragungsweg für AS4 2.6,
+//! Kap. 7.3 (S. 8): „Ohne eine NRR gilt die Übertragung als gescheitert." — so
+//! no partner is configured to deliver without one. The same directory feeds
 //! every `As4` client of the deployment (one per local MP-ID) and answers the
 //! send path's lookup.
 //!
@@ -16,7 +19,6 @@
 //!     endpoint: None,
 //!     encryption_cert: None,
 //!     signing_certs: Vec::new(),
-//!     quirks: Vec::new(),
 //! })
 //! .unwrap();
 //! assert!(dir.contains("9900000000002"));
@@ -25,6 +27,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::certificate::{carries_mp_id, uri_subject_alt_names};
 use crate::constants::party_id_type_for_agency;
 
 /// What the directory knows about one counterparty.
@@ -43,8 +46,6 @@ pub struct PartnerEntry {
     /// must be signed by one of them. Several for a rollover; none to rely on
     /// the SM-PKI chain and the MP-ID in the certificate's OU alone.
     pub signing_certs: Vec<asx::Certificate>,
-    /// Interoperability quirks the partner needs.
-    pub quirks: Vec<asx::Quirk>,
 }
 
 /// A directory entry that cannot be used.
@@ -70,36 +71,55 @@ pub enum PartnerDirectoryError {
          §2.2.6.2.2 encrypts every message with the recipient's certificate"
     )]
     MissingEncryptionCert(String),
-    /// An unknown quirk name.
+    /// An endpoint whose host is an IP address: the TLS connection must use
+    /// Server Name Indication, and SNI carries a DNS host name only (RFC 6066
+    /// Section 3).
     #[error(
-        "AS4 partner {mp_id}: unknown quirk {quirk:?}; the one AS4 quirk is \
-         \"receipt-without-non-repudiation\""
+        "AS4 partner {mp_id}: the endpoint {endpoint:?} names an IP address; Regelungen zum \
+         Übertragungsweg für AS4 2.6, Kap. 3 (S. 5) requires Server Name Indication, which \
+         carries a host name"
     )]
-    UnknownQuirk {
+    EndpointWithoutHostName {
         /// The partner.
         mp_id: String,
-        /// The configured name.
-        quirk: String,
+        /// The configured endpoint.
+        endpoint: String,
     },
-}
-
-/// The AS4 quirk a configuration names by `name`.
-///
-/// `receipt-without-non-repudiation` accepts a partner's *signed* receipt that
-/// carries no NonRepudiationInformation; an unsigned or mis-signed receipt is
-/// still refused.
-///
-/// # Errors
-///
-/// [`PartnerDirectoryError::UnknownQuirk`] for any other name.
-pub fn parse_quirk(mp_id: &str, name: &str) -> Result<asx::Quirk, PartnerDirectoryError> {
-    match name {
-        "receipt-without-non-repudiation" => Ok(asx::Quirk::ReceiptWithoutNonRepudiation),
-        other => Err(PartnerDirectoryError::UnknownQuirk {
-            mp_id: mp_id.to_owned(),
-            quirk: other.to_owned(),
-        }),
-    }
+    /// An encryption certificate whose subject `OU` is not the partner's
+    /// MP-ID: a message encrypted to it is readable by another market
+    /// participant.
+    #[error(
+        "AS4 partner {0}: the subject OU of the encryption certificate is not {0}; Regelungen \
+         zum Übertragungsweg für AS4 2.6, Kap. 5.2 (S. 6) requires the MP-ID in the OU"
+    )]
+    MpIdNotInSubject(String),
+    /// An encryption certificate with more than one URI subject alternative
+    /// name.
+    #[error(
+        "AS4 partner {mp_id}: the encryption certificate names {uris:?}; Regelungen zum \
+         Übertragungsweg für AS4 2.6, Kap. 5.2 (S. 6) admits one communication address per \
+         certificate"
+    )]
+    SeveralAddresses {
+        /// The partner.
+        mp_id: String,
+        /// The certificate's URI subject alternative names.
+        uris: Vec<String>,
+    },
+    /// An endpoint other than the address the partner's certificate names.
+    #[error(
+        "AS4 partner {mp_id}: the endpoint {endpoint:?} is not the address {uri:?} of its \
+         encryption certificate; Regelungen zum Übertragungsweg für AS4 2.6, Kap. 2 (S. 4) \
+         takes the AS4 address from the certificate"
+    )]
+    EndpointNotInCertificate {
+        /// The partner.
+        mp_id: String,
+        /// The configured endpoint.
+        endpoint: String,
+        /// The certificate's URI subject alternative name.
+        uri: String,
+    },
 }
 
 /// One counterparty as the directory holds it.
@@ -120,8 +140,15 @@ impl PartnerDirectory {
     ///
     /// # Errors
     ///
-    /// An empty or repeated MP-ID, a non-`https` endpoint, an endpoint without
-    /// an encryption certificate, or an unknown quirk.
+    /// An empty or repeated MP-ID, a non-`https` endpoint, an endpoint on an
+    /// IP address, an endpoint without an encryption certificate, an
+    /// encryption certificate of another MP-ID or with several addresses, an
+    /// endpoint other than the address the certificate names.
+    ///
+    /// Regelungen zum Übertragungsweg für AS4 2.6, Kap. 2 (S. 4): „Die URI des
+    /// AS4-Webservices muss aus den vorliegenden Zertifikaten dem Feld des
+    /// Alternativnamens vom Typ URI entnommen werden.“ A certificate without
+    /// that name is not refused here; makod reports it at startup.
     pub fn insert(&mut self, entry: PartnerEntry) -> Result<(), PartnerDirectoryError> {
         let mp_id = entry.mp_id.trim().to_owned();
         if mp_id.is_empty() {
@@ -139,19 +166,38 @@ impl PartnerDirectory {
                     endpoint: endpoint.clone(),
                 });
             }
+            if names_ip_address(endpoint) {
+                return Err(PartnerDirectoryError::EndpointWithoutHostName {
+                    mp_id,
+                    endpoint: endpoint.clone(),
+                });
+            }
             if entry.encryption_cert.is_none() {
                 return Err(PartnerDirectoryError::MissingEncryptionCert(mp_id));
             }
             partner = partner.endpoint(endpoint);
         }
         if let Some(cert) = entry.encryption_cert {
+            if !carries_mp_id(&cert, &mp_id) {
+                return Err(PartnerDirectoryError::MpIdNotInSubject(mp_id));
+            }
+            let uris = uri_subject_alt_names(cert.der()).unwrap_or_default();
+            if uris.len() > 1 {
+                return Err(PartnerDirectoryError::SeveralAddresses { mp_id, uris });
+            }
+            if let (Some(endpoint), Some(uri)) = (&entry.endpoint, uris.first())
+                && endpoint != uri
+            {
+                return Err(PartnerDirectoryError::EndpointNotInCertificate {
+                    mp_id,
+                    endpoint: endpoint.clone(),
+                    uri: uri.clone(),
+                });
+            }
             partner = partner.encryption_cert(cert);
         }
         for cert in entry.signing_certs {
             partner = partner.signing_cert(cert);
-        }
-        for quirk in entry.quirks {
-            partner = partner.quirk(quirk);
         }
         self.partners.insert(
             mp_id,
@@ -204,6 +250,18 @@ impl PartnerDirectory {
     }
 }
 
+/// Whether the host of the `https` URL `endpoint` is an IPv4 or IPv6 literal.
+fn names_ip_address(endpoint: &str) -> bool {
+    let rest = endpoint.strip_prefix("https://").unwrap_or(endpoint);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if host.starts_with('[') {
+        return true;
+    }
+    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    host.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,7 +273,6 @@ mod tests {
             endpoint: None,
             encryption_cert: None,
             signing_certs: Vec::new(),
-            quirks: Vec::new(),
         }
     }
 
@@ -280,6 +337,87 @@ mod tests {
         );
     }
 
+    /// Kap. 3: SNI carries a host name, so an endpoint on an IP address
+    /// cannot use it.
+    #[test]
+    fn an_endpoint_on_an_ip_address_is_refused() {
+        for endpoint in [
+            "https://203.0.113.7/as4",
+            "https://203.0.113.7:8443/as4",
+            "https://[2001:db8::7]/as4",
+        ] {
+            let mut dir = PartnerDirectory::default();
+            let err = dir
+                .insert(PartnerEntry {
+                    endpoint: Some(endpoint.to_owned()),
+                    encryption_cert: Some(enc_cert()),
+                    ..entry("9900000000002")
+                })
+                .unwrap_err();
+            assert!(
+                matches!(err, PartnerDirectoryError::EndpointWithoutHostName { .. }),
+                "{endpoint}: {err:?}"
+            );
+        }
+        assert!(!names_ip_address("https://partner.example:8443/as4"));
+    }
+
+    /// Kap. 5.2: a message is encrypted to the certificate of the partner's
+    /// own MP-ID, never to another market participant's.
+    #[test]
+    fn an_encryption_certificate_of_another_mp_id_is_refused() {
+        let other = asx::testkit::pki::TestCa::sm_pki()
+            .bdew_party("9900000000003")
+            .encryption
+            .certificate();
+        let mut dir = PartnerDirectory::default();
+        let err = dir
+            .insert(PartnerEntry {
+                endpoint: Some("https://partner.example/as4".to_owned()),
+                encryption_cert: Some(other),
+                ..entry("9900000000002")
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            PartnerDirectoryError::MpIdNotInSubject("9900000000002".to_owned())
+        );
+    }
+
+    /// Kap. 2 and 5.2: the endpoint is the one address the certificate
+    /// names.
+    #[test]
+    fn the_endpoint_is_the_address_of_the_certificate() {
+        let key = enc_cert();
+        let cert = |uris: &[&str]| crate::certificate::test_cert::with(&key, "9900000000002", uris);
+        let insert = |endpoint: &str, cert: asx::Certificate| {
+            PartnerDirectory::default().insert(PartnerEntry {
+                endpoint: Some(endpoint.to_owned()),
+                encryption_cert: Some(cert),
+                ..entry("9900000000002")
+            })
+        };
+        insert(
+            "https://partner.example/as4",
+            cert(&["https://partner.example/as4"]),
+        )
+        .expect("the certificate's address");
+        assert!(matches!(
+            insert(
+                "https://other.example/as4",
+                cert(&["https://partner.example/as4"])
+            ),
+            Err(PartnerDirectoryError::EndpointNotInCertificate { .. })
+        ));
+        assert!(matches!(
+            insert(
+                "https://partner.example/as4",
+                cert(&["https://partner.example/as4", "https://partner.example/b"])
+            ),
+            Err(PartnerDirectoryError::SeveralAddresses { .. })
+        ));
+    }
+
     #[test]
     fn a_partner_configured_twice_is_refused() {
         let mut dir = PartnerDirectory::default();
@@ -288,14 +426,5 @@ mod tests {
             dir.insert(entry("9900000000002")),
             Err(PartnerDirectoryError::Duplicate(_))
         ));
-    }
-
-    #[test]
-    fn the_receipt_quirk_is_the_only_one() {
-        assert!(matches!(
-            parse_quirk("9900000000002", "receipt-without-non-repudiation"),
-            Ok(asx::Quirk::ReceiptWithoutNonRepudiation)
-        ));
-        assert!(parse_quirk("9900000000002", "lenient").is_err());
     }
 }

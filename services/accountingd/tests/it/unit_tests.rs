@@ -1030,10 +1030,9 @@ fn auto_dunning_default_fees_are_reasonable() {
 
 /// Both bank-reply paths must age a settled mandate FRST → RCUR.
 ///
-/// `pg::transition_mandate_to_rcur` existed, was documented and was correct,
-/// and had **no caller anywhere in the workspace**. Every mandate therefore
-/// stayed `FRST` for its whole life, so each month's pain.008 presented a
-/// *first* collection for a debtor the bank had already collected from — wrong
+/// `pg::transition_mandate_to_rcur` must have a caller on each path: a mandate
+/// that stays `FRST` for its whole life makes each month's pain.008 present a
+/// *first* collection for a debtor the bank has already collected from — wrong
 /// under the SDD Rulebook, and rejectable as a duplicate.
 ///
 /// A collection can settle down exactly two routes: an accepted pain.002

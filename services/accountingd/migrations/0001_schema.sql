@@ -390,9 +390,8 @@ CREATE INDEX dc_overdue ON dunning_cases (tenant, due_date)
 CREATE INDEX dc_entsperr ON dunning_cases (tenant)
     WHERE sperrauftrag_ce_id IS NOT NULL AND entsperrauftrag_ce_id IS NULL;
 
--- CloudEvent idempotency no longer needs a table here: the ledger post is keyed
--- by the CloudEvent id, so a redelivery replays as a store-level no-op. There is
--- no separate `processed_events` guard to keep in sync.
+-- CloudEvent idempotency needs no table here: the ledger post is keyed by the
+-- CloudEvent id, so a redelivery replays as a store-level no-op.
 
 -- ── Mahnsperren (dunning locks) ───────────────────────────────────────────────
 --

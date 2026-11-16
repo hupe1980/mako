@@ -34,26 +34,30 @@ function NavItem({
     <Link
       href={to}
       {...(current ? { "aria-current": "page" as const } : {})}
-      className={`focus-ring flex h-8 items-center gap-2.5 rounded-[8px] px-2.5 text-body font-medium no-underline ${
-        current
-          ? "bg-fill-strong text-text"
-          : "text-text-2 data-[hovered]:bg-fill data-[hovered]:text-text"
+      className={`focus-ring flex h-7 items-center gap-2 rounded-[6px] px-2.5 text-body no-underline ${
+        current ? "bg-fill-strong text-text" : "text-text data-[hovered]:bg-fill"
       }`}
     >
-      <Icon name={icon} size={16} className={current ? "text-accent" : ""} />
+      <Icon name={icon} size={16} className="text-accent" />
       {children}
     </Link>
   );
 }
 
-/** How many decisions wait for a person — shown only when there are some. */
+/** How many decisions wait for a person — plain, trailing, shown only when there are some. */
 function FreigabenZahl() {
   const n = useFreigabenZahl();
   if (!n) return null;
+  return <span className="ml-auto text-body text-text-2 tabular-nums">{formatCount(n)}</span>;
+}
+
+/** A labelled group of the sidebar, as Finder groups its sidebar. */
+function Group({ titel, children }: { titel: string; children: ReactNode }) {
   return (
-    <span className="ml-auto rounded-full bg-accent px-1.5 text-caption font-semibold text-on-accent tabular-nums">
-      {formatCount(n)}
-    </span>
+    <div className="flex flex-col gap-0.5">
+      <h2 className="m-0 px-2.5 pt-3 pb-1 text-caption font-semibold text-text-2">{titel}</h2>
+      {children}
+    </div>
   );
 }
 
@@ -63,42 +67,48 @@ function Seitenleiste({ onShortcuts }: { onShortcuts: () => void }) {
   const t = useT();
   return (
     <>
-      <div className="mb-4 flex items-baseline gap-1 px-2.5">
-        <span className="text-callout font-bold tracking-tight">mako</span>
-        <span className="text-callout text-text-2">Desk</span>
+      <div className="mb-1 flex items-baseline gap-1 px-2.5">
+        <span className="text-body font-semibold">mako</span>
+        <span className="text-body text-text-2">Desk</span>
       </div>
-      <nav aria-label={t.shell.ansichten} className="flex flex-col gap-0.5">
-        <NavItem to="/heute" icon="tray">
-          {t.shell.heute}
-        </NavItem>
-        <NavItem to="/ueberblick" icon="bars">
-          {t.shell.ueberblick}
-        </NavItem>
-        <NavItem to="/freigaben" icon="check">
-          {t.shell.freigaben}
-          <FreigabenZahl />
-        </NavItem>
-        {rolle === "lieferant" && (
-          <NavItem to="/kunden" match="/kunde" icon="person">
-            {t.shell.kunden}
+      <nav aria-label={t.shell.ansichten} className="flex flex-col">
+        <Group titel={t.shell.groupWork}>
+          <NavItem to="/heute" icon="tray">
+            {t.shell.heute}
           </NavItem>
-        )}
-        <NavItem to="/prozess" icon="flow">
-          {t.shell.prozesse}
-        </NavItem>
-        <NavItem to="/assistent" icon="sparkle">
-          {t.shell.assistent}
-        </NavItem>
-        <NavItem to="/einrichtung" icon="tune">
-          {t.einrichtung.nav}
-        </NavItem>
+          <NavItem to="/freigaben" icon="check">
+            {t.shell.freigaben}
+            <FreigabenZahl />
+          </NavItem>
+          <NavItem to="/ueberblick" icon="bars">
+            {t.shell.ueberblick}
+          </NavItem>
+        </Group>
+        <Group titel={t.shell.groupLookUp}>
+          {rolle === "lieferant" && (
+            <NavItem to="/kunden" match="/kunde" icon="person">
+              {t.shell.kunden}
+            </NavItem>
+          )}
+          <NavItem to="/prozess" icon="flow">
+            {t.shell.prozesse}
+          </NavItem>
+        </Group>
+        <Group titel={t.shell.groupSystem}>
+          <NavItem to="/assistent" icon="sparkle">
+            {t.shell.assistent}
+          </NavItem>
+          <NavItem to="/einrichtung" icon="tune">
+            {t.einrichtung.nav}
+          </NavItem>
+          {import.meta.env.DEV && (
+            <NavItem to="/dev/gallery" icon="grid">
+              {t.shell.gallery}
+            </NavItem>
+          )}
+        </Group>
       </nav>
       <div className="flex-1" />
-      {import.meta.env.DEV && (
-        <NavItem to="/dev/gallery" icon="grid">
-          {t.shell.gallery}
-        </NavItem>
-      )}
       <div className="mt-1 border-t border-separator pt-2">
         <AccountMenu onShortcuts={onShortcuts} />
       </div>

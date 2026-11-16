@@ -374,3 +374,29 @@ fn msb_rahmenvertrag_status_matches_its_check_list() {
         assert_eq!(back, v);
     }
 }
+
+/// `referenzwerte.reihe` and `.status` are exactly the catalogue's series and
+/// statuses, both ways: a series the CHECK omits cannot be imported, and a key
+/// it lists that the catalogue lacks is a value no reader can name.
+#[test]
+fn referenzwerte_check_lists_match_the_catalogue() {
+    use mako_markt::referenzreihen::{Reihe, WertStatus};
+
+    let sql = migration_sql();
+    let start = sql
+        .find("CREATE TABLE referenzwerte (")
+        .expect("referenzwerte is declared");
+    let table = &sql[start..start + sql[start..].find("\n);").expect("table is closed")];
+    let reihen: BTreeSet<String> = check_values(table, "reihe").into_iter().collect();
+    let katalog: BTreeSet<String> = Reihe::ALL
+        .iter()
+        .map(|r| r.schluessel().to_owned())
+        .collect();
+    assert_eq!(reihen, katalog, "`referenzwerte.reihe` CHECK vs Reihe::ALL");
+    let status: BTreeSet<String> = check_values(table, "status").into_iter().collect();
+    let want: BTreeSet<String> = [WertStatus::Vorlaeufig, WertStatus::Endgueltig]
+        .iter()
+        .map(|s| s.as_str().to_owned())
+        .collect();
+    assert_eq!(status, want, "`referenzwerte.status` CHECK vs WertStatus");
+}

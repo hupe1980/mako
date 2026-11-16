@@ -655,7 +655,7 @@
           ]
         },
         "Rolle": {
-          "description": "A Rolle a deployment plays, spelled as makod's `[deployment] rollen`.",
+          "description": "A deployment role: a Marktrolle in one Sparte, spelled as makod's\n`[deployment] rollen`.\n\nmakod parses `[deployment] rollen` into this type and the interview asks\nfor it, so a role makod can load is a role the interview can name — a\nsecond list would drop a loaded role from the proposed `makod.toml`.",
           "oneOf": [
             {
               "description": "Lieferant Strom.",
@@ -668,7 +668,7 @@
               "const": "lf-gas"
             },
             {
-              "description": "Netzbetreiber Strom.",
+              "description": "Netzbetreiber Strom (VNB, ANB, and the LPB of NZR-EMob, whose wire role is NB).",
               "type": "string",
               "const": "nb-strom"
             },
@@ -688,9 +688,14 @@
               "const": "msb-gas"
             },
             {
-              "description": "Energieserviceanbieter, Strom only.",
+              "description": "Energieserviceanbieter (WiM Strom Teil 2), Strom only.",
               "type": "string",
               "const": "esa-strom"
+            },
+            {
+              "description": "Bilanzkreisverantwortlicher Strom — the BKV side of MaBiS (BK6-24-174\nAnlage 3).",
+              "type": "string",
+              "const": "bkv-strom"
             }
           ]
         },
@@ -1156,7 +1161,7 @@
           ]
         },
         "Rolle": {
-          "description": "A Rolle a deployment plays, spelled as makod's `[deployment] rollen`.",
+          "description": "A deployment role: a Marktrolle in one Sparte, spelled as makod's\n`[deployment] rollen`.\n\nmakod parses `[deployment] rollen` into this type and the interview asks\nfor it, so a role makod can load is a role the interview can name — a\nsecond list would drop a loaded role from the proposed `makod.toml`.",
           "oneOf": [
             {
               "description": "Lieferant Strom.",
@@ -1169,7 +1174,7 @@
               "const": "lf-gas"
             },
             {
-              "description": "Netzbetreiber Strom.",
+              "description": "Netzbetreiber Strom (VNB, ANB, and the LPB of NZR-EMob, whose wire role is NB).",
               "type": "string",
               "const": "nb-strom"
             },
@@ -1189,9 +1194,14 @@
               "const": "msb-gas"
             },
             {
-              "description": "Energieserviceanbieter, Strom only.",
+              "description": "Energieserviceanbieter (WiM Strom Teil 2), Strom only.",
               "type": "string",
               "const": "esa-strom"
+            },
+            {
+              "description": "Bilanzkreisverantwortlicher Strom — the BKV side of MaBiS (BK6-24-174\nAnlage 3).",
+              "type": "string",
+              "const": "bkv-strom"
             }
           ]
         },

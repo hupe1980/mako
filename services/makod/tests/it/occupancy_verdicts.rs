@@ -6,9 +6,8 @@
 //! is the difference between a re-sent Anmeldung starting a new process and it
 //! being folded into a finished one. The set is small, it grows one workflow at
 //! a time as a domain crate publishes `OccupiesBusinessKey` or a terminal-state
-//! predicate, and it is stated in prose in two places. Nothing held it: the
-//! stated set had drifted to name three workflows that pass a verdict without
-//! naming two others that do, and the count with it.
+//! predicate, and it is stated in prose in two places, which this test holds
+//! to the dispatcher — the named workflows and their count.
 //!
 //! Read off the dispatcher's own source rather than at runtime, because the
 //! verdict is a function passed at the call site and leaves no trace on the
@@ -67,7 +66,7 @@ const EXPECTED: &[(&str, Verdict, usize)] = &[
     ("MabisClearinglisteWorkflow", Verdict::Trait, 1),
     ("MabisListenabgleichWorkflow", Verdict::Trait, 1),
     ("MabisProfilWorkflow", Verdict::Trait, 2),
-    ("MabisZpLifecycleWorkflow", Verdict::Trait, 1),
+    ("MabisZpLifecycleWorkflow", Verdict::Trait, 2),
     ("WimDeviceChangeWorkflow", Verdict::Trait, 1),
     ("WimErsteinbauWorkflow", Verdict::Trait, 1),
     ("WimGeraeteubernahmeWorkflow", Verdict::Trait, 1),

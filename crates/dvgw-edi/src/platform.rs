@@ -1,6 +1,6 @@
 //! [`DvgwPlatform`] — the parse and validate entry points.
 
-use edifact_rs::{MessageWindows, OwnedSegment, ReaderConfig};
+use edifact::{MessageWindows, OwnedSegment, ReaderConfig};
 
 use crate::{error::Error, message::DvgwMessage, report::DvgwReport, validate};
 
@@ -20,13 +20,33 @@ impl Default for DvgwPlatform {
     }
 }
 
+/// The most bytes one interchange may carry — `edi-energy`'s `ParseConfig`
+/// default, so a DVGW interchange and a BDEW one at the same AS4 door are
+/// bounded alike.
+pub const DEFAULT_MAX_INPUT_BYTES: u64 = 10 * 1024 * 1024;
+
+/// The most `UNH`…`UNT` messages one interchange may carry — `edi-energy`'s
+/// `ParseConfig` default. Many small messages inside the byte bound would
+/// otherwise each cost a parsed message.
+pub const DEFAULT_MAX_MESSAGES: usize = 1_000;
+
+/// The reader limits [`DvgwPlatform::new`] and [`sniff`] apply: `edifact`'s
+/// per-segment and per-message ceilings, with the input and message-count
+/// bounds above.
+#[must_use]
+pub fn default_reader_config() -> ReaderConfig {
+    ReaderConfig::default()
+        .max_input_bytes(DEFAULT_MAX_INPUT_BYTES)
+        .max_messages(DEFAULT_MAX_MESSAGES)
+}
+
 impl DvgwPlatform {
-    /// A platform with the `edifact-rs` default limits, including the 64 KiB
-    /// per-segment ceiling that guards the parser against oversized input.
+    /// A platform with [`default_reader_config`]: 10 MiB per interchange, 1 000
+    /// messages, and `edifact`'s 64 KiB per-segment ceiling.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            config: ReaderConfig::default(),
+            config: default_reader_config(),
         }
     }
 
@@ -73,7 +93,7 @@ impl DvgwPlatform {
         input: &[u8],
     ) -> impl Iterator<Item = Result<DvgwMessage, Error>> + use<> {
         let tokenized: Result<Vec<OwnedSegment>, Error> =
-            edifact_rs::from_reader_with_config(input, self.config)
+            edifact::from_reader_with_config(input, self.config)
                 .collect::<Result<_, _>>()
                 .map_err(Error::Parse);
 
@@ -86,7 +106,7 @@ impl DvgwPlatform {
             segments
                 .into_iter()
                 .flat_map(|segments| {
-                    MessageWindows::new(segments.into_iter().map(Ok::<_, edifact_rs::EdifactError>))
+                    MessageWindows::new(segments.into_iter().map(Ok::<_, edifact::EdifactError>))
                 })
                 .map(|window| {
                     let window = window.map_err(Error::Parse)?;
@@ -139,7 +159,7 @@ impl DvgwPlatform {
 #[must_use]
 pub fn sniff(input: &[u8]) -> Option<crate::document::DvgwDocument> {
     let segments: Vec<OwnedSegment> =
-        edifact_rs::from_reader_with_config(input, ReaderConfig::default())
+        edifact::from_reader_with_config(input, default_reader_config())
             .take_while(Result::is_ok)
             .map_while(Result::ok)
             // `BGM` is the second segment of a message, so there is no reason to

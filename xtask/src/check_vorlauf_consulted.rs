@@ -110,7 +110,7 @@ const UNCHECKED: &[(&str, &str)] = &[
 
 /// Scan the catalogue and its callers.
 ///
-/// Returns `true` when every row is consulted or documented as not yet wired.
+/// Returns `true` when every row is consulted or on the exemption list.
 pub fn run(workspace_root: &Path) -> bool {
     let Ok(table) = std::fs::read_to_string(workspace_root.join(TABLE)) else {
         eprintln!("check-vorlauf-consulted: {TABLE} is unreadable — the scan cannot decide");
@@ -203,7 +203,7 @@ fn is_named(row: &Row, callers: &str, reached_helpers: &[Helper]) -> bool {
 /// block comments (`/* … */`, nested) — and every string, raw string and
 /// character literal kept, so a key in a `"…"` literal survives and a `//`
 /// inside one (a URL) is not taken for a comment.
-fn strip_comments(src: &str) -> String {
+pub(crate) fn strip_comments(src: &str) -> String {
     let b = src.as_bytes();
     let mut out = String::with_capacity(src.len());
     let mut i = 0usize;

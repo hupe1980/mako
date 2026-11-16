@@ -532,6 +532,11 @@ pub enum SupplierChangeCommand {
         /// Propagated verbatim into the `ProcessInitiated` outbox message so that
         /// `processd` can use it directly without a `marktd` fallback round-trip.
         bilanzierungsgebiet: Option<String>,
+        /// The Bilanzkreis the Anmeldung registers into — the Produktpaket's
+        /// `SG8 SEQ+Z79` / `PIA+5+9991000002082:Z11` / `SG10 CAV+ZV4`
+        /// (UTILMD AHB Strom 2.2 Kap. 5.3). processd checks it against the
+        /// Zuordnungsermächtigungen on file (`E_0622` Prüfschritt 60).
+        bilanzkreis: Option<String>,
         /// Bilanzierungsmethode extracted from UTILMD `TM+EM` segment.
         ///
         /// `"SLP"` | `"RLM"` | `"IMS"` — maps to BO4E `Bilanzierungsmethode`.
@@ -963,6 +968,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 document_date,
                 process_date,
                 bilanzierungsgebiet,
+                bilanzkreis,
                 bilanzierungsmethode,
                 fallgruppe,
                 transaktionsgrund,
@@ -1044,6 +1050,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 // bilanzierungsgebiet is consumed by processd NB check 4.
                                 // Populated by the makod adapter from `CCI+Z20`.
                                 "bilanzierungsgebiet":   bilanzierungsgebiet,
+                                // The Bilanzkreis E_0622 Prüfschritt 60 holds
+                                // against the Zuordnungsermächtigungen.
+                                "bilanzkreis":           bilanzkreis,
                                 // bilanzierungsmethode and fallgruppe are consumed by
                                 // marktd to update malo columns.
                                 "bilanzierungsmethode":  bilanzierungsmethode,
@@ -1575,5 +1584,43 @@ mod tests {
         ] {
             assert_eq!(state.occupies_business_key(), occupied, "{}", state.label());
         }
+    }
+
+    /// The Anmeldung's Bilanzkreis reaches processd on `ProcessInitiated`:
+    /// `E_0622` Prüfschritt 60 holds it against the Zuordnungsermächtigungen
+    /// on file, and without it the walk has nothing to check.
+    #[test]
+    fn the_bilanzkreis_rides_the_process_initiated() {
+        let receive = SupplierChangeCommand::ReceiveUtilmd {
+            pid: Pruefidentifikator::const_new(55_001),
+            sender: MarktpartnerCode::new("9900000000003"),
+            receiver: MarktpartnerCode::new("9900357000004"),
+            location_id: MaLo::new("51238696012"),
+            document_date: "20261001".to_owned(),
+            process_date: "20261101".to_owned(),
+            bilanzierungsgebiet: Some("11YB-TENNET----U".to_owned()),
+            bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+            bilanzierungsmethode: None,
+            fallgruppe: None,
+            transaktionsgrund: Some("E03".to_owned()),
+            transaktionsgrund_ergaenzung: None,
+            veraeusserungsform: None,
+            tranchengroesse_prozent: None,
+            vorgangsnummer: None,
+            produktpaket_id: Some("1".to_owned()),
+            kunde_name: None,
+            kunde_namensformat: None,
+            message_ref: MessageRef::new("ANM-001"),
+            validation_passed: true,
+            validation_errors: vec![],
+        };
+        let out = GpkeSupplierChangeWorkflow::handle(&SupplierChangeState::default(), receive)
+            .expect("Anmeldung accepted");
+        let initiated = out
+            .outbox
+            .iter()
+            .find(|o| &*o.message_type == "ProcessInitiated")
+            .expect("a ProcessInitiated is queued");
+        assert_eq!(initiated.payload["bilanzkreis"], "11XBK-LF-------9");
     }
 }

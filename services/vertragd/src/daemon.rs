@@ -27,7 +27,9 @@ impl Daemon for Vertragd {
     }
 
     fn validate(cfg: &config::VertragdConfig) -> Vec<mako_service::Befund> {
-        cfg.auth_befunde()
+        let mut befunde = cfg.auth_befunde();
+        befunde.extend(cfg.bestellung_befunde());
+        befunde
     }
 
     fn policy(cfg: &config::VertragdConfig) -> mako_service::policy::PolicyReport {

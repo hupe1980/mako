@@ -1745,9 +1745,9 @@ pub struct CreateMandateRequest {
     /// `FRST` on a new mandate, then `RCUR` once one collection has cleared.
     ///
     /// Defaulted because the sequence is this service's to track across the
-    /// mandate's life rather than a caller's input — `portald` states exactly
-    /// that and omits it, which made every customer-facing mandate
-    /// registration a 422.
+    /// mandate's life rather than a caller's input — `portald` omits it, so a
+    /// required field would answer every customer-facing mandate registration
+    /// with 422.
     #[serde(default = "default_sequence_type")]
     pub sequence_type: String,
     /// `CORE` (default) or `B2B`.
@@ -2707,9 +2707,9 @@ pub struct AutoDunningResult {
 /// default, whatever a re-run or a later sweep does. Fees are Verzugsschaden
 /// and stay out of `verzug_ct`, which is why they cannot themselves keep the
 /// chain alive.
-// The single-runner advisory lock lives in `mako-service`; `vertragd` needs the
-// same thing, and two copies had already drifted into two key spaces with no
-// shared rule for allocating them.
+// The single-runner advisory lock lives in `mako-service` because `vertragd`
+// needs the same thing, and two copies drift into two key spaces with no shared
+// rule for allocating them.
 pub use mako_service::worker_lock::{release_worker_lock, try_worker_lock};
 
 /// Advisory-lock keys (stable, distinct per worker).

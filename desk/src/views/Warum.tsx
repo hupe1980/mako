@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { Button as AriaButton } from "react-aria-components";
+import { runStatus } from "../app/codes";
 import { quelle } from "../app/dienste";
+import { disclosure } from "../app/disclosure";
 import { folgen, type Lauf } from "../app/laeufe";
 import { useRolle } from "../app/rollen";
 import {
@@ -57,13 +59,10 @@ export function WarumAntwort({
   const [oeffnen, aufSchritt] = useOeffnen();
   const spur = stand.kind === "fehler" ? undefined : stand.spur;
   return (
-    <section
-      aria-label={t.warum.titel}
-      className="squircle rounded-panel border border-ai-border bg-ai-fill p-4"
-    >
+    <section aria-label={t.warum.titel} className="border-l-2 border-ai py-1 pl-4">
       <div className="flex min-h-9 items-center gap-2">
-        <p className="m-0 flex flex-1 items-center gap-1.5 text-caption font-semibold text-ai">
-          <Icon name="sparkle" size={12} />
+        <p className="m-0 flex flex-1 items-center gap-1.5 text-caption font-semibold text-text-2">
+          <Icon name="sparkle" size={12} className="text-ai" />
           {warumFrage()}
         </p>
         {stand.kind === "liest" && stopp && <StoppKnopf run={stopp.run} lauf={stopp.lauf} />}
@@ -82,12 +81,12 @@ export function WarumAntwort({
         />
       )}
       {stand.kind === "liest" && !spur && <Lesen schritte={stand.schritte} />}
-      {stand.kind === "fehler" && (
-        <p className="m-0 mt-3 text-callout text-critical">{stand.text}</p>
-      )}
+      {stand.kind === "fehler" && <p className="m-0 mt-3 text-body text-critical">{stand.text}</p>}
       {stand.kind === "antwort" && (
         <div className="mt-3">
-          <p className="m-0 mb-2 text-caption font-semibold text-ai">{stand.a.disclosure}</p>
+          <p className="m-0 mb-2 text-caption font-semibold text-ai">
+            {disclosure(stand.a.disclosure)}
+          </p>
           {stand.a.status === "succeeded" ? (
             <>
               <ul aria-label={f.antwort} className="m-0 list-none divide-y divide-ai-border p-0">
@@ -112,7 +111,9 @@ export function WarumAntwort({
             </>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
-              <p className="m-0 text-callout text-text-2">{f.keineAntwort(stand.a.status)}</p>
+              <p className="m-0 text-body text-text-2">
+                {f.keineAntwort(runStatus(stand.a.status))}
+              </p>
               {onNochmal && (
                 <AriaButton
                   onPress={onNochmal}

@@ -390,7 +390,7 @@ fn nachricht(
     let parsed = edi_energy::parse(&check.bytes).ok()?;
     // The message, `UNH` … `UNT`: the profile names no envelope segment, and
     // a finding's position counts from `UNH` = 1.
-    let segments: Vec<edifact_rs::OwnedSegment> = parsed
+    let segments: Vec<edifact::OwnedSegment> = parsed
         .segments()
         .iter()
         .filter(|s| !matches!(&*s.tag, "UNA" | "UNB" | "UNG" | "UNE" | "UNZ"))
@@ -424,7 +424,7 @@ fn nachricht(
                 nr: place.and_then(|(a, p)| p.structure.nr(a.node).map(str::to_owned)),
                 gruppe,
                 name: place.map(|(a, p)| p.structure.nodes[a.node].name.clone()),
-                text: edifact_rs::segments_to_bytes(std::slice::from_ref(seg))
+                text: edifact::segments_to_bytes(std::slice::from_ref(seg))
                     .map(|b| latin1(&b).trim_end().to_owned())
                     .unwrap_or_default(),
                 elemente: seg.elements.iter().map(element_text).collect(),
@@ -468,10 +468,7 @@ fn nachricht(
 
 /// The index of the segment `issue` sits on: its one-based position when it
 /// names one whose tag agrees, else the segment its byte span falls in.
-fn platz(
-    issue: &edifact_rs::ValidationIssue,
-    segments: &[edifact_rs::OwnedSegment],
-) -> Option<usize> {
+fn platz(issue: &edifact::ValidationIssue, segments: &[edifact::OwnedSegment]) -> Option<usize> {
     let tag_agrees = |i: usize| {
         issue
             .segment_tag
@@ -494,7 +491,7 @@ fn platz(
 
 /// A data element as written: its components joined by `:`, trailing empty
 /// components dropped as the wire drops them.
-fn element_text(el: &edifact_rs::Element<'_>) -> String {
+fn element_text(el: &edifact::Element<'_>) -> String {
     let mut parts: Vec<&str> = (0..).map_while(|i| el.get_component(i)).collect();
     while parts.last().is_some_and(|p| p.is_empty()) {
         parts.pop();

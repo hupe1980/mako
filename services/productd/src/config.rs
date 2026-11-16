@@ -68,6 +68,16 @@ pub struct ProductdConfig {
     /// `read-policy` admits.
     pub billingd_api_key: Option<String>,
 
+    /// `marktd` base URL — the Netzbetreiber's Preisblätter (Netznutzung,
+    /// Messung, Konzessionsabgabe) and a MaLo's Netzbetreiber, read for an
+    /// Endkunden-Angebot. Without it that route answers `503
+    /// marktd_nicht_konfiguriert`; no offer is priced without the NB's sheets.
+    pub marktd_url: Option<String>,
+
+    /// `marktd` bearer token — a service credential of this tenant there,
+    /// which its Cedar `read-preisblatt` and `read-malo-grid` admit.
+    pub marktd_api_key: Option<String>,
+
     /// Removed: the regime is billingd's `[policy] behg_regime`. Named so a
     /// config still carrying it is refused at startup instead of ignored.
     #[serde(default)]
@@ -110,6 +120,7 @@ impl ProductdConfig {
             .posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
             .posture_presence("oidc", self.oidc.is_some(), true)
             .posture_presence("billingd_url", self.billingd_url.is_some(), false)
+            .posture_presence("marktd_url", self.marktd_url.is_some(), false)
     }
 
     /// Refuse to start in a posture that authenticates nothing.

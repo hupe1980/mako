@@ -157,7 +157,8 @@ pub use msb::{
 pub use nb::{
     Abmeldeanfrage, AbmeldungAnfrage, AnmeldungAnfrage, CODES_REQUIRING_DRITTER, LfaAntwort,
     MaloGridRecord, Messtyp, NbEntscheidung, NetzCheckConfig, RuhendeAnmeldung, TranchenAntwort,
-    TranchenLage, TranchenZuordnung, evaluate, evaluate_abmeldung, evaluate_lieferbeginn,
+    TranchenLage, TranchenZuordnung, ZuordnungsermaechtigungRecord, evaluate, evaluate_abmeldung,
+    evaluate_lieferbeginn,
 };
 
 // ── Transaktionsgrund codes the trees branch on ───────────────────────────────

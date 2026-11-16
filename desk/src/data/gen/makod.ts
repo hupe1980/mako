@@ -453,7 +453,7 @@ export interface RolleAntwort {
   /**
    * The Rolle.
    */
-  rolle: "lf-strom" | "lf-gas" | "nb-strom" | "nb-gas" | "msb-strom" | "msb-gas" | "esa-strom";
+  rolle: "lf-strom" | "lf-gas" | "nb-strom" | "nb-gas" | "msb-strom" | "msb-gas" | "esa-strom" | "bkv-strom";
   /**
    * Its MP-ID: a 13-digit BDEW- (`99…`, Strom) or DVGW-Codenummer (`98…`,
    * Gas), a GS1 GLN, or a 16-character EIC. Unanswered, it is a gap.

@@ -20,8 +20,10 @@
 use std::path::PathBuf;
 
 use mako_markt::utilmd_stammdaten::{NetznutzungZahler, Netznutzungsvertrag};
-use mako_service::schema_check::check_values;
+use mako_service::schema_check::{check_values, check_values_in};
+use vertragd::bestellung::{DokumentArt, Kanal};
 use vertragd::domain::{Kuendigungsgrund, Lieferbeginnanlass, Vertragsart};
+use vertragd::handlers::bestellungen::WiderrufKanal;
 
 fn migration_sql() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/0001_schema.sql");
@@ -35,8 +37,35 @@ fn assert_pinned<T: Copy + PartialEq + std::fmt::Debug>(
     as_db: fn(T) -> &'static str,
     from_db: fn(&str) -> Option<T>,
 ) {
-    let listed = check_values(&migration_sql(), column);
+    assert_listed(
+        column,
+        &check_values(&migration_sql(), column),
+        all,
+        as_db,
+        from_db,
+    );
+}
 
+/// [`assert_pinned`] for a column whose name repeats across tables (`kanal`),
+/// read from one table's `CREATE TABLE` block.
+fn assert_pinned_in<T: Copy + PartialEq + std::fmt::Debug>(
+    table: &str,
+    column: &str,
+    all: &[T],
+    as_db: fn(T) -> &'static str,
+    from_db: fn(&str) -> Option<T>,
+) {
+    let listed = check_values_in(&migration_sql(), table, column);
+    assert_listed(&format!("{table}.{column}"), &listed, all, as_db, from_db);
+}
+
+fn assert_listed<T: Copy + PartialEq + std::fmt::Debug>(
+    column: &str,
+    listed: &[String],
+    all: &[T],
+    as_db: fn(T) -> &'static str,
+    from_db: fn(&str) -> Option<T>,
+) {
     for v in all {
         assert!(
             listed.iter().any(|l| l == as_db(*v)),
@@ -47,7 +76,7 @@ fn assert_pinned<T: Copy + PartialEq + std::fmt::Debug>(
         );
     }
 
-    for value in &listed {
+    for value in listed {
         let decoded = from_db(value).unwrap_or_else(|| {
             panic!(
                 "`{column}` CHECK allows `{value}`, which no variant of this enum writes — a \
@@ -174,4 +203,42 @@ fn enfg_matches_its_check_lists() {
         let listed = check_values(&migration_sql(), column);
         assert_eq!(listed, codes, "`{column}` CHECK and its code list disagree");
     }
+}
+
+/// An order cites its documents by art; an art `rechtsdokumente` cannot store
+/// is a document no hash can resolve to. `PREISBLATT` lives in `productd` and
+/// is deliberately not listed.
+#[test]
+fn rechtsdokument_art_matches_its_check_list() {
+    assert_pinned_in(
+        "rechtsdokumente",
+        "art",
+        &DokumentArt::RECHTSDOKUMENTE,
+        DokumentArt::as_db,
+        DokumentArt::from_db,
+    );
+}
+
+/// The channel an order came by is part of its Bestellnachweis.
+#[test]
+fn bestellkanal_matches_its_check_list() {
+    assert_pinned_in(
+        "bestellnachweise",
+        "kanal",
+        &Kanal::ALL,
+        Kanal::as_db,
+        Kanal::from_db,
+    );
+}
+
+/// The channel a Widerruf came by is part of the § 356a Abs. 2 BGB record.
+#[test]
+fn widerrufkanal_matches_its_check_list() {
+    assert_pinned_in(
+        "widerrufe",
+        "kanal",
+        &WiderrufKanal::ALL,
+        WiderrufKanal::as_db,
+        WiderrufKanal::from_db,
+    );
 }

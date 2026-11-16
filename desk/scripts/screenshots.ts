@@ -3,6 +3,11 @@
 //
 //   just desk-screenshots
 //
+// The docs show what an operator sees: the production build under
+// `vite preview` (`buehne.ts`), so no development-only entry is on screen.
+// Only the gallery — a development page the build leaves out — is taken from
+// the dev server.
+//
 // Deterministic by construction: Vite serves the Desk, each service's MCP
 // answers are recorded responses in the schema it declares
 // (services/<name>/mcp.snapshot.json), agentd's stream is the recorded run
@@ -16,7 +21,7 @@ import { resolve } from "node:path";
 import { type BrowserContext, chromium, type Page } from "playwright";
 import { createServer } from "vite";
 import { aufzeichnungen } from "./aufzeichnung.ts";
-import { aufnehmen } from "./buehne.ts";
+import { aufnehmen, buehne } from "./buehne.ts";
 
 const desk = resolve(import.meta.dirname, "..");
 const out = resolve(desk, "../site/content/docs/guide/desk");
@@ -572,7 +577,11 @@ async function recordedAgentd(context: BrowserContext) {
           text: "1 Marktprozess nach der Frist. Die Frist ist abgelaufen; diese Zeile meldet, was versäumt wurde, und hält nichts an.",
           prioritaet: "urgent",
           faellig: "2026-11-06T16:00:00Z",
-          anker: [{ art: "malo", wert: "62358177402" }],
+          // The breached process itself, as the case correlates it: the first overdue row.
+          anker: [
+            { art: "malo", wert: "41203768152" },
+            { art: "process", wert: "5a6f0c1e-0000-4000-8000-000000000000" },
+          ],
         },
         {
           task: "t-2",
@@ -695,8 +704,38 @@ const server = await createServer({
   ],
 });
 await server.listen();
-const base = server.resolvedUrls?.local[0] ?? "http://localhost:5173/";
+const devBase = server.resolvedUrls?.local[0] ?? "http://localhost:5173/";
 const browser = await chromium.launch();
+
+// The gallery first, from the dev server: the production build below sets
+// NODE_ENV to production, and a dev server after it drops the gallery route.
+{
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    deviceScaleFactor: 2,
+    locale: "de-DE",
+    timezoneId: "Europe/Berlin",
+  });
+  // The shell around the gallery reads too (the Freigaben count): the same
+  // recorded answers, so no request reaches a real port.
+  await aufnehmen(context, RUN);
+  await recordedMakod(context);
+  await recordedVertragd(context);
+  await recordedProcessd(context);
+  await recordedAgentd(context);
+  await recordedRechnungen(context);
+  const page = await context.newPage();
+  await page.goto(`${devBase}dev/gallery`);
+  await page.getByText("Dunkel").waitFor();
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: resolve(out, "gallery.png") });
+  await context.close();
+}
+await server.close();
+
+// The production build, for every page an operator reaches.
+const stage = await buehne();
+const base = stage.base;
 
 try {
   for (const theme of ["light", "dark"] as const) {
@@ -853,7 +892,7 @@ try {
     // The list–detail–inspector layout: the first overdue process selected,
     // its Verlauf beside the list and its Angaben on the right.
     await page.goto(`${base}fristen?id=5a6f0c1e-0000-4000-8000-000000000000`);
-    await page.getByRole("heading", { name: "41203768152", level: 2 }).waitFor();
+    await page.getByText(/^41203768152 · PID/).waitFor();
     await page.getByText("UTILMD-2026-10-27-0017").waitFor();
     await shot(page, "fristen", theme);
 
@@ -923,28 +962,7 @@ try {
 
     await context.close();
   }
-
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 900 },
-    deviceScaleFactor: 2,
-    locale: "de-DE",
-    timezoneId: "Europe/Berlin",
-  });
-  // The shell around the gallery reads too (the Freigaben count): the same
-  // recorded answers, so no request reaches a real port.
-  await aufnehmen(context, RUN);
-  await recordedMakod(context);
-  await recordedVertragd(context);
-  await recordedProcessd(context);
-  await recordedAgentd(context);
-  await recordedRechnungen(context);
-  const page = await context.newPage();
-  await page.goto(`${base}dev/gallery`);
-  await page.getByText("Dunkel").waitFor();
-  await page.waitForTimeout(150);
-  await page.screenshot({ path: resolve(out, "gallery.png") });
-  await context.close();
 } finally {
   await browser.close();
-  await server.close();
+  await stage.schliessen();
 }

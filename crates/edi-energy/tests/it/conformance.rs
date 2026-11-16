@@ -488,8 +488,8 @@ fn the_meldepunkt_id_selects_the_sg27_branch() {
     let judge = |wire: &str| -> Vec<String> {
         // The Prüfschablone is about `UNH…UNT`; the interchange envelope is
         // the transport's.
-        let segs: Vec<edifact_rs::OwnedSegment> = edifact_rs::from_bytes(wire.as_bytes())
-            .map(|s| s.map(edifact_rs::Segment::into_owned))
+        let segs: Vec<edifact::OwnedSegment> = edifact::from_bytes(wire.as_bytes())
+            .map(|s| s.map(edifact::Segment::into_owned))
             .collect::<Result<Vec<_>, _>>()
             .expect("the fixture parses")
             .into_iter()

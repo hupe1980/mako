@@ -185,7 +185,7 @@ pub async fn put_melo(
         }
     };
 
-    // L4 hard cut: validate and normalise the incoming BO4E Messlokation payload.
+    // Validate and normalise the incoming BO4E Messlokation payload.
     let melo = match normalize_messlokation(req.data) {
         Ok(v) => v,
         Err(e) => return e.into_response(),

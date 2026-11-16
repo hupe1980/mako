@@ -140,7 +140,7 @@ pub fn assert_agrees_in<S: AsRef<str>>(sql: &str, table: &str, column: &str, wri
 /// Hold a `CHECK` list against the values some Rust writes, in both directions.
 ///
 /// `written` is every value the service can produce for that column. Both
-/// directions are asserted because both have shipped broken, and the message
+/// directions are asserted because either can break alone, and the message
 /// names which one failed.
 ///
 /// # Panics

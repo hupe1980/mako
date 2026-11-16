@@ -203,7 +203,7 @@ describe("the setup interview", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /Vorbelegen/ }));
     const angebote = await screen.findByRole("list", { name: "Vorgeschlagene Antworten" });
-    expect(screen.getByText(/^AI-generated\./)).toBeTruthy();
+    expect(screen.getByText(/^KI-generiert\./)).toBeTruthy();
     const zeilen = within(angebote).getAllByRole("listitem");
     expect(zeilen.map((z) => z.textContent)).toEqual([
       expect.stringContaining("Lieferant Strom unter 9900357000004"),

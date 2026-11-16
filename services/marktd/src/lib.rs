@@ -18,5 +18,7 @@ pub mod mmma_worker;
 pub mod openapi;
 pub mod outbox;
 pub mod pg;
+pub mod referenzimport;
+pub mod referenzreihen;
 pub mod retention;
 pub mod state;

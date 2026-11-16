@@ -3548,6 +3548,55 @@ pub struct MabisZpRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
+/// One Zuordnungsermächtigung a BKV has given the NB by UTILMD 55071 and, once
+/// withdrawn by 55072, the day it ends.
+///
+/// BK6-24-174 Anlage 3 (MaBiS) Kap. 10.2.1 (S. 119): „Die Ermächtigung erfolgt
+/// je ZRT, BG, BK und LF ab einem bestimmten Zeitpunkt" — so the four together
+/// are the key, and the NB checks an Anmeldung's Bilanzkreis against it
+/// (`E_0622` Prüfschritt 60 / 260). Kap. 10.3.1 (S. 121): after the
+/// Deaktivierung „können keine Zuordnungen mit Gültigkeit nach dem
+/// Deaktivierungsdatum mehr durchgeführt werden", so validity is half-open:
+/// `valid_to` is the Deaktivierungsdatum and no longer covered.
+///
+/// MaBiS is Strom only; the record carries no `sparte`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZuordnungsermaechtigungRecord {
+    /// MP-ID of the BKV that sent the 55071 (`NAD+MS`).
+    pub bkv_mp_id: String,
+    /// MP-ID of the Lieferant the Ermächtigung names (`SG12 NAD+VY`).
+    pub lf_mp_id: String,
+    /// Bilanzkreis EIC (`SG10 CCI+Z19` DE 7037).
+    pub bilanzkreis: String,
+    /// Bilanzierungsgebiet EIC (`SG10 CCI+Z20` DE 7037).
+    pub bilanzierungsgebiet: String,
+    /// Zeitreihentyp (`SG10 CCI+15++Z21`, `CAV` DE 7111).
+    pub zeitreihentyp: String,
+    /// First covered day — the German day the 55071's `DTM+158`
+    /// Bilanzierungsbeginn opens.
+    #[serde(with = "date_iso")]
+    pub valid_from: time::Date,
+    /// Deaktivierungsdatum from the 55072's `DTM+159` — the first day **not**
+    /// covered. `None` while the Ermächtigung is active.
+    #[serde(with = "date_iso::opt")]
+    pub valid_to: Option<time::Date>,
+    /// Nachrichtendatum (`DTM+137`, German day) of the 55072 that ended it.
+    ///
+    /// Kap. 10.3.2 Nr. 1 (S. 122) wants the Deaktivierung „spätestens 5 WT vor
+    /// dem angestrebten Deaktivierungsdatum", which only this date and
+    /// `valid_to` together can show.
+    #[serde(default, with = "date_iso::opt")]
+    pub deaktivierung_nachrichtendatum: Option<time::Date>,
+}
+
+impl ZuordnungsermaechtigungRecord {
+    /// Whether the Ermächtigung covers `tag`: `valid_from <= tag < valid_to`.
+    #[must_use]
+    pub fn gilt_am(&self, tag: time::Date) -> bool {
+        self.valid_from <= tag && self.valid_to.is_none_or(|ende| tag < ende)
+    }
+}
+
 #[cfg(test)]
 mod lokationsbuendel_tests {
     use std::collections::HashMap;

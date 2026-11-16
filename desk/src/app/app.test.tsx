@@ -300,7 +300,15 @@ describe("the Desk", () => {
           });
           return Response.json([
             h("t-1", "41203768152", "Die Antwortfrist ist seit gestern abgelaufen."),
-            h("t-2", "30871225644", "Für diese MaLo fehlt die Zuordnung."),
+            // Same MaLo, but about another process: not under p-alt.
+            {
+              ...h("t-3", "41203768152", "Ein anderer Prozess dieser MaLo."),
+              anker: [
+                { art: "malo", wert: "41203768152" },
+                { art: "process", wert: "p-anderer" },
+              ],
+            },
+            h("t-2", "30871225644", "AI-generated. Für diese MaLo fehlt die Zuordnung."),
           ]);
         }
         if (url.startsWith("/svc/agentd/")) return Response.json({ faehigkeiten: [] });
@@ -340,11 +348,23 @@ describe("the Desk", () => {
     );
     await open("/heute");
     const ueber = within(await screen.findByRole("list", { name: "Überfällig" }));
-    expect(ueber.getByText("Antwort auf die Anmeldung")).toBeTruthy();
+    // The task first, in the operator's words; the service's codes never raw.
+    expect(ueber.getByText("Antwortfrist überschritten · GPKE")).toBeTruthy();
+    expect(ueber.getByText(/PID 55001 · läuft/)).toBeTruthy();
+    expect(ueber.queryByText(/running|gpke/)).toBeNull();
+    // The Fundstelle is the detail's, not the row's.
+    expect(ueber.queryByText("Antwort auf die Anmeldung")).toBeNull();
     // The Hinweis on the overdue MaLo sits under that item …
     expect(ueber.getByText("Die Antwortfrist ist seit gestern abgelaufen.")).toBeTruthy();
+    // A Hinweis naming another process does not attach by the shared MaLo.
+    expect(ueber.queryByText(/Ein anderer Prozess dieser MaLo/)).toBeNull();
+    expect(await screen.findByText("Ein anderer Prozess dieser MaLo.")).toBeTruthy();
     // … and the one no item carries is an item of its own, at its own Frist.
-    expect(await screen.findByText("Für diese MaLo fehlt die Zuordnung.")).toBeTruthy();
+    // agentd's English marker reads as the Desk's disclosure, never as sent.
+    expect(
+      await screen.findByText("KI-generiert. Für diese MaLo fehlt die Zuordnung."),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("AI-generated");
     expect(
       screen.getByRole("list", { name: "Überfällig" }).textContent?.includes("fehlt die Zuordnung"),
     ).toBe(false);
@@ -505,7 +525,7 @@ describe("the Desk", () => {
     expect(dead.getAttribute("href")).toBe("/dead-letters");
     expect(
       await screen.findByRole("link", {
-        name: /^Fristen überschritten\s*—.*Prozessüberwachung nicht erreichbar/,
+        name: /^Fristen überschritten\s*—.*Prozessüberwachung ist nicht erreichbar/,
       }),
     ).toBeTruthy();
   });
@@ -583,7 +603,10 @@ describe("the Desk", () => {
     );
     await open("/fristen");
     const row = await screen.findByRole("row", { name: /51238696012/ });
-    expect(within(row).getByText(/^abgelaufen vor /)).toBeTruthy();
+    // The list already says überschritten: the row's Frist reads „vor …", and its
+    // accessible name still says the Frist has lapsed.
+    expect(within(row).getByText(/^vor /)).toBeTruthy();
+    expect(within(row).getByText(/Frist abgelaufen/)).toBeTruthy();
     // Selecting the row opens it beside the list: the Fundstelle among its
     // Angaben, and every process of its MaLo one link away.
     fireEvent.click(row);
@@ -760,7 +783,7 @@ describe("the Desk", () => {
       await screen.findByText("Antwortet mit claude-sonnet-5 · anthropic · liest nur, handelt nie"),
     ).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Was ist hier offen?" }));
-    expect(await screen.findByText("AI-generated.")).toBeTruthy();
+    expect(await screen.findByText("KI-generiert.")).toBeTruthy();
     expect(asked).toEqual([
       {
         agent: "desk-assistant",
@@ -1119,7 +1142,7 @@ describe("the Desk", () => {
     expect(
       await screen.findByText("Die MaLo nimmt nicht an der Marktkommunikation teil."),
     ).toBeTruthy();
-    expect(screen.getByText(/AI-generated\. Vorschlag: Ablehnen/)).toBeTruthy();
+    expect(screen.getByText(/KI-generiert\. Vorschlag: Ablehnen/)).toBeTruthy();
     expect(fetch.mock.calls.some(([u]) => u === "/svc/agentd/api/v1/runs")).toBe(false);
     zeile.focus();
     fireEvent.keyDown(window, { key: "u" });
@@ -1212,7 +1235,7 @@ describe("the Desk", () => {
     await open("/freigaben");
     await ablehnenSenden();
     expect(await screen.findByText("Reject denied for this principal")).toBeTruthy();
-    expect(screen.getByText(/lässt Sie hier nicht entscheiden/)).toBeTruthy();
+    expect(screen.getByText(/lässt dich hier nicht entscheiden/)).toBeTruthy();
     expect(screen.queryByRole("radio", { name: "Ablehnen" })).toBeNull();
     // R chooses nothing: no control is left to choose.
     fireEvent.keyDown(window, { key: "r" });
@@ -1487,7 +1510,7 @@ describe("the Desk", () => {
     const zeile = await screen.findByRole("button", { name: /Stadtwerke Musterstadt Netz/ });
     // Waiting under the row, the model's and marked so, with its finding by
     // its German name — never the checker's identifier.
-    expect(await screen.findByText(/AI-generated\. Vorschlag: Aufrechterhalten/)).toBeTruthy();
+    expect(await screen.findByText(/KI-generiert\. Vorschlag: Aufrechterhalten/)).toBeTruthy();
     expect(screen.getByText("wegen Preis weicht vom Preisblatt ab")).toBeTruthy();
     expect(screen.queryByText(/TariffDeviation/)).toBeNull();
     expect(fetch.mock.calls.some(([u]) => u === "/svc/agentd/api/v1/runs")).toBe(false);
@@ -1915,7 +1938,7 @@ describe("the Desk", () => {
     });
     if (!erste || !zweite || !dritte) throw new Error("three parked bookings expected");
     // Every booking on screen asked for in one read, never one per row.
-    await screen.findByText(/AI-generated\. Vorschlag: Neu buchen/);
+    await screen.findByText(/KI-generiert\. Vorschlag: Neu buchen/);
     const gelesen = fetch.mock.calls
       .map(([u]) => String(u))
       .filter((u) => u.startsWith("/svc/agentd/api/v1/vorschlaege"));
@@ -2045,7 +2068,7 @@ describe("the Desk", () => {
       },
     ]);
     // The disclosure first, every sentence with its source and its check, and „Hilfreich?".
-    expect(within(antwortFeld).getByText("AI-generated.")).toBeTruthy();
+    expect(within(antwortFeld).getByText("KI-generiert.")).toBeTruthy();
     expect(within(antwortFeld).getAllByText("Kundenkonten · geparkte Buchung")).toHaveLength(2);
     expect(within(antwortFeld).getAllByText("nicht belegt")).toHaveLength(1);
     expect(within(antwortFeld).getByRole("group", { name: "Hilfreich?" })).toBeTruthy();
@@ -2424,7 +2447,7 @@ describe("the Desk", () => {
     expect(await screen.findByText("Assistent im Desk")).toBeTruthy();
     expect(screen.getByText("Der Assistent liest nur.")).toBeTruthy();
     expect(screen.getByText("regelbasiert, kein Modell")).toBeTruthy();
-    expect(screen.getByText("startet auf Ihre Frage")).toBeTruthy();
+    expect(screen.getByText("startet auf deine Frage")).toBeTruthy();
     // A skill's reach is shown by service, never as the service's tool names.
     expect(screen.getAllByText("Marktkommunikation")).toHaveLength(2);
     expect(screen.queryByText("EEG-Anlagen")).toBeNull();
@@ -2457,6 +2480,8 @@ describe("the Desk", () => {
       }),
     );
     await open("/ueberblick");
+    // Folded to one line under the figures; it opens on a press.
+    fireEvent.click(await screen.findByRole("button", { name: "1 Hinweis" }));
     expect(
       await screen.findByText("1 Marktprozess nach der Frist. Die Frist ist abgelaufen."),
     ).toBeTruthy();
@@ -2513,7 +2538,8 @@ describe("the Desk", () => {
 
   it("renders the gallery in both appearances", async () => {
     await open("/dev/gallery");
-    expect(await screen.findByText("Hell")).toBeTruthy();
+    // The gallery is a lazy chunk, transformed on first import: give it the time.
+    expect(await screen.findByText("Hell", undefined, { timeout: 5000 })).toBeTruthy();
     expect(screen.getByText("Dunkel")).toBeTruthy();
     // The primary button once per appearance; ⌘K's panels list „Freigeben" as an option too.
     expect(screen.getAllByRole("button", { name: "Freigeben" })).toHaveLength(2);

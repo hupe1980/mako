@@ -364,6 +364,14 @@ const RULES: &[Rule] = &[
                  an MP-ID and travels in CCI DE 7037 / LOC DE 3225 — derive the NAD code from \
                  `edi_energy::AgencyCode::for_mp_id`",
     },
+    Rule {
+        id: "enwg-41c-supplier",
+        row: "§ 41c EnWG obliges suppliers to publish tariff data for Haushaltskunden",
+        pattern: r"(?i)§ 41c( Abs\. [1-4])? EnWG[^.;|]{0,40}(oblig|verpflicht|requires? (the )?(supplier|lieferant))|§ 41c Abs\. 2 EnWG[^.;|]{0,30}feed|§ 41c[^;|]{0,120}(haushaltskunden|kleinstunternehmen|100[ .]?000)[^;|]{0,80}(supplier|lieferant)|§ 41c[^;|]{0,40}(supplier|lieferant)\w*[^;|]{0,80}(haushaltskunden|kleinstunternehmen|100[ .]?000)|(supplier|lieferant)\w*[^;|]{0,80}§ 41c[^;|]{0,80}(haushaltskunden|kleinstunternehmen|100[ .]?000)",
+        reason: "§ 41c Abs. 1 EnWG is the BNetzA's duty to secure a free comparison instrument for \
+                 Haushaltskunden and Kleinstunternehmen below 100 000 kWh; the supplier's duty is \
+                 Abs. 5 Satz 2 — Stromlieferanten, no threshold, open data formats",
+    },
 ];
 
 /// Table rows no phrase can catch, by the first cell's text.
@@ -1100,6 +1108,18 @@ mod tests {
                 "eic-nad-agency",
                 "/// `\"305\"` — ETSO, the agency for EIC codes",
             ),
+            (
+                "enwg-41c-supplier",
+                "§ 41c EnWG obliges suppliers to let independent comparison tools use",
+            ),
+            (
+                "enwg-41c-supplier",
+                "/// The § 41c Abs. 2 EnWG comparison feed for one supplier within one tenant.",
+            ),
+            (
+                "enwg-41c-supplier",
+                "/// § 41c: Lieferanten publish their tariffs for Haushaltskunden below 100 000 kWh",
+            ),
         ];
         for rule in RULES {
             assert!(
@@ -1145,6 +1165,9 @@ mod tests {
             "/// C082 DE 3055 — `332` (DVGW) or `9` (GS1), NOMINT 4.6 S. 305",
             "/// BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 Nr. 1",
             "| MaBiS (BK6-24-174 Anlage 3) Kap. 10.2.1 |",
+            "§ 41c Abs. 5 Satz 2 EnWG: „Stromlieferanten müssen eine kostenlose Nutzung",
+            "//! `policies/productd.cedar`, except the two § 41c EnWG comparison-feed routes,",
+            "/// deliberate: § 41c Abs. 5 Satz 2 EnWG obliges a Stromlieferant to let",
         ] {
             assert!(
                 hit_ids(line).is_empty(),

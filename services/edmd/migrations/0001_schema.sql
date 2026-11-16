@@ -332,7 +332,7 @@ CREATE TABLE direct_push_sessions (
     raw_payload     TEXT,
     -- IoT provenance: the transport the uplink arrived over (LORAWAN / MBUS /
     -- WMBUS / REST) and the device that produced it (devEUI, M-Bus secondary
-    -- address). Both used to be echoed back in the response and stored nowhere.
+    -- address). Both are stored, not only echoed in the response.
     --
     -- `device_id` lives here and **not** in the reading's `sender_mp_id`: that
     -- column is a BDEW Codenummer and keys the meterstore version scope, so a

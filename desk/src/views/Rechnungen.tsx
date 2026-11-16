@@ -32,7 +32,7 @@ import { useVorschlaege } from "../inbox/quellen";
 import { Fragen, VorschlagKarte } from "./Fragen";
 
 const WAHL =
-  "focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body font-medium text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent";
+  "focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent";
 const PRIMAER =
   "focus-ring h-9 rounded-control bg-accent px-4 text-body font-semibold text-on-accent data-[disabled]:opacity-40";
 
@@ -57,7 +57,7 @@ function Fehler({ error, dienst }: { error: unknown; dienst: "invoicd" | "billin
 export function Gehalten({ text }: { text: string }) {
   const t = useT();
   return (
-    <p role="status" className="m-0 flex items-center gap-2 text-callout text-text">
+    <p role="status" className="m-0 flex items-center gap-2 text-body text-text">
       <Icon name="check" size={14} className="text-accent" />
       {t.entscheidung.gehalten(text, UNDO.keys)}
     </p>
@@ -158,7 +158,7 @@ export function DisputEntscheiden({
   if (verweigert) {
     return (
       <Panel className="flex flex-col gap-4 p-5">
-        <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
+        <h3 className="m-0 text-body font-semibold">{t.entscheidung.titel}</h3>
         <Notice tone="refusal" title={k.disputVerweigert}>
           {verweigert}
         </Notice>
@@ -169,12 +169,12 @@ export function DisputEntscheiden({
   return (
     <>
       <Panel className="flex flex-col gap-4 p-5">
-        <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
+        <h3 className="m-0 text-body font-semibold">{t.entscheidung.titel}</h3>
         {d.befunde.length > 0 && (
           <ul aria-label={k.befunde} className="m-0 flex list-none flex-col gap-1.5 p-0">
             {d.befunde.map((b) => (
               <li key={`${b.art}:${b.text}`} className="flex flex-col gap-0.5">
-                <span className="text-body font-medium text-text">{b.bezeichnung}</span>
+                <span className="text-body text-text">{b.bezeichnung}</span>
                 <span className="text-caption text-text-2">{b.text}</span>
               </li>
             ))}
@@ -299,12 +299,12 @@ export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: 
 
   return (
     <Panel className="flex flex-col gap-4 p-5">
-      <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
+      <h3 className="m-0 text-body font-semibold">{t.entscheidung.titel}</h3>
       {r.risk_findings.length > 0 && (
         <ul aria-label={k.befunde} className="m-0 flex list-none flex-col gap-1.5 p-0">
           {r.risk_findings.map((f) => (
             <li key={f.code} className="flex items-baseline gap-3 text-body">
-              <span className="font-mono text-caption text-text-2">{f.code}</span>
+              <span className="text-caption text-text-2">{f.code}</span>
               <span className="flex-1 text-text">{f.message}</span>
               <span className="text-caption text-text-2">+{formatCount(f.weight)}</span>
             </li>
@@ -385,7 +385,7 @@ export function GehaltenEntscheiden({ g, onDone }: { g: GehalteneRechnung; onDon
   const festgestellt = registriert(ding, "feststellen");
   return (
     <Panel className="flex flex-col gap-4 p-5">
-      <h3 className="m-0 text-callout font-semibold">{t.entscheidung.titel}</h3>
+      <h3 className="m-0 text-body font-semibold">{t.entscheidung.titel}</h3>
       <p className="m-0 text-caption text-text-2">{k.gehaltenText}</p>
       {schritte.length > 0 && (
         <ul aria-label={k.offeneSchritte} className="m-0 flex list-none flex-col gap-1.5 p-0">

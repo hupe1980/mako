@@ -9,6 +9,7 @@ import { PROBEN, zeigen } from "../app/proben";
 import { RolleProvider } from "../app/rollen";
 import { createDeskRouter } from "../app/router";
 import { de, type Katalog } from "./de";
+import deQuelle from "./de.ts?raw";
 import { en } from "./en";
 import { katalogErsetzen, setSprache } from "./index";
 
@@ -137,6 +138,20 @@ describe("the catalogues", () => {
   });
 });
 
+describe("the German catalogue says „du“", () => {
+  it("holds no formal address", () => {
+    // The Desk addresses its operator informally (AGENTS.md, Language). A
+    // capitalised „Sie“ or a form of „Ihr“ in a string is the formal address;
+    // comments are not shown and are left out.
+    const strings = deQuelle
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+    const formal = strings.match(/\b(Sie|Ihr|Ihre|Ihrer|Ihren|Ihrem|Ihres|Ihnen)\b[^"`\n]*/g);
+    expect(formal ?? []).toEqual([]);
+  });
+});
+
 describe("Sprache", () => {
   it("re-renders a view in English from the account menu and keeps the choice", async () => {
     services();
@@ -182,7 +197,11 @@ describe("the list–detail–inspector layout", () => {
     fireEvent.keyDown(document.activeElement ?? first, { key: "ArrowDown" });
     await waitFor(() => expect(second.getAttribute("aria-selected")).toBe("true"));
     await waitFor(() => expect(router.state.location.search).toEqual({ id: "p-2" }));
-    expect(await screen.findByRole("heading", { name: "41203768152", level: 2 })).toBeTruthy();
+    // The detail names the task; its MaLo and PID on the line under it.
+    expect(
+      await screen.findByRole("heading", { name: "Antwortfrist überschritten · GPKE", level: 2 }),
+    ).toBeTruthy();
+    expect(await screen.findByText(/^41203768152 · PID 55004/)).toBeTruthy();
 
     fireEvent.keyDown(second, { key: "Enter" });
     fireEvent.keyUp(second, { key: "Enter" });
@@ -198,7 +217,7 @@ describe("the list–detail–inspector layout", () => {
     await open("/fristen?id=p-1");
     const row = await screen.findByRole("row", { name: /51238696012/ });
     expect(row.getAttribute("aria-selected")).toBe("true");
-    expect(await screen.findByRole("heading", { name: "51238696012", level: 2 })).toBeTruthy();
+    expect(await screen.findByText(/^51238696012 · PID 55001/)).toBeTruthy();
   });
 });
 
@@ -243,11 +262,12 @@ function bypassing(root: Element, data: string[]): string[] {
   return out;
 }
 
+// A service's codes (`state`, `family`) are not data: they reach the screen
+// only as the catalogue's words, so a raw `running` or `gpke` shows bare.
 const DATA = [
   ...OVERDUE.flatMap((p) => [
     p.process_id,
     p.malo_id,
-    p.family,
     p.partner_mp_id ?? "",
     p.deadline_source ?? "",
   ]),
@@ -334,7 +354,7 @@ describe("the Assistent view speaks only through the catalogue", () => {
 describe("the search and decision views speak only through the catalogue", () => {
   for (const [path, ready] of [
     ["/prozess", "⟪Welcher Prozess?⟫"],
-    ["/kunden", "⟪Wen suchen Sie?⟫"],
+    ["/kunden", "⟪Wen suchst du?⟫"],
     ["/freigaben", "⟪Nichts zu entscheiden.⟫"],
     ["/heute", "⟪Heute⟫"],
   ] as const) {
@@ -343,6 +363,8 @@ describe("the search and decision views speak only through the catalogue", () =>
       services();
       await open(path);
       await screen.findAllByText(ready);
+      // Heute's rows have arrived: each carries a process's state and family.
+      if (path === "/heute") await screen.findAllByText(/51238696012/);
       // A service's name is the deployment's word for it, shown as named.
       const data = [...Object.values(DIENST), ...DATA];
       expect(converted().flatMap((r) => bypassing(r, data))).toEqual([]);

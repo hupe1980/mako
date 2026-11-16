@@ -77,7 +77,7 @@
       ],
       "status": "not_affected",
       "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
-      "impact_statement": "Quadratic duplicate-attribute scan, patched in 0.41. Every parser that reads XML from a counterparty is on quick-xml 0.41 (mako's own crates, asx-rs for AS4, opendal for edmd's cold tier). 0.38.4 is reached only through typst's hayagriva/citationberg, which parses bundled assets while rendering mako's own templates."
+      "impact_statement": "Quadratic duplicate-attribute scan, patched in 0.41. Every quick-xml parser that reads XML from a counterparty is on 0.41 or later (mako's own crates, sepa, object_store and opendal for edmd's cold tier; asx-rs parses AS4 envelopes with roxmltree). 0.38.4 is reached only through typst's hayagriva/citationberg, which parses bundled assets while rendering mako's own templates."
     },
     {
       "vulnerability": {
@@ -170,8 +170,8 @@
         }
       ],
       "status": "not_affected",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "impact_statement": "The Marvin timing side channel leaks a private key through private-key operations. rsa is reached through jsonwebtoken in mako-service, which verifies RS256/RS384/RS512 OIDC tokens against the identity provider's public JWKS; no release binary holds an RSA private key or decrypts or signs with one. AS4 cryptography runs on OpenSSL through asx-rs, not on this crate."
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "The Marvin timing side channel leaks a private key through many private-key operations an attacker can trigger and time. rsa is reached twice: jsonwebtoken in mako-service verifies RS256/RS384/RS512 OIDC tokens against the identity provider's public JWKS (no private key); edmd's gs:// cold tier signs a Google service-account JWT through opendal and reqsign-google, locally, about once per access-token lifetime, over a request no attacker shapes or observes — and not at all when the deployment uses workload identity instead of a key file. AS4 cryptography runs on OpenSSL through asx-rs."
     },
     {
       "vulnerability": {

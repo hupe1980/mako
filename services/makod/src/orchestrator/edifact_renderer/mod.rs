@@ -333,7 +333,7 @@ pub(super) fn column_lists_place(
 ///
 /// The builders emit one message (`UNH…UNT`); the regulated wire format is
 /// the Übertragungsdatei, which carries exactly this envelope around it.
-/// Written through `edifact_rs::Writer::write_composites`, so component
+/// Written through `edifact::Writer::write_composites`, so component
 /// boundaries are structural and the values are escaped for the wire.
 fn finish_interchange(
     serialized: Result<Vec<u8>, edi_energy::Error>,
@@ -1847,7 +1847,7 @@ mod tests {
             )
             .expect("validate")
             .iter_issues()
-            .filter(|e| e.severity == edifact_rs::ValidationSeverity::Error)
+            .filter(|e| e.severity == edifact::ValidationSeverity::Error)
             .map(|e| format!("{:?}: {}", e.rule_id(), e.message))
             .collect()
         };

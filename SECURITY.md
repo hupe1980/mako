@@ -84,9 +84,9 @@ triaged.
 
 ### Dependencies published by the same maintainer
 
-Twelve of mako's 87 direct external dependencies are published from the
+Twelve of mako's 86 direct external dependencies are published from the
 maintainer's own crates.io account and no other: `agentplane`, `asx-rs`,
-`billing`, `doubleentry`, `edifact-rs`, `en16931`, `en16931-formats`, `krafka`,
+`billing`, `doubleentry`, `edifact`, `en16931`, `en16931-formats`, `krafka`,
 `metering`, `meterstore`, `rubo4e` and `sepa`. Each is free and open source and
 supplied on the same terms as mako, so the determination above covers them too.
 

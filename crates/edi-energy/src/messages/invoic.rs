@@ -1,4 +1,4 @@
-use edifact_rs::{OwnedSegment, ProfileRulePack, ValidationIssue};
+use edifact::{OwnedSegment, ProfileRulePack, ValidationIssue};
 
 use crate::{
     MessageType,
@@ -107,7 +107,7 @@ fn invoic_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("INVOIC-SEM")
         .for_message_type("INVOIC")
         .with_rule_fn(
-            |segs: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>| {
+            |segs: &[edifact::Segment<'_>], issues: &mut Vec<ValidationIssue>| {
                 super::common::check_period_order(segs, "SEM-INVOIC-PERIOD-ORDER", issues);
             },
         )

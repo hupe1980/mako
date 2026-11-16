@@ -1253,3 +1253,26 @@ fn a_profile_is_written_as_one_loc_group_per_period() {
         "600"
     );
 }
+
+// ── Reader bounds ────────────────────────────────────────────────────────────
+
+/// One message past [`dvgw_edi::DEFAULT_MAX_MESSAGES`] is refused as a limit,
+/// not parsed: the default platform is bounded like `edi-energy`'s parser.
+#[test]
+fn an_interchange_past_the_message_bound_is_refused() {
+    let count = dvgw_edi::DEFAULT_MAX_MESSAGES + 1;
+    let mut wire = String::from("UNB+UNOA:3+9870012345678:502+9800505300009:502+180101:1200+IC1'");
+    for n in 1..=count {
+        wire.push_str(&format!("UNH+{n}+ORDRSP:D:07A:UN:5.11a'BGM+Z01'UNT+3+{n}'"));
+    }
+    wire.push_str(&format!("UNZ+{count}+IC1'"));
+    let refused = DvgwPlatform::new()
+        .parse_interchange(wire.as_bytes())
+        .any(|r| {
+            matches!(
+                r,
+                Err(Error::Parse(edifact::EdifactError::LimitExceeded { .. }))
+            )
+        });
+    assert!(refused, "{count} messages pass the default platform");
+}

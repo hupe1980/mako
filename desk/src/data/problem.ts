@@ -5,6 +5,8 @@
 // service's log line carries, and the only thing of an internal error the body
 // holds — plus the fields the service adds (`decided_by` on a lost race).
 
+import { katalog } from "../i18n";
+
 export interface Problem {
   status: number;
   error?: string;
@@ -45,6 +47,7 @@ export async function problem(res: Response): Promise<Problem> {
  * quote to whoever reads the service's log where there is one, else the status.
  */
 export function sentence(p: Problem): string {
-  const said = p.detail ?? `${p.error ?? "Fehler"} (HTTP ${p.status})`;
-  return p.error_id ? `${said} · Fehler-ID ${p.error_id}` : said;
+  const k = katalog().problem;
+  const said = p.detail ?? k.http(p.error ?? k.error, String(p.status));
+  return p.error_id ? k.withErrorId(said, p.error_id) : said;
 }

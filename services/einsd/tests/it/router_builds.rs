@@ -44,9 +44,10 @@ async fn an_unset_policy_is_reported_as_its_default_with_its_source() {
     .expect("the configuration parses");
     let lines = cfg.policy_report().lines("einsd");
     assert!(
-        lines.iter().any(|l| l.starts_with(
-            "einsd.beihilfe_politik=verweigern origin=default class=policy quelle=\"BT-Drs. 21/7867"
-        )),
+        lines.iter().any(|l| {
+            l.starts_with("einsd.beihilfe_politik=verweigern origin=default class=policy quelle=\"")
+                && l.contains("BT-Drs. 21/7867")
+        }),
         "{lines:?}"
     );
     assert!(

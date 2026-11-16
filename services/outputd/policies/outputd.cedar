@@ -20,8 +20,11 @@
 //                         recorded for 8 years and queued for delivery to a
 //                         named recipient
 //   "read-document"     — GET  /api/v1/documents, /{id}, /{id}/content,
-//                         /api/v1/spool, and POST /deliveries/{id}/read —
-//                         reads an issued document and its delivery evidence
+//                         /by-subject/{kind}/{subject_ref}, /api/v1/spool,
+//                         and POST /deliveries/{id}/read — reads an issued
+//                         document and its delivery evidence
+//   "read-delivery-failures" — GET /api/v1/deliveries?status=FAILED — the
+//                         tenant-wide list of documents that never arrived
 //   "report-delivery"   — POST /api/v1/deliveries/{id}/status — a channel
 //                         reporting whether a document arrived
 //   "read-policy"       — GET  /api/v1/policy — the operator policy report
@@ -105,6 +108,22 @@ permit(
     resource
 ) when {
     context.principal_tenant == context.resource_tenant
+};
+
+// ── The failed-delivery work list ─────────────────────────────────────────────
+// Unlike `read-document`, this list is not scoped by its query: it names every
+// document of the tenant that never reached its recipient, with the contract or
+// case it concerns. That is the operator's view of the portfolio, so it takes
+// the roles that issue documents.
+permit(
+    principal,
+    action == Action::"read-delivery-failures",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("LF") ||
+     context.principal_roles.contains("MSB") ||
+     context.principal_roles.contains("ESA"))
 };
 
 // ── On separating rollout from publish, and why it is not here ────────────────

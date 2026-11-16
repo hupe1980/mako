@@ -211,6 +211,21 @@ pub async fn ingest_event(
         .into_response();
     }
 
+    if let Err(e) = derive_zuordnungsermaechtigung(
+        &mut tx,
+        &state.tenant,
+        &ce_type_for_vs,
+        pid_for_vs,
+        &data_for_vs,
+    )
+    .await
+    {
+        return ApiError::internal(anyhow::Error::from(e).context(format!(
+            "event_ingest: Zuordnungsermächtigung for event {event_id_for_vs} failed — rolling back"
+        )))
+        .into_response();
+    }
+
     let derived = match derive_supply_state(
         &mut tx,
         &state.tenant,
@@ -395,6 +410,96 @@ pub async fn derive_msb_zuordnung(
         crate::pg::MsbDetails::default(),
     )
     .await
+}
+
+/// UTILMD 55071 / 55072 — a BKV activates or deactivates a
+/// Zuordnungsermächtigung at this NB (BK6-24-174 Anlage 3 Kap. 10.2 / 10.3).
+const ZUORDNUNGSERMAECHTIGUNG_PIDS: &[u32] = &[55_071, 55_072];
+
+/// Keep the Zuordnungsermächtigung a 55071 / 55072 carried — the Prüfgrundlage
+/// processd reads for `E_0622` Prüfschritt 60.
+///
+/// The `mabis-zp-lifecycle` workflow queues the `ProcessCompleted` (payload of
+/// `mako_mabis::zuordnungsermaechtigung_payload`) only for an Ermächtigung
+/// whose (ZRT, BG, BK, LF) and day are all present, so a payload without them
+/// breaks that contract: it is logged and acked rather than redelivered
+/// forever.
+///
+/// # Errors
+///
+/// Propagates any SQL failure so the whole ingest transaction rolls back and
+/// `makod` redelivers.
+pub async fn derive_zuordnungsermaechtigung(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    ce_type: &str,
+    pid: Option<u32>,
+    data: &serde_json::Value,
+) -> Result<(), mako_markt::error::MdmError> {
+    let Some(pid) = pid.filter(|p| ZUORDNUNGSERMAECHTIGUNG_PIDS.contains(p)) else {
+        return Ok(());
+    };
+    if ce_type != mako_events::mako::PROCESS_COMPLETED {
+        return Ok(());
+    }
+    let text = |k: &str| {
+        data.get(k)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+    };
+    let (
+        Some(bkv_mp_id),
+        Some(lf_mp_id),
+        Some(bilanzkreis),
+        Some(bilanzierungsgebiet),
+        Some(zeitreihentyp),
+        Some(datum),
+    ) = (
+        text("bkv_mp_id"),
+        text("lf_mp_id"),
+        text("bilanzkreis"),
+        text("bilanzierungsgebiet"),
+        text("zeitreihentyp"),
+        text("datum").and_then(parse_civil_date),
+    )
+    else {
+        warn!(
+            pid,
+            "event_ingest: Zuordnungsermächtigung without its (ZRT, BG, BK, LF) or day — \
+             nothing recorded"
+        );
+        return Ok(());
+    };
+    let key = crate::pg::zuordnungsermaechtigung::Schluessel {
+        bkv_mp_id,
+        lf_mp_id,
+        bilanzkreis,
+        bilanzierungsgebiet,
+        zeitreihentyp,
+    };
+    if pid == 55_071 {
+        debug!(%lf_mp_id, %bilanzkreis, %datum, "event_ingest: Zuordnungsermächtigung aktiviert");
+        return crate::pg::zuordnungsermaechtigung::aktivieren(conn, tenant, key, datum).await;
+    }
+    let nachrichtendatum = text("nachrichtendatum").and_then(parse_civil_date);
+    let ergebnis = crate::pg::zuordnungsermaechtigung::deaktivieren(
+        conn,
+        tenant,
+        key,
+        datum,
+        nachrichtendatum,
+    )
+    .await?;
+    if ergebnis == crate::pg::zuordnungsermaechtigung::Deaktivierung::NichtsAktiv {
+        // MaBiS Kap. 10.3.1: „Die zu deaktivierende Zuordnungsermächtigung ist
+        // noch aktiv" is the 55072's precondition; Kap. 10.3.2 Nr. 2 has the NB
+        // clear a breach manually with the BKV.
+        warn!(
+            %bkv_mp_id, %lf_mp_id, %bilanzkreis, %bilanzierungsgebiet, %zeitreihentyp, %datum,
+            "event_ingest: 55072 deactivates no active Zuordnungsermächtigung — clear with the BKV"
+        );
+    }
+    Ok(())
 }
 
 const ANMELDUNG_PIDS: &[u32] = &[55_001, 55_077, 44_001];

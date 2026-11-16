@@ -1,13 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button as AriaButton, Link } from "react-aria-components";
+import { disclosed } from "../app/disclosure";
 import { useRolle } from "../app/rollen";
 import { type Hinweis, hinweise } from "../data/agent";
 import { FristUhr } from "../design/FristUhr";
 import { Icon } from "../design/Icon";
 import type { Instant } from "../format/brands";
 import { formatCount } from "../format/count";
-import { useT } from "../i18n";
+import { eintrag, useT } from "../i18n";
 import { Bewertung } from "./Bewertung";
 
 const STORE = "mako-desk.ausgeblendet";
@@ -38,30 +39,30 @@ function Zeile({ h, onAusblenden }: { h: Hinweis; onAusblenden: (() => void) | u
   const k = t.hinweise;
   const dringend = h.prioritaet === "urgent";
   return (
-    <li className="flex gap-3 border-b border-ai-border py-3 last:border-b-0">
+    <li className="flex gap-3 border-b border-separator py-3 last:border-b-0">
       <span
         aria-hidden="true"
         className={`mt-1.5 size-2 shrink-0 rounded-full ${dringend ? "bg-critical" : "bg-ai"}`}
       />
       <div className="min-w-0 flex-1">
-        <p className="m-0 flex flex-wrap items-center gap-x-2 text-caption font-semibold text-ai">
+        <p className="m-0 flex flex-wrap items-center gap-x-2 text-headline text-text">
           {h.titel ?? h.skill ?? k.assistent}
           {dringend && <span className="text-critical">{k.dringend}</span>}
         </p>
-        <p className="m-0 mt-0.5 text-callout text-text italic">{h.text}</p>
+        <p className="m-0 mt-0.5 text-body text-text">{disclosed(h.text)}</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {h.anker.map((a) =>
             a.art === "process" ? (
-              <span key={a.wert} className="font-mono text-caption text-text-2">
+              <span key={a.wert} className="text-caption text-text-2">
                 {k.prozess(a.wert)}
               </span>
             ) : (
               <Link
                 key={a.wert}
                 href={`/prozess?key=${a.wert}`}
-                className="focus-ring inline-flex h-6 items-center gap-1 rounded-full border border-ai-border bg-surface px-2 text-caption text-text no-underline data-[hovered]:bg-fill"
+                className="focus-ring inline-flex h-6 items-center gap-1 rounded-full border border-separator bg-surface px-2 text-caption text-text no-underline data-[hovered]:bg-fill"
               >
-                {k.anker[a.art] ?? a.art} <span className="font-mono">{a.wert}</span>
+                {eintrag(k.anker, a.art)} <span>{a.wert}</span>
               </Link>
             ),
           )}
@@ -102,6 +103,7 @@ export function Hinweise({ nurFuer }: { nurFuer?: string[] }) {
   const { rolle } = useRolle();
   const [ausgeblendet, setAusgeblendet] = useAusgeblendet();
   const [alle, setAlle] = useState(false);
+  const [offen, setOffen] = useState(false);
   const rows = useQuery({
     queryKey: [rolle, "agentd", "hinweise"],
     queryFn: hinweise,
@@ -119,48 +121,57 @@ export function Hinweise({ nurFuer }: { nurFuer?: string[] }) {
   // An unreachable assistant hides this section: the rest of the Desk works.
   if (!rows.data || passend.length === 0) return null;
 
+  // Folded to one line under the work; it opens on a press.
   return (
-    <section
-      aria-labelledby="hinweise"
-      className="squircle rounded-panel border border-ai-border bg-ai-fill px-5 py-3"
-    >
-      <h2
-        id="hinweise"
-        className="m-0 flex items-center gap-1.5 py-1 text-callout font-semibold text-ai"
-      >
-        <Icon name="sparkle" size={14} />
-        {k.titel}
-        <span className="font-normal text-text-2">{formatCount(sichtbar.length)}</span>
-      </h2>
-      <ul className="m-0 list-none p-0">
-        {sichtbar.map((h) => (
-          <Zeile
-            key={h.task}
-            h={h}
-            onAusblenden={h.skill ? () => setAusgeblendet(h.skill as string, true) : undefined}
-          />
-        ))}
-      </ul>
-      {versteckt > 0 && (
+    <section aria-labelledby="hinweise" className="border-l-2 border-ai pl-4">
+      <h2 id="hinweise" className="m-0">
         <AriaButton
-          onPress={() => setAlle(!alle)}
-          className="focus-ring mt-1 mb-1 rounded-full text-caption text-text-2 data-[hovered]:text-text"
+          onPress={() => setOffen(!offen)}
+          aria-expanded={offen}
+          className="focus-ring flex items-center gap-1.5 rounded-[6px] py-1 text-headline text-text data-[hovered]:text-text-2"
         >
-          {alle ? k.wiederVerbergen : k.ausgeblendet(formatCount(versteckt))}
+          <Icon name="sparkle" size={13} className="text-ai" />
+          {k.count(sichtbar.length, formatCount(sichtbar.length))}
+          <Icon
+            name="chevron"
+            size={12}
+            className={`text-text-2 transition-transform ${offen ? "rotate-90" : ""}`}
+          />
         </AriaButton>
-      )}
-      {alle && ausgeblendet.length > 0 && (
-        <p className="m-0 mb-2 flex flex-wrap gap-2 text-caption text-text-2">
-          {ausgeblendet.map((s) => (
+      </h2>
+      {offen && (
+        <>
+          <ul className="m-0 list-none p-0">
+            {sichtbar.map((h) => (
+              <Zeile
+                key={h.task}
+                h={h}
+                onAusblenden={h.skill ? () => setAusgeblendet(h.skill as string, true) : undefined}
+              />
+            ))}
+          </ul>
+          {versteckt > 0 && (
             <AriaButton
-              key={s}
-              onPress={() => setAusgeblendet(s, false)}
-              className="focus-ring rounded-full border border-ai-border px-2 data-[hovered]:bg-fill"
+              onPress={() => setAlle(!alle)}
+              className="focus-ring mt-1 mb-1 rounded-full text-caption text-text-2 data-[hovered]:text-text"
             >
-              {k.einblenden(titelVon.get(s) ?? k.faehigkeit)}
+              {alle ? k.wiederVerbergen : k.ausgeblendet(formatCount(versteckt))}
             </AriaButton>
-          ))}
-        </p>
+          )}
+          {alle && ausgeblendet.length > 0 && (
+            <p className="m-0 mb-2 flex flex-wrap gap-2 text-caption text-text-2">
+              {ausgeblendet.map((s) => (
+                <AriaButton
+                  key={s}
+                  onPress={() => setAusgeblendet(s, false)}
+                  className="focus-ring rounded-full border border-separator px-2 data-[hovered]:bg-fill"
+                >
+                  {k.einblenden(titelVon.get(s) ?? k.faehigkeit)}
+                </AriaButton>
+              ))}
+            </p>
+          )}
+        </>
       )}
     </section>
   );

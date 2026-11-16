@@ -6,6 +6,8 @@
 -- contract fact, agreed under § 41 Abs. 5 EnWG, and lives in `vertragd`.
 -- `epex_prices`: hourly EPEX Spot day-ahead prices for §41a dynamic tariffs.
 -- `angebote`: formal B2B quotation workflow (C&I / RLM customers).
+-- `endkunden_angebote`: the frozen, all-in priced B2C offer an online order
+-- cites by id and hash (append-only).
 --
 -- All prices are user-defined in data.tarifpreise.
 -- productd contains no hardcoded commercial rates.
@@ -319,3 +321,68 @@ CREATE INDEX angebote_tenant_status ON angebote (tenant, lf_mp_id, status);
 CREATE INDEX angebote_kunden        ON angebote (kunden_id) WHERE kunden_id IS NOT NULL;
 CREATE INDEX angebote_gueltig       ON angebote (gueltig_bis)
     WHERE status IN ('ANGELEGT', 'VERSANDT');
+
+-- ── Endkunden-Angebote (the frozen B2C offer) ─────────────────────────────────
+--
+-- The binding offer an online order is placed against: the product version, the
+-- Netzbetreiber's Netzentgelte, Messentgelt and Konzessionsabgabe valid at the
+-- Lieferbeginn, the dated taxes and Umlagen, the Jahreskosten and the monthly
+-- Abschlag — frozen, with the SHA-256 of their RFC 8785 canonical JSON. The
+-- order (`vertragd` `POST /api/v1/bestellungen`) names the offer by id and hash,
+-- so a row must never change after it is written and must stay readable after
+-- it expired: an order is proven against exactly these bytes.
+--
+-- `kanonisch` is the hashed body itself. The answer of
+-- `GET /api/v1/endkunden-angebote/{id}` is read back out of it, so a third party
+-- recomputing the hash over what it was served reproduces `content_sha256`; the
+-- typed columns beside it exist for queries and cannot drift from it, because
+-- both are written once by the same insert.
+CREATE TABLE endkunden_angebote (
+    id                         UUID          PRIMARY KEY,
+    tenant                     TEXT          NOT NULL,
+    lf_mp_id                   TEXT          NOT NULL,
+    product_code               TEXT          NOT NULL,
+    -- SHA-256 of the product's `data` (RFC 8785) — the Preisblatt version priced.
+    product_version            TEXT          NOT NULL CHECK (product_version ~ '^[0-9a-f]{64}$'),
+    sparte                     TEXT          NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
+    -- Check digit verified before insert; NULL when the caller named the NB.
+    malo_id                    TEXT          CHECK (malo_id IS NULL OR malo_id ~ '^[0-9]{11}$'),
+    nb_mp_id                   TEXT          NOT NULL,
+    verbrauch_kwh              NUMERIC(14,3) NOT NULL CHECK (verbrauch_kwh > 0),
+    gewuenschter_lieferbeginn  DATE          NOT NULL,
+    lieferbeginn_fruehestens   DATE          NOT NULL,
+    -- Every price line with its source (product version, marktd sheet, dated series).
+    preise                     JSONB         NOT NULL,
+    jahreskosten_brutto_eur    NUMERIC(16,2) NOT NULL,
+    abschlag_monat_brutto_eur  NUMERIC(16,2) NOT NULL,
+    gueltig_bis                TIMESTAMPTZ   NOT NULL,
+    kanonisch                  BYTEA         NOT NULL,
+    -- The hash is held to the bytes by the schema, not only by the writer.
+    content_sha256             TEXT          NOT NULL
+                               CHECK (content_sha256 = encode(sha256(kanonisch), 'hex')),
+    created_at                 TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE endkunden_angebote IS
+    'Frozen B2C offer. Append-only: an online order is proven against these '
+    'bytes by id and content_sha256, so no row is updated or deleted.';
+
+CREATE INDEX endkunden_angebote_tenant ON endkunden_angebote (tenant, created_at DESC);
+
+CREATE OR REPLACE FUNCTION endkunden_angebote_unveraenderlich() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RAISE EXCEPTION 'endkunden_angebote is append-only: % refused', TG_OP
+        USING ERRCODE = 'restrict_violation';
+END;
+$$;
+
+CREATE TRIGGER endkunden_angebote_append_only
+    BEFORE UPDATE OR DELETE ON endkunden_angebote
+    FOR EACH ROW EXECUTE FUNCTION endkunden_angebote_unveraenderlich();
+
+-- A row trigger does not fire on TRUNCATE.
+CREATE TRIGGER endkunden_angebote_no_truncate
+    BEFORE TRUNCATE ON endkunden_angebote
+    FOR EACH STATEMENT EXECUTE FUNCTION endkunden_angebote_unveraenderlich();

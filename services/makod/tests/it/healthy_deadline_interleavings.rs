@@ -257,12 +257,14 @@ fn geli_gas_lieferbeginn_survives_every_interleaving() {
                     }],
                     ..Default::default()
                 },
+                abmeldungsanfrage: None,
             },
             C::ReceiveGnbAntwort {
                 response_pid: pid(44_014),
                 accepted: true,
                 reason: None,
                 antwort_code: None,
+                zuordnungsende: None,
             },
         ],
         external: &[(ANTWORT, 0)],

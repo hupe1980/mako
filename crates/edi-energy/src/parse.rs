@@ -11,9 +11,9 @@
 /// let report = msg.validate().unwrap();
 /// println!("valid: {}", report.is_valid());
 /// ```
-use std::io::{BufReader, Read};
+use std::io::{BufRead as _, BufReader, Read};
 
-use edifact_rs::{MessageWindows, OwnedSegment, ReaderConfig, from_bufread_with_config};
+use edifact::{MessageWindows, OwnedSegment, ReaderConfig, from_bufread_with_config};
 
 use crate::{AnyMessage, Error, MessageType};
 
@@ -44,17 +44,17 @@ fn sanitize_release_code(s: &str) -> std::borrow::Cow<'_, str> {
 /// as invalid text. Party names, addresses and `FTX` free text carry umlauts
 /// routinely, so this is the common case rather than an edge one.
 ///
-/// [`edifact_rs::decode_interchange`] reads the repertoire out of `UNB` S001
+/// [`edifact::decode_interchange`] reads the repertoire out of `UNB` S001
 /// DE 0001 and transcodes. It returns [`Cow::Borrowed`] when the payload is
 /// already ASCII or `UNOY` (UTF-8), so the zero-copy path is untouched for the
 /// interchanges this does not affect — which is most of them.
 ///
-/// `UNOX` and `KECA` are refused by `edifact-rs` rather than mis-decoded; that
+/// `UNOX` and `KECA` are refused by `edifact` rather than mis-decoded; that
 /// surfaces here as an ordinary parse error.
 ///
 /// [`Cow::Borrowed`]: std::borrow::Cow::Borrowed
 fn decode_repertoire(input: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, Error> {
-    edifact_rs::decode_interchange(input).map_err(Error::Parse)
+    edifact::decode_interchange(input).map_err(Error::Parse)
 }
 
 // ── PID source lookup ─────────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ pub(crate) fn resolve_pid_source_pub(
 
 /// Default per-segment byte limit for [`ParseConfig`].
 ///
-/// 64 KiB matches the built-in limit of `edifact_rs::from_bytes` and guards
+/// 64 KiB matches the built-in limit of `edifact::from_bytes` and guards
 /// against maliciously crafted oversized segments.
 pub const DEFAULT_MAX_SEGMENT_BYTES: usize = 64 * 1024;
 
@@ -132,20 +132,20 @@ pub struct ParseConfig {
     pub max_messages_per_interchange: Option<usize>,
     /// Stop parsing after this many UNH/UNT message pairs have been read.
     ///
-    /// Maps directly to [`edifact_rs::ReaderConfig::max_messages`] (0.11.0+).
+    /// Maps directly to [`edifact::ReaderConfig::max_messages`] (0.11.0+).
     /// Useful for sampling large interchanges — e.g., `max_messages: Some(1)`
     /// extracts only the first message without reading the rest of the file.
     ///
     /// `None` (the default) means no limit.
     pub max_messages: Option<usize>,
-    /// Maximum number of segments within one message, `UNH` to `UNT`
-    /// inclusive; the envelope does not count.
+    /// Maximum number of bytes within one message, `UNH` to the `UNT`
+    /// terminator inclusive; the envelope does not count.
     ///
-    /// `None` by default, for the reason [`Self::max_segments`] gives. Set, it
-    /// maps to [`edifact_rs::ReaderConfig::max_segments_per_message`] and a
-    /// longer message is refused as `E036`
-    /// ([`edifact_rs::EdifactError::LimitExceeded`]).
-    pub max_segments_per_message: Option<usize>,
+    /// `None` by default: [`Self::max_input_bytes`] already bounds the whole
+    /// interchange. Set, it maps to [`edifact::ReaderConfig::max_message_bytes`]
+    /// and a longer message is refused as `E036`
+    /// ([`edifact::EdifactError::LimitExceeded`]).
+    pub max_message_bytes: Option<u64>,
     /// Reference date used for profile validity lookups during `validate()`.
     ///
     /// When `None` (the default), nothing is disambiguated by date: for a wire
@@ -172,7 +172,7 @@ impl Default for ParseConfig {
             max_segments: None,
             max_input_bytes: Some(10 * 1024 * 1024),
             max_messages_per_interchange: Some(1_000),
-            max_segments_per_message: None,
+            max_message_bytes: None,
             max_messages: None,
             reference_date: None,
         }
@@ -200,9 +200,7 @@ impl ParseConfig {
         if let Some(n) = self.max_messages {
             cfg = cfg.max_messages(n);
         }
-        if let Some(n) = self.max_segments_per_message {
-            cfg = cfg.max_segments_per_message(n);
-        }
+        cfg.max_message_bytes = self.max_message_bytes;
         cfg
     }
 }
@@ -227,7 +225,7 @@ impl ParseConfig {
 pub fn parse_envelope_only(input: &[u8]) -> Result<crate::light_message::LightMessage, Error> {
     let cfg = ParseConfig::default().to_reader_config();
     let input = decode_repertoire(input)?;
-    let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(input.as_ref(), cfg)
+    let segments: Vec<OwnedSegment> = edifact::from_reader_with_config(input.as_ref(), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
     crate::light_message::LightMessage::from_segments(
@@ -294,14 +292,28 @@ pub(crate) fn check_interchange_party_identity(
     Ok(())
 }
 
+/// A buffered `reader` and the decimal mark its `UNA` declares.
+///
+/// The `UNA` is ASCII and leads the input, so the first buffer holds it. An
+/// input whose first read is shorter than a `UNA` reads as `.`, and a `,`
+/// value then fails closed under it.
+fn peek_decimal_mark<R: Read>(reader: R) -> (char, BufReader<R>) {
+    let mut buffered = BufReader::new(reader);
+    let mark = buffered
+        .fill_buf()
+        .map_or('.', crate::decimal::una_decimal_mark);
+    (mark, buffered)
+}
+
 pub(crate) fn parse_with_registry(
     input: &[u8],
     config: ParseConfig,
     registry: &crate::registry::ReleaseRegistry,
 ) -> Result<AnyMessage, Error> {
     let cfg = config.to_reader_config();
+    let decimal_mark = crate::decimal::una_decimal_mark(input);
     let input = decode_repertoire(input)?;
-    let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(input.as_ref(), cfg)
+    let segments: Vec<OwnedSegment> = edifact::from_reader_with_config(input.as_ref(), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
     // Kap. 2.13 — read the envelope parties before `dispatch_message` consumes the
@@ -317,7 +329,7 @@ pub(crate) fn parse_with_registry(
         })
         .unwrap_or_default();
 
-    let message = dispatch_message_on_date(segments, registry, config.reference_date)?;
+    let message = dispatch_message_in(segments, registry, config.reference_date, decimal_mark)?;
     check_interchange_party_identity(&unb_sender, &unb_receiver, &message, 0)?;
     Ok(message)
 }
@@ -373,7 +385,8 @@ pub(crate) fn parse_interchange_impl(
     //
     // A decode failure yields one `Err` and no messages, rather than an empty
     // stream that reads as "the interchange was fine and contained nothing".
-    let (decoded, fatal) = match edifact_rs::decode_reader(BufReader::new(reader)) {
+    let (decimal_mark, reader) = peek_decimal_mark(reader);
+    let (decoded, fatal) = match edifact::decode_reader(reader) {
         Ok(d) => (Some(d), None),
         Err(e) => (None, Some(Error::Parse(e))),
     };
@@ -392,7 +405,7 @@ pub(crate) fn parse_interchange_impl(
                         return Err(Error::TooManyMessages { limit: lim });
                     }
                     let window = window.map_err(Error::Parse)?;
-                    dispatch_message_on_date(window.segments, &registry, reference_date)
+                    dispatch_message_in(window.segments, &registry, reference_date, decimal_mark)
                 })
         }))
 }
@@ -424,7 +437,8 @@ pub(crate) fn parse_interchange_buffered_impl(
     registry: std::sync::Arc<crate::registry::ReleaseRegistry>,
 ) -> Result<(crate::interchange::InterchangeHeader, InterchangeIter), Error> {
     let cfg = config.to_reader_config();
-    let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
+    let (decimal_mark, reader) = peek_decimal_mark(reader);
+    let decoded = edifact::decode_reader(reader).map_err(Error::Parse)?;
     let segments: Vec<OwnedSegment> = from_bufread_with_config(BufReader::new(decoded), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
@@ -445,8 +459,8 @@ pub(crate) fn parse_interchange_buffered_impl(
         .unwrap_or(0);
 
     let msg_iter = MessageWindows::new(segments.into_iter().map(
-        Ok::<_, edifact_rs::EdifactError>
-            as fn(OwnedSegment) -> Result<OwnedSegment, edifact_rs::EdifactError>,
+        Ok::<_, edifact::EdifactError>
+            as fn(OwnedSegment) -> Result<OwnedSegment, edifact::EdifactError>,
     ));
 
     let iter = InterchangeIter {
@@ -461,6 +475,7 @@ pub(crate) fn parse_interchange_buffered_impl(
         unz_checked: false,
         done: false,
         reference_date: config.reference_date,
+        decimal_mark,
     };
 
     Ok((header, iter))
@@ -561,17 +576,19 @@ impl Parser {
     /// Returns `Err` on I/O errors, EDIFACT syntax errors, or unknown message type.
     pub fn parse_reader(&self, reader: impl Read) -> Result<AnyMessage, Error> {
         let cfg = self.config.to_reader_config();
+        let (decimal_mark, reader) = peek_decimal_mark(reader);
         // Transcode from the declared repertoire, as the byte-slice paths do:
         // reading a `UNOC:3` interchange as UTF-8 rejects any message with an
         // umlaut in a party name, which is most of them.
-        let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
+        let decoded = edifact::decode_reader(reader).map_err(Error::Parse)?;
         let segments: Vec<OwnedSegment> = from_bufread_with_config(BufReader::new(decoded), cfg)
             .collect::<Result<_, _>>()
             .map_err(Error::Parse)?;
-        dispatch_message_on_date(
+        dispatch_message_in(
             segments,
             crate::registry::ReleaseRegistry::global(),
             self.config.reference_date,
+            decimal_mark,
         )
     }
 
@@ -594,7 +611,7 @@ impl Parser {
     ) -> Result<crate::light_message::LightMessage, Error> {
         let cfg = self.config.to_reader_config();
         let input = decode_repertoire(input)?;
-        let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(input.as_ref(), cfg)
+        let segments: Vec<OwnedSegment> = edifact::from_reader_with_config(input.as_ref(), cfg)
             .collect::<Result<_, _>>()
             .map_err(Error::Parse)?;
         crate::light_message::LightMessage::from_segments(
@@ -675,7 +692,7 @@ impl Parser {
         reader: impl Read,
     ) -> Result<crate::interchange::InterchangeHeader, Error> {
         let reader_cfg = self.config.to_reader_config();
-        let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
+        let decoded = edifact::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
         let segments: Vec<OwnedSegment> =
             from_bufread_with_config(BufReader::new(decoded), reader_cfg)
                 .collect::<Result<_, _>>()
@@ -702,12 +719,13 @@ impl Parser {
         reader: impl Read,
     ) -> Result<crate::interchange::ParsedInterchange, Error> {
         let reader_cfg = self.config.to_reader_config();
-        let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
+        let (decimal_mark, reader) = peek_decimal_mark(reader);
+        let decoded = edifact::decode_reader(reader).map_err(Error::Parse)?;
         let segments: Vec<OwnedSegment> =
             from_bufread_with_config(BufReader::new(decoded), reader_cfg)
                 .collect::<Result<_, _>>()
                 .map_err(Error::Parse)?;
-        parse_interchange_full_from_segments(segments, &self.config)
+        parse_interchange_full_from_segments(segments, &self.config, decimal_mark)
     }
 }
 
@@ -728,7 +746,7 @@ pub struct InterchangeIter {
         'static,
         std::iter::Map<
             std::vec::IntoIter<OwnedSegment>,
-            fn(OwnedSegment) -> Result<OwnedSegment, edifact_rs::EdifactError>,
+            fn(OwnedSegment) -> Result<OwnedSegment, edifact::EdifactError>,
         >,
     >,
     header: crate::interchange::InterchangeHeader,
@@ -741,6 +759,7 @@ pub struct InterchangeIter {
     unz_checked: bool,
     done: bool,
     reference_date: Option<time::Date>,
+    decimal_mark: char,
 }
 
 impl Iterator for InterchangeIter {
@@ -767,8 +786,12 @@ impl Iterator for InterchangeIter {
 
             let result = (|| {
                 let window = window_result.map_err(Error::Parse)?;
-                let message =
-                    dispatch_message_on_date(window.segments, &self.registry, self.reference_date)?;
+                let message = dispatch_message_in(
+                    window.segments,
+                    &self.registry,
+                    self.reference_date,
+                    self.decimal_mark,
+                )?;
                 // Kap. 2.13 is an authorisation boundary, so it holds on every path
                 // that yields a message.
                 check_interchange_party_identity(
@@ -860,12 +883,28 @@ fn parse_interchange_header_from_segments(
 fn parse_interchange_full_from_segments(
     segments: Vec<OwnedSegment>,
     config: &ParseConfig,
+    decimal_mark: char,
 ) -> Result<crate::interchange::ParsedInterchange, Error> {
-    parse_interchange_full_from_segments_with_registry(
-        segments,
-        config,
-        std::sync::Arc::clone(crate::registry::ReleaseRegistry::global_arc()),
-    )
+    Ok(with_decimal_mark(
+        parse_interchange_full_from_segments_with_registry(
+            segments,
+            config,
+            std::sync::Arc::clone(crate::registry::ReleaseRegistry::global_arc()),
+        )?,
+        decimal_mark,
+    ))
+}
+
+/// `interchange` with the decimal mark its `UNA` declares recorded on every
+/// message.
+fn with_decimal_mark(
+    mut interchange: crate::interchange::ParsedInterchange,
+    decimal_mark: char,
+) -> crate::interchange::ParsedInterchange {
+    for envelope in &mut interchange.messages {
+        envelope.message.set_decimal_mark(decimal_mark);
+    }
+    interchange
 }
 
 /// Arc-registry variant used by [`Platform::parse_interchange_full`].
@@ -875,11 +914,15 @@ pub(crate) fn parse_interchange_full_with_arc_registry(
     registry: std::sync::Arc<crate::registry::ReleaseRegistry>,
 ) -> Result<crate::interchange::ParsedInterchange, Error> {
     let cfg = config.to_reader_config();
+    let decimal_mark = crate::decimal::una_decimal_mark(data);
     let data = decode_repertoire(data)?;
-    let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(data.as_ref(), cfg)
+    let segments: Vec<OwnedSegment> = edifact::from_reader_with_config(data.as_ref(), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
-    parse_interchange_full_from_segments_with_registry(segments, &config, registry)
+    Ok(with_decimal_mark(
+        parse_interchange_full_from_segments_with_registry(segments, &config, registry)?,
+        decimal_mark,
+    ))
 }
 
 #[expect(
@@ -966,9 +1009,8 @@ fn parse_interchange_full_from_segments_with_registry(
     };
 
     // ── Dispatch all messages using MessageWindows ────────────────────────
-    let msg_iter = edifact_rs::MessageWindows::new(
-        segments.into_iter().map(Ok::<_, edifact_rs::EdifactError>),
-    );
+    let msg_iter =
+        edifact::MessageWindows::new(segments.into_iter().map(Ok::<_, edifact::EdifactError>));
 
     let mut messages: Vec<MessageEnvelope> = Vec::new();
     for (index, window_result) in msg_iter.enumerate() {
@@ -1091,6 +1133,19 @@ pub(crate) fn dispatch_message(
     registry: &crate::registry::ReleaseRegistry,
 ) -> Result<AnyMessage, Error> {
     dispatch_message_on_date(segments, registry, None)
+}
+
+/// `dispatch_message_on_date`, recording the interchange's decimal mark
+/// ([`crate::una_decimal_mark`]) on the message.
+pub(crate) fn dispatch_message_in(
+    segments: Vec<OwnedSegment>,
+    registry: &crate::registry::ReleaseRegistry,
+    reference_date: Option<time::Date>,
+    decimal_mark: char,
+) -> Result<AnyMessage, Error> {
+    let mut message = dispatch_message_on_date(segments, registry, reference_date)?;
+    message.set_decimal_mark(decimal_mark);
+    Ok(message)
 }
 
 /// `dispatch_message`, recording the date `validate()` will resolve profiles at.

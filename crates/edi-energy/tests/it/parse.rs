@@ -896,7 +896,7 @@ fn monthly_mscons() -> Vec<u8> {
 fn is_limit(e: &edi_energy::Error) -> bool {
     matches!(
         e,
-        edi_energy::Error::Parse(edifact_rs::EdifactError::LimitExceeded { .. })
+        edi_energy::Error::Parse(edifact::EdifactError::LimitExceeded { .. })
     )
 }
 
@@ -920,25 +920,117 @@ fn a_month_of_quarter_hour_values_is_not_refused_for_its_size() {
     }
 }
 
-/// A per-message limit an operator sets is enforced by edifact-rs, counting
-/// `UNH` to `UNT`: the 8 941-segment message passes at 8 941 and is refused
-/// at 8 940, whatever the envelope adds.
+/// A per-message limit an operator sets is enforced by `edifact`, counting
+/// the bytes from `UNH` to the `UNT` terminator: the message passes at its own
+/// length and is refused one byte short of it, whatever the envelope adds.
 #[cfg(feature = "mscons")]
 #[test]
 fn a_per_message_limit_counts_unh_to_unt() {
     let input = monthly_mscons();
+    let find = |needle: &[u8]| {
+        input
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .expect("segment present")
+    };
+    let unh = find(b"UNH+");
+    let unt = find(b"UNT+");
+    let end = unt
+        + input[unt..]
+            .iter()
+            .position(|&b| b == b'\'')
+            .expect("UNT terminator")
+        + 1;
+    let length = u64::try_from(end - unh).expect("fits");
     let parse = |limit| {
         Platform::with_all_profiles()
             .parse_interchange_with_config(
                 &input[..],
                 ParseConfig {
-                    max_segments_per_message: Some(limit),
+                    max_message_bytes: Some(limit),
                     ..ParseConfig::default()
                 },
             )
             .find_map(Result::err)
     };
-    assert!(parse(8_941).is_none_or(|e| !is_limit(&e)));
-    let refused = parse(8_940).expect("one segment over the limit");
+    assert!(parse(length).is_none_or(|e| !is_limit(&e)));
+    let refused = parse(length - 1).expect("one byte over the limit");
     assert!(is_limit(&refused), "{refused}");
+}
+
+/// Every parse path carries the decimal mark the interchange's `UNA` declares
+/// onto the message, and `.` when there is no `UNA` (Allgemeine Festlegungen
+/// V6.1d Kap. 2.18).
+#[cfg(feature = "utilmd")]
+#[test]
+fn the_una_decimal_mark_reaches_the_message() {
+    let plain = include_str!("../fixtures/utilmd/valid/beispiel_55168_verpflichtungsanfrage.edi");
+    let comma = format!("UNA:+,? '{plain}");
+    let platform = Platform::with_all_profiles();
+
+    assert_eq!(
+        platform.parse(plain.as_bytes()).unwrap().decimal_mark(),
+        '.'
+    );
+    assert_eq!(
+        platform.parse(comma.as_bytes()).unwrap().decimal_mark(),
+        ','
+    );
+    let full = platform.parse_interchange_full(comma.as_bytes()).unwrap();
+    assert_eq!(full.messages[0].message.decimal_mark(), ',');
+    let streamed = platform
+        .parse_interchange(comma.as_bytes())
+        .next()
+        .unwrap()
+        .unwrap();
+    assert_eq!(streamed.decimal_mark(), ',');
+}
+
+/// A numeric Formatbedingung reads its value under the decimal mark the
+/// interchange's `UNA` declares and refuses the other one (Allgemeine
+/// Festlegungen V6.1d Kap. 2.18). DE 6060 of `QTY+11` in PID 55168 carries
+/// `X [914] ∧ [930] ∧ [955]` — „> 0", at most two Nachkommastellen, „< 100":
+/// `1,5` satisfies all three under `UNA:+,? '` and is no number under `.`.
+#[cfg(feature = "utilmd")]
+#[test]
+fn a_numeric_formatbedingung_reads_the_unas_decimal_mark() {
+    use edi_energy::EdiEnergyMessage;
+    let plain = include_str!("../fixtures/utilmd/valid/beispiel_55168_verpflichtungsanfrage.edi");
+    assert!(plain.contains("QTY+11:50:P1'"), "fixture changed");
+    let platform = Platform::with_all_profiles();
+    let findings = |wire: &str| -> Vec<String> {
+        let report = platform.parse(wire.as_bytes()).unwrap().validate().unwrap();
+        report
+            .errors()
+            .iter()
+            .chain(report.warnings())
+            .map(|i| i.message.clone())
+            .filter(|m| m.contains("Formatbedingung"))
+            .collect()
+    };
+    let fractional = plain.replace("QTY+11:50:P1'", "QTY+11:1,5:P1'");
+
+    let comma = findings(&format!("UNA:+,? '{fractional}"));
+    assert!(comma.is_empty(), "UNA declares `,`: {comma:?}");
+
+    for wire in [format!("UNA:+.? '{fractional}"), fractional.clone()] {
+        let dot = findings(&wire);
+        assert!(
+            dot.iter()
+                .any(|m| m.contains("[914]") && m.contains("not a number")),
+            "UNA declares `.`, so `1,5` is no number: {dot:?}"
+        );
+    }
+}
+
+/// A parse error names wire bytes escaped: the transport doors log it with
+/// `%e`, so a control character carried into its text would forge log lines.
+#[test]
+fn a_parse_error_names_no_control_character() {
+    let hostile: &[u8] = b"UNH+1+UTILMD:D:11A:UN:S2.1'\x1b[2J\nFAKE LINE\x07+x'UNT+3+1'";
+    let error = Platform::with_all_profiles()
+        .parse(hostile)
+        .expect_err("not EDIFACT");
+    let text = error.to_string();
+    assert!(!text.chars().any(char::is_control), "{text:?}");
 }

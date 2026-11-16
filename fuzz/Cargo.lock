@@ -577,9 +577,9 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "edi-energy"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
- "edifact-rs",
+ "edifact",
  "rubo4e",
  "serde",
  "serde_json",
@@ -608,22 +608,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "edifact-rs"
-version = "0.18.0"
+name = "edifact"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52048ed0677e360d89fa90d6b4a3017edc03626125ea8f7d02e1250646f8557b"
+checksum = "b7b43453d204faa251573f39a83df6e4d9643a4e2884496786767274356f3cff"
 dependencies = [
- "edifact-rs-derive",
+ "edifact-derive",
  "memchr",
  "smallvec",
  "thiserror 2.0.21",
+ "time",
 ]
 
 [[package]]
-name = "edifact-rs-derive"
-version = "0.18.0"
+name = "edifact-derive"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "094f587ad16044b1468215cd41eccae3caa7116042f681b6d49a0311ba4dbf68"
+checksum = "02e55844b72b119220703f56df5472109680e222b448a15668179b2f0118a069"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -632,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "billing",
  "grid-billing",
@@ -658,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -871,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "billing",
  "rust_decimal",
@@ -1294,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -1312,11 +1313,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.33.1"
+version = "0.34.0"
 
 [[package]]
 name = "mako-fristen"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "time",
  "time-tz",

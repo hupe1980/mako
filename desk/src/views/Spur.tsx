@@ -84,7 +84,7 @@ export function StoppKnopf({ lauf, run }: { lauf: Lauf | undefined; run: string 
       <Icon name="stop" size={12} />
       {stoppt ? s.wirdGestoppt : s.stoppen}
       {!stoppt && (
-        <kbd aria-hidden className="font-sans text-caption font-medium">
+        <kbd aria-hidden className="font-sans text-caption">
           {s.esc}
         </kbd>
       )}
@@ -113,7 +113,7 @@ function SchrittZeile({ s, nr, abgebrochen }: { s: Schritt; nr: number; abgebroc
       {...ziel}
       data-schritt={s.seq}
       tabIndex={-1}
-      className="einblenden flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[6px] text-callout text-text-2 outline-none"
+      className="einblenden flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[6px] text-body text-text-2 outline-none"
     >
       <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-surface text-caption font-semibold text-ai tabular-nums">
         {nr}
@@ -126,14 +126,14 @@ function SchrittZeile({ s, nr, abgebrochen }: { s: Schritt; nr: number; abgebroc
       ) : (
         <span
           title={k.verborgenTitel}
-          className="inline-flex h-5 items-center gap-1 rounded-full border border-separator px-2 text-caption font-medium text-text-2"
+          className="inline-flex h-5 items-center gap-1 rounded-full border border-separator px-2 text-caption text-text-2"
         >
           <Icon name="lock" size={11} />
           {k.verborgen}
         </span>
       )}
       {fehlgeschlagen && (
-        <span className="inline-flex h-5 items-center rounded-full bg-fill px-2 text-caption font-medium text-text-2">
+        <span className="inline-flex h-5 items-center rounded-full bg-fill px-2 text-caption text-text-2">
           {k.nichtBeantwortet}
         </span>
       )}
@@ -200,7 +200,7 @@ export function SpurAnsicht({
         <AriaButton
           onPress={() => setOffen((o) => !o)}
           aria-expanded={offen}
-          className="focus-ring inline-flex h-6 items-center gap-1 rounded-full px-2 text-caption font-medium text-text-2 data-[hovered]:bg-fill data-[hovered]:text-text"
+          className="focus-ring inline-flex h-6 items-center gap-1 rounded-full px-2 text-caption text-text-2 data-[hovered]:bg-fill data-[hovered]:text-text"
         >
           {quittung(schritte)}
           <span aria-hidden className={`morph inline-block ${offen ? "rotate-90" : ""}`}>
@@ -209,7 +209,7 @@ export function SpurAnsicht({
         </AriaButton>
       )}
       {stand === "live" && schritte.length === 0 && (
-        <p className="m-0 text-callout text-text-2">{t.fragen.ueberlegt}</p>
+        <p className="m-0 text-body text-text-2">{t.fragen.ueberlegt}</p>
       )}
       {zeigen && schritte.length > 0 && (
         <ol
@@ -223,7 +223,7 @@ export function SpurAnsicht({
         </ol>
       )}
       {stand === "abgebrochen" && (
-        <p className="m-0 mt-2 text-callout text-text-2">{t.spur.gestoppt}</p>
+        <p className="m-0 mt-2 text-body text-text-2">{t.spur.gestoppt}</p>
       )}
     </div>
   );

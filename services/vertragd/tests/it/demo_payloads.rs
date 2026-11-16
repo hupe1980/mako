@@ -81,7 +81,7 @@ fn the_o2c_kunde_payload_deserialises_and_names_somebody() {
     assert_eq!(stored["_typ"], "GESCHAEFTSPARTNER");
 }
 
-/// The shape that shipped is a refusal now, not a silent `201`.
+/// A flat customer payload is a refusal, not a silent `201`.
 #[test]
 fn the_flat_customer_payload_is_refused_by_name() {
     let err = serde_json::from_value::<CreateKundeInput>(serde_json::json!({

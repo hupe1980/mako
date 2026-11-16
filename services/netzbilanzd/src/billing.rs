@@ -29,6 +29,8 @@ use grid_billing::{
 };
 use invoic_checker::{InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore};
 use mako_markt::marktd_client::MarktdClient;
+use mako_markt::referenzreihen::{REFERENZWERT_FEHLT, ReferenzwertFehlt, Reihe, Zeitraum};
+use mako_service::{ApiError, ApiResult};
 use rust_decimal::Decimal;
 
 use crate::request::{BillingPositionRequest, SettlementRequest};
@@ -70,6 +72,16 @@ pub struct Resolver<'a> {
     /// identical round-trips to `marktd` before the transaction opens. The memo
     /// is per-run and dropped with it, so a later run reads the current series.
     prices: std::collections::HashMap<(Sparte, i32, u8), (Decimal, Decimal)>,
+    /// Published KAV Strom Grenzpreise already read during this run, by the
+    /// Kalenderjahr they were published for.
+    grenzpreise: std::collections::HashMap<i32, Decimal>,
+}
+
+/// marktd's `422 referenzwert_fehlt`, answered on as the caller's own refusal.
+fn referenzwert_fehlt(f: &ReferenzwertFehlt) -> ApiError {
+    ApiError::unprocessable(f.to_string())
+        .with_code(REFERENZWERT_FEHLT)
+        .with_fields(serde_json::to_value(f).unwrap_or_default())
 }
 
 impl<'a> Resolver<'a> {
@@ -79,6 +91,7 @@ impl<'a> Resolver<'a> {
         Self {
             marktd,
             prices: std::collections::HashMap::new(),
+            grenzpreise: std::collections::HashMap::new(),
         }
     }
 
@@ -89,9 +102,91 @@ impl<'a> Resolver<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error when a price or profile the request left open cannot be
-    /// resolved.
-    pub async fn resolve(&mut self, position: &mut BillingPositionRequest) -> anyhow::Result<()> {
+    /// `422` when a price or profile the request left open cannot be resolved —
+    /// `422 referenzwert_fehlt` when marktd holds no KAV Grenzpreis for the
+    /// year the comparison needs — and the upstream error when marktd fails.
+    pub async fn resolve(&mut self, position: &mut BillingPositionRequest) -> ApiResult<()> {
+        match position.settlement {
+            SettlementRequest::Mmm(_) => self
+                .resolve_mmm(position)
+                .await
+                .map_err(|e| ApiError::unprocessable(format!("{e:#}"))),
+            SettlementRequest::Nne(_) => self.resolve_grenzpreis(position).await,
+            _ => Ok(()),
+        }
+    }
+
+    /// KAV § 2 Abs. 4 — the Strom Grenzpreis a Sondervertragskunde charged a
+    /// Konzessionsabgabe is compared against: „Maßgeblich ist der in der
+    /// amtlichen Statistik des Bundes jeweils für das vorletzte Kalenderjahr
+    /// veröffentlichte Wert ohne Umsatzsteuer"
+    /// (`regulatories/gesetze/KAV_2_2026-11-10.md`). Read from marktd's
+    /// `kav_grenzpreis_strom` for the settled Kalenderjahr minus two, and
+    /// refused when marktd holds none — never skipped, since without it the
+    /// prohibition cannot be ruled out.
+    ///
+    /// A Grenzpreis the caller states is one the Versorgungsunternehmen and the
+    /// Gemeinde agreed; Satz 3 admits only „höhere Grenzpreise", so one below
+    /// the published value is refused. Gas is left to the caller: the Abs. 5
+    /// Nr. 2 Grenzpreis is 1,50 ct/kWh scaled by Durchschnittserlöse, which is
+    /// not derived here.
+    async fn resolve_grenzpreis(&mut self, position: &mut BillingPositionRequest) -> ApiResult<()> {
+        let jahr = position.period_from.year();
+        let ueber_jahreswechsel = position.period_to.year() != jahr;
+        let SettlementRequest::Nne(nne) = &mut position.settlement else {
+            return Ok(());
+        };
+        let Some(ka) = nne.konzessionsabgabe.as_mut() else {
+            return Ok(());
+        };
+        if nne.sparte != Sparte::Strom || !ka.braucht_grenzpreisvergleich() {
+            return Ok(());
+        }
+        if ueber_jahreswechsel {
+            return Err(ApiError::unprocessable(
+                "KAV § 2 Abs. 4 compares the Durchschnittspreis im Kalenderjahr, and this period \
+                 spans two — split it at 1 January",
+            )
+            .with_code("grenzpreis_jahr_uneindeutig"));
+        }
+        let bezugsjahr = jahr - 2;
+        let veroeffentlicht = match self.grenzpreise.get(&bezugsjahr) {
+            Some(v) => *v,
+            None => {
+                let w = self
+                    .marktd
+                    .referenzwert(
+                        Reihe::KavGrenzpreisStrom,
+                        Zeitraum::Jahr { jahr: bezugsjahr },
+                        "",
+                        None,
+                    )
+                    .await
+                    .map_err(|e| ApiError::upstream("marktd", e))?
+                    .map_err(|f| referenzwert_fehlt(&f))?;
+                self.grenzpreise.insert(bezugsjahr, w.wert);
+                w.wert
+            }
+        };
+        match ka.grenzpreis_ct_per_kwh {
+            Some(vereinbart) if vereinbart < veroeffentlicht => {
+                Err(ApiError::unprocessable(format!(
+                    "the stated Grenzpreis {vereinbart} ct/kWh lies below the published \
+                     {veroeffentlicht} ct/kWh for {bezugsjahr} — KAV § 2 Abs. 4 Satz 3 lets \
+                     Versorgungsunternehmen and Gemeinde agree only a higher one"
+                ))
+                .with_code("grenzpreis_unter_veroeffentlichtem"))
+            }
+            Some(_) => Ok(()),
+            None => {
+                ka.grenzpreis_ct_per_kwh = Some(veroeffentlicht);
+                Ok(())
+            }
+        }
+    }
+
+    /// The MMM prices and the Lastprofil an MMM position left open.
+    async fn resolve_mmm(&mut self, position: &mut BillingPositionRequest) -> anyhow::Result<()> {
         let SettlementRequest::Mmm(mmm) = &position.settlement else {
             return Ok(());
         };
@@ -224,7 +319,9 @@ pub fn settle(position: &BillingPositionRequest) -> anyhow::Result<SettlementRes
             arbeitspreis: nne.arbeitspreis.clone(),
             leistungspreis: nne.leistungspreis,
             grundpreis: nne.grundpreis,
-            konzessionsabgabe: nne.konzessionsabgabe,
+            konzessionsabgabe: nne
+                .konzessionsabgabe
+                .map(crate::request::KonzessionsabgabeAngabe::to_engine),
             blindarbeit: nne.blindarbeit,
             gas_kapazitaet: nne.gas_kapazitaet,
             letztverbrauchergruppe: nne.letztverbrauchergruppe,
@@ -738,8 +835,7 @@ mod tests {
     use super::*;
     use crate::request::{GasAwhRequest, MmmRequest, NneRequest};
     use grid_billing::{
-        ArbeitspreisModell, AwhPositionInput, KaKundengruppe, Konzessionsabgabe, MengePreis,
-        SettlementType,
+        ArbeitspreisModell, AwhPositionInput, KaKundengruppe, MengePreis, SettlementType,
     };
     use rust_decimal::dec;
 
@@ -922,14 +1018,12 @@ mod tests {
             let SettlementRequest::Nne(nne) = &mut pos.settlement else {
                 unreachable!()
             };
-            nne.konzessionsabgabe = Some(Konzessionsabgabe {
+            nne.konzessionsabgabe = Some(crate::request::KonzessionsabgabeAngabe {
                 satz_ct_per_kwh: dec!(1.32),
                 klasse,
                 niederspannung: None,
-                grenzpreis: Some(grid_billing::Grenzpreisvergleich {
-                    durchschnittspreis_ct_per_kwh: dec!(24.80),
-                    grenzpreis_ct_per_kwh: dec!(18.20),
-                }),
+                durchschnittspreis_ct_per_kwh: Some(dec!(24.80)),
+                grenzpreis_ct_per_kwh: Some(dec!(18.20)),
             });
             settle(&pos).expect("settle")
         };
@@ -1640,5 +1734,219 @@ mod tests {
             ..awh
         };
         assert!(refuse_invalid("AWH", "51238696781", validate_gas_awh_input(&ok)).is_ok());
+    }
+
+    // ── KAV § 2 Abs. 4: the Strom Grenzpreis from marktd ─────────────────────
+
+    /// A marktd that answers every request with `status` and `body`, and
+    /// records each request line it was sent.
+    async fn marktd_answering(
+        status: &'static str,
+        body: serde_json::Value,
+    ) -> (Arc<MarktdClient>, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let body = body.to_string();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let line = String::from_utf8_lossy(&request)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+                log.lock().expect("log").push(line);
+                let _ = sock
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n\
+                             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        let client = MarktdClient::new(
+            format!("http://{addr}"),
+            secrecy::SecretString::from("test-key"),
+            reqwest::Client::new(),
+        );
+        (Arc::new(client), seen)
+    }
+
+    /// The published value marktd serves for 2025 — a test figure, not the
+    /// Destatis one.
+    fn grenzpreis_2025() -> serde_json::Value {
+        serde_json::json!({
+            "id": "00000000-0000-4000-8000-000000000001",
+            "reihe": "kav_grenzpreis_strom",
+            "dim": "",
+            "gilt_von": "2024-12-31T23:00:00Z",
+            "gilt_bis": "2025-12-31T23:00:00Z",
+            "wert": "18.20",
+            "status": "endgueltig",
+            "quelle_url": "https://www-genesis.destatis.de/",
+            "veroeffentlicht_am": null,
+            "dokument_sha256": null,
+            "herkunft": "import",
+            "erfasst_von": "2026-11-16T10:00:00Z",
+            "erfasst_bis": null
+        })
+    }
+
+    /// A 2027 Strom Sondervertragskunde charged a Konzessionsabgabe, with the
+    /// caller's Durchschnittspreis and `grenzpreis` as stated.
+    fn sondervertrag_2027(grenzpreis: Option<Decimal>) -> BillingPositionRequest {
+        let mut pos = nne(Sparte::Strom);
+        pos.period_from = time::macros::date!(2027 - 01 - 01);
+        pos.period_to = time::macros::date!(2027 - 01 - 31);
+        let SettlementRequest::Nne(n) = &mut pos.settlement else {
+            unreachable!()
+        };
+        n.konzessionsabgabe = Some(crate::request::KonzessionsabgabeAngabe {
+            satz_ct_per_kwh: dec!(0.11),
+            klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            durchschnittspreis_ct_per_kwh: Some(dec!(24.80)),
+            grenzpreis_ct_per_kwh: grenzpreis,
+        });
+        pos
+    }
+
+    fn grenzpreis_of(pos: &BillingPositionRequest) -> Option<Decimal> {
+        let SettlementRequest::Nne(n) = &pos.settlement else {
+            unreachable!()
+        };
+        n.konzessionsabgabe.and_then(|k| k.grenzpreis_ct_per_kwh)
+    }
+
+    /// KAV § 2 Abs. 4: „Maßgeblich ist der … für das vorletzte Kalenderjahr
+    /// veröffentlichte Wert" — a 2027 settlement reads 2025, fills it in, and
+    /// settles without a caller-supplied Grenzpreis.
+    #[tokio::test]
+    async fn the_strom_grenzpreis_is_read_for_the_vorletzte_kalenderjahr() {
+        let (marktd, seen) = marktd_answering("200 OK", grenzpreis_2025()).await;
+        let mut pos = sondervertrag_2027(None);
+        Resolver::new(&marktd)
+            .resolve(&mut pos)
+            .await
+            .expect("resolves");
+        assert_eq!(grenzpreis_of(&pos), Some(dec!(18.20)));
+        let line = seen.lock().expect("log")[0].clone();
+        assert!(
+            line.contains("/api/v1/referenzreihen/kav_grenzpreis_strom/wert")
+                && line.contains("jahr=2025"),
+            "{line}"
+        );
+        let settled = settle(&pos).expect("a case without a supplied Grenzpreis is computed");
+        assert!(
+            !settled
+                .warnings
+                .iter()
+                .any(|w| w.code == "KA_UNTER_GRENZPREIS"),
+            "24.80 lies above 18.20"
+        );
+    }
+
+    /// No published value for the vorletzte Kalenderjahr refuses by name —
+    /// never a skipped comparison, which could bill an Abgabe the Verordnung
+    /// forbids.
+    #[tokio::test]
+    async fn a_missing_grenzpreis_is_refused_referenzwert_fehlt() {
+        let (marktd, _) = marktd_answering(
+            "422 Unprocessable Entity",
+            serde_json::json!({
+                "error": "Unprocessable Entity",
+                "detail": "Referenzreihe kav_grenzpreis_strom hat keinen Wert für 2025",
+                "code": "referenzwert_fehlt",
+                "reihe": "kav_grenzpreis_strom",
+                "dim": "",
+                "zeitraum": "2025",
+                "faelligkeit": "KAV § 2 Abs. 4 nennt keinen Veröffentlichungstermin"
+            }),
+        )
+        .await;
+        let mut pos = sondervertrag_2027(None);
+        let err = Resolver::new(&marktd)
+            .resolve(&mut pos)
+            .await
+            .expect_err("no Grenzpreis for 2025");
+        assert_eq!(err.code(), Some("referenzwert_fehlt"));
+        assert!(err.to_string().contains("2025"), "{err}");
+    }
+
+    /// § 2 Abs. 4 Satz 3 admits only a higher agreed Grenzpreis: one below
+    /// the published value is refused, one above it stands.
+    #[tokio::test]
+    async fn an_agreed_grenzpreis_below_the_published_one_is_refused() {
+        let (marktd, _) = marktd_answering("200 OK", grenzpreis_2025()).await;
+        let mut niedriger = sondervertrag_2027(Some(dec!(15)));
+        let err = Resolver::new(&marktd)
+            .resolve(&mut niedriger)
+            .await
+            .expect_err("below the published Grenzpreis");
+        assert_eq!(err.code(), Some("grenzpreis_unter_veroeffentlichtem"));
+
+        let mut hoeher = sondervertrag_2027(Some(dec!(26)));
+        Resolver::new(&marktd)
+            .resolve(&mut hoeher)
+            .await
+            .expect("a higher agreed Grenzpreis stands");
+        assert_eq!(grenzpreis_of(&hoeher), Some(dec!(26)));
+        let settled = settle(&hoeher).expect("settles");
+        assert!(
+            settled
+                .warnings
+                .iter()
+                .any(|w| w.code == "KA_UNTER_GRENZPREIS"),
+            "24.80 lies below the agreed 26"
+        );
+    }
+
+    /// A Tarifkunde and a Gas supply read nothing: Abs. 4 is Strom
+    /// Sondervertragskunden only, and the Gas Grenzpreis is the caller's.
+    #[tokio::test]
+    async fn only_a_strom_sondervertragskunde_reads_the_series() {
+        let (marktd, seen) =
+            marktd_answering("500 Internal Server Error", serde_json::json!({})).await;
+        let mut tarif = sondervertrag_2027(None);
+        let SettlementRequest::Nne(n) = &mut tarif.settlement else {
+            unreachable!()
+        };
+        if let Some(ka) = n.konzessionsabgabe.as_mut() {
+            ka.klasse = KaKundengruppe::Tarifkunde {
+                gemeinde: grid_billing::GemeindeGroesse::Bis25k,
+                nur_kochen_warmwasser: false,
+            };
+        }
+        Resolver::new(&marktd)
+            .resolve(&mut tarif)
+            .await
+            .expect("a Tarifkunde needs no Grenzpreis");
+        let mut gas = sondervertrag_2027(None);
+        let SettlementRequest::Nne(n) = &mut gas.settlement else {
+            unreachable!()
+        };
+        n.sparte = Sparte::Gas;
+        Resolver::new(&marktd)
+            .resolve(&mut gas)
+            .await
+            .expect("the Gas Grenzpreis is the caller's");
+        assert!(seen.lock().expect("log").is_empty());
     }
 }

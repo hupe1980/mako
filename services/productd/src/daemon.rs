@@ -45,9 +45,11 @@
 //!
 //! Every route below takes a verified OIDC bearer and a Cedar decision from
 //! `policies/productd.cedar`, except the two § 41c EnWG comparison-feed routes,
-//! which take no `Claims` at all: the statute obliges the supplier to publish
-//! its tariff data to independent comparison instruments, and an obligation
-//! discharged only behind a bearer token is not discharged. Those two serve
+//! which take no `Claims` at all: § 41c Abs. 5 Satz 2 EnWG obliges a
+//! Stromlieferant to let comparison instruments use its offer-relevant
+//! information free of charge in open data formats, and an obligation
+//! discharged only behind a bearer token is not discharged. The other
+//! categories are published by choice. Those two serve
 //! `product_status = 'PUBLISHED'` rows of the `FEED_CATEGORIES` allowlist and
 //! nothing else, which `tests/it/authorization_guard.rs` pins.
 //!
@@ -223,6 +225,15 @@ impl Daemon for Productd {
                 post(handlers::post_expire_angebote),
             )
             .route("/api/v1/angebote/{id}", get(handlers::get_angebot_handler))
+            // ── Endkunden-Angebot (the frozen B2C offer an online order cites) ──
+            .route(
+                "/api/v1/products/{lf_mp_id}/endkunden-angebote",
+                post(handlers::post_endkunden_angebot),
+            )
+            .route(
+                "/api/v1/endkunden-angebote/{id}",
+                get(handlers::get_endkunden_angebot),
+            )
             .route(
                 "/api/v1/angebote/{id}/comparison",
                 get(handlers::get_angebot_comparison),
@@ -252,8 +263,8 @@ impl Daemon for Productd {
                 "/api/v1/comparison-feed",
                 get(handlers::get_comparison_feed),
             )
-            // GET /api/v1/comparison-feed/bo4e — § 41c EnWG: full BO4E Tarifinfo array
-            // for direct schema-validated import by Verivox / Check24 / BNetzA MTS.
+            // GET /api/v1/comparison-feed/bo4e — the § 41c Abs. 5 EnWG feed as a BO4E
+            // Tarifinfo array, for schema-validated import by comparison portals.
             .route(
                 "/api/v1/comparison-feed/bo4e",
                 get(handlers::get_comparison_feed_bo4e),
@@ -264,6 +275,13 @@ impl Daemon for Productd {
             .layer(Extension(oidc))
             .layer(Extension(cedar))
             .layer(Extension(Arc::new(regime_quelle)))
+            .layer(Extension(Arc::new(
+                crate::endkunden_angebot::MarktdQuelle::new(
+                    cfg.marktd_url.as_deref(),
+                    cfg.marktd_api_key.clone(),
+                    ctx.http.clone(),
+                ),
+            )))
             .layer(Extension(Arc::clone(&cfg)))
             .layer(Extension(pool.clone()));
 

@@ -99,7 +99,7 @@ use crate::codes::{
 use super::config::NetzCheckConfig;
 use super::types::{
     AnmeldungAnfrage, ErzeugungsAnmeldung, Geschaeftsvorfall, MaloGridRecord, Marktlokationsart,
-    Messtyp, NbEntscheidung, RejectReason, Veraeusserungsform,
+    Messtyp, NbEntscheidung, RejectReason, Veraeusserungsform, ZuordnungsermaechtigungRecord,
 };
 
 // ── Regulatory constants ──────────────────────────────────────────────────────
@@ -389,6 +389,9 @@ fn e_0622_verbrauchend(
             Anforderung::Abweichung(detail) => strom("A05", 60, detail),
         };
     }
+    if let Some(entscheidung) = zuordnungsermaechtigung_fehlt(anfrage, grid, "A05", 60) {
+        return entscheidung;
+    }
 
     // ── 70: Liegt bereits eine in Arbeit befindliche Anmeldung vor? ──────────
     if let Some(detail) = andere_anmeldung_in_bearbeitung(anfrage, versorgung) {
@@ -442,6 +445,9 @@ fn e_0622_erzeugend(
             },
             Anforderung::Abweichung(detail) => strom("A25", 260, detail),
         };
+    }
+    if let Some(entscheidung) = zuordnungsermaechtigung_fehlt(anfrage, grid, "A25", 260) {
+        return entscheidung;
     }
 
     // ── 270: Liegt bereits eine in Arbeit befindliche Anmeldung vor? ─────────
@@ -908,6 +914,99 @@ fn anforderungen_nicht_erfuellt(
     None
 }
 
+/// `E_0622` Prüfschritt 60 / 260 — „Insbesondere die notwendige
+/// Zuordnungsermächtigung (Bilanzkreis/Bilanzierungsverfahren) ist vorhanden."
+///
+/// The BKV authorises „je ZRT, BG, BK und LF ab einem bestimmten Zeitpunkt"
+/// (BK6-24-174 Anlage 3 Kap. 10.2.1, S. 119), and after a Deaktivierung „können
+/// keine Zuordnungen mit Gültigkeit nach dem Deaktivierungsdatum mehr
+/// durchgeführt werden" (Kap. 10.3.1, S. 121). So the Anmeldung is covered when
+/// an Ermächtigung for its Lieferant, Bilanzkreis and Bilanzierungsgebiet holds
+/// on the Zuordnungsbeginn. The Anmeldung names no Zeitreihentyp, so the ZRT is
+/// not part of the match.
+///
+/// `None` from here means covered. An unread store escalates; an Anmeldung
+/// without a Bilanzkreis, or one no Ermächtigung covers, is refused with the
+/// deviation named — the code's Bemerkung requires it.
+fn zuordnungsermaechtigung_fehlt(
+    anfrage: &AnmeldungAnfrage,
+    grid: &MaloGridRecord,
+    code: &'static str,
+    pruefschritt: u16,
+) -> Option<NbEntscheidung> {
+    let Some(ermaechtigungen) = anfrage.zuordnungsermaechtigungen.as_deref() else {
+        return Some(NbEntscheidung::Escalate {
+            reason: format!(
+                "The Zuordnungsermächtigungen for LF {} were not read, so E_0622 Prüfschritt \
+                 {pruefschritt} („die notwendige Zuordnungsermächtigung … ist vorhanden\") \
+                 cannot be answered.",
+                anfrage.new_supplier_gln
+            ),
+        });
+    };
+    let Some(bilanzkreis) = anfrage.bilanzkreis.as_deref() else {
+        return Some(strom(
+            code,
+            pruefschritt,
+            "Die Anmeldung nennt keinen Bilanzkreis (SG10 CAV+ZV4), daher kann keine \
+             Zuordnungsermächtigung die Zuordnung abdecken."
+                .to_owned(),
+        ));
+    };
+    let Some(bilanzierungsgebiet) = grid
+        .bilanzierungsgebiet
+        .as_deref()
+        .or(anfrage.bilanzierungsgebiet.as_deref())
+    else {
+        return Some(NbEntscheidung::Escalate {
+            reason: format!(
+                "Neither the grid record nor the Anmeldung names a Bilanzierungsgebiet for \
+                 MaLo {}, so the Zuordnungsermächtigung of E_0622 Prüfschritt {pruefschritt} \
+                 cannot be matched. Update the record via PUT /api/v1/malos/{}/grid.",
+                anfrage.malo_id, anfrage.malo_id
+            ),
+        });
+    };
+    let lf = anfrage.new_supplier_gln.as_str();
+    let tag = anfrage.process_date;
+    let passend = |z: &&ZuordnungsermaechtigungRecord| {
+        z.lf_mp_id == lf
+            && z.bilanzkreis == bilanzkreis
+            && z.bilanzierungsgebiet == bilanzierungsgebiet
+    };
+    if ermaechtigungen
+        .iter()
+        .filter(passend)
+        .any(|z| z.gilt_am(tag))
+    {
+        return None;
+    }
+    let detail = match ermaechtigungen
+        .iter()
+        .filter(passend)
+        .max_by_key(|z| z.valid_from)
+    {
+        Some(z) if z.valid_from > tag => format!(
+            "Die Zuordnungsermächtigung des BKV {} für LF {lf}, Bilanzkreis {bilanzkreis} \
+             und Bilanzierungsgebiet {bilanzierungsgebiet} gilt erst ab {}; der \
+             Zuordnungsbeginn {tag} ist nicht abgedeckt.",
+            z.bkv_mp_id, z.valid_from
+        ),
+        Some(z) => format!(
+            "Die Zuordnungsermächtigung des BKV {} für LF {lf}, Bilanzkreis {bilanzkreis} \
+             und Bilanzierungsgebiet {bilanzierungsgebiet} ist zum {} deaktiviert; der \
+             Zuordnungsbeginn {tag} ist nicht abgedeckt.",
+            z.bkv_mp_id,
+            z.valid_to.map_or_else(String::new, |d| d.to_string())
+        ),
+        None => format!(
+            "Für LF {lf}, Bilanzkreis {bilanzkreis} und Bilanzierungsgebiet \
+             {bilanzierungsgebiet} liegt dem NB keine Zuordnungsermächtigung vor."
+        ),
+    };
+    Some(strom(code, pruefschritt, detail))
+}
+
 /// „Liegt für diese Marktlokation bereits eine gerade in Arbeit befindliche und
 /// noch nicht beantwortete Anmeldung vor?"
 ///
@@ -1183,6 +1282,28 @@ mod tests {
             erzeugung: None,
             abmeldeanfrage: crate::nb::Abmeldeanfrage::NichtErforderlich,
             ruhend: crate::nb::types::RuhendeAnmeldung::default(),
+            bilanzkreis: Some(BK.to_owned()),
+            zuordnungsermaechtigungen: Some(vec![ermaechtigung(
+                Date::from_calendar_date(2020, Month::January, 1).unwrap(),
+                None,
+            )]),
+        }
+    }
+
+    const BK: &str = "11XBK-LF-------9";
+
+    /// A Zuordnungsermächtigung for the test LF, Bilanzkreis and
+    /// Bilanzierungsgebiet, valid `[von, bis)`.
+    fn ermaechtigung(von: Date, bis: Option<Date>) -> ZuordnungsermaechtigungRecord {
+        ZuordnungsermaechtigungRecord {
+            bkv_mp_id: "9900000000019".to_owned(),
+            lf_mp_id: "9900357000004".to_owned(),
+            bilanzkreis: BK.to_owned(),
+            bilanzierungsgebiet: "11YB-TENNET----U".to_owned(),
+            zeitreihentyp: "SLS".to_owned(),
+            valid_from: von,
+            valid_to: bis,
+            deaktivierung_nachrichtendatum: None,
         }
     }
 
@@ -1283,6 +1404,116 @@ mod tests {
         let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
         let result = run(&anfrage, &vs, NOW);
         assert!(result.is_accept(), "expected Accept, got {result:?}");
+    }
+
+    // ── Zuordnungsermächtigung (Prüfschritt 60 / 260, A05 / A25) ─────────────
+
+    /// The refusal `E_0622` publishes for `code` at `schritt`, or a panic.
+    fn abgelehnt(result: &NbEntscheidung, code: &str, schritt: u16) -> String {
+        match result {
+            NbEntscheidung::Reject(r) => {
+                assert_eq!(result.antwortcode(), Some(code), "{r:?}");
+                assert_eq!(result.ebd(), Some("E_0622"));
+                assert_eq!(r.pruefschritt, schritt);
+                r.detail.clone()
+            }
+            other => panic!("expected {code} at Prüfschritt {schritt}, got {other:?}"),
+        }
+    }
+
+    /// A Bilanzkreis no Zuordnungsermächtigung names is not confirmed: the BKV
+    /// authorises „je ZRT, BG, BK und LF" (MaBiS Kap. 10.2.1, S. 119).
+    #[test]
+    fn an_unauthorised_bilanzkreis_is_refused_a05() {
+        let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
+        anfrage.bilanzkreis = Some("11XBK-STD------Y".to_owned());
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
+        let detail = abgelehnt(&run(&anfrage, &vs, NOW), "A05", 60);
+        assert!(detail.contains("11XBK-STD------Y"), "{detail}");
+    }
+
+    /// The Ermächtigung is the LF's: one for another Lieferant covers nothing.
+    #[test]
+    fn another_lieferants_ermaechtigung_covers_nothing() {
+        let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
+        anfrage.new_supplier_gln = "9900000000026".to_owned();
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
+        abgelehnt(&run(&anfrage, &vs, NOW), "A05", 60);
+    }
+
+    /// None on file is an answer, and it is a refusal.
+    #[test]
+    fn no_ermaechtigung_on_file_is_refused() {
+        let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
+        anfrage.zuordnungsermaechtigungen = Some(Vec::new());
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
+        abgelehnt(&run(&anfrage, &vs, NOW), "A05", 60);
+    }
+
+    /// An unread store is no all-clear either: the step escalates.
+    #[test]
+    fn an_unread_store_escalates() {
+        let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
+        anfrage.zuordnungsermaechtigungen = None;
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
+        let result = run(&anfrage, &vs, NOW);
+        assert!(
+            matches!(result, NbEntscheidung::Escalate { .. }),
+            "{result:?}"
+        );
+    }
+
+    /// An Anmeldung without a Bilanzkreis cannot be covered.
+    #[test]
+    fn an_anmeldung_without_a_bilanzkreis_is_refused() {
+        let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
+        anfrage.bilanzkreis = None;
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
+        abgelehnt(&run(&anfrage, &vs, NOW), "A05", 60);
+    }
+
+    /// After a 55072, „können keine Zuordnungen mit Gültigkeit nach dem
+    /// Deaktivierungsdatum mehr durchgeführt werden" (Kap. 10.3.1, S. 121): a
+    /// Zuordnungsbeginn on the Deaktivierungsdatum is refused, the day before
+    /// is still covered.
+    #[test]
+    fn a_deaktivierung_ends_the_cover_on_its_date() {
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
+        let ende = d(2026, Month::August, 1);
+        let mut anfrage = make_anfrage(55001, ende);
+        anfrage.zuordnungsermaechtigungen =
+            Some(vec![ermaechtigung(d(2026, Month::January, 1), Some(ende))]);
+        let detail = abgelehnt(&run(&anfrage, &vs, NOW), "A05", 60);
+        assert!(detail.contains("deaktiviert"), "{detail}");
+
+        anfrage.process_date = d(2026, Month::July, 31);
+        assert!(run(&anfrage, &vs, NOW).is_accept());
+    }
+
+    /// An Ermächtigung that begins after the Zuordnungsbeginn does not cover it.
+    #[test]
+    fn an_ermaechtigung_from_a_later_date_does_not_cover() {
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
+        let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
+        anfrage.zuordnungsermaechtigungen =
+            Some(vec![ermaechtigung(d(2026, Month::August, 1), None)]);
+        let detail = abgelehnt(&run(&anfrage, &vs, NOW), "A05", 60);
+        assert!(detail.contains("erst ab"), "{detail}");
+    }
+
+    /// The erzeugende branch asks the same question at Prüfschritt 260 and
+    /// answers it with its own code, `A25`.
+    #[test]
+    fn the_erzeugende_branch_refuses_a25_at_260() {
+        let vs = make_versorgung(LieferStatus::Grundversorgung, None, None);
+        let mut anfrage = make_erz_anfrage(
+            d(2026, Month::September, 1),
+            Geschaeftsvorfall::Eins,
+            Veraeusserungsform::Marktpraemie,
+            Veraeusserungsform::Marktpraemie,
+        );
+        anfrage.zuordnungsermaechtigungen = Some(Vec::new());
+        abgelehnt(&run(&anfrage, &vs, NOW), "A25", 260);
     }
 
     /// A Bestätigung is not the absence of a code: `SG4 STS+E01` is Muss, and

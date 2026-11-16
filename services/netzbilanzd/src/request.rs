@@ -21,13 +21,81 @@
 //! document. The stored input is also the audit answer to "how was this figure
 //! reached" — replayable, not merely described.
 
+use grid_billing::types::NiederspannungsEinstufung;
 use grid_billing::{
-    ArbeitspreisModell, AwhPositionInput, Blindarbeit, GasKapazitaet, Grundpreis,
-    Konzessionsabgabe, Leistungspreis, MsbEmpfaengerRolle, Sparte,
+    ArbeitspreisModell, AwhPositionInput, Blindarbeit, GasKapazitaet, Grenzpreisvergleich,
+    Grundpreis, KaKundengruppe, Konzessionsabgabe, Leistungspreis, MsbEmpfaengerRolle, Sparte,
 };
 use grid_billing::{msbg, netzebene, sect19, umlagen};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+
+/// A Konzessionsabgabe as the caller states it.
+///
+/// The KAV § 2 Abs. 4 Grenzpreisvergleich for a Strom Sondervertragskunde
+/// charged one compares the customer's Durchschnittspreis im Kalenderjahr —
+/// the caller's fact — with „der in der amtlichen Statistik des Bundes jeweils
+/// für das vorletzte Kalenderjahr veröffentlichte Wert ohne Umsatzsteuer",
+/// which netzbilanzd reads from marktd's `kav_grenzpreis_strom` series
+/// ([`crate::billing::Resolver`]) and refuses without.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KonzessionsabgabeAngabe {
+    /// Published rate in ct/kWh.
+    pub satz_ct_per_kwh: Decimal,
+    /// The KAV § 2 customer group, which fixes the ceiling.
+    pub klasse: KaKundengruppe,
+    /// § 2 Abs. 7 KAV — the facts that classify a Niederspannungslieferung.
+    #[serde(default)]
+    pub niederspannung: Option<NiederspannungsEinstufung>,
+    /// The customer's Durchschnittspreis im Kalenderjahr, in ct/kWh ohne USt,
+    /// „unter Einschluß des Netznutzungsentgelts". Required for a
+    /// Sondervertragskunde charged a Konzessionsabgabe.
+    #[serde(default)]
+    pub durchschnittspreis_ct_per_kwh: Option<Decimal>,
+    /// The Grenzpreis applied, in ct/kWh ohne USt.
+    ///
+    /// Strom: omitted, the published value of the vorletzte Kalenderjahr is
+    /// read from marktd and filled in; stated, it is a Grenzpreis the
+    /// Versorgungsunternehmen and the Gemeinde agreed — „können höhere
+    /// Grenzpreise vereinbaren" (§ 2 Abs. 4 Satz 3) — and is refused below the
+    /// published one. Gas: the Grenzpreis itself, required, because the § 2
+    /// Abs. 5 Nr. 2 scaling of 1,50 ct/kWh is not derived here.
+    #[serde(default)]
+    pub grenzpreis_ct_per_kwh: Option<Decimal>,
+}
+
+impl KonzessionsabgabeAngabe {
+    /// Whether the § 2 Abs. 4 / Abs. 5 Nr. 2 comparison applies: a
+    /// Sondervertragskunde charged a Konzessionsabgabe.
+    #[must_use]
+    pub fn braucht_grenzpreisvergleich(&self) -> bool {
+        self.klasse == KaKundengruppe::Sondervertragskunde && self.satz_ct_per_kwh > Decimal::ZERO
+    }
+
+    /// The engine's input. Without both figures the comparison is absent and
+    /// `grid-billing` refuses a Sondervertragskunde charged an Abgabe.
+    #[must_use]
+    pub fn to_engine(self) -> Konzessionsabgabe {
+        Konzessionsabgabe {
+            satz_ct_per_kwh: self.satz_ct_per_kwh,
+            klasse: self.klasse,
+            niederspannung: self.niederspannung,
+            grenzpreis: match (
+                self.durchschnittspreis_ct_per_kwh,
+                self.grenzpreis_ct_per_kwh,
+            ) {
+                (Some(durchschnittspreis_ct_per_kwh), Some(grenzpreis_ct_per_kwh)) => {
+                    Some(Grenzpreisvergleich {
+                        durchschnittspreis_ct_per_kwh,
+                        grenzpreis_ct_per_kwh,
+                    })
+                }
+                _ => None,
+            },
+        }
+    }
+}
 
 /// Request body for `POST /api/v1/billing/run`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,15 +243,15 @@ pub struct NneRequest {
     /// Höchstbetrag can be checked. A bare rate cannot be checked against
     /// anything, which is exactly when an over-charge goes unnoticed.
     ///
-    /// Two optional fact blocks travel with it. `niederspannung` carries the
-    /// § 2 Abs. 7 classification facts — months over the Leistungswert and the
-    /// Jahresverbrauch — so the stated group can be held against the statute
-    /// rather than believed; `grenzpreis` carries the § 2 Abs. 4 / Abs. 5 Nr. 2
-    /// Grenzpreisvergleich, below which no Konzessionsabgabe may be charged at
-    /// all — required for a Sondervertragskunde charged one, refused without. The § 2 Abs. 5 Nr. 1 Gas Grenzmenge needs neither: it is read off
-    /// `jahresarbeit_kwh`.
+    /// `niederspannung` carries the § 2 Abs. 7 classification facts — months
+    /// over the Leistungswert and the Jahresverbrauch — so the stated group can
+    /// be held against the statute rather than believed. The § 2 Abs. 4 /
+    /// Abs. 5 Nr. 2 Grenzpreisvergleich is [`KonzessionsabgabeAngabe`]'s: the
+    /// customer's Durchschnittspreis from the caller, the Strom Grenzpreis from
+    /// marktd. The § 2 Abs. 5 Nr. 1 Gas Grenzmenge needs neither: it is read
+    /// off `jahresarbeit_kwh`.
     #[serde(default)]
-    pub konzessionsabgabe: Option<Konzessionsabgabe>,
+    pub konzessionsabgabe: Option<KonzessionsabgabeAngabe>,
     /// Blindmehrarbeit — reactive energy beyond the price sheet's free share.
     #[serde(default)]
     pub blindarbeit: Option<Blindarbeit>,

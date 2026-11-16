@@ -1,11 +1,12 @@
 //! One local MP-ID and the `asx-rs` client built for it.
 //!
 //! A receiving MSH checks that the signing certificate's subject OU carries
-//! the `eb:From` MP-ID (BDEW AS4-Profil 1.2 §2.3.2, §2.3.4.4; RzÜ AS4 2.6
-//! §5.2: „Das Feld Organisational Unit („OU") des Subject muss die MP-ID
-//! enthalten"). So every MP-ID a deployment sends and receives for has its own
-//! signing, encryption and TLS key pairs — and its own `As4` client.
+//! the `eb:From` MP-ID (BDEW AS4-Profil 1.2 §2.3.2, §2.3.4.4; Regelungen zum
+//! Übertragungsweg für AS4 2.6, Kap. 5.2, S. 6). So every MP-ID a deployment
+//! sends and receives for has its own Zertifikatstripel — signing, encryption
+//! and TLS (Kap. 1.3, S. 3) — and its own `As4` client.
 
+use crate::certificate::carries_mp_id;
 use crate::keys::same_public_key;
 use crate::partner_directory::PartnerDirectory;
 
@@ -48,6 +49,20 @@ pub enum IdentityError {
         /// The other use.
         second: &'static str,
     },
+    /// A certificate whose subject `OU` is not the identity's MP-ID: a
+    /// receiver refuses a message signed under another MP-ID, and a partner
+    /// encrypting to it encrypts for another market participant.
+    #[error(
+        "AS4 identity {mp_id}: the subject OU of the {usage} certificate is not {mp_id}; \
+         Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.2 (S. 6) requires the MP-ID in the \
+         OU of every certificate of the Zertifikatstripel"
+    )]
+    MpIdNotInSubject {
+        /// The MP-ID.
+        mp_id: String,
+        /// Which certificate.
+        usage: &'static str,
+    },
 }
 
 /// The `asx-rs` builder for `identity`: `Profile::bdew()` capped at
@@ -62,7 +77,9 @@ pub enum IdentityError {
 ///
 /// [`IdentityError::SharedKeyPair`] when two of the signing, encryption and
 /// TLS certificates certify one key — a case `build()` does not see, because it
-/// compares certificates.
+/// compares certificates; [`IdentityError::MpIdNotInSubject`] when one of
+/// them, or a retired encryption certificate, does not carry the MP-ID in its
+/// subject `OU` — `build()` checks partners' signing certificates only.
 pub fn client_builder(
     identity: &LocalIdentity,
     trust_anchor: asx::Certificate,
@@ -80,6 +97,18 @@ pub fn client_builder(
         ),
         ("TLS", asx::Decrypter::certificate(&identity.tls).clone()),
     ];
+    let retired = identity
+        .retired_decrypters
+        .iter()
+        .map(|kp| ("retired encryption", asx::Decrypter::certificate(kp)));
+    for (usage, cert) in certs.iter().map(|(u, c)| (*u, c)).chain(retired) {
+        if !carries_mp_id(cert, &identity.mp_id) {
+            return Err(IdentityError::MpIdNotInSubject {
+                mp_id: identity.mp_id.clone(),
+                usage,
+            });
+        }
+    }
     for (i, (first, a)) in certs.iter().enumerate() {
         for (second, b) in &certs[i + 1..] {
             if same_public_key(a, b) {
@@ -166,6 +195,70 @@ mod tests {
                 second: "TLS",
             }
         );
+    }
+
+    /// `[party.as4] tls_cert_pem_file` / `tls_key_pem_file` reach the TLS
+    /// handshake through `LocalParty::tls_identity`: `asx-rs`'s built-in HTTP
+    /// client presents the local party's TLS key pair and nothing else. The
+    /// builder's `Debug` is the one view `asx-rs` 0.16 gives of the local
+    /// party, so the TLS certificate is looked for there.
+    #[test]
+    fn the_tls_key_pair_is_the_local_partys_tls_identity() {
+        let ca = TestCa::sm_pki();
+        let crl = ca.crl_signer("CCRL-S", KeyAlg::EcBrainpoolP256r1);
+        let party = ca.bdew_party("9900357000004");
+        let id = identity(&party);
+        let builder = client_builder(
+            &id,
+            ca.anchor(),
+            crl.certificate(),
+            &PartnerDirectory::default(),
+        )
+        .unwrap();
+        let tls = format!("{:?}", asx::Decrypter::certificate(&id.tls));
+        let debug = format!("{builder:?}");
+        assert!(
+            debug.contains(&format!("tls: Some(KeyPair {{ certificate: Some({tls})")),
+            "the TLS key pair is not the local party's TLS identity: {debug}"
+        );
+    }
+
+    /// Kap. 5.2: each certificate of the triple carries the MP-ID in its
+    /// subject `OU`; one issued to another MP-ID is refused before `build()`.
+    #[test]
+    fn a_certificate_of_another_mp_id_is_refused() {
+        let ca = TestCa::sm_pki();
+        let crl = ca.crl_signer("CCRL-S", KeyAlg::EcBrainpoolP256r1);
+        let party = ca.bdew_party("9900357000004");
+        let other = ca.bdew_party("9900357000005");
+        for (usage, swap) in [
+            ("signing", 0),
+            ("encryption", 1),
+            ("TLS", 2),
+            ("retired encryption", 3),
+        ] {
+            let mut id = identity(&party);
+            match swap {
+                0 => id.signer = other.signing.key_pair(),
+                1 => id.decrypter = other.encryption.key_pair(),
+                2 => id.tls = other.tls.key_pair(),
+                _ => id.retired_decrypters = vec![other.encryption.key_pair()],
+            }
+            let err = client_builder(
+                &id,
+                ca.anchor(),
+                crl.certificate(),
+                &PartnerDirectory::default(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                err,
+                IdentityError::MpIdNotInSubject {
+                    mp_id: "9900357000004".to_owned(),
+                    usage,
+                }
+            );
+        }
     }
 
     /// The trust anchor is the SM-PKI root; a signer under another CA does

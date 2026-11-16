@@ -38,7 +38,13 @@ const TENANT: &str = "9900357000004";
 /// The handler modules the router mounts REST routes from. `inbound` is
 /// excluded: its two routes are authenticated by the `inbound_secret` HMAC and
 /// carry no token at all.
-const HANDLER_MODULES: [&str; 4] = ["kunden", "vertraege", "rahmenvertraege", "stammdaten"];
+const HANDLER_MODULES: [&str; 5] = [
+    "kunden",
+    "vertraege",
+    "rahmenvertraege",
+    "stammdaten",
+    "bestellungen",
+];
 
 /// The MCP surface's blanket gate, applied by the shared middleware rather than
 /// by a handler in this crate.
@@ -96,8 +102,9 @@ fn actions_used_in_code() -> BTreeSet<String> {
             }
         }
     }
-    // Only Cedar action names, not arbitrary strings that happened to follow.
-    found.retain(|a| a.contains('-') && a.chars().all(|c| c.is_ascii_lowercase() || c == '-'));
+    // Only Cedar action names, not arbitrary strings that happened to follow. A
+    // name need not carry a hyphen: `bestellen` and `widerrufen` are one word.
+    found.retain(|a| !a.is_empty() && a.chars().all(|c| c.is_ascii_lowercase() || c == '-'));
     found
 }
 

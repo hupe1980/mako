@@ -135,6 +135,11 @@ fn a_clean_interchange_is_fehlerfrei_and_an_unreadable_one_is_the_whole_file() {
 }
 
 async fn rendered(own: &str, role: &str, wire: &str) -> String {
+    rendered_for(own, role, wire, "IC9").await
+}
+
+/// [`rendered`], acknowledging the interchange reference `reference`.
+async fn rendered_for(own: &str, role: &str, wire: &str, reference: &str) -> String {
     let store = SlateDbStore::open_in_memory().await.expect("store");
     let registry = registry(own, role);
     let svc = ContrlAckService::new(
@@ -145,7 +150,7 @@ async fn rendered(own: &str, role: &str, wire: &str) -> String {
     let Syntaxpruefung::Nachrichten(fehler) = syntaxpruefung(wire.as_bytes(), &parse(wire)) else {
         panic!("per-message report expected");
     };
-    svc.emit_message_syntax_errors(wire.as_bytes(), "IC9", own, COUNTERPARTY, &fehler)
+    svc.emit_message_syntax_errors(wire.as_bytes(), reference, own, COUNTERPARTY, &fehler)
         .await
         .expect("enqueued");
     let queued = store.pending_now(10).await.expect("outbox");
@@ -207,6 +212,32 @@ async fn strom_gets_the_per_message_syntaxfehlermeldung() {
 async fn gas_gets_the_per_message_syntaxfehlermeldung_not_an_empfangsbestaetigung() {
     let wire = rendered(OWN_GAS, "NB", &interchange(44001, OWN_GAS, "502")).await;
     assert_per_message(&wire);
+}
+
+/// `UNT` DE 0074 counts segments, not terminator bytes: `UCI` DE 0020 echoes the
+/// inbound interchange reference, and a released terminator in it (`?'`) is
+/// one character of one value, so the count is the same as for any other
+/// reference.
+#[tokio::test]
+async fn a_released_terminator_in_the_reference_does_not_change_the_unt_count() {
+    let wire = rendered_for(
+        OWN_STROM,
+        "NB",
+        &interchange(55001, OWN_STROM, "500"),
+        "IC'9",
+    )
+    .await;
+    assert!(wire.contains("UCI+IC?'9+"), "{wire}");
+    let segments: Vec<_> = edifact::from_bytes(wire.as_bytes())
+        .collect::<Result<_, _>>()
+        .expect("the CONTRL parses");
+    let unh = segments.iter().position(|s| s.tag == "UNH").expect("UNH");
+    let unt = segments.iter().position(|s| s.tag == "UNT").expect("UNT");
+    assert_eq!(
+        segments[unt].component_str(0, 0),
+        Some((unt - unh + 1).to_string().as_str()),
+        "UNT DE 0074 is UNH through UNT: {wire}"
+    );
 }
 
 /// `POST /edifact` answers a partly broken file as the AS4 door does: nothing

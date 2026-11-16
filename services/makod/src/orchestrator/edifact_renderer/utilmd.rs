@@ -835,9 +835,18 @@ fn render_utilmd_liste(
     if let Some(dd) = u.document_date.as_deref() {
         builder = builder.document_date(dokumentdatum_303("UTILMD", dd)?);
     }
-    // `DTM+157` in `610` — the Bilanzierungsmonat, `CCYYMM`.
+    // `DTM+157` in `610` — the Bilanzierungsmonat, `CCYYMM`. The payload
+    // carries the `BillingPeriod` spelling `CCYY-MM`; anything that is not a
+    // month after dropping the hyphen is refused, not written.
     if let Some(monat) = u.billing_period.as_deref().filter(|s| !s.is_empty()) {
-        builder = builder.gueltigkeit_beginn(monat);
+        let ccyymm = monat.replacen('-', "", 1);
+        if edifact::DtmValue::parse(&ccyymm, "610").is_err() {
+            return Err(RenderError::MissingField {
+                message_type: "UTILMD".into(),
+                field: format!("billing_period {monat:?} is no month (CCYY-MM)").into(),
+            });
+        }
+        builder = builder.gueltigkeit_beginn(ccyymm);
     }
     // `SG1 RFF+AAV` „Nummer der Anfrage" — Muss on a list the Netzbetreiber
     // distributes: the `BGM` DE 1004 of the ORDERS that ordered it (UTILMD AHB
@@ -1435,7 +1444,7 @@ pub(crate) struct UtilmdGateCheck {
     pub bytes: Vec<u8>,
     /// What keeps it from being sent — the profile's errors and every
     /// Formatbedingung finding; empty when the message passes.
-    pub findings: Vec<edifact_rs::ValidationIssue>,
+    pub findings: Vec<edifact::ValidationIssue>,
 }
 
 /// Render `pending` as the outbox worker will render it for a process running

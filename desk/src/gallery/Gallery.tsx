@@ -11,9 +11,10 @@ import { Button } from "../design/Button";
 import { FristUhr } from "../design/FristUhr";
 import { Icon } from "../design/Icon";
 import { Kbd } from "../design/Kbd";
-import { Angabe, ListDetail } from "../design/ListDetail";
+import { Angabe, AngabenListe, ListDetail } from "../design/ListDetail";
 import { ListRow } from "../design/ListRow";
 import { EmptyState, Notice, Panel } from "../design/Panel";
+import { Refusal } from "../design/Refusal";
 import { SearchField } from "../design/SearchField";
 import { SourceChip } from "../design/SourceChip";
 import { Table } from "../design/Table";
@@ -61,7 +62,7 @@ const BILANZ: Bilanz = {
 const wartend = (run: string, v: Vorschlag | null, status = "succeeded"): Answer => ({
   run,
   status,
-  disclosure: "AI-generated.",
+  disclosure: "KI-generiert.",
   saetze: [],
   vorschlag: v,
   schritte: [],
@@ -103,7 +104,7 @@ const WARUM_ANTWORT = {
       quelle: "accountingd/get_parked_booking",
       belegt: false,
     },
-    { text: "Entscheiden Sie: neu buchen oder verwerfen.", quelle: null, belegt: false },
+    { text: "Entscheide: neu buchen oder verwerfen.", quelle: null, belegt: false },
   ],
   schritte: [{ quelle: "accountingd/get_parked_booking", fertig: true }],
 };
@@ -160,12 +161,52 @@ const LAUF: Lauf = {
   zuschauer: 0,
 };
 
+/** Every colour token, by the name a view writes it with (`design/tokens.css`). */
+const FARBEN = [
+  "--bg",
+  "--surface",
+  "--sidebar",
+  "--fill",
+  "--separator",
+  "--text",
+  "--text-2",
+  "--accent",
+  "--critical",
+  "--critical-fill",
+  "--soon",
+  "--soon-fill",
+  "--info",
+  "--info-fill",
+  "--done",
+  "--done-fill",
+  "--ai",
+] as const;
+
+/** The macOS ramp, each step under its token's name. */
+const RAMPE = [
+  ["text-large-title font-semibold", "Large Title 26/32"],
+  ["text-title1", "Title 1 22/26"],
+  ["text-title2 font-semibold", "Title 2 17/22"],
+  ["text-title3", "Title 3 15/20"],
+  ["text-headline", "Headline 13/16"],
+  ["text-body", "Body 13/18 — 51238696012 · PID 55001"],
+  ["text-callout text-text-2", "Callout 12/15"],
+  ["text-caption text-text-2", "Caption 11/14"],
+] as const;
+
+/** Tinted text on its own fill; the only solid fill is the primary Button. */
+const STATUS = [
+  ["bg-critical-fill text-critical", "Frist abgelaufen"],
+  ["bg-soon-fill text-soon", "Frist heute"],
+  ["bg-info-fill text-info", "Anmeldung läuft"],
+  ["bg-done-fill text-done", "beliefert"],
+  ["bg-fill text-text-2", "beendet"],
+] as const;
+
 function Specimen({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="m-0 text-caption font-semibold uppercase tracking-wide text-text-2">
-        {title}
-      </h2>
+      <h2 className="m-0 text-caption font-semibold text-text-2">{title}</h2>
       <div className="flex flex-wrap items-center gap-3">{children}</div>
     </section>
   );
@@ -183,7 +224,7 @@ function ListeDetailProbe() {
     <ListDetail
       hoehe="h-96"
       label="Beispiel"
-      kopf={<h3 className="m-0 text-title font-semibold">Fristen überschritten</h3>}
+      kopf={<h3 className="m-0 text-title2 font-semibold">Fristen überschritten</h3>}
       selected={gewaehlt}
       onSelect={setGewaehlt}
       liste={zeilen.map((r) => (
@@ -192,16 +233,18 @@ function ListeDetailProbe() {
       detail={
         z ? (
           <div className="px-6 py-6">
-            <h2 className="m-0 font-mono text-title font-semibold">{z.malo}</h2>
+            <h2 className="m-0 text-title2 font-semibold">{z.malo}</h2>
           </div>
         ) : null
       }
       angaben={
         z ? (
-          <dl className="m-0">
+          <AngabenListe>
             <Angabe name="MaLo">{z.malo}</Angabe>
             <Angabe name="Zustand">{z.zustand}</Angabe>
-          </dl>
+            <Angabe name="Marktpartner-ID">{null}</Angabe>
+            <Angabe name="Fundstelle">BK6-24-174 GPKE Teil 2</Angabe>
+          </AngabenListe>
         ) : null
       }
     />
@@ -220,6 +263,43 @@ function Specimens() {
         </Button>
       </Specimen>
 
+      <Specimen title="Farben">
+        {FARBEN.map((token) => (
+          <span key={token} className="flex w-36 items-center gap-2 text-callout text-text-2">
+            <span
+              className="size-6 shrink-0 rounded-[6px] border border-separator"
+              style={{ background: `var(${token})` }}
+            />
+            {token}
+          </span>
+        ))}
+      </Specimen>
+      <Specimen title="Schrift">
+        <div className="flex flex-col gap-1.5">
+          {RAMPE.map(([klasse, name]) => (
+            <p key={klasse} className={`m-0 ${klasse}`}>
+              {name}
+            </p>
+          ))}
+        </div>
+      </Specimen>
+      <Specimen title="Status">
+        {STATUS.map(([ton, wort]) => (
+          <span
+            key={ton}
+            className={`inline-flex h-6 items-center rounded-full px-2 text-body font-semibold ${ton}`}
+          >
+            {wort}
+          </span>
+        ))}
+      </Specimen>
+      <Specimen title="Ablehnung">
+        <Refusal
+          title="Kein Prozess für „51238696782“"
+          raw="process_not_found: No process for business key '51238696782'."
+          action={<Button variant="primary">Neue Suche</Button>}
+        />
+      </Specimen>
       <Specimen title="Frist-Uhr">
         <FristUhr due={at("2026-11-03T07:00:00Z")} now={NOW} />
         <FristUhr due={at("2026-11-03T10:15:00Z")} now={NOW} />
@@ -228,7 +308,7 @@ function Specimens() {
       </Specimen>
 
       <Specimen title="Quelle">
-        <span className="text-callout">
+        <span className="text-body">
           Antwort bis 11:00 Uhr am 1. WT{" "}
           <SourceChip
             quelle={{
@@ -246,7 +326,7 @@ function Specimens() {
         <div className="w-full">
           <AiNote
             text={
-              "AI-generated. Die Anmeldung wurde abgelehnt; die Antwort des Netzbetreibers nennt den Grund. Vorschlag: die Anmeldung mit korrigiertem Lieferbeginn erneut senden."
+              "KI-generiert. Die Anmeldung wurde abgelehnt; die Antwort des Netzbetreibers nennt den Grund. Vorschlag: die Anmeldung mit korrigiertem Lieferbeginn erneut senden."
             }
             footer={
               <div className="flex items-center gap-2 text-caption text-text-2">
@@ -672,7 +752,7 @@ export function Gallery() {
     <div className="grid min-h-full grid-cols-2">
       {(["light", "dark"] as const).map((theme) => (
         <div key={theme} data-theme={theme} className="bg-bg px-8 py-10 text-text">
-          <p className="m-0 mb-6 text-caption font-semibold uppercase tracking-wide text-text-2">
+          <p className="m-0 mb-6 text-caption font-semibold text-text-2">
             {theme === "light" ? "Hell" : "Dunkel"}
           </p>
           <Specimens />

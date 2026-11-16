@@ -46,8 +46,8 @@ fn the_gas_eog_command_is_the_body_makod_reads() {
     assert_eq!(body.transaktionsgrund, "ZT6");
 }
 
-/// The check is makod's: a key its type does not declare refuses the body —
-/// the Stammdaten a caller used to send among them.
+/// The check is makod's: a key its type does not declare refuses the body, so
+/// Stammdaten sent among the declared keys are refused.
 #[test]
 fn a_body_with_a_key_makod_does_not_declare_is_refused() {
     let mut payload =

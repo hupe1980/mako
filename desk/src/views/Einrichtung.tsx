@@ -13,6 +13,7 @@ import { Verweigert } from "../data/verweigert";
 import { Button } from "../design/Button";
 import { Icon, type IconName } from "../design/Icon";
 import { Kbd } from "../design/Kbd";
+import { Page } from "../design/Page";
 import { EmptyState, Notice, Panel } from "../design/Panel";
 import { SourceChip } from "../design/SourceChip";
 import { eintrag, katalog, useT } from "../i18n";
@@ -26,15 +27,11 @@ import { QuickLook } from "./QuickLook";
 export function EinrichtungView() {
   const t = useT();
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">{t.einrichtung.titel}</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">{t.einrichtung.untertitel}</p>
-      </header>
+    <Page width="work" title={t.einrichtung.titel} subtitle={t.einrichtung.untertitel}>
       <Bereitschaft />
       <Befragung />
       <Probelauf />
-    </div>
+    </Page>
   );
 }
 
@@ -64,10 +61,10 @@ export function Bereitschaft() {
       <section aria-labelledby={titel} className="contents">
         <div className="flex flex-wrap items-start gap-3">
           <div className="min-w-0 flex-1 basis-64">
-            <h2 id={titel} className="m-0 text-title font-semibold">
+            <h2 id={titel} className="m-0 text-title2 font-semibold">
               {c.titel}
             </h2>
-            <p className="m-0 mt-1 max-w-3xl text-body text-text-2">{c.text}</p>
+            <p className="m-0 mt-1 measure text-body text-text-2">{c.text}</p>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-caption text-text-2">{q.isFetching ? c.prueft : c.laufend}</span>
@@ -126,7 +123,7 @@ export function ChecklisteAnzeige({ liste }: { liste: Checkliste }) {
           className={`shrink-0 ${liste.bereit ? "text-done" : "text-text-2"}`}
         />
         <div className="flex min-w-0 flex-col gap-0.5">
-          <p className="m-0 text-callout font-semibold text-text">
+          <p className="m-0 text-body font-semibold text-text">
             {liste.bereit ? c.bereit : c.nichtBereit}
           </p>
           <p className="m-0 text-body text-text-2">
@@ -136,7 +133,7 @@ export function ChecklisteAnzeige({ liste }: { liste: Checkliste }) {
       </div>
 
       <div className="flex flex-col gap-2">
-        <h3 className="m-0 text-caption font-semibold uppercase text-text-2">{c.dienste}</h3>
+        <h3 className="m-0 text-caption font-semibold text-text-2">{c.dienste}</h3>
         <ul aria-label={c.dienste} className="m-0 flex list-none flex-wrap gap-2 p-0">
           {liste.dienste.map((d) => (
             <DienstChip key={d.dienst} zeile={d} />
@@ -145,7 +142,7 @@ export function ChecklisteAnzeige({ liste }: { liste: Checkliste }) {
       </div>
 
       <div className="flex flex-col gap-2">
-        <h3 className="m-0 text-caption font-semibold uppercase text-text-2">{c.punkte}</h3>
+        <h3 className="m-0 text-caption font-semibold text-text-2">{c.punkte}</h3>
         <ul aria-label={c.punkte} className="m-0 flex list-none flex-col gap-3 p-0">
           {liste.punkte.map((p) => (
             <PunktZeile key={p.bereich} punkt={p} />
@@ -155,7 +152,7 @@ export function ChecklisteAnzeige({ liste }: { liste: Checkliste }) {
 
       {unlesbar.length > 0 && (
         <div className="flex flex-col gap-2">
-          <h3 className="m-0 text-caption font-semibold uppercase text-text-2">{c.roh}</h3>
+          <h3 className="m-0 text-caption font-semibold text-text-2">{c.roh}</h3>
           <p className="m-0 text-body text-text-2">{c.rohText}</p>
           {unlesbar.map((b) => (
             <Roh
@@ -179,7 +176,7 @@ function dienstName(dienst: string): string {
 
 const AMPEL: Record<string, { icon: IconName; farbe: string }> = {
   gruen: { icon: "check", farbe: "text-done" },
-  gelb: { icon: "warn", farbe: "text-soon" },
+  gelb: { icon: "warn", farbe: "text-info" },
   rot: { icon: "blockiert", farbe: "text-critical" },
 };
 const UNBEKANNT = { icon: "unbekannt" as IconName, farbe: "text-text-2" };
@@ -201,7 +198,7 @@ export function AmpelZeichen({ ampel }: { ampel: string }) {
 const STATUS: Record<string, { icon: IconName; farbe: string }> = {
   bereit: { icon: "check", farbe: "text-done" },
   blockiert: { icon: "blockiert", farbe: "text-critical" },
-  unlesbar: { icon: "warn", farbe: "text-soon" },
+  unlesbar: { icon: "warn", farbe: "text-info" },
 };
 
 /** A service's state: unreachable is unknown — neither ready nor failing. */
@@ -212,7 +209,7 @@ export function DienstChip({ zeile }: { zeile: DienstZeile }) {
   return (
     <li className="squircle flex min-w-0 items-center gap-2 rounded-control border border-separator px-2.5 py-1.5">
       <Icon name={s.icon} size={14} className={`shrink-0 ${s.farbe}`} />
-      <span className="min-w-0 text-body font-medium text-text">{dienstName(zeile.dienst)}</span>
+      <span className="min-w-0 text-body text-text">{dienstName(zeile.dienst)}</span>
       <span className="text-caption text-text-2">
         {eintrag(c.dienstStatus, zeile.status)}
         {zeile.version ? ` · ${c.version(zeile.version)}` : ""}
@@ -231,7 +228,7 @@ export function PunktZeile({ punkt }: { punkt: Punkt }) {
   return (
     <li className="squircle flex flex-col gap-3 rounded-panel border border-separator p-4">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h4 className="m-0 text-callout font-semibold text-text">{titel}</h4>
+        <h4 className="m-0 text-body font-semibold text-text">{titel}</h4>
         <AmpelZeichen ampel={punkt.ampel} />
         <p className="m-0 basis-full text-body text-text-2">{frage}</p>
       </div>
@@ -257,13 +254,13 @@ export function BefundZeile({ befund }: { befund: DienstBefund }) {
   const link = befund.referenz ? handbuchLink(befund.referenz, handbuch) : null;
   const frage = FRAGE_ZUM_BEREICH[befund.bereich];
   const chip =
-    "inline-flex min-h-5 max-w-full items-center gap-1 rounded-[10px] border border-separator px-2 py-px text-caption text-text-2";
+    "inline-flex min-h-5 min-w-0 items-center gap-1 rounded-[10px] border border-separator px-2 py-px text-caption text-text-2";
   return (
     <li className="flex gap-2.5 rounded-control bg-fill px-3 py-2.5">
       <Icon
         name={blockiert ? "blockiert" : "warn"}
         size={16}
-        className={`mt-0.5 shrink-0 ${blockiert ? "text-critical" : "text-soon"}`}
+        className={`mt-0.5 shrink-0 ${blockiert ? "text-critical" : "text-info"}`}
       />
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <p className="m-0 text-body break-words text-text">
@@ -271,7 +268,7 @@ export function BefundZeile({ befund }: { befund: DienstBefund }) {
           {befund.text}
         </p>
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-caption font-medium text-text-2">{dienstName(befund.dienst)}</span>
+          <span className="text-caption text-text-2">{dienstName(befund.dienst)}</span>
           <code className={`${chip} font-mono break-all`} title={c.pfad}>
             {befund.pfad || c.ganzeDatei}
           </code>
@@ -282,7 +279,7 @@ export function BefundZeile({ befund }: { befund: DienstBefund }) {
                 target="_blank"
                 rel="noreferrer"
                 aria-label={c.referenzKnopf(befund.pfad || befund.referenz)}
-                className={`focus-ring ${chip} font-medium no-underline data-[hovered]:bg-fill data-[hovered]:text-text`}
+                className={`focus-ring ${chip} no-underline data-[hovered]:bg-fill data-[hovered]:text-text`}
               >
                 <Icon name="doc" size={12} className="shrink-0" />
                 {c.referenz}
@@ -294,7 +291,7 @@ export function BefundZeile({ befund }: { befund: DienstBefund }) {
           {frage && (
             <Link
               onPress={() => zurFrage(frage)}
-              className={`focus-ring ${chip} cursor-default border-accent/40 font-medium text-accent no-underline data-[hovered]:bg-fill`}
+              className={`focus-ring ${chip} cursor-default border-accent/40 text-accent no-underline data-[hovered]:bg-fill`}
             >
               <Icon name="tune" size={12} className="shrink-0" />
               {t.einrichtung.befragung.ergebnis.imVorschlag}
@@ -310,7 +307,7 @@ export function BefundZeile({ befund }: { befund: DienstBefund }) {
 function Roh({ titel, text }: { titel: string; text: string }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <p className="m-0 text-body font-medium text-text">{titel}</p>
+      <p className="m-0 text-body text-text">{titel}</p>
       <pre className="m-0 max-h-60 overflow-auto rounded-control bg-fill p-3 font-mono text-caption whitespace-pre-wrap break-all text-text">
         {text}
       </pre>
@@ -351,8 +348,8 @@ export function Probelauf() {
   return (
     <Panel className="flex flex-col gap-5 p-6">
       <div>
-        <h2 className="m-0 text-title font-semibold">{p.titel}</h2>
-        <p className="m-0 mt-1 max-w-3xl text-body text-text-2">{p.text}</p>
+        <h2 className="m-0 text-title2 font-semibold">{p.titel}</h2>
+        <p className="m-0 mt-1 measure text-body text-text-2">{p.text}</p>
       </div>
 
       <form
@@ -368,7 +365,7 @@ export function Probelauf() {
           orientation="horizontal"
           className="flex flex-col gap-1.5"
         >
-          <Label className="text-caption font-medium text-text-2">{p.nachricht}</Label>
+          <Label className="text-caption text-text-2">{p.nachricht}</Label>
           <div className="flex flex-wrap gap-2">
             {PROBEN.map((a) => (
               <Radio
@@ -389,7 +386,7 @@ export function Probelauf() {
           aria-describedby={hilfe}
           className="flex flex-col gap-1.5"
         >
-          <Label className="text-caption font-medium text-text-2">{p.angaben}</Label>
+          <Label className="text-caption text-text-2">{p.angaben}</Label>
           <TextArea
             rows={12}
             spellCheck={false}
@@ -475,7 +472,7 @@ function Ergebnis({ probe }: { probe: Probe }) {
           className={`shrink-0 ${besteht ? "text-done" : "text-critical"}`}
         />
         <div className="flex min-w-0 flex-col gap-1">
-          <p className="m-0 text-callout font-semibold text-text">
+          <p className="m-0 text-body font-semibold text-text">
             {besteht ? p.besteht : p.abgelehnt}
             <span className="font-normal text-text-2">
               {" — "}

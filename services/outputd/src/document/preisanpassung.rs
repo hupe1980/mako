@@ -89,7 +89,8 @@ pub struct PreisanpassungView {
     pub wirksam_ab: String,
     /// § 41 Abs. 5 Satz 1 — **Anlass** of the change, in prose the customer
     /// reads: a levy change, a procurement-cost change, a Grundversorgung
-    /// recalculation.
+    /// recalculation. Printed verbatim in whichever `anrede` the letter is
+    /// written in, so phrased without „Sie“ or „du“.
     pub anlass: String,
     /// The notice period actually observed, named — `"1 Monat
     /// (§ 41 Abs. 5 Satz 2 EnWG)"` — so the customer can check it.
@@ -103,6 +104,7 @@ pub struct PreisanpassungView {
     pub sonderkuendigung: SonderkuendigungView,
     /// Free-text the operator adds — a service number, a comparison-portal
     /// pointer. Rendered where the template puts it; no statutory meaning.
+    /// Phrased without „Sie“ or „du“, like [`Self::anlass`].
     pub hinweis: Option<String>,
 }
 
@@ -150,7 +152,7 @@ pub fn specimen() -> PreisanpassungView {
         sparte: Some("STROM".to_owned()),
         wirksam_ab: "2026-05-01".to_owned(),
         anlass: "Gestiegene Beschaffungskosten und die zum 01.01.2026 geänderten \
-                 Netzentgelte Ihres Netzbetreibers."
+                 Netzentgelte des Netzbetreibers."
             .to_owned(),
         ankuendigungsfrist: "1 Monat (§ 41 Abs. 5 Satz 2 EnWG)".to_owned(),
         positionen: vec![
@@ -175,7 +177,7 @@ pub fn specimen() -> PreisanpassungView {
             entgeltfrei: true,
         },
         hinweis: Some(
-            "Sie erreichen uns unter 0800 1234567 oder service@stadtwerke-musterstadt.example."
+            "Fragen beantworten wir unter 0800 1234567 oder service@stadtwerke-musterstadt.example."
                 .to_owned(),
         ),
     }

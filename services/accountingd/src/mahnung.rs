@@ -100,11 +100,12 @@ const ZINS_GRUNDLAGE_ABS1: &str = "5 Prozentpunkte über dem Basiszinssatz (§ 2
 
 /// The § 41f Abs. 1 EnWG threat block, printed only once the case carries a
 /// `sperrandrohung_at`. Printing it because the Stufe is 3 would threaten a
-/// customer whose Abs. 3 gates were never cleared.
+/// customer whose Abs. 3 gates were never cleared. Phrased without a pronoun
+/// of address: outputd prints it in whichever form its `[policy] anrede` sets.
 fn sperrandrohung_text(sperrkosten_ct: i64, entsperrkosten_ct: i64) -> String {
     format!(
         "Sollte der Gesamtbetrag nicht bis zum genannten Termin eingehen, drohen wir hiermit \
-         gemäß § 41f Abs. 1 EnWG die Unterbrechung Ihrer Versorgung an. Die voraussichtlichen \
+         gemäß § 41f Abs. 1 EnWG die Unterbrechung der Versorgung an. Die voraussichtlichen \
          Kosten der Unterbrechung betragen {} EUR, die der Wiederherstellung {} EUR \
          (§ 41f Abs. 6 EnWG).",
         format_ct_as_eur(sperrkosten_ct),

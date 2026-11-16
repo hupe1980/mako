@@ -646,7 +646,7 @@ impl Daemon for Accountingd {
                                 // raise is idempotent on its key but still
                                 // returns `Ok`, so announcing on that alone
                                 // would re-send whenever the 23-hour loop
-                                // drifted across midnight. The CloudEvent id is
+                                // drifts across midnight. The CloudEvent id is
                                 // the same key and `outbox::enqueue` is
                                 // `ON CONFLICT DO NOTHING`, so a replay drops
                                 // at the outbox.

@@ -61,10 +61,11 @@ fn each_role_registers_its_module_set() {
         (Rolle::MsbStrom, &["gpke", "wim"]),
         (Rolle::MsbGas, &["wim", "geli-gas"]),
         (Rolle::EsaStrom, &["wim"]),
+        (Rolle::BkvStrom, &["mabis"]),
     ];
     assert_eq!(
         expected.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
-        Rolle::ALL.to_vec(),
+        Rolle::ALLE.to_vec(),
         "every role has exactly one row"
     );
     for (rolle, modules) in expected {
@@ -86,7 +87,7 @@ fn each_role_registers_its_module_set() {
     }
     // All roles together are the whole stack the guards measure.
     assert_eq!(
-        makod::startup::modules_for(&Rolle::ALL.into_iter().collect()).len(),
+        makod::startup::modules_for(&Rolle::ALLE.into_iter().collect()).len(),
         makod::startup::production_modules().len()
     );
 }
@@ -109,6 +110,21 @@ fn an_lf_strom_deployment_registers_no_network_module() {
             "lf-strom registers {nb_only}: {names:?}"
         );
     }
+}
+
+/// A BKV-only deployment loads the BKV side of MaBiS and nothing else.
+///
+/// The Bilanzkreisverantwortlicher is party to no GPKE, WiM, NZR-EMob or
+/// Redispatch process; MaBiS loads with its own PIDs only
+/// (`mako_mabis::BKV_PIDS`).
+#[test]
+fn a_bkv_strom_deployment_loads_mabis_alone() {
+    let names: Vec<&str> =
+        makod::startup::modules_for(&std::iter::once(makod::deployment::Rolle::BkvStrom).collect())
+            .iter()
+            .map(|m| m.name())
+            .collect();
+    assert_eq!(names, ["mabis"]);
 }
 
 /// Assert that every active FV transition is registered in the migration
@@ -371,7 +387,7 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // The Marktrollen a deployment can declare, counted from the role type
     // `[deployment] rollen` parses — the role, not the Sparte: `lf-strom` and
     // `lf-gas` are one Marktrolle in two Sparten, and ESA is Strom-only.
-    let makod_roles: std::collections::BTreeSet<&str> = makod::deployment::Rolle::ALL
+    let makod_roles: std::collections::BTreeSet<&str> = makod::deployment::Rolle::ALLE
         .iter()
         .map(|r| r.token().split('-').next().unwrap_or(r.token()))
         .collect();

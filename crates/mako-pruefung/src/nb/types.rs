@@ -9,6 +9,7 @@ use time::Date;
 use uuid::Uuid;
 
 use mako_markt::domain::Sparte;
+pub use mako_markt::repository::ZuordnungsermaechtigungRecord;
 
 pub use crate::antwort::{AntwortDetail, RejectReason};
 use crate::codes::{AntwortCode, Cluster};
@@ -299,6 +300,22 @@ pub struct AnmeldungAnfrage {
     /// [`Marktlokationsart::Ruhend`]; every unanswered step reached escalates.
     #[serde(default)]
     pub ruhend: RuhendeAnmeldung,
+    /// The Bilanzkreis the Anmeldung registers the Marktlokation into — the
+    /// Produktpaket's `CAV+ZV4` (UTILMD AHB Strom 2.2 Kap. 5.3).
+    ///
+    /// `None` when the message carries none; `E_0622` Prüfschritt 60 / 260
+    /// then refuses, because without one no Zuordnungsermächtigung can cover
+    /// the Anmeldung.
+    #[serde(default)]
+    pub bilanzkreis: Option<String>,
+    /// Every Zuordnungsermächtigung the NB holds for the requesting Lieferant,
+    /// read from `marktd` when the walk runs.
+    ///
+    /// `None` means nobody read the store, and the Prüfschritt escalates — an
+    /// unread input is never an all-clear. `Some(vec![])` is an answer: no BKV
+    /// has authorised this Lieferant, and the walk refuses.
+    #[serde(default)]
+    pub zuordnungsermaechtigungen: Option<Vec<ZuordnungsermaechtigungRecord>>,
 }
 
 // ── Ruhende Marktlokation (E_0622 Prüfschritte 18–28) ─────────────────────────

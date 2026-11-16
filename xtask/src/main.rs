@@ -35,6 +35,8 @@ Commands:
   check-expected-tenant  A service reading `Claims` pins the tenant it expects
   check-vorlauf-consulted  Every catalogued Mindestvorlaufzeit is read by something
   check-behg-prices   Refuse a BEHG price table row for a year no enacted statute prices
+  check-referenzreihen  Every catalogued Referenzreihe is sourced, licensed and read; no
+                        value ships for a series mako may not distribute
   check-specs         Local: every spec's Status matches its tasks, and specs/ and
                         concepts/ROADMAP.md name each other (skips when they are absent)
   check-runner-disk   Refuse a workflow job that compiles the workspace without reclaiming
@@ -204,6 +206,7 @@ mod check_process_verdict;
 mod check_prompt_tools;
 mod check_publish_order;
 mod check_quotations;
+mod check_referenzreihen;
 mod check_release_coverage;
 mod check_request_bodies;
 mod check_rounding;
@@ -250,6 +253,7 @@ fn main() {
         Some("check-expected-tenant") => check_expected_tenant(),
         Some("check-vorlauf-consulted") => check_vorlauf_consulted(),
         Some("check-behg-prices") => check_behg_prices(),
+        Some("check-referenzreihen") => check_referenzreihen(),
         Some("check-specs") => check_specs(),
         Some("check-routes") => check_routes(),
         Some("check-runner-disk") => check_runner_disk(),
@@ -418,6 +422,13 @@ fn check_vorlauf_consulted() {
 fn check_behg_prices() {
     let (workspace_root, _) = workspace_info();
     if !check_behg_prices::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_referenzreihen() {
+    let (workspace_root, _) = workspace_info();
+    if !check_referenzreihen::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

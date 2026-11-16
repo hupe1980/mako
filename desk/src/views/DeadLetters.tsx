@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { DIENST, nichtErreichbar } from "../app/dienste";
 import { useRolle } from "../app/rollen";
 import { call, ServiceUnavailable } from "../data/mcp";
+import { Page } from "../design/Page";
 import { EmptyState, Notice, Panel } from "../design/Panel";
 import { type Spalte, Table } from "../design/Table";
 import { formatCount } from "../format/count";
@@ -43,7 +44,7 @@ export function DeadLettersView() {
       id: "was",
       titel: d.spalteWas,
       rowHeader: true,
-      className: "text-callout text-text",
+      className: "text-body text-text",
       zelle: (z) => z.reason_detail,
     },
     {
@@ -55,12 +56,7 @@ export function DeadLettersView() {
   ];
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">{d.titel}</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">{d.untertitel}</p>
-      </header>
-
+    <Page width="work" title={d.titel} subtitle={d.untertitel}>
       {q.isError && (
         <Notice
           tone="failure"
@@ -95,6 +91,6 @@ export function DeadLettersView() {
           )}
         </Panel>
       )}
-    </div>
+    </Page>
   );
 }

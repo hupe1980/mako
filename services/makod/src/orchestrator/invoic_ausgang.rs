@@ -29,7 +29,7 @@
 //! workflow crate link the EDIFACT profiles.
 
 use edi_energy::{Completion, MessageType, Profile, ReleaseRegistry, SkeletonParties};
-use edifact_rs::OwnedSegment;
+use edifact::OwnedSegment;
 use rubo4e::current::{
     Adresse, Energierichtung, Geschaeftspartner, Mengeneinheit, NetznutzungRechnungsart,
     NetznutzungRechnungstyp, Rechnung, Rechnungsposition, Steuerart, Steuerbetrag, Waehrungscode,
@@ -863,7 +863,7 @@ impl<'p> Seeder<'p> {
         if !befunde.is_empty() {
             return Err(InvoicAusgangError::Invalid(befunde));
         }
-        let bytes = edifact_rs::segments_to_bytes(&segments).map_err(|e| {
+        let bytes = edifact::segments_to_bytes(&segments).map_err(|e| {
             InvoicAusgangError::Invalid(vec![Befund {
                 nr: None,
                 regel: None,
@@ -880,7 +880,7 @@ impl<'p> Seeder<'p> {
         // The interchange goes out in UNOC (ISO 8859-1, Allgemeine
         // Festlegungen 6.1d, UNB DE0001); a character outside it is refused
         // here, to the caller, rather than at dispatch after the process began.
-        edifact_rs::Charset::UnoC.encode(&nachricht).map_err(|e| {
+        edifact::Charset::UnoC.encode(&nachricht).map_err(|e| {
             InvoicAusgangError::Invalid(vec![Befund {
                 nr: None,
                 regel: None,
@@ -896,7 +896,7 @@ impl<'p> Seeder<'p> {
 /// warning because a receiver may still process the message; a sender has no
 /// reason to send a value the AHB's format refuses — an amount with three
 /// Nachkommastellen where `[930]` admits two is rounded by nobody.
-fn refuses(i: &edifact_rs::ValidationIssue) -> bool {
+fn refuses(i: &edifact::ValidationIssue) -> bool {
     edi_energy::profile::validate::bars_sending(i)
 }
 
@@ -1297,8 +1297,8 @@ mod tests {
     }
 
     fn segments(nachricht: &str) -> Vec<OwnedSegment> {
-        edifact_rs::from_bytes(nachricht.as_bytes())
-            .map(|s| s.map(edifact_rs::Segment::into_owned))
+        edifact::from_bytes(nachricht.as_bytes())
+            .map(|s| s.map(edifact::Segment::into_owned))
             .collect::<Result<Vec<_>, _>>()
             .expect("the built message parses")
     }
@@ -1413,7 +1413,7 @@ mod tests {
         // the Rechnungsbetrag `MOA+77`.
         assert!(m.nachricht.contains("MOA+203:80'"), "{}", m.nachricht);
         assert!(m.nachricht.contains("MOA+77:102.58'"), "{}", m.nachricht);
-        let read = crate::orchestrator::adapters::build_rechnung(&segments(&m.nachricht));
+        let read = crate::orchestrator::adapters::build_rechnung(&segments(&m.nachricht), '.');
         assert_eq!(read.rechnungsnummer, issued.rechnungsnummer);
         assert_eq!(read.rechnungsdatum, issued.rechnungsdatum);
         assert_eq!(read.faelligkeitsdatum, issued.faelligkeitsdatum);
@@ -1449,7 +1449,7 @@ mod tests {
             "{}",
             m.nachricht
         );
-        let read = crate::orchestrator::adapters::build_rechnung(&segments(&m.nachricht));
+        let read = crate::orchestrator::adapters::build_rechnung(&segments(&m.nachricht), '.');
         assert_eq!(read.rechnungsnummer, issued.rechnungsnummer);
         assert_round_trip(&issued, &read, Decimal::ONE);
         assert_positions(&issued, &read);
@@ -1460,7 +1460,7 @@ mod tests {
     fn renders_validates_and_round_trips(issued: &Rechnung, k: &Kopf<'_>) -> String {
         let m = rechnung(fv20261001(), issued, k).unwrap_or_else(|e| panic!("renders: {e}"));
         assert!(findings(&m, k.pid).is_empty(), "{:?}", findings(&m, k.pid));
-        let read = crate::orchestrator::adapters::build_rechnung(&segments(&m.nachricht));
+        let read = crate::orchestrator::adapters::build_rechnung(&segments(&m.nachricht), '.');
         assert_eq!(read.rechnungsnummer, issued.rechnungsnummer);
         assert_eq!(read.rechnungsdatum, issued.rechnungsdatum);
         assert_eq!(read.faelligkeitsdatum, issued.faelligkeitsdatum);
@@ -1620,7 +1620,7 @@ mod tests {
         );
         assert!(m.nachricht.contains("MOA+77:-102.58'"), "{}", m.nachricht);
         assert!(!m.nachricht.contains("LIN+"), "{}", m.nachricht);
-        let read = crate::orchestrator::adapters::build_rechnung(&segments(&m.nachricht));
+        let read = crate::orchestrator::adapters::build_rechnung(&segments(&m.nachricht), '.');
         assert_eq!(read.rechnungsnummer.as_deref(), Some("STO-2026-0001"));
         assert_eq!(read.ist_storno, Some(true));
         assert_eq!(read.original_rechnungsnummer, original.rechnungsnummer);

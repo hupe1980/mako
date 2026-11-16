@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use edifact_rs::Writer;
+use edifact::Writer;
 
 use crate::AgencyCode;
 use crate::{Error, Release};
@@ -384,7 +384,7 @@ impl<S, R> OrdrespBuilder<S, R> {
                     &[a.land.as_str()][..],
                 ],
             )
-            .map_err(Error::Parse)?;
+            .map_err(Error::write)?;
         }
         Ok(())
     }
@@ -495,7 +495,7 @@ impl<S, R> OrdrespBuilder<S, R> {
                 .collect();
             let chunks: Vec<&str> = chunks.iter().map(String::as_str).collect();
             let elements: [&[&str]; 4] = [&[qualifier.as_str()], &[""], &[""], &chunks];
-            w.write_composites("FTX", &elements).map_err(Error::Parse)?;
+            w.write_composites("FTX", &elements).map_err(Error::write)?;
         }
         self.emit_parties(&mut w)?;
         // ── SG27: line item ──────────────────────────────────────────────────
@@ -504,7 +504,7 @@ impl<S, R> OrdrespBuilder<S, R> {
         }
         emit_seg!(w, "UNS", "S");
         w.finish_unt(&self.inner.message_ref)
-            .map_err(Error::Parse)?;
+            .map_err(Error::write)?;
         Ok(buf)
     }
     /// Build and serialize the message to EDIFACT bytes.

@@ -6,12 +6,12 @@
 //! configuration will start*. That promise only holds if every fatal
 //! configuration error is discovered **before** the check-mode exit.
 //!
-//! Historically several were not. A config naming an AS4 partner with no
-//! encryption certificate, a partner endpoint on plain `http://`, or a
-//! syntactically invalid Cedar policy all passed `--check` with exit 0 and then
-//! killed the real boot — the pipeline had already promoted the release.
+//! A config naming an AS4 partner with no encryption certificate, a partner
+//! endpoint on plain `http://`, or a syntactically invalid Cedar policy that
+//! passes `--check` and then kills the real boot does so after the pipeline
+//! has promoted the release.
 //!
-//! Everything that can be judged from the configuration alone now lives here.
+//! Everything that can be judged from the configuration alone lives here.
 //! `main` runs [`pruefe`] before the `--check` exit and hands the resolved
 //! values to the workers, so the check and the boot cannot diverge: they run the
 //! same code and the boot consumes the check's own output.
@@ -859,7 +859,7 @@ mod tests {
                     endpoint: Some("https://partner.example/as4/inbox/9900001000002".to_owned()),
                     encryption_cert_pem_file: Some(self.path("partner.enc.pem")),
                     signing_cert_pem_files: vec![self.path("partner.sig.pem")],
-                    quirks: Vec::new(),
+                    quirks: None,
                     de0004_ausnahme: Vec::new(),
                 }],
                 allow_no_signing: false,
@@ -1020,8 +1020,36 @@ mod tests {
         assert!(err.contains("HTTPS"), "{err}");
     }
 
-    /// The removed lenient-receipts switch is refused, naming the per-partner
-    /// quirk that replaces it.
+    /// Regelungen zum Übertragungsweg für AS4 2.6: a partner endpoint on an IP
+    /// address cannot use SNI (Kap. 3, S. 5), and a partner encryption
+    /// certificate and an own certificate carry their MP-ID in the subject OU
+    /// (Kap. 5.2, S. 6) — each stops the boot.
+    #[test]
+    fn the_as4_2_6_certificate_and_endpoint_rules_stop_the_boot() {
+        let f = As4Files::new();
+        let mut as4 = f.as4();
+        as4.partner[0].endpoint = Some("https://203.0.113.7/as4/inbox".to_owned());
+        let err = as4_rejection(&as4, &f.parties());
+        assert!(err.contains("Kap. 3"), "{err}");
+
+        let mut as4 = f.as4();
+        as4.partner[0].encryption_cert_pem_file = Some(f.path("enc.cert.pem"));
+        let err = as4_rejection(&as4, &f.parties());
+        assert!(
+            err.contains("subject OU of the encryption certificate"),
+            "{err}"
+        );
+
+        f.write("partner.enc.key.pem", &f.partner.encryption.key_pem);
+        let mut parties = f.parties();
+        let keys = parties[0].as4.as_mut().expect("as4");
+        keys.encryption_cert_pem_file = f.path("partner.enc.pem");
+        keys.encryption_key_pem_file = f.path("partner.enc.key.pem");
+        let err = as4_rejection(&f.as4(), &parties);
+        assert!(err.contains("Kap. 5.2"), "{err}");
+    }
+
+    /// The removed lenient-receipts switch is refused, naming the rule.
     #[test]
     fn the_removed_lenient_receipts_key_is_refused() {
         let f = As4Files::new();
@@ -1031,20 +1059,29 @@ mod tests {
             ..f.as4()
         };
         let err = as4_rejection(&as4, &f.parties());
-        assert!(err.contains("receipt-without-non-repudiation"), "{err}");
-        assert!(err.contains("[[as4.partner]] quirks"), "{err}");
+        assert!(err.contains("Kap. 7.3"), "{err}");
     }
 
-    /// The quirk is the per-partner replacement and is accepted.
+    /// Regelungen zum Übertragungsweg für AS4 2.6, Kap. 7.3 (S. 8): a
+    /// transmission without an NRR has failed, so the removed per-partner
+    /// receipt relaxation stops the boot, naming the partner and the rule.
     #[test]
-    fn a_partner_quirk_is_accepted_and_an_unknown_one_refused() {
+    fn a_configured_quirks_key_is_refused() {
         let f = As4Files::new();
+        let partner: crate::config::As4PartnerConfig = toml::from_str(
+            "mp_id = \"9900001000002\"\nquirks = [\"receipt-without-non-repudiation\"]",
+        )
+        .unwrap();
         let mut as4 = f.as4();
-        as4.partner[0].quirks = vec!["receipt-without-non-repudiation".to_owned()];
-        as4_preflight(&as4, &f.parties()).expect("the quirk is a valid setting");
-        as4.partner[0].quirks = vec!["lenient".to_owned()];
+        as4.partner[0].quirks = partner.quirks;
         let err = as4_rejection(&as4, &f.parties());
-        assert!(err.contains("unknown quirk"), "{err}");
+        assert!(
+            err.contains("[[as4.partner]] 9900001000002 quirks"),
+            "{err}"
+        );
+        assert!(err.contains("Kap. 7.3 (S. 8)"), "{err}");
+        as4.partner[0].quirks = None;
+        as4_preflight(&as4, &f.parties()).expect("without the key the partner builds");
     }
 
     /// A DE 0004 escape names another market participant's MP-ID — never a

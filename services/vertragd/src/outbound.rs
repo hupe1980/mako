@@ -50,6 +50,10 @@ pub enum TaskKind {
     Abrechnungskonto,
     /// `accountingd` § 13 BGB Verbraucher status of the contract.
     Verbraucher,
+    /// `outputd` — a customer document the statute owes, rendered, stored and
+    /// delivered: the Vertragszusammenfassung, the Vertragsbestätigung, the
+    /// Widerrufsbestätigung ([`crate::dokumente`]).
+    Dokument,
 }
 
 impl TaskKind {
@@ -61,6 +65,7 @@ impl TaskKind {
         Self::AblesungEnde,
         Self::Abrechnungskonto,
         Self::Verbraucher,
+        Self::Dokument,
     ];
 
     #[must_use]
@@ -72,6 +77,7 @@ impl TaskKind {
             Self::AblesungEnde => "ABLESUNG_ENDE",
             Self::Abrechnungskonto => "ABRECHNUNGSKONTO",
             Self::Verbraucher => "VERBRAUCHER",
+            Self::Dokument => "DOKUMENT",
         }
     }
 
@@ -85,6 +91,7 @@ impl TaskKind {
             "ABLESUNG_ENDE" => Self::AblesungEnde,
             "ABRECHNUNGSKONTO" => Self::Abrechnungskonto,
             "VERBRAUCHER" => Self::Verbraucher,
+            "DOKUMENT" => Self::Dokument,
             _ => None?,
         })
     }
@@ -101,6 +108,20 @@ pub struct Task {
 }
 
 // ── Task constructors ─────────────────────────────────────────────────────────
+
+/// The `outputd` task issuing document `kind` about `subject_ref` — the
+/// contract for the Vertragszusammenfassung and the Vertragsbestätigung, the
+/// Widerruf for its Eingangsbestätigung. Keyed by `(kind, subject_ref)`, the
+/// same pair `outputd` holds unique, so a retried issue is a replay.
+#[must_use]
+pub fn dokument(kind: &str, subject_ref: &str, body: serde_json::Value) -> Task {
+    Task {
+        kind: TaskKind::Dokument,
+        komp_id: None,
+        payload: serde_json::json!({ "kind": kind, "body": body }),
+        dedupe_key: format!("DOKUMENT:{kind}:{subject_ref}"),
+    }
+}
 
 /// The `processd` Lieferbeginn task for one component.
 ///
@@ -535,6 +556,26 @@ pub fn command(tenant: &str, task: &Task) -> Result<Command> {
                 call_body(&task.payload)?.clone(),
             )
         }
+        TaskKind::Dokument => {
+            let kind = task
+                .payload
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .context("document task carries no kind")?;
+            anyhow::ensure!(
+                kind.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
+                "document kind must be SCREAMING_SNAKE (kind={kind})"
+            );
+            (
+                "outputd",
+                CommandMethod::Post,
+                format!("/api/v1/documents/issue/{kind}"),
+                task.payload
+                    .get("body")
+                    .cloned()
+                    .context("document task carries no body")?,
+            )
+        }
         TaskKind::AblesungBeginn | TaskKind::AblesungEnde => (
             "edmd",
             CommandMethod::Post,
@@ -762,6 +803,14 @@ pub fn workers(pool: &PgPool, cfg: &VertragdConfig) -> Vec<OutboxWorker> {
         ),
     ]
     .into_iter()
+    // The documents an online contract owes. Without `outputd_url` they stay
+    // queued; `bestellung_befunde` refuses that posture once online orders
+    // are taken.
+    .chain(
+        cfg.outputd_url
+            .as_ref()
+            .map(|url| ("outputd", url, secret(cfg.outputd_api_key.as_ref()))),
+    )
     .map(|(name, url, key)| {
         OutboxWorker::commands(pool.clone(), name, url.clone(), key).on_delivered(Arc::new(
             |conn, delivered| Box::pin(follow_up(conn, delivered)),

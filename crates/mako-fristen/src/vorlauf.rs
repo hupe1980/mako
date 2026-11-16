@@ -1030,6 +1030,209 @@ pub fn eog_ankuendigung_fristgerecht(
     )
 }
 
+// ── Widerrufsfrist (§§ 355, 356 BGB) ─────────────────────────────────────────
+
+/// § 355 Abs. 2 Satz 1 BGB: „Die Widerrufsfrist beträgt 14 Tage."
+pub const WIDERRUFSFRIST_TAGE: i64 = 14;
+
+/// § 356 Abs. 4 Satz 1 BGB: „Das Widerrufsrecht erlischt spätestens zwölf
+/// Monate und 14 Tage nach dem in Absatz 2 oder § 355 Absatz 2 Satz 2
+/// genannten Zeitpunkt." — the months.
+pub const WIDERRUF_ERLOESCHEN_MONATE: u32 = 12;
+
+/// § 356 Abs. 4 Satz 1 BGB — the days after [`WIDERRUF_ERLOESCHEN_MONATE`].
+pub const WIDERRUF_ERLOESCHEN_TAGE: i64 = 14;
+
+/// A consumer's Widerrufsfrist for a Fernabsatz contract on the supply of Strom
+/// or Gas, as [`widerrufsfrist`] decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Widerrufsfrist {
+    /// The day the fourteen days start from — the later of the
+    /// Vertragsschluss and the Belehrung. `None` while no Belehrung is proven:
+    /// § 356 Abs. 3 Satz 1 BGB keeps the Frist from starting, and only the
+    /// [`Self::erloeschen`] cap runs.
+    pub beginn: Option<Date>,
+    /// The last day a Widerruf may be sent (§ 355 Abs. 1 Satz 5 BGB: the
+    /// sending decides), to its end in gesetzlicher deutscher Zeit.
+    pub ende: Date,
+    /// The last day before the right is extinguished whatever the Belehrung
+    /// (§ 356 Abs. 4 Satz 1 BGB).
+    pub erloeschen: Date,
+}
+
+impl Widerrufsfrist {
+    /// Whether a Widerruf sent on `abgesendet` (a Berlin date) is in time.
+    #[must_use]
+    pub fn rechtzeitig(&self, abgesendet: Date) -> bool {
+        abgesendet <= self.ende
+    }
+}
+
+/// The Widerrufsfrist of a consumer's contract on the supply of Strom or Gas.
+///
+/// - **Start**: the Vertragsschluss — § 356 Abs. 2 Nr. 2 BGB names it for „die
+///   nicht in einem begrenzten Volumen oder in einer bestimmten Menge
+///   angebotene Lieferung von Wasser, Gas oder Strom", so the Lieferbeginn
+///   plays no part and is not an argument. Never before the Belehrung: „Die
+///   Widerrufsfrist beginnt nicht, bevor der Unternehmer den Verbraucher
+///   entsprechend den Anforderungen des Artikels 246a § 1 Absatz 2 Satz 1
+///   Nummer 1 … unterrichtet hat." (§ 356 Abs. 3 Satz 1 BGB). `belehrung` is
+///   the day that Unterrichtung is proven; `None` when it is not (yet).
+/// - **End**: 14 days (§ 355 Abs. 2 Satz 1); the start day is not counted
+///   (§ 187 Abs. 1 BGB) and the Frist ends with the expiry of the last day
+///   (§ 188 Abs. 1). A last day that is a Saturday, Sunday or holiday moves to
+///   the next Werktag (§ 193 BGB).
+/// - **Cap**: twelve months and 14 days after the Vertragsschluss (§ 356
+///   Abs. 4 Satz 1) — the months by § 188 Abs. 2/3, clamped to the month's end
+///   — and § 193 on its last day. The end never runs past it.
+///
+/// § 193 BGB names the holidays „am Erklärungs- oder Leistungsort", which mako
+/// does not hold. `cal` is the union of every Land's holidays (with 24.12. and
+/// 31.12.), so the end only ever moves later than the consumer's own Land
+/// would move it: no Widerruf that is timely where it was declared is refused.
+///
+/// # Panics
+///
+/// Only if date arithmetic overflows the Gregorian calendar.
+#[must_use]
+pub fn widerrufsfrist(
+    vertragsschluss: Date,
+    belehrung: Option<Date>,
+    cal: HolidayCalendar,
+) -> Widerrufsfrist {
+    let tag_193 = |d: Date| crate::next_werktag(d, cal);
+    let erloeschen = tag_193(
+        crate::add_months(vertragsschluss, WIDERRUF_ERLOESCHEN_MONATE)
+            + time::Duration::days(WIDERRUF_ERLOESCHEN_TAGE),
+    );
+    let Some(belehrung) = belehrung else {
+        return Widerrufsfrist {
+            beginn: None,
+            ende: erloeschen,
+            erloeschen,
+        };
+    };
+    let beginn = vertragsschluss.max(belehrung);
+    let ende = tag_193(beginn + time::Duration::days(WIDERRUFSFRIST_TAGE)).min(erloeschen);
+    Widerrufsfrist {
+        beginn: Some(beginn),
+        ende,
+        erloeschen,
+    }
+}
+
+#[cfg(test)]
+mod widerrufsfrist_tests {
+    use super::*;
+    use time::macros::date;
+
+    const CAL: HolidayCalendar = HolidayCalendar::BdewMaKo;
+
+    /// § 356 Abs. 2 Nr. 2 BGB: the start is the Vertragsschluss; the
+    /// Lieferbeginn is not even an input. Mon 02.11.2026 + 14 = Mon 16.11.
+    #[test]
+    fn starts_at_vertragsschluss_not_lieferbeginn() {
+        let f = widerrufsfrist(date!(2026 - 11 - 02), Some(date!(2026 - 11 - 02)), CAL);
+        assert_eq!(f.beginn, Some(date!(2026 - 11 - 02)));
+        assert_eq!(f.ende, date!(2026 - 11 - 16));
+    }
+
+    /// § 356 Abs. 3 Satz 1 BGB: a Belehrung after the Vertragsschluss moves
+    /// the start to it.
+    #[test]
+    fn belehrung_after_conclusion_moves_the_start() {
+        let f = widerrufsfrist(date!(2026 - 11 - 02), Some(date!(2026 - 11 - 10)), CAL);
+        assert_eq!(f.beginn, Some(date!(2026 - 11 - 10)));
+        assert_eq!(f.ende, date!(2026 - 11 - 24));
+    }
+
+    /// § 356 Abs. 3 Satz 1 BGB says „nicht, bevor": a Belehrung shown on the
+    /// order page before the click does not start the Frist before the
+    /// Vertragsschluss.
+    #[test]
+    fn a_belehrung_before_conclusion_starts_at_conclusion() {
+        let f = widerrufsfrist(date!(2026 - 11 - 02), Some(date!(2026 - 10 - 30)), CAL);
+        assert_eq!(f.beginn, Some(date!(2026 - 11 - 02)));
+        assert_eq!(f.ende, date!(2026 - 11 - 16));
+    }
+
+    /// § 356 Abs. 4 Satz 1 BGB with § 188 Abs. 2: 02.11.2026 + 12 Monate =
+    /// 02.11.2027, + 14 Tage = Tue 16.11.2027.
+    #[test]
+    fn extinguishes_twelve_months_and_fourteen_days_after_conclusion() {
+        let f = widerrufsfrist(date!(2026 - 11 - 02), Some(date!(2026 - 11 - 02)), CAL);
+        assert_eq!(f.erloeschen, date!(2027 - 11 - 16));
+    }
+
+    /// § 356 Abs. 4 Satz 1 BGB: a Belehrung given so late that its fourteen
+    /// days run past the cap ends at the cap, measured from the
+    /// Vertragsschluss and not from the Belehrung.
+    #[test]
+    fn a_late_belehrung_never_runs_past_the_cap() {
+        let f = widerrufsfrist(date!(2026 - 11 - 02), Some(date!(2027 - 11 - 10)), CAL);
+        assert_eq!(f.ende, date!(2027 - 11 - 16));
+        assert_eq!(f.ende, f.erloeschen);
+    }
+
+    /// § 193 BGB: Sun 15.11.2026 + 14 = Sun 29.11. → Mon 30.11.
+    #[test]
+    fn a_sunday_end_moves_to_monday() {
+        let f = widerrufsfrist(date!(2026 - 11 - 15), Some(date!(2026 - 11 - 15)), CAL);
+        assert_eq!(f.ende, date!(2026 - 11 - 30));
+    }
+
+    /// § 193 BGB names „Sonnabend" too: Sat 14.11.2026 + 14 = Sat 28.11. →
+    /// Mon 30.11.
+    #[test]
+    fn a_saturday_end_moves_to_monday() {
+        let f = widerrufsfrist(date!(2026 - 11 - 14), Some(date!(2026 - 11 - 14)), CAL);
+        assert_eq!(f.ende, date!(2026 - 11 - 30));
+    }
+
+    /// § 193 BGB on the union calendar: Buß- und Bettag (Wed 18.11.2026) is a
+    /// holiday in Sachsen alone, and still moves the end to Thu 19.11.
+    #[test]
+    fn a_holiday_of_any_land_moves_the_end() {
+        let f = widerrufsfrist(date!(2026 - 11 - 04), Some(date!(2026 - 11 - 04)), CAL);
+        assert_eq!(f.ende, date!(2026 - 11 - 19));
+    }
+
+    /// § 193 BGB across Christmas: Fri 11.12.2026 + 14 = Fri 25.12. → 26.12.
+    /// holiday, 27.12. Sunday → Mon 28.12.
+    #[test]
+    fn a_christmas_end_moves_past_both_holidays_and_the_weekend() {
+        let f = widerrufsfrist(date!(2026 - 12 - 11), Some(date!(2026 - 12 - 11)), CAL);
+        assert_eq!(f.ende, date!(2026 - 12 - 28));
+    }
+
+    /// § 188 Abs. 3 BGB: twelve months from 29.02.2028 have no 29th, so the
+    /// months end on 28.02.2029, and the 14 days end on Wed 14.03.2029.
+    #[test]
+    fn a_conclusion_on_the_29th_of_february_caps_at_the_month_end() {
+        let f = widerrufsfrist(date!(2028 - 02 - 29), None, CAL);
+        assert_eq!(f.erloeschen, date!(2029 - 03 - 14));
+    }
+
+    /// § 356 Abs. 3 Satz 1 BGB: without a proven Belehrung the fourteen days
+    /// have not started, and only the § 356 Abs. 4 cap runs.
+    #[test]
+    fn without_a_belehrung_only_the_cap_runs() {
+        let f = widerrufsfrist(date!(2026 - 11 - 02), None, CAL);
+        assert_eq!(f.beginn, None);
+        assert_eq!(f.ende, date!(2027 - 11 - 16));
+        assert!(f.rechtzeitig(date!(2027 - 06 - 01)));
+    }
+
+    /// § 355 Abs. 1 Satz 5 BGB: sending on the last day is in time, the day
+    /// after is not.
+    #[test]
+    fn the_last_day_is_in_time_and_the_next_is_not() {
+        let f = widerrufsfrist(date!(2026 - 11 - 15), Some(date!(2026 - 11 - 15)), CAL);
+        assert!(f.rechtzeitig(date!(2026 - 11 - 30)));
+        assert!(!f.rechtzeitig(date!(2026 - 12 - 01)));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

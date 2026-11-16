@@ -13,6 +13,7 @@
 //! |---|---|
 //! | `billingd` | the 2027 BEHG regime, read from billingd's `[policy]` |
 //! | `daemon` | the [`Productd`] daemon `mako_service::run` starts |
+//! | `endkunden_angebot` | the frozen, all-in priced B2C offer an online order cites |
 //! | `config` | see module docs |
 //! | `handlers` | see module docs |
 //! | `pg` | see module docs |
@@ -22,6 +23,7 @@ pub mod billingd;
 pub mod bo4e_angebot;
 pub mod config;
 pub mod daemon;
+pub mod endkunden_angebot;
 pub mod handlers;
 pub mod mcp_server;
 pub mod pg;

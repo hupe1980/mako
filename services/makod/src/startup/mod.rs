@@ -256,10 +256,14 @@ pub const MODULE_TABLE: &[ModuleRow] = &[
     //   Summenzeitreihen, IFTSTA Datenstatus, the MaBiS-ZP lifecycle. The
     //   Lieferant is party to the LF-SZR, the LF-AASZR, the Lieferanten-
     //   clearinglisten and the normierten Profile; on an LF-only deployment
-    //   the module registers those PIDs alone (`mako_mabis::LF_PIDS`).
+    //   the module registers those PIDs alone (`mako_mabis::LF_PIDS`). The
+    //   Bilanzkreisverantwortlicher is party to the BK-SZR, its Prüfmitteilung
+    //   and Datenstatus, the Bilanzkreiszuordnungs- and BAS-Clearingliste and
+    //   its Anforderungen; a BKV-only deployment registers those alone
+    //   (`mako_mabis::BKV_PIDS`).
     ModuleRow {
         name: "mabis",
-        rollen: &[Rolle::NbStrom, Rolle::LfStrom],
+        rollen: &[Rolle::NbStrom, Rolle::LfStrom, Rolle::BkvStrom],
         build: || Box::new(mako_mabis::MabisModule),
     },
     // EmobModule — NZR-EMob / Modell 2 (BK6-20-160 Anlage 6, BK6-24-267):
@@ -383,9 +387,8 @@ pub(crate) fn build_engine(
 /// would otherwise be silently dead-lettered rather than dispatched.
 ///
 /// The registry list is derived from [`adapters::coverage`], not maintained
-/// here. The previous version of this function was a hand-written table of
-/// workflow names, and it had drifted: twenty of the seventy-two registries
-/// were absent from it and were therefore never checked at all.
+/// here: a hand-written table of workflow names drifts, and a registry absent
+/// from it is never checked at all.
 pub(crate) fn adapter_befunde() -> Vec<mako_service::Befund> {
     use mako_service::befund::{Befund, Bereich};
     let known = adapters::known_fvs();
@@ -910,10 +913,10 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
     // The prefix is `process/`, never a domain name. Every stream in this
     // platform is `process/{tenant}/{process}` — `StreamId::for_process` builds
     // no other shape — so a prefix like `gpke/` selects nothing and the
-    // projection folds zero events while its heartbeat reports it healthy. Two
-    // workers shipped exactly that way; `tests/it/projection_prefix_guard.rs`
-    // refuses it now. Since there is no per-domain prefix, each projection sees
-    // every workflow's events and filters on `event_type` itself.
+    // projection folds zero events while its heartbeat reports it healthy;
+    // `tests/it/projection_prefix_guard.rs` refuses it. Since there is no
+    // per-domain prefix, each projection sees every workflow's events and
+    // filters on `event_type` itself.
     if cfg.projection_checkpoint_interval > 0 {
         let interval = Duration::from_secs(cfg.projection_checkpoint_interval);
 

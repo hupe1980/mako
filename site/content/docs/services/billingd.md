@@ -784,7 +784,8 @@ takes.
   Abs. 5 UStG).
 - **§ 40 Abs. 2 EnWG:** supplier identity plus the statutory hints
   (Schlichtungsstelle Energie § 111b EnWG, BNetzA Verbraucherservice,
-  Energieberatung, § 41c Wechselhinweis) on every document.
+  Energieberatung, the § 40 Abs. 2 Satz 1 Nr. 12 Wechselhinweis with the § 41c
+  Vergleichsinstrumente) on every document.
 
 ### E-invoicing mandates
 

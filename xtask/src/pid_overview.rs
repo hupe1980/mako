@@ -67,9 +67,8 @@ pub struct Overview {
     /// rows marks it. That is the question consumers actually ask: „can this
     /// Prüfidentifikator arrive in a Gas interchange?"
     ///
-    /// This exists because the classification was hand-maintained in
-    /// `makod`, where five PIDs were wrong at once — each one silently
-    /// suppressing or misrouting a mandatory CONTRL.
+    /// Read off the overview rather than hand-maintained, because a wrongly
+    /// classified PID silently suppresses or misroutes a mandatory CONTRL.
     #[serde(default)]
     pub sparten: BTreeMap<String, Sparten>,
     /// Where each Prüfidentifikator's assignment to a preceding

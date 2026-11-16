@@ -75,6 +75,7 @@ use crate::{
             put_preisblatt_messung,
         },
         pricat::{get_dispatch_log, get_pricat_history, post_pricat_dispatch},
+        referenzreihen,
         subscription::{
             delete_subscription, get_subscription, list_subscriptions, put_subscription,
             test_subscription,
@@ -82,6 +83,7 @@ use crate::{
         tranche::{get_tranche, list_tranchen, put_tranche},
         utilmd_stammdaten,
         versorgung::{get_versorgungsstatus, get_versorgungsstatus_history, put_versorgungsstatus},
+        zuordnungsermaechtigung::list_zuordnungsermaechtigungen,
     },
     openapi::openapi_router,
     pg,
@@ -490,6 +492,23 @@ fn preisblatt_routes() -> Router<S> {
             "/api/v1/mmma-preise/import-trigger",
             post(mmma_preise::post_import_trigger),
         )
+        // Referenzreihen: published figures billing reads, bitemporal.
+        .route(
+            "/api/v1/referenzreihen",
+            get(referenzreihen::list_referenzreihen),
+        )
+        .route(
+            "/api/v1/referenzreihen/{reihe}/werte",
+            get(referenzreihen::get_werte),
+        )
+        .route(
+            "/api/v1/referenzreihen/{reihe}/wert",
+            get(referenzreihen::get_wert),
+        )
+        .route(
+            "/api/v1/referenzreihen/{reihe}/import",
+            post(referenzreihen::post_import),
+        )
         // PRICAT version history + manual (re-)dispatch.
         .route("/api/v1/pricat/{nb_mp_id}/history", get(get_pricat_history))
         .route(
@@ -532,6 +551,12 @@ fn registry_routes() -> Router<S> {
         .route(
             "/api/v1/bilanzierungsgebiete/{eic}/mabis-zp",
             get(get_mabis_zp).put(put_mabis_zp),
+        )
+        // MaBiS Zuordnungsermächtigungen from 55071/55072 (read by processd's
+        // E_0622 Prüfschritt 60). No write route: only the BKV's message sets one.
+        .route(
+            "/api/v1/zuordnungsermaechtigungen/{lf_mp_id}",
+            get(list_zuordnungsermaechtigungen),
         )
         // §36 Abs. 2 EnWG Grundversorger Feststellung (read by the processd EoG
         // gap closure).
@@ -678,6 +703,7 @@ fn repository_layers(app: Router, pool: &PgPool) -> Router {
         PgZaehlzeitRepository,
         PgUtilmdStammdatenRepository,
         PgLokationsbuendelRepository,
+        PgZuordnungsermaechtigungRepository,
     )
 }
 

@@ -65,7 +65,7 @@ pub fn wim_invoic_registry() -> AdapterRegistry<WimInvoicWorkflow> {
                     .to_owned(),
                 validation_passed,
                 validation_errors,
-                rechnung: Some(Box::new(build_rechnung(inv.segments()))),
+                rechnung: Some(Box::new(build_rechnung(inv.segments(), inv.decimal_mark()))),
                 // `SG1 RFF+ACE` and `IMD+7081` — Muss on the wire, and BO4E
                 // has no field for either. The first is what `E_0264`
                 // Prüfschritt 40 compares against the order on record; the
@@ -828,7 +828,8 @@ fn extract_angebot(msg: &AnyMessage) -> mako_wim::esa::Angebot {
 /// so 00:00 Europe/Berlin — and is read back with
 /// [`mako_fristen::tag_des_beginns`]; one that begins no day reads as absent,
 /// never as the day it falls in. The document date `137` is a point in time
-/// and reads as its Europe/Berlin date. A `102` value is the date itself.
+/// and reads as its Europe/Berlin date. A `102` value is the date itself; any
+/// other format reads as absent.
 fn extract_dtm_date(msg: &AnyMessage, qualifier: &str) -> Option<time::Date> {
     let segment = msg
         .segments()
@@ -836,10 +837,12 @@ fn extract_dtm_date(msg: &AnyMessage, qualifier: &str) -> Option<time::Date> {
         .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))?;
     let value = segment.component_str(0, 1)?;
     let format = segment.component_str(0, 2);
+    // Decoded by its own DE 2379: a format that names no instant (`203`, a
+    // duration) reads as absent, never as `303`.
+    let instant = super::parse_dtm_datetime(value, format)?;
     if format == Some("102") {
-        return super::parse_ccyymmdd(value).map(time::OffsetDateTime::date);
+        return Some(instant.date());
     }
-    let instant = super::parse_dtm_datetime(value, Some("303"))?;
     if qualifier == "137" {
         return Some(mako_fristen::berlin_date(instant));
     }

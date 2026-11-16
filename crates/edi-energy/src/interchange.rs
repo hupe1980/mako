@@ -51,33 +51,39 @@ impl InterchangeHeader {
         self.transmission_datetime.map(time::OffsetDateTime::date)
     }
 
-    /// Convert from the `edifact_rs::InterchangeEnvelope` produced by
-    /// [`edifact_rs::validate_envelope`] into edi-energy's typed header.
+    /// Convert from the `edifact::InterchangeEnvelope` produced by
+    /// [`edifact::validate_envelope`] into edi-energy's typed header.
     ///
     /// Used to attach envelope metadata to [`EdiEnergyReport`] so a single
     /// report carries both the interchange routing data (sender/receiver/control
     /// reference) and the validation findings.
     #[cfg(any_message)]
     #[must_use]
-    pub(crate) fn from_edifact_envelope(env: edifact_rs::InterchangeEnvelope) -> Self {
-        // The same reader the `UNB` parse path uses.  A second copy here drifted
-        // into treating an absent time as midnight while the other rejected the
-        // record outright, and both indexed by byte offset into wire strings.
-        let transmission_datetime =
-            crate::parse::parse_unb_datetime(&env.date, env.time.as_deref().unwrap_or("0000"));
-
-        let syntax_version: u8 = env.syntax_version.parse().unwrap_or(3);
+    pub(crate) fn from_edifact_envelope(env: edifact::InterchangeEnvelope) -> Self {
+        let h = env.header;
+        // A two-digit year is 20YY, which BDEW interchanges have used since
+        // 2000 — the reading `parse_unb_datetime` applies on the UNB path.
+        let year = match h.prepared.year() {
+            edifact::Year::TwoDigit(yy) => Some(2000 + i32::from(yy)),
+            edifact::Year::Full(yyyy) => Some(i32::from(yyyy)),
+            _ => None,
+        };
+        let transmission_datetime = year
+            .zip(time::Month::try_from(h.prepared.month()).ok())
+            .and_then(|(year, m)| time::Date::from_calendar_date(year, m, h.prepared.day()).ok())
+            .and_then(|d| d.with_hms(h.prepared.hour(), h.prepared.minute(), 0).ok())
+            .map(time::PrimitiveDateTime::assume_utc);
 
         Self {
-            sender_id: env.sender_id.into_boxed_str(),
-            sender_qualifier: env.sender_qualifier.into_boxed_str(),
-            receiver_id: env.recipient_id.into_boxed_str(),
-            receiver_qualifier: env.recipient_qualifier.into_boxed_str(),
+            sender_id: h.sender.id.into_boxed_str(),
+            sender_qualifier: h.sender.qualifier.unwrap_or_default().into_boxed_str(),
+            receiver_id: h.recipient.id.into_boxed_str(),
+            receiver_qualifier: h.recipient.qualifier.unwrap_or_default().into_boxed_str(),
             transmission_datetime,
-            control_ref: env.control_ref.into_boxed_str(),
-            syntax_id: env.syntax_identifier.into_boxed_str(),
-            syntax_version,
-            test_indicator: env.test_indicator,
+            control_ref: h.control_ref.into_boxed_str(),
+            syntax_id: h.charset.to_string().into_boxed_str(),
+            syntax_version: h.syntax_version.number(),
+            test_indicator: h.test_indicator,
         }
     }
 }

@@ -98,7 +98,12 @@ impl Sparte {
     }
 }
 
-/// A Rolle a deployment plays, spelled as makod's `[deployment] rollen`.
+/// A deployment role: a Marktrolle in one Sparte, spelled as makod's
+/// `[deployment] rollen`.
+///
+/// makod parses `[deployment] rollen` into this type and the interview asks
+/// for it, so a role makod can load is a role the interview can name — a
+/// second list would drop a loaded role from the proposed `makod.toml`.
 #[derive(
     Debug,
     Clone,
@@ -118,7 +123,7 @@ pub enum Rolle {
     LfStrom,
     /// Lieferant Gas.
     LfGas,
-    /// Netzbetreiber Strom.
+    /// Netzbetreiber Strom (VNB, ANB, and the LPB of NZR-EMob, whose wire role is NB).
     NbStrom,
     /// Gasnetzbetreiber.
     NbGas,
@@ -126,13 +131,16 @@ pub enum Rolle {
     MsbStrom,
     /// Messstellenbetreiber Gas.
     MsbGas,
-    /// Energieserviceanbieter, Strom only.
+    /// Energieserviceanbieter (WiM Strom Teil 2), Strom only.
     EsaStrom,
+    /// Bilanzkreisverantwortlicher Strom — the BKV side of MaBiS (BK6-24-174
+    /// Anlage 3).
+    BkvStrom,
 }
 
 impl Rolle {
     /// Every Rolle, in the order a proposal lists them.
-    pub const ALLE: [Self; 7] = [
+    pub const ALLE: [Self; 8] = [
         Self::LfStrom,
         Self::LfGas,
         Self::NbStrom,
@@ -140,6 +148,7 @@ impl Rolle {
         Self::MsbStrom,
         Self::MsbGas,
         Self::EsaStrom,
+        Self::BkvStrom,
     ];
 
     /// The `[deployment] rollen` token.
@@ -153,37 +162,44 @@ impl Rolle {
             Self::MsbStrom => "msb-strom",
             Self::MsbGas => "msb-gas",
             Self::EsaStrom => "esa-strom",
+            Self::BkvStrom => "bkv-strom",
+        }
+    }
+
+    /// The `[[party]] roles` abbreviations whose MP-ID is this Rolle's MP-ID,
+    /// the one a proposal writes first.
+    ///
+    /// The AHB sub-qualifiers (`ANB`/`VNB`, `NMSB`/`AMSB`) name the same
+    /// Marktrolle in one Sparte, so they share its one MP-ID.
+    #[must_use]
+    pub const fn alle_kuerzel(self) -> &'static [&'static str] {
+        match self {
+            Self::LfStrom => &["LF"],
+            Self::LfGas => &["LFG"],
+            Self::NbStrom => &["NB", "ANB", "VNB"],
+            Self::NbGas => &["GNB"],
+            Self::MsbStrom => &["MSB", "NMSB", "AMSB"],
+            Self::MsbGas => &["GMSB"],
+            Self::EsaStrom => &["ESA"],
+            Self::BkvStrom => &["BKV"],
         }
     }
 
     /// The `[[party]] roles` abbreviation a proposal writes.
     #[must_use]
     pub const fn kuerzel(self) -> &'static str {
-        match self {
-            Self::LfStrom => "LF",
-            Self::LfGas => "LFG",
-            Self::NbStrom => "NB",
-            Self::NbGas => "GNB",
-            Self::MsbStrom => "MSB",
-            Self::MsbGas => "GMSB",
-            Self::EsaStrom => "ESA",
-        }
+        self.alle_kuerzel()[0]
     }
 
-    /// The Rolle a `[[party]] roles` abbreviation names, the AHB
-    /// sub-qualifiers (`ANB`, `VNB`, `NMSB`, `AMSB`) included.
+    /// The Rolle a `[[party]] roles` abbreviation names, case-insensitive,
+    /// the AHB sub-qualifiers included. `None` for a Marktrolle no deployment
+    /// plays (`UNB`, `BIKO`, `FNB`, `MGV`, `KN`, `DP`, `EIV`, `RB`).
     #[must_use]
     pub fn von_kuerzel(kuerzel: &str) -> Option<Self> {
-        match kuerzel.to_uppercase().as_str() {
-            "LF" => Some(Self::LfStrom),
-            "LFG" => Some(Self::LfGas),
-            "NB" | "ANB" | "VNB" => Some(Self::NbStrom),
-            "GNB" => Some(Self::NbGas),
-            "MSB" | "NMSB" | "AMSB" => Some(Self::MsbStrom),
-            "GMSB" => Some(Self::MsbGas),
-            "ESA" => Some(Self::EsaStrom),
-            _ => None,
-        }
+        let upper = kuerzel.to_uppercase();
+        Self::ALLE
+            .into_iter()
+            .find(|r| r.alle_kuerzel().contains(&upper.as_str()))
     }
 
     /// The Rolle a `[deployment] rollen` token names.
@@ -197,7 +213,9 @@ impl Rolle {
     pub const fn sparte(self) -> Sparte {
         match self {
             Self::LfGas | Self::NbGas | Self::MsbGas => Sparte::Gas,
-            _ => Sparte::Strom,
+            Self::LfStrom | Self::NbStrom | Self::MsbStrom | Self::EsaStrom | Self::BkvStrom => {
+                Sparte::Strom
+            }
         }
     }
 
@@ -205,6 +223,12 @@ impl Rolle {
     #[must_use]
     pub const fn ist_lieferant(self) -> bool {
         matches!(self, Self::LfStrom | Self::LfGas)
+    }
+}
+
+impl std::fmt::Display for Rolle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.token())
     }
 }
 
@@ -1212,6 +1236,36 @@ mod tests {
                 url: "http://processd:8580".into(),
                 api_key_file: Some("/run/secrets/processd-read-config".into()),
             }],
+        }
+    }
+
+    /// `Rolle::ALLE` lists every variant: makod's role checks, the
+    /// interview's pre-fill and every list derived from it iterate `ALLE`,
+    /// so a variant left out of it parses in `[deployment] rollen` and is
+    /// then dropped from the proposal. The variants are read off the derived
+    /// JSON Schema, which no hand-written list feeds.
+    #[test]
+    fn alle_holds_every_rolle_once() {
+        let schema = serde_json::to_value(schemars::schema_for!(Rolle)).unwrap();
+        let mut varianten: Vec<String> = schema["oneOf"]
+            .as_array()
+            .expect("a oneOf per variant")
+            .iter()
+            .map(|v| v["const"].as_str().expect("a token").to_owned())
+            .collect();
+        varianten.sort();
+        let mut alle: Vec<String> = Rolle::ALLE.iter().map(|r| r.token().to_owned()).collect();
+        alle.sort();
+        assert_eq!(alle, varianten);
+        for r in Rolle::ALLE {
+            assert_eq!(Rolle::von_token(r.token()), Some(r));
+            assert_eq!(
+                serde_json::to_value(r).unwrap(),
+                serde_json::json!(r.token())
+            );
+            for k in r.alle_kuerzel() {
+                assert_eq!(Rolle::von_kuerzel(k), Some(r), "{k}");
+            }
         }
     }
 

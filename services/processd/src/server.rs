@@ -46,10 +46,9 @@ impl QueueMethod {
 ///
 /// Spelled once because there are two callers — the router below and the
 /// loopback call the MCP `approve_queue_entry` / `reject_queue_entry` tools
-/// make — and they drifted: the tools built a `PUT` to an `approval-queue`
-/// path that matches no route, so both tools returned 404 on every call for
-/// their whole existence. Nothing in the type system connects a `format!` path
-/// to a `.route()` string, so the connection is made here instead.
+/// make. Nothing in the type system connects a `format!` path to a
+/// `.route()` string, and a loopback path that matches no route answers every
+/// call with 404, so the connection is made here instead.
 #[derive(Debug, Clone, Copy)]
 pub struct QueueRoute {
     /// The HTTP method the router registers this path under.

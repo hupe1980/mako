@@ -147,4 +147,42 @@ mod tests {
             json!({ "rollen": [], "primaer": null, "bilanzkreise": [], "verbundene_lieferanten": null })
         );
     }
+
+    /// The pre-fill names the Rollen the interview asks for — every one and
+    /// nothing else. Its output schema's `rolle` enum and its ROLLEN
+    /// instruction are both held against
+    /// `mako_service::einrichtung::befragung::Rolle::ALLE`, the type makod's
+    /// `[deployment] rollen` parses: a Rolle missing from the enum is one the
+    /// model can never propose, and one the instruction does not name is one
+    /// it is never told to read.
+    #[test]
+    fn the_pre_fill_names_every_rolle_the_interview_asks_for() {
+        use mako_service::einrichtung::befragung::Rolle;
+
+        let m = serde_json::to_value(&crate::plane::manifests()["einrichtung-assistent"])
+            .expect("the manifest serializes");
+        let erwartet: Vec<&str> = Rolle::ALLE.iter().map(|r| r.token()).collect();
+        let schema: Vec<&str> = m
+            .pointer("/spec/output/schema/properties/angaben/properties/rollen/items/properties/rolle/enum")
+            .and_then(Value::as_array)
+            .expect("the output schema names the Rollen")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(schema, erwartet, "einrichtung-assistent.yaml output enum");
+        let constraints = m
+            .pointer("/spec/identity/constraints")
+            .and_then(Value::as_str)
+            .expect("the manifest has constraints");
+        let rollen_absatz = constraints
+            .split("## ")
+            .find(|a| a.starts_with("ROLLEN"))
+            .expect("a ROLLEN section");
+        for token in erwartet {
+            assert!(
+                rollen_absatz.contains(&format!("`{token}`")),
+                "the ROLLEN instruction does not name `{token}`"
+            );
+        }
+    }
 }

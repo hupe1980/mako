@@ -34,10 +34,12 @@ pub mod netzzugang;
 pub mod partner;
 pub mod preisblatt;
 pub mod pricat;
+pub mod referenzreihen;
 pub mod subscription;
 pub mod tranche;
 pub mod utilmd_stammdaten;
 pub mod versorgung;
+pub mod zuordnungsermaechtigung;
 
 use axum::{
     http::HeaderMap,

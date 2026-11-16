@@ -587,10 +587,10 @@ mako_service::policy_choice! {
         options: {
             /// The Anfrage's 3 WT before the Sperrtermin (Nr. 3) and the MSB's
             /// 3 WT to answer it (Nr. 4) run one after the other: six Werktage.
-            Additiv = "additiv" => "BK6-24-174 Anlage 1b (GPKE Teil 2) Kap. 3.5.1.2 Nr. 2 (S. 106): so festzulegen, dass dem MSB noch eine fristgerechte Antwort auf Anfrage vor dem Sperrtermin möglich ist (s. dazu Fristen der SD-Schritte 3 und 4) — the Fristen of Nr. 3 (S. 106) and Nr. 4 (S. 107) run one after the other",
+            Additiv = "additiv" => "the Fristen of Nr. 3 and Nr. 4 that Nr. 2 points at run one after the other (BK6-24-174 Anlage 1b (GPKE Teil 2) Kap. 3.5.1.2 Nr. 2–4, S. 106–107)",
             /// The Anfrage leaves by the 3. WT before the Sperrtermin (Nr. 3),
             /// and the MSB's answer has to fall before it: three Werktage.
-            Wortlaut = "wortlaut" => "BK6-24-174 Anlage 1b (GPKE Teil 2) Kap. 3.5.1.2 Nr. 3 (S. 106), the Anfrage's own Frist before the Sperrtermin; Nr. 2 (S. 106): eine fristgerechte Antwort auf Anfrage vor dem Sperrtermin",
+            Wortlaut = "wortlaut" => "only the Anfrage's own Frist before the Sperrtermin binds; the answer need only be possible before it (BK6-24-174 Anlage 1b (GPKE Teil 2) Kap. 3.5.1.2 Nr. 2–3, S. 106)",
         }
     }
 }

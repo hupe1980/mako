@@ -29,7 +29,7 @@
 /// }
 /// # Ok::<(), edi_energy::Error>(())
 /// ```
-use edifact_rs::OwnedSegment;
+use edifact::OwnedSegment;
 
 use crate::{AnyMessage, Error, MessageType, Pruefidentifikator, Release};
 

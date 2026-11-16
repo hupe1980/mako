@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button as AriaButton, Form } from "react-aria-components";
 import { keyKind } from "../app/CommandPalette";
 import { nichtErreichbar } from "../app/dienste";
@@ -8,10 +8,14 @@ import { prozessTitel } from "../app/prozesse";
 import { useRolle } from "../app/rollen";
 import type { ProcessView } from "../data/gen/makod";
 import { call, ServiceUnavailable, type ToolOutput, ToolRefusal } from "../data/mcp";
+import { Button } from "../design/Button";
 import { FristUhr } from "../design/FristUhr";
 import { Icon } from "../design/Icon";
 import { Kbd } from "../design/Kbd";
+import { Angabe, AngabenListe } from "../design/ListDetail";
+import { Page } from "../design/Page";
 import { EmptyState, Notice, Panel } from "../design/Panel";
+import { Refusal } from "../design/Refusal";
 import { SearchField } from "../design/SearchField";
 import { epochMs } from "../format/date";
 import { useT } from "../i18n";
@@ -46,15 +50,12 @@ function Copy({ value, label }: { value: string; label: string }) {
 
 function Fact({ term, value, copy }: { term: string; value: string; copy?: boolean }) {
   return (
-    <div className="min-w-0">
-      <dt className="text-caption font-medium text-text-2">{term}</dt>
-      <dd className="m-0 mt-0.5 flex items-center gap-1">
-        <span className="truncate font-mono text-body text-text" title={value}>
-          {value}
-        </span>
+    <Angabe name={term}>
+      <span className="inline-flex min-w-0 items-center gap-1">
+        <span className="truncate">{value}</span>
         {copy && <Copy value={value} label={term} />}
-      </dd>
-    </div>
+      </span>
+    </Angabe>
   );
 }
 
@@ -74,7 +75,7 @@ function ProcessCard({ process }: { process: ProcessView }) {
     <Panel>
       <div className="flex items-start gap-3 px-6 pt-5 pb-4">
         <div className="min-w-0 flex-1">
-          <h2 className="m-0 truncate text-title font-semibold">
+          <h2 className="m-0 truncate text-title2 font-semibold">
             {prozessTitel(process.workflow_name)}
           </h2>
           <details className="group mt-1">
@@ -86,11 +87,13 @@ function ProcessCard({ process }: { process: ProcessView }) {
               />
               {k.technisch}
             </summary>
-            <dl className="m-0 mt-3 grid grid-cols-2 gap-4">
-              <Fact term={k.workflow} value={process.workflow_name} />
-              <Fact term={k.prozessId} value={process.process_id} copy />
-              <Fact term={k.stream} value={process.stream_id} copy />
-            </dl>
+            <div className="mt-3">
+              <AngabenListe>
+                <Fact term={k.workflow} value={process.workflow_name} />
+                <Fact term={k.prozessId} value={process.process_id} copy />
+                <Fact term={k.stream} value={process.stream_id} copy />
+              </AngabenListe>
+            </div>
           </details>
         </div>
         {next && <FristUhr due={next} />}
@@ -108,17 +111,18 @@ function Result({ view }: { view: Processes }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-baseline gap-3 px-1">
-        <span className="font-mono text-title font-semibold">{view.business_key}</span>
+        <span className="text-title2 font-semibold">{view.business_key}</span>
         <Copy value={view.business_key} label={t.prozessAnsicht.schluessel} />
-        <span className="text-callout text-text-2">{keyKind(view.business_key)}</span>
+        <span className="text-body text-text-2">{keyKind(view.business_key)}</span>
         <span className="flex-1" />
-        <span className="text-callout text-text-2">{t.prozessAnsicht.anzahl(n, `${n}`)}</span>
+        <span className="text-body text-text-2">{t.prozessAnsicht.anzahl(n, `${n}`)}</span>
       </div>
-      <Hinweise nurFuer={[view.business_key]} />
-      {keyKind(view.business_key) === "MaLo-ID" && <Fragen anker={{ malo: view.business_key }} />}
       {ordered.map((p) => (
         <ProcessCard key={p.stream_id} process={p} />
       ))}
+      {/* The assistant follows the work, never above it. */}
+      <Hinweise nurFuer={[view.business_key]} />
+      {keyKind(view.business_key) === "MaLo-ID" && <Fragen anker={{ malo: view.business_key }} />}
     </div>
   );
 }
@@ -141,14 +145,28 @@ function Loading() {
   );
 }
 
-function Failure({ error, businessKey }: { error: unknown; businessKey: string }) {
+function Failure({
+  error,
+  businessKey,
+  onNeu,
+}: {
+  error: unknown;
+  businessKey: string;
+  onNeu: () => void;
+}) {
   const t = useT();
   const k = t.prozessAnsicht;
   if (error instanceof ToolRefusal) {
     return (
-      <Notice tone="refusal" title={k.keiner(businessKey)}>
-        {error.message}
-      </Notice>
+      <Refusal
+        title={k.keiner(businessKey)}
+        raw={error.message}
+        action={
+          <Button variant="primary" onPress={onNeu}>
+            {t.refusal.newSearch}
+          </Button>
+        }
+      />
     );
   }
   if (error instanceof ServiceUnavailable) {
@@ -178,6 +196,7 @@ export function ProzessView() {
   const navigate = useNavigate({ from: "/prozess" });
   const { rolle } = useRolle();
   const [draft, setDraft] = useState(key ?? "");
+  const feld = useRef<HTMLInputElement>(null);
   useEffect(() => setDraft(key ?? ""), [key]);
 
   const query = useQuery({
@@ -187,12 +206,7 @@ export function ProzessView() {
   });
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">{k.titel}</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">{k.untertitel}</p>
-      </header>
-
+    <Page width="reading" title={k.titel} subtitle={k.untertitel}>
       <Form
         onSubmit={(e) => {
           e.preventDefault();
@@ -201,6 +215,7 @@ export function ProzessView() {
         }}
       >
         <SearchField
+          inputRef={feld}
           aria-label={k.schluessel}
           placeholder={k.platzhalter}
           value={draft}
@@ -216,8 +231,18 @@ export function ProzessView() {
         </EmptyState>
       )}
       {key && query.isPending && <Loading />}
-      {key && query.isError && <Failure error={query.error} businessKey={key} />}
+      {key && query.isError && (
+        <Failure
+          error={query.error}
+          businessKey={key}
+          onNeu={() => {
+            navigate({ search: {} });
+            setDraft("");
+            feld.current?.focus();
+          }}
+        />
+      )}
       {key && query.data && <Result view={query.data} />}
-    </div>
+    </Page>
   );
 }

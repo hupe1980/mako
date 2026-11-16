@@ -13,6 +13,7 @@ mod catalog_integration;
 mod demo_config;
 mod demo_payloads;
 mod dev_config;
+mod endkunden_angebot;
 mod mcp_round_trips;
 mod router_builds;
 mod schema_enum_guard;

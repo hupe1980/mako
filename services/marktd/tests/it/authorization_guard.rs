@@ -2,27 +2,23 @@
 //!
 //! These are source-level tests rather than request-level ones on purpose: the
 //! two defects they pin are both *silent at compile time and invisible until a
-//! request arrives in production*, and both had shipped.
+//! request arrives in production*.
 //!
 //! 1. **A handler with no `Claims` extractor is unauthenticated.** marktd has no
 //!    global auth middleware — `Claims` is a `FromRequestParts` extractor, so a
-//!    handler that simply does not name it is served to anyone. The §42 EnWG
-//!    Energiemix endpoints were reachable without a token this way.
+//!    handler that simply does not name it is served to anyone.
 //!
 //! 2. **A Cedar action that appears in code but in no policy is a permanent
 //!    403.** Cedar is default-deny, so `enforcer.check(.., "read-grundversorger", ..)`
-//!    against a policy that never mentions that action denies every caller —
-//!    the §36 Abs. 2 Grundversorger endpoints and the whole `/admin/fanout/dlq`
-//!    surface were dead this way. The reverse (a policy action nothing checks)
+//!    against a policy that never mentions that action denies every caller.
+//!    The reverse (a policy action nothing checks)
 //!    is a dead grant and is pinned too.
 //!
 //! 3. **A handler asking for the enforcer by the wrong type gets a 500.** The
 //!    router layers `Extension(Arc<CedarEnforcer>)`; a handler declaring
 //!    `Extension<CedarEnforcer>` compiles, because axum resolves extensions by
 //!    type at *run* time, and then fails every request with „Missing request
-//!    extension". Fourteen endpoints across `device` and `lokationszuordnung`
-//!    shipped that way — including `PUT /api/v1/lokationszuordnungen`, which is
-//!    how a Marktlokation learns which Messlokationen sit behind it.
+//!    extension".
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

@@ -389,7 +389,7 @@ opened the process.
 | 44007 | Abmeldung NN vom NB | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44008 | Bestätigung Abmeldung vom NB | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44009 | Ablehnung Abmeldung vom NB | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
-| 44010 | Abmeldungsanfrage des NB | GeLi Gas 2.0 | NB → LFA | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
+| 44010 | Abmeldungsanfrage des NB | GeLi Gas 2.0 | NB → LFA | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` — the GNB sends it from `geli.beendigung-zuordnung.anfragen`, which processd issues when `E_3006` finds the Marktlokation assigned |
 | 44011 | Bestätigung Abmeldungsanfrage | GeLi Gas 2.0 | LFA → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44012 | Ablehnung Abmeldungsanfrage | GeLi Gas 2.0 | LFA → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44013 | Anmeldung EoG | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |

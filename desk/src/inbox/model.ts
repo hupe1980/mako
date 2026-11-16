@@ -13,19 +13,20 @@ import type { Instant } from "../format/brands";
 export type Ziel =
   | { to: "/freigaben"; search: { id: string } }
   | { to: "/prozess"; search: { key: string } }
+  | { to: "/fristen"; search: { id: string } }
   | { to: "/kunde/$id"; params: { id: string } };
 
 export interface Eintrag {
   /** Unique across sources: one process reached by two sources is one item. */
   id: string;
   quelle: QuelleId;
-  /** The subject: a customer's name, else the identifier. */
+  /** The subject, the row's second line: a customer's name, else the identifier. */
   titel: string;
   /** Whether `titel` is an identifier, set in mono. */
   kennung: boolean;
   /** The second line: identifiers, PID — what tells two items apart. */
   detail: string;
-  /** Why it waits, in the service's words. */
+  /** The task — why it waits — the row's first line. */
   grund: string;
   frist: Instant | null;
   /** The MaLo or process the agent's Hinweise are filed under. */

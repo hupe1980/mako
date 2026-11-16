@@ -362,6 +362,7 @@ async fn the_nbs_55003_reaches_the_read_model_with_its_wording() {
             document_date: "20261020".to_owned(),
             process_date: "20261201".to_owned(),
             bilanzierungsgebiet: None,
+            bilanzkreis: None,
             bilanzierungsmethode: None,
             fallgruppe: None,
             transaktionsgrund: Some("E01".to_owned()),

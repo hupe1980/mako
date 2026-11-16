@@ -649,9 +649,9 @@ const STOPP_GRUND: &str = "stopped by the person who started the run";
 /// `POST /api/v1/runs/{run}/stopp` — the starter stops their run.
 ///
 /// agentplane's `request_cancel` with the person as operator: durable at once,
-/// acted on at the run's next step boundary, after which the `schritte` stream
-/// ends with `abgebrochen` and the answer read reports `cancelled`. Until then
-/// no service is read for the run (`plane::tools::StopGuard`). `202`, because
+/// acted on before the run's next effect — the call in flight completes, and
+/// no further model turn or tool call is made — after which the `schritte`
+/// stream ends with `abgebrochen` and the answer read reports `cancelled`. `202`, because
 /// the stop is recorded, not yet carried out. Only the starter stops a run
 /// here; anyone else's stop is the oversight surface's `RUN_CANCEL`.
 pub async fn stopp(

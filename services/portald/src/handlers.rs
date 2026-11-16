@@ -631,9 +631,8 @@ pub async fn post_portal_kuendigen(
 /// The contact details the operator holds — DSGVO Art. 15, and the read half
 /// of the rectification flow: [`put_portal_kontakt`] **replaces** the stored
 /// `Geschaeftspartner`, so a client that has not read it first cannot change
-/// one field without dropping the rest. There was no way to read it at all
-/// until this route existed, which made every correction a full re-entry —
-/// and a partial one silent data loss.
+/// one field without dropping the rest; without this read every correction
+/// is a full re-entry, and a partial one silent data loss.
 ///
 /// Projected, not proxied whole: `vertragd`'s customer record also carries
 /// operator notes, the ERP key and the tenant, and none of those are the

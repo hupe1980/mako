@@ -22,6 +22,7 @@
 //! | [`makod_client`] | Typed HTTP client for `makod` admin + command APIs (reqwest-backed); requires `makod-client` feature |
 //! | [`error`] | `MdmError` — all domain-level error variants |
 //! | [`lokationsbuendel`] | `MaloLokationsbuendel` — the Lokationsbündel of a Marktlokation on a Stichtag and the NB's Angaben a Geschäftsdatenanfrage answer carries |
+//! | [`referenzreihen`] | The catalogue of published reference series billing reads (`Reihe`, `ReiheInfo`), the period a value covers and the `referenzwert_fehlt` refusal |
 //! | [`utilmd_stammdaten`] | `MaloUtilmdStammdaten` — the UTILMD Stammdaten of a Marktlokation on a Stichtag, as marktd serves them |
 
 #![deny(unsafe_code)]
@@ -45,5 +46,6 @@ pub mod lokationsbuendel;
 pub mod makod_client;
 #[cfg(feature = "marktd-client")]
 pub mod marktd_client;
+pub mod referenzreihen;
 pub mod repository;
 pub mod utilmd_stammdaten;

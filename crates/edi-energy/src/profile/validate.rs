@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 
-use edifact_rs::{Segment, ValidationIssue, ValidationSeverity};
+use edifact::{Segment, ValidationIssue, ValidationSeverity};
 
 use super::Profile;
 use super::conditions::{
@@ -61,25 +61,29 @@ pub const AHB_UNKNOWN_PID: &str = "AHB-UNKNOWN-PID";
 /// Run every MIG and AHB check. `segments` is the message from `UNH` to `UNT`.
 ///
 /// A Bedingung on the Marktrolle of the sender or receiver stays undecided;
-/// [`validate_with_rollen`] decides it where the caller knows the role.
+/// [`validate_with_rollen`] decides it where the caller knows the role. A
+/// number is read under `.`, the default service string advice's decimal mark.
 #[must_use]
 pub fn validate(
     profile: &Profile,
     segments: &[Segment<'_>],
     pid: Option<u32>,
 ) -> Vec<ValidationIssue> {
-    validate_with_rollen(profile, segments, pid, &Parteirollen::unbekannt())
+    validate_with_rollen(profile, segments, pid, &Parteirollen::unbekannt(), '.')
 }
 
 /// [`validate`], with the Marktrollen of sender and receiver as far as the
 /// caller knows them — what a Bedingung like „Wenn MP-ID in SG2 NAD+MS mit
-/// Rolle MSB nicht vorhanden" is decided from.
+/// Rolle MSB nicht vorhanden" is decided from — and with the decimal mark the
+/// interchange's `UNA` declares, under which every numeric Formatbedingung
+/// reads its value (Allgemeine Festlegungen 6.1d Kap. 2.18).
 #[must_use]
 pub fn validate_with_rollen(
     profile: &Profile,
     segments: &[Segment<'_>],
     pid: Option<u32>,
     rollen: &Parteirollen,
+    decimal_mark: char,
 ) -> Vec<ValidationIssue> {
     let structure = &profile.structure;
     let res = structure.resolve(segments);
@@ -91,7 +95,9 @@ pub fn validate_with_rollen(
     };
     mig_checks(structure, &res, segments, af, &mut issues);
     match selected {
-        Selected::Some(af) => ahb_checks(profile, af, &res, segments, rollen, &mut issues),
+        Selected::Some(af) => {
+            ahb_checks(profile, af, &res, segments, rollen, decimal_mark, &mut issues);
+        }
         Selected::UnknownPid(p) => issues.push(
             ValidationIssue::new(
                 ValidationSeverity::Warning,
@@ -103,8 +109,8 @@ pub fn validate_with_rollen(
             .with_rule_id(AHB_UNKNOWN_PID)
             .with_context_entry("pid", p.to_string()),
         ),
-        Selected::None => match best_fit(profile, &res, segments, rollen) {
-            Some(af) => ahb_checks(profile, af, &res, segments, rollen, &mut issues),
+        Selected::None => match best_fit(profile, &res, segments, rollen, decimal_mark) {
+            Some(af) => ahb_checks(profile, af, &res, segments, rollen, decimal_mark, &mut issues),
             None => issues.push(
                 ValidationIssue::new(
                     ValidationSeverity::Warning,
@@ -207,6 +213,7 @@ fn best_fit<'p>(
     res: &Resolution,
     segments: &[Segment<'_>],
     rollen: &Parteirollen,
+    decimal_mark: char,
 ) -> Option<&'p Anwendungsfall> {
     if !profile.mig.pid_exempt && profile.ahb.anwendungsfaelle.iter().any(|a| a.pid.is_some()) {
         return None;
@@ -217,7 +224,7 @@ fn best_fit<'p>(
         .iter()
         .map(|af| {
             let mut found = Vec::new();
-            ahb_checks(profile, af, res, segments, rollen, &mut found);
+            ahb_checks(profile, af, res, segments, rollen, decimal_mark, &mut found);
             (
                 found
                     .iter()
@@ -713,6 +720,8 @@ struct Ctx<'a, 'd> {
     expanding: std::cell::RefCell<Vec<String>>,
     /// The Marktrollen of sender and receiver, as far as the caller knows.
     rollen: &'a Parteirollen,
+    /// The decimal mark the interchange's `UNA` declares.
+    decimal_mark: char,
 }
 
 impl<'a, 'd> Ctx<'a, 'd> {
@@ -722,6 +731,7 @@ impl<'a, 'd> Ctx<'a, 'd> {
         segments: &'a [Segment<'d>],
         ahb: &'a super::model::AhbProfile,
         rollen: &'a Parteirollen,
+        decimal_mark: char,
     ) -> Self {
         // Allgemeine Festlegungen 6.1d Kap. 6.9.1: „Ein Paket ohne
         // Paketvoraussetzung ist immer zu nutzen, soweit das Segment, dem das
@@ -747,6 +757,7 @@ impl<'a, 'd> Ctx<'a, 'd> {
             packages,
             expanding: std::cell::RefCell::new(Vec::new()),
             rollen,
+            decimal_mark,
         }
     }
 
@@ -1044,10 +1055,11 @@ fn ahb_checks(
     res: &Resolution,
     segments: &[Segment<'_>],
     rollen: &Parteirollen,
+    decimal_mark: char,
     issues: &mut Vec<ValidationIssue>,
 ) {
     let structure = &profile.structure;
-    let ctx = Ctx::new(structure, res, segments, &profile.ahb, rollen);
+    let ctx = Ctx::new(structure, res, segments, &profile.ahb, rollen, decimal_mark);
     let pid = column_key(profile, af);
     let tag_issue = |issue: ValidationIssue| issue.with_context_entry("pid", pid.clone());
 
@@ -1496,7 +1508,7 @@ fn format_violations(
         if op.code.as_deref().is_some_and(|c| c != value) {
             continue;
         }
-        out.extend(formatbedingung::violations(expr, value));
+        out.extend(formatbedingung::violations(expr, value, ctx.decimal_mark));
     }
     out.sort();
     out.dedup();
@@ -1550,9 +1562,9 @@ mod tests {
         Profile::from_json(mig, &ahb).expect("the test profile parses")
     }
 
-    fn message(edi: &str) -> Vec<edifact_rs::OwnedSegment> {
-        edifact_rs::from_bytes(edi.as_bytes())
-            .map(|s| s.map(edifact_rs::Segment::into_owned))
+    fn message(edi: &str) -> Vec<edifact::OwnedSegment> {
+        edifact::from_bytes(edi.as_bytes())
+            .map(|s| s.map(edifact::Segment::into_owned))
             .collect::<Result<Vec<_>, _>>()
             .expect("the test message parses")
     }

@@ -44,6 +44,7 @@ fn answer_with(
         document_date: "20260820".to_owned(),
         process_date: "20260901".to_owned(),
         bilanzierungsgebiet: None,
+        bilanzkreis: None,
         bilanzierungsmethode: None,
         fallgruppe: None,
         transaktionsgrund: Some("E03".to_owned()),

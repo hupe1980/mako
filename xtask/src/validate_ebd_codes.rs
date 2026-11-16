@@ -444,11 +444,10 @@ fn code_tokens(line: &str) -> Vec<String> {
 /// `A01`, `A100`, `AC1`, `AE6`, `AF2` — the Prüfschritt code space.
 ///
 /// The lettered forms are **not** just `AC#`. EBD 4.3 uses `AE6`–`AE9` and
-/// `AF0`–`AF2` in the Messstellenbetrieb trees, and hard-coding `C` made every
+/// `AF0`–`AF2` in the Messstellenbetrieb trees; hard-coding `C` makes every
 /// one of them invisible to this guard — including to the completeness check
-/// below, which can only report a code it can recognise. A tree that publishes
-/// nothing but lettered codes was checked against an empty published set and
-/// passed.
+/// below, which can only report a code it can recognise — and a tree that
+/// publishes nothing but lettered codes passes against an empty set.
 fn is_a_code(w: &str) -> bool {
     let b = w.as_bytes();
     match b {

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Icon, type IconName } from "./Icon";
 
 /** A content surface. */
 export function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
@@ -11,12 +12,21 @@ export function Panel({ children, className = "" }: { children: ReactNode; class
   );
 }
 
-/** A quiet, centred state: nothing to show, nothing went wrong. */
-export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
+/** A quiet, centred state: nothing to show, nothing went wrong — one glyph, one line. */
+export function EmptyState({
+  title,
+  glyph,
+  children,
+}: {
+  title: string;
+  glyph?: IconName;
+  children?: ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-      <p className="m-0 text-title font-semibold text-text">{title}</p>
-      {children && <div className="max-w-sm text-callout text-text-2">{children}</div>}
+      {glyph && <Icon name={glyph} size={28} className="mb-1 text-done" />}
+      <p className="m-0 text-title2 font-semibold text-text">{title}</p>
+      {children && <div className="max-w-sm text-body text-text-2">{children}</div>}
     </div>
   );
 }
@@ -40,7 +50,7 @@ export function Notice({
         : "border-separator bg-fill";
   return (
     <div role="status" className={`squircle rounded-panel border p-4 ${look}`}>
-      <p className="m-0 text-callout font-semibold text-text">{title}</p>
+      <p className="m-0 text-body font-semibold text-text">{title}</p>
       {children && <div className="mt-1 text-body text-text-2">{children}</div>}
     </div>
   );

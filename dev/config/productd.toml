@@ -14,6 +14,10 @@ lf_mp_id = "9900357000004"
 # billingd's `[policy] behg_regime`, read from its GET /api/v1/policy.
 billingd_url = "http://127.0.0.1:9280"
 
+# An Endkunden-Angebot reads the Netzbetreiber's Preisblätter and a MaLo's NB
+# from marktd.
+marktd_url = "http://127.0.0.1:8180"
+
 [http]
 addr = "127.0.0.1:9080"
 

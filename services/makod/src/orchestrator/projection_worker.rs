@@ -31,9 +31,8 @@
 //!
 //! Every stream in this platform is `process/{tenant}/{process}`, so a prefix
 //! like `"gpke/"` selects nothing: the projection folds zero events for the
-//! life of the deployment while its heartbeat reports it healthy. Two workers
-//! shipped that way. Each projection sees every workflow's events and filters
-//! on `event_type` itself.
+//! life of the deployment while its heartbeat reports it healthy. Each
+//! projection sees every workflow's events and filters on `event_type` itself.
 //!
 //! ## Projection name → checkpoint key
 //!
@@ -130,9 +129,9 @@ impl<P: Projection + Send> ProjectionWorker<P> {
     /// Observe the read model after every successful catch-up.
     ///
     /// The worker owns its projection, so without this the fold is
-    /// write-only: events go in and nothing can look at what they produced.
-    /// Two projections shipped in exactly that shape, and a read model nothing
-    /// reads is indistinguishable from one that is never fed.
+    /// write-only: events go in and nothing can look at what they produced,
+    /// and a read model nothing reads is indistinguishable from one that is
+    /// never fed.
     ///
     /// The callback runs on the worker task between ticks, so it must not
     /// block: read what it needs, log or publish, return.

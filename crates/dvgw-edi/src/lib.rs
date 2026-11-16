@@ -124,7 +124,9 @@ pub use message::DvgwMessage;
 pub use model::{
     EnergyByQualifier, ItemDescription, LineItem, LocationGroup, Party, Quantity, Reference,
 };
-pub use platform::{DvgwPlatform, sniff};
+pub use platform::{
+    DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_MESSAGES, DvgwPlatform, default_reader_config, sniff,
+};
 pub use pruefidentifikator::{
     PID_MAX, PID_MIN, PidInfo, Pruefidentifikator, SSQNOT_RLM_CUTOFF, catalogue, catalogue_for,
 };

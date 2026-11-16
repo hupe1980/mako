@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use edifact_rs::Writer;
+use edifact::Writer;
 
 use crate::AgencyCode;
 use crate::{Error, Pruefidentifikator, Release};
@@ -415,7 +415,7 @@ impl<S, R> AperakBuilder<S, R> {
             }
         }
         w.finish_unt(&self.inner.message_ref)
-            .map_err(Error::Parse)?;
+            .map_err(Error::write)?;
         Ok(buf)
     }
     /// Build and serialize the message to EDIFACT bytes.

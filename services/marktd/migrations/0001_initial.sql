@@ -1499,6 +1499,81 @@ COMMENT ON TABLE mmm_preise_strom IS
 
 CREATE INDEX mmm_strom_month ON mmm_preise_strom (price_month DESC);
 
+-- ── Referenzreihen (published figures billing reads) ────────────────────────
+--
+-- One store for every series `mako_markt::referenzreihen::Reihe` catalogues:
+-- the Durchschnittserlös behind the KAV Grenzpreis, the EEG Marktwerte, the
+-- day-ahead Spotmarktpreis. Nationwide figures, so no `tenant`: every
+-- deployment reads the same published value.
+--
+-- Bitemporal and append-only. `gilt` is when the value holds — for an annual
+-- or monthly figure the range between the Berlin midnights that bound the
+-- period, so DST is handled once, by the writer. `erfasst` is when marktd knew
+-- it: a correction closes the current row's `erfasst` and inserts the new one,
+-- so a read „as known at `stand`" still returns the provisional figure a
+-- settlement was computed from after the final one has arrived. No row is
+-- ever updated in any other column, and none is deleted.
+--
+-- The EXCLUDE is the bitemporal key: no two rows for one series and dimension
+-- may overlap in both valid and recorded time, so „the value for this period
+-- as known then" has at most one answer. PostgreSQL 18's `WITHOUT OVERLAPS`
+-- takes one period, so the key stays an EXCLUDE over both.
+
+CREATE TABLE referenzwerte (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    reihe               TEXT        NOT NULL
+                        CHECK (reihe IN ('kav_grenzpreis_strom', 'kav_durchschnittserloes_gas',
+                                         'eeg_monatsmarktwert', 'eeg_jahresmarktwert',
+                                         'day_ahead_de_lu')),
+    -- The dimension value ('' for a series without one), held to the
+    -- catalogue by the writer.
+    dim                 TEXT        NOT NULL DEFAULT '',
+    gilt                TSTZRANGE   NOT NULL
+                        CHECK (NOT isempty(gilt) AND NOT lower_inf(gilt) AND NOT upper_inf(gilt)
+                               AND lower_inc(gilt) AND NOT upper_inc(gilt)),
+    -- In the catalogued unit; published to three or four decimals, kept exactly.
+    wert                NUMERIC     NOT NULL,
+    status              TEXT        NOT NULL CHECK (status IN ('vorlaeufig', 'endgueltig')),
+    quelle_url          TEXT        NOT NULL CHECK (quelle_url LIKE 'https://%'),
+    veroeffentlicht_am  DATE,
+    dokument_sha256     TEXT        CHECK (dokument_sha256 ~ '^[0-9a-f]{64}$'),
+    herkunft            TEXT        NOT NULL CHECK (herkunft IN ('seed', 'import', 'api')),
+    erfasst             TSTZRANGE   NOT NULL DEFAULT tstzrange(now(), NULL, '[)')
+                        CHECK (NOT lower_inf(erfasst) AND lower_inc(erfasst)
+                               AND NOT upper_inc(erfasst)),
+    CONSTRAINT referenzwerte_bitemporal EXCLUDE USING gist (
+        reihe   WITH =,
+        dim     WITH =,
+        gilt    WITH &&,
+        erfasst WITH &&
+    )
+);
+
+COMMENT ON TABLE referenzwerte IS
+    'Published reference figures (mako_markt::referenzreihen), append-only and '
+    'bitemporal: gilt = valid time, erfasst = recorded time. A correction closes '
+    'erfasst and inserts; nothing is deleted.';
+
+CREATE INDEX referenzwerte_aktuell ON referenzwerte (reihe, dim, lower(gilt))
+    WHERE upper_inf(erfasst);
+
+-- One row per imported document, keyed by its hash: importing the same file
+-- twice is answered from here and adds nothing.
+CREATE TABLE referenz_importe (
+    dokument_sha256  TEXT        PRIMARY KEY CHECK (dokument_sha256 ~ '^[0-9a-f]{64}$'),
+    reihe            TEXT        NOT NULL,
+    format           TEXT        NOT NULL,
+    quelle_url       TEXT        NOT NULL,
+    zeilen           INTEGER     NOT NULL CHECK (zeilen >= 0),
+    neu              INTEGER     NOT NULL CHECK (neu >= 0),
+    ersetzt          INTEGER     NOT NULL CHECK (ersetzt >= 0),
+    importiert_am    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- No seed rows: `Reihe::seed` states none (no Frei value has been read from a
+-- mirrored document), and `cargo xtask check-referenzreihen` holds any seed
+-- INSERT into this table to that function.
+
 -- ── marktd migration 0003 — ZaehlzeitRegister + ZaehlzeitSaison ─────────────
 --
 -- Provides the PostgreSQL persistence for iMSys Time-of-Use (TOU) register
@@ -1960,4 +2035,41 @@ CREATE TABLE mabis_zaehlpunkte (
     -- refuses it — long after the assignment was made.
     CONSTRAINT mabis_zp_ist_zaehlpunktbezeichnung
         CHECK (length(trim(mabis_zp_id)) = 33)
+);
+
+-- ── Zuordnungsermächtigungen (UTILMD 55071 / 55072) ──────────────────────────
+-- What a BKV authorises at this NB: „Die Ermächtigung erfolgt je ZRT, BG, BK und
+-- LF ab einem bestimmten Zeitpunkt" (BK6-24-174 Anlage 3 (MaBiS) Kap. 10.2.1,
+-- S. 119). The NB checks every Strom Anmeldung's Bilanzkreis against it
+-- (`E_0622` Prüfschritt 60 / 260, read by processd). A 55072 sets `valid_to` to
+-- its Deaktivierungsdatum, after which „können keine Zuordnungen mit Gültigkeit
+-- nach dem Deaktivierungsdatum mehr durchgeführt werden" (Kap. 10.3.1, S. 121) —
+-- half-open, so that day is no longer covered. Written only by the event
+-- ingest from the `ProcessCompleted` the `mabis-zp-lifecycle` workflow queues.
+-- Strom only, like every MaBiS record: no `sparte`.
+CREATE TABLE zuordnungsermaechtigungen (
+    tenant              TEXT        NOT NULL,
+    bkv_mp_id           TEXT        NOT NULL CHECK (length(trim(bkv_mp_id)) > 0),
+    lf_mp_id            TEXT        NOT NULL CHECK (length(trim(lf_mp_id)) > 0),
+    bilanzkreis         TEXT        NOT NULL CHECK (length(trim(bilanzkreis)) > 0),
+    bilanzierungsgebiet TEXT        NOT NULL CHECK (length(trim(bilanzierungsgebiet)) > 0),
+    zeitreihentyp       TEXT        NOT NULL CHECK (length(trim(zeitreihentyp)) > 0),
+    valid_from          DATE        NOT NULL,
+    valid_to            DATE,                       -- Deaktivierungsdatum; NULL = active
+    -- The 55072's `DTM+137` day: MaBiS Kap. 10.3.2 Nr. 1 (S. 122) wants the
+    -- Deaktivierung „spätestens 5 WT vor dem angestrebten Deaktivierungsdatum".
+    deaktivierung_nachrichtendatum DATE,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, lf_mp_id, bilanzkreis, bilanzierungsgebiet, zeitreihentyp, valid_from),
+    CONSTRAINT zuordnungsermaechtigungen_range CHECK (valid_to IS NULL OR valid_to > valid_from),
+    -- One answer per key and day: two overlapping rows would make whether an
+    -- Anmeldung is covered depend on which one a reader found first.
+    CONSTRAINT zuordnungsermaechtigungen_no_overlap EXCLUDE USING gist (
+        tenant              WITH =,
+        lf_mp_id            WITH =,
+        bilanzkreis         WITH =,
+        bilanzierungsgebiet WITH =,
+        zeitreihentyp       WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
 );

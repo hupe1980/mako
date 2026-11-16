@@ -40,13 +40,21 @@ if report.outcome != CheckOutcome::Ok {
 |---|---|---|
 | 1 | **Storno reference** — `ist_storno = true` must name an `original_rechnungsnummer` | `Dispute` |
 | 2 | **Period validity** — `rechnungsperiode_start < end`, both within plausible range | `Dispute` |
-| 3 | **Zahlungsziel** — before `rechnungsdatum` (invalid); < 10 WT after receipt on 31001–31003, 31009 with Betrag ≥ 0 (unterschritten, GPKE Teil 2 Kap. 3.3.2 Nr. 1, `A10`); < 10 WT after the Rechnungsdatum on 31005, 31007, Gas 31001–31003 (unterschritten, INVOIC AHB 1.0b `[24]`, S. 16/39); > 10 WT on a Rückerstattung (31001, 31002, 31005, Gas 31003) and on 31006/31008 (überschritten, `[25]`, `A11`); beyond `max_zahlungsziel_days` if set (exceeded) | `Dispute` · `Dispute` · `Dispute` · `Warn` |
+| 3 | **Zahlungsziel** — before `rechnungsdatum`, unterschritten, überschritten, or beyond `max_zahlungsziel_days` (see below) | `Dispute` · `Dispute` · `Dispute` · `Warn` |
 | 3a | **WiM 31003 send window** — a Dienstleistungsrechnung dated more than 20 Werktage after the period it bills (WiM Teil 1 Kap. 3.7.2 Nr. 1). Only PID 31003 | `Warn` |
 | 4 | **Currency agreement** — the document totals, every position's `gesamtpreis` and every `steuerbetraege` entry agree on one currency. Runs before the arithmetic, which reads every amount as EUR | `Dispute` |
 | 5 | **Position arithmetic** — every `Rechnungsposition` satisfies `menge × einzelpreis ≈ gesamtpreis`. An unrepresentable product is itself a finding, not a panic | `Dispute` |
 | 6 | **Document total** — the positions sum to `gesamtnetto` | `Warn` |
 | 7 | **Umsatzsteuer** — a rate and an amount are stated (§14 Abs. 4 Nr. 8 UStG); `gesamtbrutto = gesamtnetto + gesamtsteuer`; each breakdown entry's `steuerwert` is its rate on its `basiswert` (± one cent); a reverse-charged invoice states **no** tax | `Dispute` |
 | 8 | **Tariff / Angebot** — `einzelpreis` against the published Preisblatt, or against the accepted QUOTES for an ESA invoice. **Skipped for a Stornorechnung**. For PIDs 31005–31008 this is the Mehr-/Mindermengen price from the MMMA store | `Warn` or `Dispute` |
+
+Rule 3 reads the Zahlungsziel by PID:
+
+| Finding | PIDs | Source |
+|---|---|---|
+| unterschritten — < 10 WT after receipt | 31001–31003, 31009 with Betrag ≥ 0 | GPKE Teil 2 Kap. 3.3.2 Nr. 1, `A10` |
+| unterschritten — < 10 WT after the Rechnungsdatum | 31005, 31007, Gas 31001–31003 | INVOIC AHB 1.0b `[24]`, S. 16/39 |
+| überschritten — > 10 WT | a Rückerstattung (31001, 31002, 31005, Gas 31003), 31006/31008 | `[25]`, `A11` |
 
 `CheckConfig` holds the tolerances (`arithmetic_tolerance_ppm`,
 `total_tolerance_ppm`, `tariff_tolerance_ppm`), `require_tariff` and the

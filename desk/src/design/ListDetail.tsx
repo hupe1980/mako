@@ -73,7 +73,7 @@ export function ListDetail({
             zeigt ? "hidden" : "flex"
           }`}
         >
-          <div className="px-5 pt-6 pb-4">{kopf}</div>
+          <div className="px-5 pt-5 pb-3">{kopf}</div>
           <GridList
             ref={listRef}
             aria-label={label}
@@ -113,15 +113,15 @@ export function ListDetail({
           >
             {detail === null ? (
               <div className="m-auto max-w-xs px-6 py-16 text-center">
-                <p className="m-0 text-title font-semibold text-text">{t.liste.nichtsGewaehlt}</p>
-                <p className="m-0 mt-2 text-callout text-text-2">{t.liste.nichtsGewaehltText}</p>
+                <p className="m-0 text-title2 font-semibold text-text">{t.liste.nichtsGewaehlt}</p>
+                <p className="m-0 mt-2 text-body text-text-2">{t.liste.nichtsGewaehltText}</p>
               </div>
             ) : (
               <>
                 <div className="px-5 pt-4 @3xl:hidden">
                   <Button
                     onPress={zurListe}
-                    className="focus-ring -ml-2 flex h-8 items-center gap-1 rounded-[8px] px-2 text-body font-medium text-accent data-[hovered]:bg-fill"
+                    className="focus-ring -ml-2 flex h-8 items-center gap-1 rounded-[8px] px-2 text-body text-accent data-[hovered]:bg-fill"
                   >
                     <Icon name="chevron" size={14} className="rotate-180" />
                     {t.liste.zurueck}
@@ -145,12 +145,23 @@ export function ListDetail({
   );
 }
 
-/** One fact in the Angaben: its name above, the value under it. */
-export function Angabe({ name, children }: { name: string; children: ReactNode }) {
+/** The Angaben as Get Info shows them: names trailing-aligned on the left, values beside. */
+export function AngabenListe({ children }: { children: ReactNode }) {
   return (
-    <div className="border-b border-separator py-2.5 first:pt-0 last:border-b-0">
-      <dt className="text-caption font-semibold uppercase tracking-wide text-text-2">{name}</dt>
-      <dd className="m-0 mt-1 text-body text-text">{children}</dd>
+    <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-3 gap-y-2">
+      {children}
+    </dl>
+  );
+}
+
+/** One fact in the Angaben; a fact with no value is left out, not shown as a dash. */
+export function Angabe({ name, children }: { name: string; children: ReactNode }) {
+  if (children === null || children === undefined || children === false || children === "")
+    return null;
+  return (
+    <div className="contents">
+      <dt className="text-right text-body text-text-2">{name}</dt>
+      <dd className="m-0 min-w-0 text-body break-words text-text">{children}</dd>
     </div>
   );
 }

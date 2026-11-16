@@ -8,7 +8,7 @@
 //! and the [`EdiEnergyMessage`](crate::EdiEnergyMessage) trait.
 
 #[cfg(any_message)]
-use edifact_rs::{OwnedSegment, ProfileRulePack};
+use edifact::{OwnedSegment, ProfileRulePack};
 
 #[cfg(any_message)]
 use crate::{
@@ -45,6 +45,8 @@ pub(crate) struct MessageCore {
     /// `None` disambiguates nothing by date: for a wire code shared by two
     /// Formatversionen the last registered profile wins.
     pub(crate) reference_date: Option<time::Date>,
+    /// The interchange's decimal mark (`UNA` position 3): `,` or `.`.
+    pub(crate) decimal_mark: char,
 }
 
 #[cfg(any_message)]
@@ -94,6 +96,7 @@ impl MessageCore {
             pruefidentifikator,
             message_type,
             reference_date,
+            decimal_mark: '.',
         }
     }
 
@@ -183,7 +186,7 @@ impl MessageCore {
         // skipping the envelope check for bare messages lets callers validate
         // message-level content without first constructing a synthetic interchange.
         let interchange_header = if self.has_interchange_wrapper {
-            let vi = edifact_rs::validate_envelope(&self.segments).map_err(Error::Parse)?;
+            let vi = edifact::validate_envelope(&self.segments).map_err(Error::Parse)?;
             Some(crate::interchange::InterchangeHeader::from_edifact_envelope(vi.interchange))
         } else {
             None
@@ -194,7 +197,7 @@ impl MessageCore {
         // Staying on owned segments avoids a separate Vec<Segment<'_>> borrow allocation:
         // group_segments_indexed and validate_grouped work on them
         // directly, so no borrowed intermediary is needed at this layer.
-        let message_segments: Vec<edifact_rs::OwnedSegment> = self
+        let message_segments: Vec<edifact::OwnedSegment> = self
             .segments
             .iter()
             .filter(|s| !matches!(&*s.tag, "UNB" | "UNZ" | "UNG" | "UNE"))
@@ -209,25 +212,27 @@ impl MessageCore {
                 // any other message gets an advisory instead of rules that
                 // cannot be selected.
                 let pid = self.detect_pruefidentifikator().ok();
-                let mut ctx = edifact_rs::ValidationContext::builder()
+                let mut ctx = edifact::ValidationContext::builder()
                     .with_message_type(self.message_type.as_str())
                     .with_message_ref(&*self.message_ref)
                     .bail_on_first_critical(true);
-                for issue in profile.validate_with_rollen(&message_segments, pid, rollen) {
+                for issue in
+                    profile.validate_with_rollen(&message_segments, pid, rollen, self.decimal_mark)
+                {
                     ctx = ctx.with_static_issue(issue);
                 }
-                // The `303` value shape. Which code a qualifier takes is
+                // The value shape per DE 2379. Which code a qualifier takes is
                 // per-profile (the MIG layout of each DTM place); whether the
                 // value matches the code it claims is the same check for every
                 // message type, so it lives here.
-                for issue in dtm_303_value_issues(&message_segments) {
+                for issue in dtm_value_issues(&message_segments) {
                     ctx = ctx.with_static_issue(issue);
                 }
                 // Layer 5: message-type-specific semantic rule pack (optional, caller-supplied).
                 if let Some(sem) = semantic_pack {
                     ctx = ctx.with_profile_pack(sem);
                 }
-                let group_tree = edifact_rs::group_segments_indexed(
+                let group_tree = edifact::group_segments_indexed(
                     &message_segments,
                     profile.group_schema(),
                     "ROOT",
@@ -271,10 +276,10 @@ impl MessageCore {
     }
 
     pub(crate) fn serialize(&self) -> Result<Vec<u8>, Error> {
-        Ok(edifact_rs::segments_to_bytes(&self.segments)?)
+        Ok(edifact::segments_to_bytes(&self.segments)?)
     }
 
-    // ── edifact-rs trait helpers ──────────────────────────────────────────────
+    // ── edifact trait helpers ────────────────────────────────────────────────
 
     /// Extract `(message_ref, assoc_code)` from the `UNH` segment.
     ///
@@ -287,10 +292,10 @@ impl MessageCore {
         feature = "utilmd",
     ))]
     pub(crate) fn extract_unh_fields(
-        segments: &[edifact_rs::Segment<'_>],
-    ) -> Result<(String, String), edifact_rs::EdifactError> {
+        segments: &[edifact::Segment<'_>],
+    ) -> Result<(String, String), edifact::EdifactError> {
         let unh = segments.iter().find(|s| s.tag == "UNH").ok_or_else(|| {
-            edifact_rs::EdifactError::MissingSegment {
+            edifact::EdifactError::MissingSegment {
                 tag: "UNH".to_owned(),
                 expected_position: "position 1 (message start)".to_owned(),
             }
@@ -310,7 +315,7 @@ impl MessageCore {
     /// does. The profile registry is not consulted here (`EdifactDeserialize`
     /// has no release context), so `BGM` is tried first and `RFF+Z13` second.
     #[cfg(any(feature = "aperak", feature = "mscons", feature = "utilmd",))]
-    pub(crate) fn extract_bgm_pid(segments: &[edifact_rs::Segment<'_>]) -> Option<u32> {
+    pub(crate) fn extract_bgm_pid(segments: &[edifact::Segment<'_>]) -> Option<u32> {
         crate::pid_scan::detect(segments, crate::registry::PidSource::BgmDe1004)
     }
 
@@ -325,53 +330,58 @@ impl MessageCore {
         feature = "mscons",
         feature = "utilmd",
     ))]
-    pub(crate) fn emit_segments<E: edifact_rs::EventEmitter>(
+    pub(crate) fn emit_segments<E: edifact::EventEmitter>(
         &self,
         emitter: &mut E,
-    ) -> Result<(), edifact_rs::EdifactError> {
+    ) -> Result<(), edifact::EdifactError> {
         for seg in &self.segments {
-            emitter.emit(edifact_rs::EdifactEvent::start(&*seg.tag))?;
+            emitter.emit(edifact::EdifactEvent::start(&*seg.tag))?;
             for element in &seg.elements {
                 for (i, (value, _span)) in element.components.iter().enumerate() {
                     if i == 0 {
-                        emitter.emit(edifact_rs::EdifactEvent::element(&**value))?;
+                        emitter.emit(edifact::EdifactEvent::element(&**value))?;
                     } else {
-                        emitter.emit(edifact_rs::EdifactEvent::component(&**value))?;
+                        emitter.emit(edifact::EdifactEvent::component(&**value))?;
                     }
                 }
             }
-            emitter.emit(edifact_rs::EdifactEvent::EndSegment)?;
+            emitter.emit(edifact::EdifactEvent::EndSegment)?;
         }
         Ok(())
     }
 }
 
-/// `SEM-DTM-VALUE` — a `DTM` claiming DE 2379 `303` must carry
-/// `CCYYMMDDHHMMZZZ`.
+/// `SEM-DTM-VALUE` — a `DTM` value must have the layout its DE 2379 code
+/// names.
 ///
 /// Companion to `MIG-DTM-2379`, which checks the code. `DTM+137:20260701:303`
 /// names the right code and carries the wrong value; a receiver reading a zoned
-/// timestamp out of eight characters gets a different instant.
+/// timestamp out of eight characters gets a different instant, and a `104`
+/// (`MMWWMMWW`) carrying four digits names no period at all. The value is
+/// decoded by `edifact::DtmValue`, one codec for every UNCL 2379 code it
+/// supports; a code it does not (the BDEW `Z01`) is left to the code check.
 #[cfg(any_message)]
-fn dtm_303_value_issues(segments: &[OwnedSegment]) -> Vec<edifact_rs::ValidationIssue> {
+fn dtm_value_issues(segments: &[OwnedSegment]) -> Vec<edifact::ValidationIssue> {
     let mut out = Vec::new();
     for seg in segments.iter().filter(|s| &*s.tag == "DTM") {
-        if seg.component_str(0, 2) != Some("303") {
+        let (Some(value), Some(code)) = (seg.component_str(0, 1), seg.component_str(0, 2)) else {
             continue;
-        }
-        let value = seg.component_str(0, 1).unwrap_or_default();
-        if is_ccyymmddhhmmzzz(value) {
+        };
+        let Err(error) = edifact::DtmValue::parse(value, code) else {
             continue;
-        }
+        };
+        let edifact::DtmError::InvalidValue { format, .. } = &error else {
+            continue;
+        };
         let qualifier = seg.component_str(0, 0).unwrap_or("?");
         out.push(
-            edifact_rs::ValidationIssue::new(
-                edifact_rs::ValidationSeverity::Error,
+            edifact::ValidationIssue::new(
+                edifact::ValidationSeverity::Error,
                 format!(
-                    "segment DTM DE 2380 (element 0, component 1): \
-                     `DTM+{qualifier}` declares DE 2379 format '303' but carries \
-                     '{value}', which is not CCYYMMDDHHMMZZZ — 12 digits plus a \
-                     signed 2-digit zone, as in DTM+137:202610011200?+00:303'"
+                    "segment DTM DE 2380 (element 0, component 1): `DTM+{qualifier}` \
+                     declares DE 2379 format '{code}' ({layout}) but carries {value:?}: \
+                     {error}",
+                    layout = format.layout(),
                 ),
             )
             .with_rule_id("SEM-DTM-VALUE".to_owned())
@@ -379,17 +389,4 @@ fn dtm_303_value_issues(segments: &[OwnedSegment]) -> Vec<edifact_rs::Validation
         );
     }
     out
-}
-
-/// Whether `value` has the `CCYYMMDDHHMMZZZ` shape DE 2379 code `303` defines.
-///
-/// The zone is written `?+00` on the wire; the parser has already resolved the
-/// release character, so 15 characters arrive here.
-#[cfg(any_message)]
-fn is_ccyymmddhhmmzzz(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 15
-        && bytes[..12].iter().all(u8::is_ascii_digit)
-        && matches!(bytes[12], b'+' | b'-')
-        && bytes[13..].iter().all(u8::is_ascii_digit)
 }

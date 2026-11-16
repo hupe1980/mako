@@ -6,12 +6,11 @@
 //! made it into the profile passes the AHB layer unchecked. The MIG layer
 //! still applies, and the warning is the only trace.
 //!
-//! That is not hypothetical. ORDERS 17008/17116/17117 were lost because only the
-//! first column of each multi-PID AHB table survived import, and the UTILMD
-//! profiles are missing a large block of published PIDs for the same reason.
-//! `validate-profiles` catches a PID *lost between releases*; it cannot catch one
-//! that was never imported. This test closes that hole by cross-checking the
-//! routers — the set of PIDs mako actually accepts — against the profiles.
+//! An import that keeps only the first column of a multi-PID AHB table drops
+//! every other PID of that table this way. `validate-profiles` catches a PID
+//! *lost between releases*; it cannot catch one that was never imported. This
+//! test cross-checks the routers — the set of PIDs mako actually accepts —
+//! against the profiles.
 //!
 //! Uses only committed code and profiles: no PDFs, no network, CI-safe.
 

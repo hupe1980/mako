@@ -62,7 +62,25 @@ impl EdifactIngestDispatcher {
             // which series a message belongs to only the adapter can say, from
             // the MaBiS-Zählpunkt it names.
             "mabis-zp-lifecycle" => {
-                if !mako_mabis::serien_fuer_pid(pid).is_empty() {
+                // 55071 / 55072 carry a Zuordnungsermächtigung, not a
+                // MaBiS-Zählpunkt: their own adapter reads the (ZRT, BG, BK, LF)
+                // key and day, and the workflow hands it to marktd.
+                if crate::orchestrator::zuordnungsermaechtigung::ist_zuordnungsermaechtigung(pid) {
+                    let cmd = crate::orchestrator::zuordnungsermaechtigung::registry()
+                        .dispatch(msg as &dyn Any, &fv)?;
+                    let key =
+                        crate::orchestrator::zuordnungsermaechtigung::geschaeftsschluessel(msg);
+                    self.spawn_or_resume_guarded::<MabisZpLifecycleWorkflow>(
+                        inbound,
+                        &key,
+                        "mabis-zp-lifecycle",
+                        cmd,
+                        &fv,
+                        &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                    )
+                    .await
+                } else if !mako_mabis::serien_fuer_pid(pid).is_empty() {
                     // A Deaktivierung 55063 carries no `SG8 SEQ+Z22` / `SG10`
                     // (UTILMD AHB Strom 2.2 Kap. 13.1, S. 1100): the series is
                     // the one the MaBiS-ZP was activated for.

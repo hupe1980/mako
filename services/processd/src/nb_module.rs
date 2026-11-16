@@ -194,6 +194,10 @@ pub struct AnmeldungPayload {
     pub kunde_name: Option<String>,
     /// `NAD` DE 3045 — `Z01` Personenname, `Z02` Firmenbezeichnung.
     pub kunde_namensformat: Option<String>,
+    /// The Bilanzkreis the Anmeldung registers into — the Produktpaket's
+    /// `CAV+ZV4` (Strom) or `SG10 CCI+Z19` (Gas). `E_0622` Prüfschritt 60
+    /// checks it against the Zuordnungsermächtigungen on file.
+    pub bilanzkreis: Option<String>,
 }
 
 impl AnmeldungPayload {
@@ -271,6 +275,11 @@ impl AnmeldungPayload {
             .get("kunde_namensformat")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let bilanzkreis = data
+            .get("bilanzkreis")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
 
         let date_str = data.get("process_date")?.as_str()?;
         // Includes the `CCYYMMDDHHMM±ZZ` shape an EDIFACT `SG4 DTM` arrives in,
@@ -293,6 +302,7 @@ impl AnmeldungPayload {
             vorgangsnummer,
             kunde_name,
             kunde_namensformat,
+            bilanzkreis,
         })
     }
 
@@ -338,6 +348,10 @@ impl AnmeldungPayload {
             // Netzlokationen and iMS — so a ruhende Marktlokation escalates at
             // the first of them.
             ruhend: mako_pruefung::RuhendeAnmeldung::default(),
+            bilanzkreis: self.bilanzkreis,
+            // Filled in by `evaluate_and_decide` from marktd: the store, not the
+            // message, says which Bilanzkreise a BKV authorised.
+            zuordnungsermaechtigungen: None,
         }
     }
 }
@@ -565,6 +579,21 @@ pub async fn evaluate_and_decide(
     };
 
     let mut anfrage = payload.into_anfrage();
+    // `E_0622` Prüfschritt 60 / 260 — „die notwendige Zuordnungsermächtigung
+    // (Bilanzkreis/Bilanzierungsverfahren) ist vorhanden". The BKV gives it
+    // by UTILMD 55071 and withdraws it by 55072, and marktd keeps both, so the
+    // walk reads what holds now. A read that fails is no answer: propagate so
+    // the fan-out redelivers. MaBiS is Strom only; `G_0011` is not given it.
+    if anfrage.sparte == Sparte::Strom {
+        anfrage.zuordnungsermaechtigungen = Some(
+            reader
+                .zuordnungsermaechtigungen(&lf_mp_id)
+                .await
+                .inspect_err(|e| {
+                    warn!(%e, lf_mp_id = %lf_mp_id, "processd NB: marktd Zuordnungsermächtigung read failed");
+                })?,
+        );
+    }
     // `E_0622` Prüfschritt 400 / 600 („Verändert sich die Veräußerungsform?")
     // needs the form in force at the Zuordnungsbeginn. That is the NB's own
     // EEG-/KWKG-Register, not the message — and `Z90` covers two regimes with
@@ -784,20 +813,10 @@ pub async fn evaluate_and_decide(
             lfa_mp_ids,
             zuordnungsende,
         } => {
-            // The Anfrage is a Sparte's own message: GeLi Gas 3.0 Kap. 3.2.3
-            // (S. 9) has the GNB send its Abmeldungsanfrage 44010, which no
-            // door sends yet. A Strom 55010 to a Gas LFA would be a wrong
-            // message on the wire, so the Gas case goes to the operator by
-            // name; the Information (44036, Nr. 2) is owed either way.
-            let command = match abmeldeanfrage_command(anfrage.sparte) {
-                Ok(command) => command,
-                Err(grund) => {
-                    warn!(%process_id, pid, %malo_id, %grund, "processd NB: Abmeldungsanfrage escalated");
-                    enqueue_for_operator(queue, config, &payload_meta, grund).await?;
-                    meldung.informieren(makod, &malo_id, process_id).await;
-                    return Ok(true);
-                }
-            };
+            // The Anfrage is a Sparte's own message: the 55010 in Strom, the
+            // GNB's Abmeldungsanfrage 44010 in Gas (GeLi Gas 3.0 Kap. 3.2.3,
+            // S. 9) — never one in the other's place.
+            let command = abmeldeanfrage_command(anfrage.sparte);
             let waiting = AbmeldeanfrageRecord {
                 anmeldung_process_id: process_id,
                 malo_id: malo_id.clone(),
@@ -938,8 +957,9 @@ async fn dispatch_abmeldeanfrage(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut payload = serde_json::json!({
         // The ÜT the LFA's 09:00 window and the Meldepflichten of Nr. 2 / 10
-        // count from (GPKE Teil 2 Kap. 2.1.2, S. 20–23): the Anmeldung's
-        // arrival, which the CloudEvent `time` carries.
+        // count from (GPKE Teil 2 Kap. 2.1.2, S. 20–23; in Gas the 44036's
+        // Ablauf des 4. WT, AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 2): the
+        // Anmeldung's arrival, which the CloudEvent `time` carries.
         "anmeldung_eingang":    eingang
             .format(&time::format_description::well_known::Rfc3339)
             .map_err(|e| format!("anmeldung_eingang: {e}"))?,
@@ -949,13 +969,32 @@ async fn dispatch_abmeldeanfrage(
         // its assignment on.
         "process_date":         zuordnungsende.to_string(),
         "anmeldung_process_id": process_id,
-        // `SG12 NAD+VY` — the Neulieferant (UTILMD AHB Strom Bedingung [567]).
+        // `SG12 NAD+VY` — the Neulieferant (UTILMD AHB Strom / Gas Bedingung
+        // [567]).
         "lfn_mp_id":            lfn_mp_id,
-        "tranche":              anfrage.marktlokationsart == Marktlokationsart::Erzeugend
-            && anfrage.erzeugung.as_ref().is_none_or(|e| {
-                e.geschaeftsvorfall != mako_pruefung::nb::types::Geschaeftsvorfall::Eins
-            }),
     });
+    let obj = payload.as_object_mut().expect("json! built an object");
+    match anfrage.sparte {
+        // `SG4 STS+7` — Muss on the 44010 and the Anmeldung's own Grund
+        // (UTILMD AHB Gas 1.2 Kap. 5.7, Bedingung [644]); makod restates an
+        // `E02` as `E01`. Gas has no Tranche.
+        Sparte::Gas => {
+            obj.insert(
+                "transaktionsgrund".into(),
+                anfrage.transaktionsgrund.clone().unwrap_or_default().into(),
+            );
+        }
+        _ => {
+            obj.insert(
+                "tranche".into(),
+                (anfrage.marktlokationsart == Marktlokationsart::Erzeugend
+                    && anfrage.erzeugung.as_ref().is_none_or(|e| {
+                        e.geschaeftsvorfall != mako_pruefung::nb::types::Geschaeftsvorfall::Eins
+                    }))
+                .into(),
+            );
+        }
+    }
     // `SG12 NAD+Z09` „Kunde des LF" — Muss on a verbrauchende oder ruhende
     // Marktlokation (Bedingung [279]), „der Kundenname aus der Anmeldung
     // Lieferant neu" ([572]). Copied verbatim: it is the LFN's own claim about
@@ -964,7 +1003,6 @@ async fn dispatch_abmeldeanfrage(
     // carried none, which is itself a defect in the LFN's message rather than
     // something to invent a value for.
     if let Some(name) = kunde.name.as_deref().filter(|n| !n.is_empty()) {
-        let obj = payload.as_object_mut().expect("json! built an object");
         obj.insert("kunde_name".into(), name.into());
         if let Some(format) = kunde.namensformat.as_deref().filter(|f| !f.is_empty()) {
             obj.insert("kunde_namensformat".into(), format.into());
@@ -972,7 +1010,15 @@ async fn dispatch_abmeldeanfrage(
     }
 
     let cmd = ForwardCommand {
-        marktrolle: Some("NB".to_owned()),
+        // The Rollenmodell has one NB; the Gas commands are catalogued under
+        // the `GNB` sub-qualifier, as the Meldepflichten are.
+        marktrolle: Some(
+            match anfrage.sparte {
+                Sparte::Gas => "GNB",
+                _ => "NB",
+            }
+            .to_owned(),
+        ),
         command: command.to_owned(),
         malo_id: Some(malo_id.to_owned()),
         melo_id: None,
@@ -990,21 +1036,15 @@ async fn dispatch_abmeldeanfrage(
     Ok(())
 }
 
-/// The command that sends the Anfrage zur Beendigung der Zuordnung in `sparte`,
-/// or why none can be sent.
+/// The command that sends the Anfrage zur Beendigung der Zuordnung in `sparte`.
 ///
 /// Strom: the 55010 (GPKE Teil 2 Kap. 2.1.2 Nr. 3, S. 20). Gas: the GNB's
-/// Abmeldungsanfrage 44010 (GeLi Gas 3.0 Kap. 3.2.3, S. 9), which no `makod`
-/// door sends — never the Strom message in its place.
-fn abmeldeanfrage_command(sparte: Sparte) -> Result<&'static str, &'static str> {
+/// Abmeldungsanfrage 44010 (GeLi Gas 3.0 Kap. 3.2.3, S. 9; AWH GeLi Gas V1.2
+/// Kap. 2.5.2 Nr. 3, S. 41).
+const fn abmeldeanfrage_command(sparte: Sparte) -> &'static str {
     match sparte {
-        Sparte::Gas => Err(
-            "GeLi Gas 3.0 Kap. 3.2.3: the Marktlokation is assigned, so the GNB owes the \
-             Altlieferant an Abmeldungsanfrage (UTILMD 44010) before it may answer. makod \
-             has no door that sends a 44010, and the Strom 55010 is not one — the operator \
-             sends the Abmeldungsanfrage and decides the Anmeldung",
-        ),
-        _ => Ok(mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN),
+        Sparte::Gas => mako_markt::commands::GELI_BEENDIGUNG_ZUORDNUNG_ANFRAGEN,
+        _ => mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN,
     }
 }
 
@@ -2384,6 +2424,20 @@ mod tests {
         assert!(AnmeldungPayload::parse(&initiated(55_001, "20261001")).is_some());
     }
 
+    /// The Anmeldung's Bilanzkreis reaches the walk; the Zuordnungsermächtigungen
+    /// do not come from the message — `evaluate_and_decide` reads them from
+    /// marktd, and until it has, `E_0622` Prüfschritt 60 has nothing to pass on.
+    #[test]
+    fn the_bilanzkreis_reaches_the_walk_and_the_ermaechtigungen_do_not() {
+        let mut event = initiated(55_001, "20261001");
+        event["data"]["bilanzkreis"] = serde_json::json!("11XBK-LF-------9");
+        let anfrage = AnmeldungPayload::parse(&event)
+            .expect("parses")
+            .into_anfrage();
+        assert_eq!(anfrage.bilanzkreis.as_deref(), Some("11XBK-LF-------9"));
+        assert!(anfrage.zuordnungsermaechtigungen.is_none());
+    }
+
     /// An Anmeldung whose Lieferbeginn is missing does not parse — and must
     /// still be recognisable as *ours*, so the drop is logged rather than
     /// mistaken for an event addressed elsewhere.
@@ -2430,6 +2484,18 @@ mod tests {
             erzeugung: None,
             abmeldeanfrage: Abmeldeanfrage::NichtErforderlich,
             ruhend: mako_pruefung::RuhendeAnmeldung::default(),
+            bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+            zuordnungsermaechtigungen: Some(vec![mako_pruefung::ZuordnungsermaechtigungRecord {
+                bkv_mp_id: "9900000000019".to_owned(),
+                lf_mp_id: "9900555000005".to_owned(),
+                bilanzkreis: "11XBK-LF-------9".to_owned(),
+                bilanzierungsgebiet: "11YB-TENNET----U".to_owned(),
+                zeitreihentyp: "SLS".to_owned(),
+                valid_from: time::Date::from_calendar_date(2020, time::Month::January, 1)
+                    .expect("valid date"),
+                valid_to: None,
+                deaktivierung_nachrichtendatum: None,
+            }]),
         }
     }
 
@@ -2619,17 +2685,24 @@ mod tests {
         assert_eq!(payload.kunde_namensformat.as_deref(), Some("Z01"));
     }
 
-    /// A Gas Anmeldung never produces a 55010: GeLi Gas 3.0 Kap. 3.2.3 (S. 9)
-    /// owes the GNB's Abmeldungsanfrage 44010, and without a door for it the
-    /// case goes to the operator by name.
+    /// A Gas Anmeldung on an assigned Marktlokation sends the GNB's
+    /// Abmeldungsanfrage 44010 (GeLi Gas 3.0 Kap. 3.2.3, S. 9) — never the
+    /// Strom 55010, and never the operator queue in its place.
     #[test]
-    fn a_gas_anmeldung_never_produces_a_55010() {
+    fn a_gas_anmeldung_sends_the_44010_and_never_a_55010() {
         assert_eq!(
             super::abmeldeanfrage_command(Sparte::Strom),
-            Ok(mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN)
+            mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN
         );
-        let grund = super::abmeldeanfrage_command(Sparte::Gas).expect_err("no Gas door");
-        assert!(grund.contains("44010"), "{grund}");
+        assert_eq!(
+            super::abmeldeanfrage_command(Sparte::Gas),
+            mako_markt::commands::GELI_BEENDIGUNG_ZUORDNUNG_ANFRAGEN
+        );
+        assert!(
+            mako_markt::commands::DISPATCHED_BY_SERVICES
+                .contains(&mako_markt::commands::GELI_BEENDIGUNG_ZUORDNUNG_ANFRAGEN),
+            "geli.beendigung-zuordnung.anfragen must be in the command catalogue"
+        );
     }
 
     /// The command the NB sends is registered and permitted to the NB role —

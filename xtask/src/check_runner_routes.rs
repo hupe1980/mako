@@ -9,10 +9,9 @@
 //! ```
 //!
 //! That panic happens while the router is built — which for these daemons is
-//! startup, before the listener binds. `accountingd` shipped it: its own router
-//! registered `GET /metrics` for the ledger gauges, the runner had already
-//! mounted `/metrics`, and the daemon could not boot. Nothing caught it,
-//! because the handler tests build handlers rather than the assembled router.
+//! startup, before the listener binds — so a daemon whose own router registers
+//! `GET /metrics` cannot boot. The handler tests build handlers rather than
+//! the assembled router, so nothing else catches it.
 //!
 //! A service that wants its own metrics gives them their own path — `invoicd`
 //! serves `/invoicd/metrics` and `processd` `/obs/metrics`. This holds every

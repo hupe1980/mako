@@ -48,7 +48,7 @@ secrecy      = { version = "0.10", features = ["serde"] }
 base64       = { version = "0.22" }
 # Belegprüfung reads the § and chapter addresses a sentence names.
 regex        = "1"
-agentplane = { version = "0.60", features = [
+agentplane = { version = "0.61", features = [
     # The declaration, and the wires that reach a model and a tool server.
     "manifest", "mcp", "providers",
     # Both journal backends: an embedded file, or one database several
@@ -86,7 +86,7 @@ mako-service = { workspace = true, features = ["testing", "mcp"] }
 rmcp = { version = "3.1", features = ["server", "transport-streamable-http-server"] }
 # testkit brings FakeProvider, Faulty and the replay assertions. It carries no
 # reqwest dependency, so it resolves independently of the provider drivers.
-agentplane = { version = "0.60", features = [
+agentplane = { version = "0.61", features = [
     "manifest", "mcp", "providers", "redb", "postgres", "cedar", "signing",
     "keyring", "keyring-vault", "http", "push", "witness-http", "testkit",
 ] }

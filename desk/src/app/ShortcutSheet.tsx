@@ -22,14 +22,12 @@ export function ShortcutSheet({
     >
       <Modal className="mx-auto mt-[16vh] w-[min(420px,calc(100vw-32px))] outline-none">
         <Dialog className="squircle rounded-panel bg-surface-raised p-5 shadow-popover outline-none">
-          <Heading slot="title" className="m-0 mb-3 text-title font-bold tracking-tight">
+          <Heading slot="title" className="m-0 mb-3 text-title2 font-semibold">
             {t.tasten.sheet}
           </Heading>
           {groups.map((g) => (
             <section key={g} className="mb-3 last:mb-0">
-              <h3 className="m-0 mb-1 text-caption font-semibold uppercase tracking-wide text-text-2">
-                {g}
-              </h3>
+              <h3 className="m-0 mb-1 text-caption font-semibold text-text-2">{g}</h3>
               <dl className="m-0">
                 {SHORTCUTS.filter((s) => s.group === g).map((s) => (
                   <div

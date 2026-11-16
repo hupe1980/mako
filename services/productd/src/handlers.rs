@@ -869,7 +869,7 @@ pub async fn get_energiemix(
 
 /// `DELETE /api/v1/products/{lf_mp_id}/{product_code}/energiemix`
 ///
-/// Remove the `Energiemix` and `Oekolabel` from a product (hard cut).
+/// Remove the `Energiemix` and `Oekolabel` from a product (deleted outright, no archive).
 /// Use when a product transitions from green-certified back to standard.
 pub async fn delete_energiemix_handler(
     claims: Claims,
@@ -1620,7 +1620,7 @@ fn unpreisbar_response(errors: &[PositionPricingError]) -> axum::response::Respo
 ///
 /// billingd is asked for its `[policy] behg_regime` only when the Stichtag's
 /// year needs it ([`braucht_behg_regime`]).
-async fn pricing_context(
+pub(crate) async fn pricing_context(
     pool: &PgPool,
     regime_quelle: &crate::billingd::BehgRegimeQuelle,
     stichtag: time::Date,
@@ -1979,6 +1979,58 @@ pub async fn get_angebot_handler(
         Ok(None) => ApiError::not_found(format!("Angebot {id} not found")).into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
+}
+
+// ── Endkunden-Angebot (B2C) ──────────────────────────────────────────────────
+
+/// `POST /api/v1/products/{lf_mp_id}/endkunden-angebote` — price and freeze a
+/// binding B2C offer ([`crate::endkunden_angebot`]).
+///
+/// `201` with the stored offer and its `content_sha256`; `422` with a stable
+/// `code` for every refusal — `eingabe_fehlt` names each missing Preisblatt,
+/// position or series year at once.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "an axum handler: each argument is an extractor the route needs"
+)]
+pub async fn post_endkunden_angebot(
+    claims: Claims,
+    Extension(cedar): Authz,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
+    Extension(regime_quelle): Extension<std::sync::Arc<crate::billingd::BehgRegimeQuelle>>,
+    Extension(marktd): crate::endkunden_angebot::MarktdExt,
+    Path(lf_mp_id): Path<String>,
+    Json(req): Json<crate::endkunden_angebot::EndkundenAngebotAnfrage>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&cedar, &claims, "quote-endkunde", &cfg.tenant)?;
+    let angebot = crate::endkunden_angebot::erstelle(
+        &pool,
+        &cfg.tenant,
+        &lf_mp_id,
+        &marktd,
+        &regime_quelle,
+        &req,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(angebot)))
+}
+
+/// `GET /api/v1/endkunden-angebote/{id}` — the frozen offer, as stored, read
+/// back out of the bytes its `content_sha256` is computed over. An expired
+/// offer stays readable: an order placed against it is proven by it.
+pub async fn get_endkunden_angebot(
+    claims: Claims,
+    Extension(cedar): Authz,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
+    Path(id): Path<uuid::Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "read-endkunden-angebot", &cfg.tenant)?;
+    crate::endkunden_angebot::lade(&pool, &cfg.tenant, id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found(format!("Endkunden-Angebot {id} not found")))
 }
 
 /// `GET /api/v1/angebote/{id}/comparison`
@@ -2570,7 +2622,7 @@ pub async fn put_angebot(
 /// consumption the feed is computed for. Reading `preisstaffeln[0]` instead
 /// publishes the lowest tier's price for every consumption, which understates
 /// the bill of any customer past the first boundary in the one place § 41c EnWG
-/// exists to make comparable. Selection follows BO4E's own rule — a quantity in
+/// exists to make comparable — the feed a Stromlieferant owes under Abs. 5. Selection follows BO4E's own rule — a quantity in
 /// a gap between two tiers „rutscht in die obere Zone" — through
 /// [`rubo4e::convenience::PreisstaffelSliceExt::select_for`], the same call the
 /// Angebot path makes.
@@ -2809,9 +2861,10 @@ pub fn compute_feed_etag(
 
 /// Build a `rubo4e::current::Tarifinfo` BO4E envelope from a product row.
 ///
-/// This is the § 41c EnWG canonical form: comparison portals (Verivox, Check24)
-/// and the BNetzA Markttransparenzstelle can import this object directly without
-/// custom ETL, since it conforms to the published BO4E `Tarifinfo` JSON schema.
+/// The § 41c Abs. 5 EnWG feed in BO4E form: a comparison portal can import this
+/// object directly without custom ETL, since it conforms to the published BO4E
+/// `Tarifinfo` JSON schema. The statute prescribes open data formats, not this
+/// one.
 ///
 /// Mapping:
 ///
@@ -2952,8 +3005,8 @@ pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo
 /// `GET /api/v1/comparison-feed/bo4e`
 ///
 /// Returns the same feed as `GET /api/v1/comparison-feed` but wraps every tariff
-/// in a full BO4E `Tarifinfo` Business Object — the format expected by comparison
-/// portals (Verivox, Check24) and the BNetzA Markttransparenzstelle per § 41c EnWG.
+/// in a full BO4E `Tarifinfo` Business Object, for comparison portals reading the
+/// § 41c Abs. 5 EnWG feed.
 ///
 /// Unlike the standard feed which returns a mako-specific JSON structure alongside
 /// the BO4E `Tarifpreisblatt`, this endpoint returns a schema-validated BO4E array
@@ -3263,10 +3316,9 @@ mod category_tests {
 
     /// Three copies of the category list exist — the schema constraint that
     /// enforces it, the Rust constant the REST layer describes it with, and the
-    /// MCP tool descriptions an agent reads before it calls anything. They had
-    /// drifted: `WASSER` and `SHARING` were missing from the tool descriptions,
-    /// so no agent could list or create either, and no test noticed because the
-    /// database accepted them all along.
+    /// MCP tool descriptions an agent reads before it calls anything. A category
+    /// missing from the tool descriptions is one no agent can list or create,
+    /// and the database accepting it hides the gap from every other test.
     #[test]
     fn the_categories_match_the_schema_constraint() {
         let sql = include_str!("../migrations/0001_schema.sql");

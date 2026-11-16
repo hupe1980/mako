@@ -2549,6 +2549,7 @@ mod config_surface_tests {
             "endpoint",
             "encryption_cert_pem_file",
             "signing_cert_pem_files",
+            // Removed; read by `as4_clients` only to refuse it.
             "quirks",
             "de0004_ausnahme",
             "signing_cert_pem_file",

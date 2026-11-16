@@ -836,6 +836,28 @@ mod nb {
         "/anfrage/transaktionsgrund=null",
         "not asked: E_0623 Prüfschritte 10–60 (EBD 4.3 Kap. 6.6.4, S. 85)",
     );
+    const BILANZKREIS_E0623: (&str, &str) = (
+        "/anfrage/bilanzkreis=null",
+        "not asked: E_0623 Prüfschritte 10–60 (EBD 4.3 Kap. 6.6.4, S. 85); the \
+         Zuordnungsermächtigung is E_0622 Prüfschritt 60's, walked before this tree",
+    );
+    const ERMAECHTIGUNG_E0623: (&str, &str) = (
+        "/anfrage/zuordnungsermaechtigungen=null",
+        "not asked: E_0623 Prüfschritte 10–60 (EBD 4.3 Kap. 6.6.4, S. 85); the \
+         Zuordnungsermächtigung is E_0622 Prüfschritt 60's, walked before this tree",
+    );
+    const BILANZKREIS_G0011: (&str, &str) = (
+        "/anfrage/bilanzkreis=null",
+        "not read: the MaBiS Zuordnungsermächtigung (UTILMD 55071/55072, BK6-24-174 \
+         Anlage 3 Kap. 10.2) is Strom, and no Gas Zuordnungsermächtigung is stored for \
+         G_0011's E13 to check against",
+    );
+    const ERMAECHTIGUNG_G0011: (&str, &str) = (
+        "/anfrage/zuordnungsermaechtigungen=null",
+        "not read: the MaBiS Zuordnungsermächtigung (UTILMD 55071/55072, BK6-24-174 \
+         Anlage 3 Kap. 10.2) is Strom, and no Gas Zuordnungsermächtigung is stored for \
+         G_0011's E13 to check against",
+    );
     const BILANZIERUNGSGEBIET_E0623: (&str, &str) = (
         "/anfrage/bilanzierungsgebiet=null",
         "not asked: E_0623 Prüfschritte 10–60 (EBD 4.3 Kap. 6.6.4, S. 85)",
@@ -867,6 +889,17 @@ mod nb {
             erzeugung: None,
             abmeldeanfrage: Abmeldeanfrage::NichtErforderlich,
             ruhend: mako_pruefung::RuhendeAnmeldung::default(),
+            bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+            zuordnungsermaechtigungen: Some(vec![mako_pruefung::ZuordnungsermaechtigungRecord {
+                bkv_mp_id: "9900000000019".to_owned(),
+                lf_mp_id: LFN.to_owned(),
+                bilanzkreis: "11XBK-LF-------9".to_owned(),
+                bilanzierungsgebiet: "11YB-TENNET----U".to_owned(),
+                zeitreihentyp: "SLS".to_owned(),
+                valid_from: date!(2020 - 01 - 01),
+                valid_to: None,
+                deaktivierung_nachrichtendatum: None,
+            }]),
         }
     }
 
@@ -994,7 +1027,12 @@ mod nb {
                 now: datetime!(2026-07-08 10:00 UTC),
             },
             accepts: evaluate,
-            exempt: &[BILANZIERUNGSGEBIET, GRUND_G0011],
+            exempt: &[
+                BILANZIERUNGSGEBIET,
+                GRUND_G0011,
+                BILANZKREIS_G0011,
+                ERMAECHTIGUNG_G0011,
+            ],
         }));
 
         // G_0011 — an Ein-/Auszug inside the Wechsel lead: only the
@@ -1012,7 +1050,7 @@ mod nb {
                 now: datetime!(2026-07-08 10:00 UTC),
             },
             accepts: evaluate,
-            exempt: &[BILANZIERUNGSGEBIET],
+            exempt: &[BILANZIERUNGSGEBIET, BILANZKREIS_G0011, ERMAECHTIGUNG_G0011],
         }));
 
         // E_0607 — Abmeldung.
@@ -1096,7 +1134,12 @@ mod nb {
                 anfrage: anmeldung(55_001, date!(2026 - 11 - 01)),
             },
             accepts: lieferbeginn,
-            exempt: &[BILANZIERUNGSGEBIET_E0623, GRUND_E0623],
+            exempt: &[
+                BILANZIERUNGSGEBIET_E0623,
+                GRUND_E0623,
+                BILANZKREIS_E0623,
+                ERMAECHTIGUNG_E0623,
+            ],
         }));
         f.extend(check(&Case {
             name: "E_0623 evaluate_lieferbeginn (LFA Zustimmung)",
@@ -1115,6 +1158,8 @@ mod nb {
             exempt: &[
                 BILANZIERUNGSGEBIET_E0623,
                 GRUND_E0623,
+                BILANZKREIS_E0623,
+                ERMAECHTIGUNG_E0623,
                 LFA_SCHWEIGT,
                 LFA_ZUORDNUNGSENDE,
             ],

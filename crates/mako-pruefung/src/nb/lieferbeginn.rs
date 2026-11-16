@@ -499,6 +499,10 @@ mod tests {
             }),
             abmeldeanfrage,
             ruhend: crate::nb::types::RuhendeAnmeldung::default(),
+            // `E_0623` does not ask about the Zuordnungsermächtigung; `E_0622`
+            // Prüfschritt 60 does, before this tree runs.
+            bilanzkreis: None,
+            zuordnungsermaechtigungen: None,
         }
     }
 

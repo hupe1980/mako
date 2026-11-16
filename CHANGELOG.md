@@ -9,11 +9,53 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
-## [0.33.1] — unreleased
+## [0.34.0] — 2026-11-16
+
+### Added
+
+- vertragd: online Vertragsschluss — `POST /api/v1/bestellungen` concludes a contract only together with its append-only Bestellnachweis (§ 312j Abs. 4 BGB), idempotent on `Idempotency-Key`, naming the frozen offer as `angebot_ref: { id, sha256 }`; `/api/v1/rechtsdokumente` and `/annehmen`, `/ablehnen`, `/nachweis`; `[policy] vertragsschluss` (required — unset, the route answers `409 policy_nicht_gesetzt`), `lieferbeginn_in_widerrufsfrist`, `bestellbutton_beschriftungen`. The schema refuses a consumer `ONLINE` contract without its Nachweis.
+- vertragd: the Widerruf — `POST /api/v1/vertraege/{id}/widerruf` and `/bestellungen/{id}/widerruf`: Stornierung before Lieferbeginn, Lieferende with the § 357a Abs. 2 BGB Wertersatz after it, an Eingangsbestätigung (§ 356a Abs. 4 BGB); a late Widerruf is recorded and refused. mako-fristen: `vorlauf::widerrufsfrist`. mako-events: `vertrag::{BESTELLUNG_EINGEGANGEN, BESTELLUNG_ANGENOMMEN, BESTELLUNG_ABGELEHNT, WIDERRUF_EINGEGANGEN}`.
+- productd: the frozen Endkunden-Angebot — `POST /api/v1/products/{lf_mp_id}/endkunden-angebote` prices against the NB's Preisblatt and the dated series, refuses a missing input by name and freezes the offer under an RFC 8785 hash; `GET /api/v1/endkunden-angebote/{id}`.
+- outputd: document kinds `VERTRAGSZUSAMMENFASSUNG` (§ 41 Abs. 4 EnWG), `VERTRAGSBESTAETIGUNG` (§ 312f Abs. 2 BGB) and `WIDERRUFSBESTAETIGUNG` (§ 356a Abs. 4 BGB), each gated on its mandated items; `GET /api/v1/documents/by-subject/{kind}/{subject_ref}`, `GET /api/v1/deliveries?status=FAILED&kind=…`.
+- outputd: `[policy] anrede` (`sie`, the default, or `du`) for the letters' reference layouts and the built-in mail subjects; the Widerrufsbelehrung and the Gebührenbescheid are always „Sie". `POST /api/v1/render/{kind}` takes `anrede` to reproduce a document (answered as `X-Mako-Anrede`), and each issued document records it.
+- mako-markt and marktd: Referenzreihen — a catalogue of the published figures billing reads (`kav_grenzpreis_strom`, `kav_durchschnittserloes_gas`, `eeg_monatsmarktwert`, `eeg_jahresmarktwert`, `day_ahead_de_lu`) with source, legal anchor and licence, and a bitemporal, append-only `referenzwerte` store: `GET /api/v1/referenzreihen[/{reihe}/werte|/wert]` with `stand`, `422 referenzwert_fehlt` when missing, `POST …/{reihe}/import` (`generisch`, `smard`, `energy_charts`; `?vorschau=true`; idempotent per file), MCP `list_referenzreihen` / `get_referenzwert`, `MarktdClient::referenzwert`. No value ships; a `betreiber` series is the operator's to load.
+- makod: the deployment role `bkv-strom` (`[[party]] roles = ["BKV"]`), which loads `MabisModule` with the BKV's ten PIDs (`mako_mabis::BKV_PIDS`) and makes the BKV's `mabis.abrechnung.*` commands licensable; the setup interview and agentd's `einrichtung-assistent` offer it.
+- makod: the certificate and endpoint rules of Regelungen zum Übertragungsweg für AS4 2.6 at startup — certificate subject OU = MP-ID (Kap. 5.2), no IP-address endpoint (Kap. 3), one URI matching `endpoint` (Kap. 2, 5.2), `as4.zertifikat_warnfenster_tage` ≥ 14 (Kap. 5.3). mako-as4: `certificate::{subject_organisational_units, carries_mp_id, uri_subject_alt_names}`.
+- xtask: `check-referenzreihen`; `check-policy-settings` accepts a required setting held as `Option<Policy<_>>`.
+
+### Changed
+
+- **Breaking:** the EDIFACT layer is the crate `edifact` 0.20 (was `edifact-rs` 0.18); edi-energy and dvgw-edi re-export `edifact::` types.
+- **Breaking:** edi-energy: a writer refusal is `Error::Serialize`; `ParseConfig::max_segments_per_message` is `max_message_bytes`; `InterchangeBuilder` refuses an interchange without `transmission(…)` or without a message.
+- **Breaking:** edi-energy: numbers are read under the interchange's `UNA` decimal mark (Allgemeine Festlegungen V6.1d Kap. 2.18) — `EdiEnergyMessage::decimal_mark`, `Qty::value_f64(mark)`, `wire_decimal`, `una_decimal_mark`; `formatbedingung::{evaluate, truth, violations}` and `Profile::validate_with_rollen` take the mark.
+- **Breaking:** the Zuordnungsermächtigung — mako-mabis receives UTILMD 55071 / 55072 as `ZpLifecycleCommand::ReceiveZuordnungsermaechtigung` (`ReceiveAnfrage` refuses them), makod routes them under the BKV and its `IDE+24` Vorgangsnummer, marktd keeps them; mako-gpke `SupplierChangeCommand::ReceiveUtilmd` and mako-pruefung `AnmeldungAnfrage` carry the Anmeldung's `bilanzkreis`, `AnmeldungAnfrage` also the `zuordnungsermaechtigungen` on file.
+- **Breaking:** mako-geli-gas: `InitiateGnbProcess` takes `abmeldungsanfrage`, `ReceiveGnbAntwort` takes `zuordnungsende`; new commands `MeldungGesendet`, `AnmeldungBestaetigt`, `MeldepflichtVerstrichen` (the 44010, under Fixed).
+- **Breaking:** mako-mabis: `register_pids_with_roles` registers the whole family only for NB, ÜNB or BIKO, `BKV_PIDS` for a BKV alone. mako-service: `einrichtung::befragung::Rolle` is the one role type and replaces makod's (`ALL` → `ALLE`, `party_roles` → `alle_kuerzel`, `of_party_role` → `von_kuerzel`).
+- **Breaking:** mako-as4: error variants `IdentityError::MpIdNotInSubject` and `PartnerDirectoryError::{EndpointWithoutHostName, MpIdNotInSubject, SeveralAddresses, EndpointNotInCertificate}`.
+- **Breaking:** outputd: `DeliveryConfig::subject_for` and `default_subject` take the `Anrede`; a view that carries `anrede` is refused (`ANREDE_IN_VIEW`); `documents.anrede`.
+- **Breaking:** netzbilanzd: an NNE `konzessionsabgabe` is `{ satz_ct_per_kwh, klasse, niederspannung?, durchschnittspreis_ct_per_kwh?, grenzpreis_ct_per_kwh? }`. The Strom Grenzpreis (KAV § 2 Abs. 4) is read from marktd's `kav_grenzpreis_strom` for the vorletzte Kalenderjahr and refused `referenzwert_fehlt` when missing; a stated value below it (`grenzpreis_unter_veroeffentlichtem`) and a period across 1 January (`grenzpreis_jahr_uneindeutig`) are refused.
+- dvgw-edi: `DvgwPlatform::new` and `sniff` bound an interchange at 10 MiB and 1 000 messages (`default_reader_config`).
+- agentd: agentplane 0.61 — a stop takes effect before the run's next effect, a model turn included.
+- Desk: one page container and the macOS type ramp; status as tinted text, with `--info` for work in progress; Heute, Fristen and Angaben rows reorganised task first; German text says „du"; the docs screenshots come from the production build.
+
+### Removed
+
+- **Breaking:** makod and mako-as4: the receipt relaxation `receipt-without-non-repudiation` — a transmission without an NRR has failed (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 7.3, S. 8). `[[as4.partner]] quirks` and `as4.lenient_receipts` stop the boot; `PartnerEntry::quirks`, `parse_quirk` and `PartnerDirectoryError::UnknownQuirk` are gone.
 
 ### Fixed
 
-- `just desk-vergleich` always renders in the pinned Playwright image, CI included; a host browser's fonts and rasteriser differed from the baselines.
+- makod and processd: a Gas Anmeldung on an assigned Marktlokation sends the Abmeldungsanfrage 44010 to the Altlieferant (GeLi Gas 3.0 Kap. 3.2.3) instead of escalating; the LFA's 44011 / 44012, or the lapse of the 3. WT, resumes the Anmeldung, under the 44036 and 44037 windows.
+- processd: `E_0622` Prüfschritt 60 / 260 refuses `A05` / `A25` for a Strom Anmeldung whose Bilanzkreis no Zuordnungsermächtigung covers (`GET /api/v1/zuordnungsermaechtigungen/{lf_mp_id}`), and escalates when marktd was not read.
+- makod and edi-energy: every `DTM` is read by `edifact::DtmValue` — a `303` without its zone is refused, a `104` skeleton carries `MMWWMMWW`, `SEM-DTM-VALUE` checks every decoded format, and `SEM-*-PERIOD-ORDER` compares each `DTM+163` / `164` pair as instants.
+- makod and edi-energy: INVOIC amounts, Gas Brennwert / Zustandszahl and `QTY` values are read under the `UNA` decimal mark; the other mark is refused.
+- makod: the CONTRL `UNT` DE 0074 count is right when the echoed `UCI` reference contains `?'`.
+- makotest: `validate_edifact` counts messages under the blob's own `UNA`; the simulators respell non-UNOC characters in a finding or refuse it.
+- Desk: codes and states go through the catalogue and are never shown raw; a refused lookup shows the catalogue sentence with the service text under „Details"; model text opens with „KI-generiert." in the chosen Sprache; a Hinweis sits only under the process it names.
+- `just desk-vergleich` renders in the pinned Playwright image everywhere, CI included.
+
+### Security
+
+- VEX: RUSTSEC-2023-0071 (`rsa`) states both paths — jsonwebtoken verifies with public keys only, and edmd's `gs://` cold tier signs a service-account JWT locally through reqsign-google, about once per token lifetime, on a schedule no attacker triggers or times (`vulnerable_code_cannot_be_controlled_by_adversary`).
 
 ## [0.33.0] — 2026-11-13
 

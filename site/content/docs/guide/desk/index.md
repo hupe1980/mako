@@ -70,11 +70,14 @@ row („2 interne Schritte"). Pending Fristen close the thread, each named for w
 „Eingangsbestätigung (APERAK)", a „Syntaxquittung (CONTRL)" or a „Frist des
 Prozesses".
 
-The **Frist-Uhr** says how far a deadline is: red inside two hours, amber
-inside a day, solid red once it has lapsed. The time beside it is Berlin time;
+The **Frist-Uhr** says how far a deadline is: plain while it is far, amber
+inside a day, red inside two hours and once it has lapsed — tinted text, never
+a solid badge; amber means only that a Frist is near. The time beside it is Berlin time;
 hover or focus shows the instant in UTC as the wire carries it.
 
-A key with no process gets the Marktkommunikation's own answer, said calmly:
+A key with no process gets a sentence for the Marktkommunikation's refusal
+code and one way on — „Neue Suche"; the service's own text waits under
+„Details":
 
 [![The answer for a key that names no process](refusal-light.png)](refusal-light.png)
 [![The answer for a key that names no process](refusal-dark.png)](refusal-dark.png)
@@ -84,12 +87,12 @@ A key with no process gets the Marktkommunikation's own answer, said calmly:
 Under a customer, a MaLo's processes and a Freigabe, the Desk asks the
 assistant — type a question, take a suggestion, or press <kbd>⌘J</kbd>. It
 reads the same services the screen does and names the model that answers. The
-answer opens with „AI-generated."; the assistant reads and never acts.
+answer opens with „KI-generiert." („AI-generated." in English); the assistant reads and never acts.
 
 **The trail.** Each read the assistant makes appears under the question as a
 numbered line the moment agentd journals it — „Verlauf gelesen · Prozess 43991093"
 with its source chip — while a hairline runs under the question. A read whose
-source you may not see stays, marked „Quelle für Sie verborgen"; a call a stop
+source you may not see stays, marked „Quelle für dich verborgen"; a call a stop
 refused stays muted, marked „nicht beantwortet".
 
 [![Fragen while the assistant reads: four numbered reads with their source chips, the hairline above them, Stoppen in place of Fragen](fragen-live-light.png)](fragen-live-light.png)
@@ -137,9 +140,10 @@ has concluded, lists the services it read under it („Gelesen: …") and says w
 if agentd refuses it.
 
 What a skill noticed on its own — a Frist that passed, an Anmeldung that
-stalled — arrives as a **Hinweis**: at the top of Heute and the Überblick, and
-under the customer or MaLo it concerns, in the skill's own words (a
-model-written one opens with „AI-generated."). A skill can be muted in one
+stalled — arrives as a **Hinweis**: in Heute under the item it concerns, and below the
+work on the Überblick, a process and a customer, folded to one line („1
+Hinweis") that opens on a press, in the skill's own words (a
+model-written one opens with „KI-generiert."). A skill can be muted in one
 click and shown again in one; muting is this browser's and deletes nothing.
 
 **Assistent** in the sidebar is each skill's package leaflet, read off the
@@ -187,7 +191,7 @@ words; one its policy makes stands where the controls were until the tab is
 closed.
 
 The assistant proposes a decision for every Freigabe as it is queued — an
-action, a code and one sentence why, marked „AI-generated." and checked like
+action, a code and one sentence why, marked „KI-generiert." and checked like
 every sentence it writes. It stands at the top of the decision; <kbd>U</kbd> or
 „In die Entscheidung übernehmen" fills the form and sends nothing. Where it has
 not proposed one, ask it „Was schlägst du vor?". Whether you sent a proposal as
@@ -243,7 +247,7 @@ When the service refuses it after the hold, its words stand on the entry.
 
 Where the assistant's proposal is waiting, the action it proposes carries
 „Vorschlag", and choosing it fills in what the proposal names — the code, the
-date, the Grund — tinted and marked by a card that opens „AI-generated.", says
+date, the Grund — tinted and marked by a card that opens „KI-generiert.", says
 why, and ends with the assistant's 30-day record. <kbd>Tab</kbd> keeps the
 suggestion and moves on; typing replaces it, and the mark is gone once you
 change what it filled in. A Bemerkung is never filled in: it is recorded as
@@ -304,8 +308,12 @@ Each item is something a service holds open for this Rolle:
 
 The list is read in bands — **Überfällig**, **Heute**, **Nächste 7 Tage**,
 **Später**, **Ohne Frist** — by the Frist each service returned; the Desk
-computes none. A row names the customer where one is known, says in the
-service's words why it waits, and opens what it is about.
+computes none. A row reads like a mail: what is to be done first, then the
+customer or MaLo and the PID, the Frist in one column on the right. A state or
+family a service returns is said in the Desk's words („läuft", „GPKE"), never
+as its code; an overdue process opens in **Fristen**, where its Fundstelle
+stands. A Hinweis that names a process sits under that process's row only.
+The section heads stay in view while the list scrolls.
 
 A Freigabe is decided where it stands: <kbd>↵</kbd> opens the decision under
 the row — <kbd>A</kbd> or <kbd>R</kbd>, the code, the send, held for undo — and Heute
@@ -374,8 +382,10 @@ whose sources it does not read. While the assistant is unreachable, „Warum?" i
 not offered.
 
 Under the list each source says how many it returned, or why it did not
-answer — one unreachable service never empties Heute. As Lieferant the
-**Lage** heads the page: the day in the services' own counts, no model in it.
+answer — one unreachable service never empties Heute. As Lieferant one
+**Lage** line heads the page with what the list cannot say — the services'
+totals beyond its page, no model in it — and is absent when it would only
+repeat the list.
 
 [![Heute as Lieferant: the Lage, then the items in Frist bands, a Hinweis of the assistant under the item it concerns](heute-light.png)](heute-light.png)
 [![Heute as Lieferant: the Lage, then the items in Frist bands, a Hinweis of the assistant under the item it concerns](heute-dark.png)](heute-dark.png)
@@ -478,7 +488,8 @@ or a Marktrolle it does not declare, is refused in the service's words.
 
 Below 768 px the sidebar folds away: the button at the start of the top bar
 opens it as a sheet over the view, and esc, a tap outside or a choice closes
-it, the focus back on the button. Search shrinks to its icon, a list–detail
+it, the focus back on the button. The sidebar groups the views under
+**Arbeit**, **Nachschlagen** and **System**. Search shrinks to its icon, a list–detail
 view shows one pane at a time, and no view scrolls sideways.
 
 [![Einrichtung at a phone's width](telefon-einrichtung-light.png)](telefon-einrichtung-light.png)
@@ -527,8 +538,18 @@ writes — a finding, a refusal, a reason — appears in its own words.
 
 ## The design system
 
-`/dev/gallery` (development builds) shows every control in every state, light
-and dark side by side — the page a design change is reviewed on.
+Every view sits in one page container, leading-aligned at one gutter, in one
+of two widths — reading (≈720 px) for a document-like view, work for a list
+or grid — so a title never moves between views. The type is the macOS ramp
+(Large Title 26 pt down to Caption 11 pt, Regular and Semibold only); status
+is tinted text on its own faint fill, and the only solid fill is the one
+primary button. What the assistant wrote is upright text behind a thin violet
+rule and its sparkle.
+
+`/dev/gallery` (development builds) shows every colour token, the type ramp,
+each status and every control in every state, light and dark side by side —
+the page a design change is reviewed on. The screenshots on this page are
+taken from the production build.
 
 [![The design system gallery, light and dark side by side](gallery.png)](gallery.png)
 

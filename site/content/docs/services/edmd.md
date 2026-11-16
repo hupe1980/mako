@@ -412,12 +412,16 @@ is answered 5xx and receipted on redelivery.
 
 `SG6 LOC+172` names a Marktlokation or a Messlokation. A delivery naming a
 Messlokation is filed under the one Marktlokation `marktd`'s Lokationszuordnung
-links it to on the values' day; none, or several, is **422**. A Zählerstand
+links it to on the values' day; none, or several, is **422**.
+
+A Zählerstand
 (`zaehlerstaende`: `at`, `value`, `quality`, `obis_code`, `melo_id`,
 `herkunft`) is filed as a register reading — `makod` dates it by its `SG10
 DTM+7` Nutzungszeitpunkt, which MSCONS MIG 2.5 (S. 35) makes the instant it is
 processed at, not the `DTM+9` Ablesedatum. A Zählerstand addressed to the
-Marktlokation is filed under the one Messlokation `marktd` links to it. Each read may carry
+Marktlokation is filed under the one Messlokation `marktd` links to it.
+
+Each read may carry
 `herkunft` — see [reading origin](#reading-origin) — and the payload may carry
 `mscons_version`, which `makod` states for the Lastgang PIDs 13008, 13018 and
 13025 from their `DTM+137` Nachrichtendatum: those are the PIDs whose

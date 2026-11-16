@@ -6,16 +6,25 @@
 //! with ConcatKDF and AES-128-GCM with an `X509SKI` reference, sign then
 //! encrypt, gzip, the fixed Action, roles and `AgreementRef`, an empty
 //! `ConversationId`, CRL revocation with the three-day distrust rule. Nothing
-//! here can relax it. What this crate adds is what a mako deployment decides:
+//! here can relax it. Regelungen zum Übertragungsweg für AS4 2.6 (anzuwenden
+//! ab 01.10.2026) adds the certificate rules: the MP-ID in the subject `OU` of
+//! each certificate and one URI subject alternative name naming the AS4
+//! address (Kap. 5.2, S. 6), taken as the partner endpoint (Kap. 2, S. 4),
+//! reached by SNI (Kap. 3, S. 5). What this crate adds is what a mako
+//! deployment decides:
 //!
 //! - [`identity`] — one [`LocalIdentity`] per local MP-ID and the
 //!   [`client_builder`] for its `As4` client, refusing two uses of one key pair
+//!   and a certificate whose subject `OU` is not the MP-ID
+//! - [`certificate`] — the subject `OU` and the URI subject alternative names
+//!   Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.2 (S. 6) requires
 //! - [`partner_directory`] — [`PartnerDirectory`], one `asx::Partner` per
-//!   counterparty MP-ID
+//!   counterparty MP-ID, refusing an endpoint or encryption certificate the
+//!   2.6 rules do not admit
 //! - [`action`] — [`BdewAction`], the EDIFACT message type, and the
 //!   [`Service`] it is sent under
 //! - [`file_name`] — the Übertragungsdatei name of Allgemeine Festlegungen
-//!   V6.1d §2.12
+//!   V6.1d Kap. 2.12
 //! - [`message_id`] — the RFC 2822 `eb:MessageId` of an outbox entry
 //! - [`constants`] — party types per issuing agency, the payload media type,
 //!   the size limit and the 72 h retry window
@@ -37,6 +46,7 @@
 #![deny(unsafe_code)]
 
 pub mod action;
+pub mod certificate;
 pub mod constants;
 pub mod file_name;
 pub mod identity;
@@ -49,5 +59,5 @@ pub use action::{BdewAction, bdew_action_from_str};
 pub use file_name::uebertragungsdatei_name;
 pub use identity::{IdentityError, LocalIdentity, client_builder};
 pub use message_id::{InvalidMessageIdDomain, MessageIdDomain};
-pub use partner_directory::{PartnerDirectory, PartnerDirectoryError, PartnerEntry, parse_quirk};
+pub use partner_directory::{PartnerDirectory, PartnerDirectoryError, PartnerEntry};
 pub use service::Service;

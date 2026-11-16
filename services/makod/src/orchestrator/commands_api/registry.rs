@@ -617,6 +617,17 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         workflow: Some("geli-gas-supplier-change"),
         dispatch: cmd_geli_abmeldung_nb_ablehnen,
     },
+    // ── GeLi Gas Abmeldungsanfrage (44010, GNB → LFA) ─────────────────────────
+    // SD Lieferbeginn Nr. 3, „Zeitgleich zu Prozessschritt 2" (AWH GeLi Gas V1.2
+    // Kap. 2.5.2). Without it an assigned Gas Marktlokation has no path to
+    // `E_3007` but the operator queue.
+    CommandDescriptor {
+        name: "geli.beendigung-zuordnung.anfragen",
+        permitted_roles: &[Marktrolle::Gnb],
+        primary_pid: pid(44010),
+        workflow: Some("geli-gas-supplier-change"),
+        dispatch: cmd_geli_beendigung_zuordnung_anfragen,
+    },
     CommandDescriptor {
         // 44010 Abmeldungsanfrage des NB → 44011 / 44012 (Codeliste `E_3020`).
         name: "geli.beendigung-zuordnung.bestaetigen",

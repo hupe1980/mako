@@ -102,6 +102,7 @@ async fn spawn_supplier_change(
                 kunde_namensformat: None,
                 message_ref: mako_engine::types::MessageRef::new("MSG-001"),
                 bilanzierungsgebiet: None,
+                bilanzkreis: None,
                 bilanzierungsmethode: None,
                 fallgruppe: None,
                 validation_passed: true,

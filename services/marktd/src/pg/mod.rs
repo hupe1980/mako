@@ -127,11 +127,13 @@ pub mod netzzugang;
 pub mod partner;
 pub mod preisblatt;
 pub mod pricat;
+pub mod referenzreihen;
 pub mod subscription;
 pub mod tranche;
 pub mod utilmd_stammdaten;
 pub mod versorgung;
 pub mod zaehler_register;
+pub mod zuordnungsermaechtigung;
 
 pub use bilanzierung::PgBilanzierungRepository;
 pub use correlation::PgCorrelationIndex;
@@ -166,3 +168,4 @@ pub use tranche::PgTrancheRepository;
 pub use utilmd_stammdaten::PgUtilmdStammdatenRepository;
 pub use versorgung::PgVersorgungsStatusRepository;
 pub use zaehler_register::PgZaehlzeitRepository;
+pub use zuordnungsermaechtigung::PgZuordnungsermaechtigungRepository;

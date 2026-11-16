@@ -2,14 +2,12 @@
 //!
 //! # Why this is a table
 //!
-//! `invoicd` handled ten PIDs through four near-identical ~250-line functions.
-//! They differed in five things — the check to run, the price sheet to fetch,
-//! the accept/reject command names, an idempotency salt and an outcome label —
-//! and agreed on everything else, including the parts that matter: persist
-//! before dispatch, mark dispatched after, notify the ERP. They also drifted:
-//! only two of the four notified the ERP at all, only two wrote a dead-letter
-//! entry when the Rechnung would not parse, and one wrote it without the
-//! tenant column, so every one of its inserts was rejected by the schema.
+//! The PIDs differ in five things — the check to run, the price sheet to
+//! fetch, the accept/reject command names, an idempotency salt and an outcome
+//! label — and agree on everything else, including the parts that matter:
+//! persist before dispatch, mark dispatched after, notify the ERP, dead-letter
+//! a Rechnung that does not parse. A function per PID lets those parts drift
+//! apart.
 //!
 //! Stating the five differences as data and running one pipeline over them
 //! means a new PID is a row, and a change to the invariant is one edit rather

@@ -75,9 +75,9 @@ fn the_bgm_convention_still_parses() {
 /// Every message type whose AHB gives BGM DE 1004 as a *Dokumentennummer* must
 /// put the Prüfidentifikator in `RFF+Z13` and leave DE 1004 alone.
 ///
-/// The failure this pins is systemic rather than per-message: mako once wrote
-/// the PID into DE 1004 everywhere, which is non-conformant on a Muss field and
-/// makes a conformant partner's message undetectable.
+/// The failure this pins is systemic rather than per-message: a PID in DE 1004
+/// is non-conformant on a Muss field and makes a conformant partner's message
+/// undetectable.
 #[test]
 fn the_pid_never_occupies_the_bgm_dokumentennummer() {
     use edi_energy::builders::{

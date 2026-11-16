@@ -221,10 +221,10 @@ mako_service::policy_choice! {
         options: {
             /// Only senders listed in `[[as4.partner]]`: any other is refused
             /// before dispatch and answered `EBMS:0202`.
-            NurKonfigurierte = "nur_konfigurierte" => "BDEW AS4-Profil 1.2 Kap. 2.3.7 (S. 19): Zertifikate KÖNNEN auf der Grundlage der MP-ID im OU-Feld abgelehnt werden (Whitelist); die Whitelist sind die Partnerstammdaten des Betreibers",
+            NurKonfigurierte = "nur_konfigurierte" => "a receiver may reject certificates by the MP-ID in the OU as a whitelist, here the operator's partner master data (BDEW AS4-Profil 1.2 Kap. 2.3.7, S. 19)",
             /// Any sender whose verified SM-PKI certificate carries the claimed
             /// MP-ID in its OU.
-            BdewOuZulassen = "bdew_ou_zulassen" => "BDEW AS4-Profil 1.2 Kap. 2.3.2 (S. 16): Nachrichten mit beliebigen Werten in eb:From/eb:PartyId werden akzeptiert, sofern sie mit den Betreff-Feldern im vorgelegten Zertifikat übereinstimmen; Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2 (S. 6): das OU des Subject enthält die MP-ID",
+            BdewOuZulassen = "bdew_ou_zulassen" => "any eb:From PartyId matching the certificate, whose OU carries the MP-ID, is accepted (BDEW AS4-Profil 1.2 Kap. 2.3.2, S. 16; Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2, S. 6)",
         }
     }
 }
@@ -244,9 +244,9 @@ mako_service::policy_choice! {
         default: tightening(Z33, "the document's rule: a follow-up whose Geschäftsvorfall the receiver does not hold is refused at once, so the sender learns within the APERAK window rather than from a silent Frist lapse"),
         options: {
             /// Refuse with the Verarbeitbarkeitsfehlermeldung `Z33`.
-            Z33 = "z33" => "APERAK AHB 1.1 Kap. 2.1.3 (S. 14): nur wenn die Zuordnung scheitert, kann und muss der Empfänger dies mit der APERAK / Zuordnungsfehler melden, wo die Stelle der Zuordnungsprüfung „V“ ist; Kap. 4.3 (S. 43): Z33 Referenziertes Geschäftsvorfall-Tupel nicht vorhanden",
+            Z33 = "z33" => "where the Stelle der Zuordnungsprüfung is V, a failed assignment is reported by APERAK, code Z33 (APERAK AHB 1.1 Kap. 2.1.3, S. 14; Kap. 4.3, S. 43)",
             /// Record it as a dead letter for a person and send no APERAK.
-            ZurPruefung = "zur_pruefung" => "APERAK AHB 1.1 Kap. 1.3 (S. 7): sofern die Ursache für das Misslingen auf Seiten des Empfängers liegt, hat dieser die ursprüngliche Übertragungsdatei in die fristgerechte Verarbeitung aufzunehmen",
+            ZurPruefung = "zur_pruefung" => "a failure on the receiver's side obliges it to take the Übertragungsdatei into fristgerechte Verarbeitung (APERAK AHB 1.1 Kap. 1.3, S. 7)",
         }
     }
 }
@@ -342,7 +342,7 @@ pub struct PartyAs4Config {
 #[serde(deny_unknown_fields)]
 pub struct DeploymentConfig {
     /// Role tokens: `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`,
-    /// `msb-gas`, `esa-strom`.
+    /// `msb-gas`, `esa-strom`, `bkv-strom`.
     pub rollen: Vec<crate::deployment::Rolle>,
 }
 
@@ -642,14 +642,16 @@ pub struct As4Config {
     #[serde(default)]
     pub allow_no_signing: bool,
 
-    /// Removed: refused at startup with the per-partner replacement named.
+    /// Removed: refused at startup, naming the rule that settles it.
     #[serde(default)]
     pub lenient_receipts: Option<serde::de::IgnoredAny>,
 
     /// How many days before a certificate's expiry the configuration check
     /// warns about it — every `[party.as4]` and `[[as4.partner]]`
     /// certificate. An expired one blocks the boot whatever is set here.
-    /// Default: 30.
+    /// Default: 30; at least 14 — a successor is due 10 Werktage before the
+    /// old certificate expires (Regelungen zum Übertragungsweg für AS4 2.6,
+    /// Kap. 5.3, S. 6).
     pub zertifikat_warnfenster_tage: Option<u32>,
 }
 
@@ -671,11 +673,9 @@ pub struct As4PartnerConfig {
     /// the MP-ID in the certificate's OU.
     #[serde(default)]
     pub signing_cert_pem_files: Vec<PathBuf>,
-    /// Interoperability quirks: `"receipt-without-non-repudiation"` accepts the
-    /// partner's *signed* receipt without NonRepudiationInformation. An
-    /// unsigned or mis-signed receipt is refused whatever is set here.
+    /// Removed: refused at startup, naming the rule that settles it.
     #[serde(default)]
-    pub quirks: Vec<String>,
+    pub quirks: Option<serde::de::IgnoredAny>,
     /// MP-IDs this partner may name as the interchange sender (`UNB`
     /// DE 0004) while it authenticates as itself — a Dienstleister sending on
     /// their behalf. Empty, the default: an interchange from this partner
@@ -687,9 +687,15 @@ pub struct As4PartnerConfig {
 
 /// The refusal of the removed `as4.lenient_receipts` key.
 pub const LENIENT_RECEIPTS_REMOVED: &str = "as4.lenient_receipts (MAKOD_AS4_LENIENT_RECEIPTS) is \
-     removed: every synchronous eb:Receipt is verified. For a partner whose signed receipt \
-     carries no NonRepudiationInformation, declare it per partner: [[as4.partner]] quirks = \
-     [\"receipt-without-non-repudiation\"]. An unsigned or mis-signed receipt is never accepted.";
+     removed: every synchronous eb:Receipt is verified, NonRepudiationInformation included — \
+     Regelungen zum Übertragungsweg für AS4 2.6, Kap. 7.3 (S. 8): a transmission without an \
+     NRR has failed.";
+
+/// The refusal of the removed `[[as4.partner]] quirks` key.
+pub const QUIRKS_REMOVED: &str = "is removed: every synchronous eb:Receipt is verified, \
+     NonRepudiationInformation included — Regelungen zum Übertragungsweg für AS4 2.6, Kap. 7.3 \
+     (S. 8): a transmission without an NRR has failed, so no partner may be configured to \
+     deliver without one. Delete the key.";
 
 /// `[erp]` — ERP / backend integration settings (BO4E contract).
 #[derive(Debug, Deserialize)]
@@ -902,7 +908,6 @@ mp_id                    = "9900000000002"
 endpoint                 = "https://partner-a.example/as4/inbox"
 encryption_cert_pem_file = "/etc/makod/partners/9900000000002.enc.pem"
 signing_cert_pem_files   = ["/etc/makod/partners/9900000000002.sig.pem"]
-quirks                   = ["receipt-without-non-repudiation"]
 
 [policy.as4]
 unbekannte_absender = "bdew_ou_zulassen"
@@ -1018,13 +1023,20 @@ unbekannte_absender = "bdew_ou_zulassen"
         );
     }
 
-    /// The removed `as4.lenient_receipts` key still parses, so startup can
-    /// refuse it naming the per-partner setting instead of a generic
-    /// unknown-field error.
+    /// The removed `as4.lenient_receipts` and `[[as4.partner]] quirks` keys
+    /// still parse, so startup can refuse them naming the rule instead of a
+    /// generic unknown-field error.
     #[test]
-    fn the_removed_lenient_receipts_key_is_recognised() {
-        let cfg: ConfigFile = toml::from_str("[as4]\nlenient_receipts = true\n").expect("parses");
-        assert!(cfg.as4.expect("as4").lenient_receipts.is_some());
-        assert!(LENIENT_RECEIPTS_REMOVED.contains("receipt-without-non-repudiation"));
+    fn the_removed_receipt_keys_are_recognised() {
+        let cfg: ConfigFile = toml::from_str(
+            "[as4]\nlenient_receipts = true\n\n[[as4.partner]]\nmp_id = \"9900000000002\"\n\
+             quirks = [\"receipt-without-non-repudiation\"]\n",
+        )
+        .expect("parses");
+        let as4 = cfg.as4.expect("as4");
+        assert!(as4.lenient_receipts.is_some());
+        assert!(as4.partner[0].quirks.is_some());
+        assert!(LENIENT_RECEIPTS_REMOVED.contains("Kap. 7.3"));
+        assert!(!LENIENT_RECEIPTS_REMOVED.contains("quirks"));
     }
 }

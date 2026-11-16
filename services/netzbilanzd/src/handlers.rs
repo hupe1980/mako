@@ -185,10 +185,7 @@ pub async fn draft_positions(
     // of every marktd round-trip.
     let mut resolver = Resolver::new(marktd);
     for position in &mut *positions {
-        resolver
-            .resolve(position)
-            .await
-            .map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
+        resolver.resolve(position).await?;
     }
 
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
@@ -1338,10 +1335,7 @@ pub async fn post_korrektur(
         abschlaege: req.abschlaege.clone(),
         settlement: req.settlement,
     };
-    Resolver::new(&marktd)
-        .resolve(&mut position)
-        .await
-        .map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
+    Resolver::new(&marktd).resolve(&mut position).await?;
 
     let mut replacement =
         billing::settle(&position).map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;

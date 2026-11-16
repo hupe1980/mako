@@ -76,6 +76,10 @@ const DOCUMENTS: &[Document] = &[
         name: r"WiM (?:Strom )?Teil 2",
         path: "regulatories/bentza/BK6-24-174_WiM_Teil2_Lesefassung.pdf",
     },
+    Document {
+        name: r"Übertragungsweg für AS4 2\.6",
+        path: "regulatories/bdew-mako/Regelungen_Uebertragungsweg_AS4_2.6.pdf",
+    },
 ];
 
 /// A crate whose bare `Kap. n` names one document: its subject is that

@@ -2911,8 +2911,8 @@ mod tests {
     /// This is the invariant the miss counters rest on. A window label that
     /// `discharges_delivery_window` does not recognise is never retired, so it
     /// fires on every process and is counted as a regulatory violation each
-    /// time — which is precisely how `makod_delivery_window_missed_total` once came to
-    /// count Strom processes rather than missed APERAKs.
+    /// time, so `makod_delivery_window_missed_total` counts processes rather
+    /// than missed APERAKs.
     ///
     /// Adding a delivery window means adding a row here.
     #[test]

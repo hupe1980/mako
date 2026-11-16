@@ -48,7 +48,7 @@ const G: Gefunden = {
 const VORSCHLAG: Answer = {
   run: "r-a",
   status: "succeeded",
-  disclosure: "AI-generated.",
+  disclosure: "KI-generiert.",
   saetze: [],
   vorschlag: {
     aktion: "ablehnen",

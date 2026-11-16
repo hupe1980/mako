@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { DIENST } from "../app/dienste";
 import { ROLLEN, useRolle } from "../app/rollen";
 import { call, type Service, ServiceUnavailable } from "../data/mcp";
+import { Page } from "../design/Page";
 import { Tile, type TileState } from "../design/Tile";
 import {
   formatAnteil,
@@ -224,14 +225,11 @@ export function UeberblickView() {
   const t = useT();
   const { rolle } = useRolle();
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
-      <header>
-        <h1 className="m-0 text-large font-bold tracking-tight">{t.ueberblick.titel}</h1>
-        <p className="m-0 mt-1 text-callout text-text-2">
-          {t.ueberblick.untertitel(ROLLEN[rolle].label)}
-        </p>
-      </header>
-      <Hinweise />
+    <Page
+      width="work"
+      title={t.ueberblick.titel}
+      subtitle={t.ueberblick.untertitel(ROLLEN[rolle].label)}
+    >
       <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
         <FristenTile />
         {rolle === "netz" && <DeadLettersTile />}
@@ -246,6 +244,8 @@ export function UeberblickView() {
         {rolle === "messstelle" && <AbleseauftraegeTile />}
         <AssistentTile />
       </div>
-    </div>
+      {/* The assistant's notes follow the figures, folded to one line. */}
+      <Hinweise />
+    </Page>
   );
 }

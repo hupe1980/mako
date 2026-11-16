@@ -39,6 +39,8 @@
 //! | `get_correlation`                 | Correlate process ID or ERP order ref |
 //! | `list_pricat_versions`            | List available PRICAT versions for an NB |
 //! | `get_nb_energiemix`               | Read §42 EnWG Energiemix for an NB |
+//! | `list_referenzreihen`             | The Referenzreihen catalogue with each series' newest value |
+//! | `get_referenzwert`                | One Referenzreihe value as known at `stand`, or `referenzwert_fehlt` |
 //! | `get_technische_ressource`        | Read a TechnischeRessource (TR) record |
 //! | `get_steuerbare_ressource`        | Read a SteuerbareRessource (SR) + §14a config |
 
@@ -175,6 +177,26 @@ pub struct GetNbEnergiemixParams {
     pub nb_mp_id: String,
     /// Calendar year (defaults to most recent available).
     pub year: Option<i16>,
+}
+
+/// `list_referenzreihen` takes no argument.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListReferenzreihenParams {}
+
+/// `get_referenzwert`'s arguments.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetReferenzwertParams {
+    /// The series key, e.g. `kav_grenzpreis_strom` (see `list_referenzreihen`).
+    pub reihe: String,
+    /// The calendar year.
+    pub jahr: i32,
+    /// The month (1–12), for a monthly series.
+    pub monat: Option<u8>,
+    /// The dimension value (`spot`, `wind_an_land`, `wind_auf_see`, `solar` for
+    /// the EEG Marktwerte); omitted for a series without one.
+    pub dim: Option<String>,
+    /// RFC 3339 instant the read is as of — what was known then. Defaults to now.
+    pub stand: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -992,6 +1014,79 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
     }
 
     #[tool(
+        description = "List the Referenzreihen — every published figure billing reads (KAV Grenzpreis basis, EEG Marktwerte, day-ahead price) with its unit, period, publisher, legal anchor, publication rule, licence and newest stored value.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_referenzreihen(
+        &self,
+        Parameters(_): Parameters<ListReferenzreihenParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let katalog = crate::referenzreihen::katalog(&self.state.pool)
+            .await
+            .map_err(|_| McpError::internal_error("referenzreihen read failed", None))?;
+        ContentBlock::json(serde_json::json!({ "referenzreihen": katalog }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "Get the value of one Referenzreihe for a calendar year (or year and month), as known at `stand`. A missing value is answered `referenzwert_fehlt` with the series, the period and the publication rule — never a zero.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_referenzwert(
+        &self,
+        Parameters(p): Parameters<GetReferenzwertParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::referenzreihen::{reihe_of, wert_fuer};
+        use mako_markt::referenzreihen::Zeitraum;
+        let refusal = |e: mako_service::ApiError| match e.code() {
+            Some(code) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "{code}: {e}"
+            ))])),
+            None => Err(McpError::internal_error("referenzwert read failed", None)),
+        };
+        let reihe = match reihe_of(&p.reihe) {
+            Ok(r) => r,
+            Err(e) => return refusal(e),
+        };
+        let stand = match p.stand.as_deref() {
+            None => None,
+            Some(s) => {
+                match time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                {
+                    Ok(t) => Some(t),
+                    Err(_) => {
+                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                            "stand_ungueltig: {s:?} is not an RFC 3339 instant"
+                        ))]));
+                    }
+                }
+            }
+        };
+        let zeitraum = match p.monat {
+            None => Zeitraum::Jahr { jahr: p.jahr },
+            Some(monat) => Zeitraum::Monat {
+                jahr: p.jahr,
+                monat,
+            },
+        };
+        match wert_fuer(
+            &self.state.pool,
+            reihe,
+            zeitraum,
+            p.dim.as_deref().unwrap_or_default(),
+            stand,
+        )
+        .await
+        {
+            Ok(w) => ContentBlock::json(serde_json::to_value(&w).unwrap_or_default())
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => refusal(e),
+        }
+    }
+
+    #[tool(
         description = "Get a TechnischeRessource (smart meter, generation unit) by TR-ID. Returns device type, installed capacity, commissioning date, and §14a EnWG steuerkanal info.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -1387,7 +1482,7 @@ impl ServerHandler for MdmdMcpHandler {
              \n\
              Provides MaLo/MeLo master data, trading partner registry, NNE price sheets, supply status, and grid topology.\n\
              \n\
-             ## Tools (18)\n\
+             ## Tools (20)\n\
              - `get_malo` — read a MaLo by 11-digit ID (sparte, netzebene, bilanzierungsmethode, regelzone, full BO4E data)\n\
              - `list_malo` — list/filter MaLos by sparte, bilanzierungsmethode, netzebene\n\
              - `get_melo` — read a MeLo by ID (netzebene_messung, regelzone, standorteigenschaften)\n\
@@ -1404,6 +1499,8 @@ impl ServerHandler for MdmdMcpHandler {
              - `get_correlation` — look up a process correlation by process_id or erp_order_id\n\
              - `list_pricat_versions` — PRICAT 27003 version history for an NB\n\
              - `get_nb_energiemix` — §42 EnWG annual grid-area renewable mix for an NB\n\
+             - `list_referenzreihen` — published figures billing reads, with source, licence and newest value\n\
+             - `get_referenzwert` — one Referenzreihe value as known at `stand`, or `referenzwert_fehlt`\n\
              - `get_technische_ressource` — smart meter / generation unit by TR-ID\n\
              - `get_steuerbare_ressource` — §14a EnWG controllable load + Konfigurationsprodukte by SR-ID\n\
              \n\

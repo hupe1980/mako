@@ -676,7 +676,7 @@ impl NetzbilanzMcpHandler {
                  \x20     \"sparte\": \"Strom\",\n\
                  \x20     \"arbeitspreis\": { \"Einheitlich\": { \"menge_kwh\": \"1500\", \"preis_ct_per_kwh\": \"3.5\" } },\n\
                  \x20     \"konzessionsabgabe\": { \"satz_ct_per_kwh\": \"0.11\", \"klasse\": \"Sondervertragskunde\",\n\
-                 \x20       \"grenzpreis\": { \"durchschnittspreis_ct_per_kwh\": \"24.80\", \"grenzpreis_ct_per_kwh\": \"18.20\" } }\n\
+                 \x20       \"durchschnittspreis_ct_per_kwh\": \"24.80\" }\n\
                  \x20   }\n  }]\n}\n\
                  ```\n\
                  The invoice states 19 % Umsatzsteuer: Netznutzung is a sonstige Leistung, which \

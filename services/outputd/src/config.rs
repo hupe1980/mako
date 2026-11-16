@@ -25,6 +25,83 @@ pub struct OutputdConfig {
     /// `[delivery]` — how issued documents reach the customer.
     #[serde(default)]
     pub delivery: DeliveryConfig,
+    /// `[policy]` — the operator readings this deployment runs under.
+    #[serde(default)]
+    pub policy: OutputdPolicy,
+}
+
+/// `[policy]` — outputd's operator settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputdPolicy {
+    /// How a customer letter addresses its reader.
+    #[serde(default)]
+    pub anrede: mako_service::policy::Policy<Anrede>,
+}
+
+mako_service::policy_choice! {
+    /// How a customer letter addresses its reader — „Sie“ or „du“.
+    ///
+    /// No statute fixes the form of address of a Textform letter, so it is the
+    /// operator's. Two documents do not follow it: the Widerrufsbelehrung inside
+    /// the Vertragsbestätigung is the statutory Muster, and the Gebührenbescheid
+    /// is a Verwaltungsakt — both keep „Sie“ ([`Anrede::fuer`]).
+    pub enum Anrede {
+        key: "anrede",
+        doc: "@/docs/services/outputd.md#policy-anrede",
+        default: tightening(Sie, "the formal address the Muster-Widerrufsbelehrung and a Gebührenbescheid keep regardless: an unset deployment never addresses a customer more familiarly than the operator chose, and its letters never mix two forms"),
+        options: {
+            /// „Sie“, „Ihr“ — capitalised, the formal address.
+            Sie = "sie" => "§ 126b BGB (Textform) fixes no form of address; the formal „Sie“ is the address the Muster-Widerrufsbelehrung under Art. 246a § 1 Abs. 2 EGBGB uses",
+            /// „du“, „dein“ — lower-case in a letter, as the current spelling
+            /// rules write it.
+            Du = "du" => "§ 126b BGB (Textform) fixes no form of address; the informal „du“ is the operator's choice of voice",
+        }
+    }
+}
+
+impl Anrede {
+    /// The address a document of `kind` is written in under this setting.
+    ///
+    /// A `GEBUEHRENBESCHEID` is always „Sie“: it is a Verwaltungsakt of a
+    /// municipal operator, not a supplier's letter. The Widerrufsbelehrung is
+    /// exempt inside the Vertragsbestätigung's template, not here, because the
+    /// rest of that letter follows the setting.
+    #[must_use]
+    pub fn fuer(self, kind: &str) -> Self {
+        if kind == "GEBUEHRENBESCHEID" {
+            Self::Sie
+        } else {
+            self
+        }
+    }
+
+    /// The option by its config name, `sie` or `du`.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        use mako_service::policy::PolicyChoice as _;
+        Self::options().iter().copied().find(|a| a.name() == name)
+    }
+
+    /// `sie` or `du` — the value a template reads as `anrede` and the
+    /// document store records.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        use mako_service::policy::PolicyChoice as _;
+        self.name()
+    }
+}
+
+impl OutputdConfig {
+    /// The policy and posture outputd runs under — logged, exported, recorded
+    /// and served by the runner and `GET /api/v1/policy`.
+    #[must_use]
+    pub fn policy_report(&self) -> mako_service::policy::PolicyReport {
+        mako_service::policy::PolicyReport::new()
+            .with(&self.policy.anrede)
+            .posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
+            .posture_presence("oidc", self.oidc.is_some(), true)
+    }
 }
 
 /// How documents leave this daemon.
@@ -141,24 +218,37 @@ impl DeliveryConfig {
             .is_some_and(|u| !u.is_empty())
     }
 
-    /// The subject line for a document kind.
+    /// The subject line for a document kind, in the document's `anrede`.
+    ///
+    /// An operator's `[delivery.subjects]` entry is used verbatim: it is their
+    /// own wording, in whichever form they wrote it.
     #[must_use]
-    pub fn subject_for(&self, kind: &str) -> String {
+    pub fn subject_for(&self, kind: &str, anrede: Anrede) -> String {
         self.subjects
             .get(kind)
             .cloned()
-            .unwrap_or_else(|| Self::default_subject(kind).to_owned())
+            .unwrap_or_else(|| Self::default_subject(kind, anrede).to_owned())
     }
 
     /// The built-in subject for a kind — plain German, no marketing, because
     /// these are statutory notices and one of them threatens a disconnection.
     #[must_use]
-    pub const fn default_subject(kind: &str) -> &'static str {
+    pub const fn default_subject(kind: &str, anrede: Anrede) -> &'static str {
+        let du = matches!(anrede, Anrede::Du);
         match kind.as_bytes() {
+            b"INVOICE" if du => "Deine Rechnung",
             b"INVOICE" => "Ihre Rechnung",
             b"MAHNUNG" => "Zahlungserinnerung",
+            b"PREISANPASSUNG" if du => "Änderung deiner Preise",
             b"PREISANPASSUNG" => "Änderung Ihrer Preise",
             b"GEBUEHRENBESCHEID" => "Gebührenbescheid",
+            b"VERTRAGSZUSAMMENFASSUNG" if du => "Zusammenfassung deines Vertrags",
+            b"VERTRAGSZUSAMMENFASSUNG" => "Zusammenfassung Ihres Vertrags",
+            b"VERTRAGSBESTAETIGUNG" if du => "Bestätigung deines Vertrags",
+            b"VERTRAGSBESTAETIGUNG" => "Bestätigung Ihres Vertrags",
+            b"WIDERRUFSBESTAETIGUNG" if du => "Eingangsbestätigung deines Widerrufs",
+            b"WIDERRUFSBESTAETIGUNG" => "Eingangsbestätigung Ihres Widerrufs",
+            _ if du => "Dein Dokument",
             _ => "Ihr Dokument",
         }
     }

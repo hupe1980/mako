@@ -59,6 +59,11 @@
   let abs = anzeige.absender
   let emp = anzeige.empfaenger
 
+  // The form of address: `anrede` is outputd's `[policy] anrede`, "sie" or
+  // "du", set on every view. `form[Sie text][du text]` picks the phrase.
+  let du = anzeige.anrede == "du"
+  let form(sie, du-text) = if du { du-text } else { sie }
+
   set text(font: "Libertinus Serif", size: 10pt, lang: "de", hyphenate: false)
   set par(justify: false, leading: 0.62em)
   set page(
@@ -99,7 +104,7 @@
   grid(
     columns: (1fr, auto),
     align: (left + bottom, right),
-    text(size: 14pt, weight: "bold")[Änderung Ihrer Preise],
+    text(size: 14pt, weight: "bold")[Änderung #form[Ihrer][deiner] Preise],
     table(
       columns: 2,
       stroke: none,
@@ -118,12 +123,12 @@
   v(4mm)
 
   // § 41 Abs. 5 Satz 1 — the change, when it takes effect, and its Anlass.
-  [Sehr geehrte Damen und Herren,]
+  form[Sehr geehrte Damen und Herren,][Hallo,]
   v(2mm)
-  [wir passen die Preise Ihrer#opt(anzeige.sparte, prefix: " ")belieferung zum
+  [wir passen die Preise #form[Ihrer][deiner]#opt(anzeige.sparte, prefix: " ")belieferung zum
    *#date(anzeige.wirksam_ab)* an. Anlass: #anzeige.anlass]
   v(2mm)
-  [Die Änderung wird Ihnen mit einer Frist von #anzeige.ankuendigungsfrist
+  [Die Änderung wird #form[Ihnen][dir] mit einer Frist von #anzeige.ankuendigungsfrist
    angekündigt.]
 
   // § 41 Abs. 5 Satz 1 — the Umfang, line by line. A single sentence cannot
@@ -161,14 +166,14 @@
     inset: 8pt,
     stroke: 0.8pt + luma(60),
     [
-      *Ihr Sonderkündigungsrecht* \
-      Sie können den Vertrag ohne Einhaltung einer Kündigungsfrist zum
+      *#form[Ihr][Dein] Sonderkündigungsrecht* \
+      #form[Sie können][Du kannst] den Vertrag ohne Einhaltung einer Kündigungsfrist zum
       *#date(anzeige.sonderkuendigung.wirksam_zum)* kündigen
       (#anzeige.sonderkuendigung.rechtsgrundlage).
       #if anzeige.sonderkuendigung.entgeltfrei [
-        Die Kündigung ist für Sie kostenfrei.
+        Die Kündigung ist für #form[Sie][dich] kostenfrei.
       ]
-      \ Kündigen Sie nicht, gelten die neuen Preise ab dem genannten Termin.
+      \ #form[Kündigen Sie nicht][Kündigst du nicht], gelten die neuen Preise ab dem genannten Termin.
     ],
   )
 
@@ -178,5 +183,5 @@
   }
 
   v(6mm)
-  [Mit freundlichen Grüßen \ #opt(abs.name)#opt(abs.contact_name, prefix: " — ")]
+  [#form[Mit freundlichen Grüßen][Viele Grüße] \ #opt(abs.name)#opt(abs.contact_name, prefix: " — ")]
 }

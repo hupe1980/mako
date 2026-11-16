@@ -25,7 +25,7 @@ use mako_engine::types::{MaLo, MarktpartnerCode};
 ///
 /// Defined in [`mako_engine::lf_vorgang`] rather than here because GeLi Gas
 /// emits the same contract for 44007 / 44010 / 44016 and `processd` parses both
-/// with one parser. Two definitions drifted once already.
+/// with one parser; two definitions drift.
 pub use mako_engine::lf_vorgang::LfVorgangsdaten;
 
 /// The supplier's answer, as the ERP or `processd` decides it.

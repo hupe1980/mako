@@ -19,7 +19,7 @@ pub mod validate;
 use std::collections::HashMap;
 use std::fmt;
 
-use edifact_rs::{GroupDef, GroupDefBuilder, Segment, SegmentPlace, ValidationIssue};
+use edifact::{GroupDef, GroupDefBuilder, Segment, SegmentPlace, ValidationIssue};
 
 use crate::registry::PidSource;
 use crate::{MessageType, ProfileError, Pruefidentifikator, Release};
@@ -226,6 +226,9 @@ impl Profile {
     /// Run the MIG and AHB checks over a message (`UNH`…`UNT`, envelope
     /// excluded). `pid` selects the Prüfschablone; without one, a message
     /// type published without Prüfidentifikatoren is matched by its `BGM`.
+    /// A number is read under `.`, the default service string advice's
+    /// decimal mark; [`validate_with_rollen`](Self::validate_with_rollen)
+    /// takes the one the interchange's `UNA` declares.
     #[must_use]
     pub fn validate(
         &self,
@@ -236,15 +239,24 @@ impl Profile {
     }
 
     /// [`validate`](Self::validate), deciding the Bedingungen on the Marktrolle
-    /// of sender and receiver from `rollen`.
+    /// of sender and receiver from `rollen` and reading every number under
+    /// `decimal_mark`, the one the interchange's `UNA` declares
+    /// ([`crate::una_decimal_mark`]; Allgemeine Festlegungen 6.1d Kap. 2.18).
     #[must_use]
     pub fn validate_with_rollen(
         &self,
         segments: &[Segment<'_>],
         pid: Option<Pruefidentifikator>,
         rollen: &Parteirollen,
+        decimal_mark: char,
     ) -> Vec<ValidationIssue> {
-        validate::validate_with_rollen(self, segments, pid.map(Pruefidentifikator::as_u32), rollen)
+        validate::validate_with_rollen(
+            self,
+            segments,
+            pid.map(Pruefidentifikator::as_u32),
+            rollen,
+            decimal_mark,
+        )
     }
 
     /// Assign every segment of a message to its place in the
@@ -261,7 +273,7 @@ impl Profile {
         Some(Pruefschablone::new(self, af))
     }
 
-    /// Group nesting for `edifact_rs::group_segments_indexed`, used by the
+    /// Group nesting for `edifact::group_segments_indexed`, used by the
     /// semantic rule packs.
     #[must_use]
     pub fn group_schema(&self) -> &[GroupDef] {

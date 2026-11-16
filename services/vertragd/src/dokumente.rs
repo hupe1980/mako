@@ -188,3 +188,274 @@ pub fn absender(cfg: &crate::config::VertragdConfig) -> PartyView {
         tax_number: None,
     }
 }
+
+// ── The documents an online contract owes ─────────────────────────────────────
+//
+// Mirrors `outputd::document::{vertragszusammenfassung, vertragsbestaetigung,
+// widerrufsbestaetigung}`; those copies are normative.
+
+/// One price line as the page prints it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreisZeile {
+    pub bezeichnung: String,
+    pub einheit: String,
+    /// A decimal string.
+    pub wert: String,
+}
+
+/// The § 41 Abs. 4 EnWG Vertragszusammenfassung — owed to every
+/// Letztverbraucher „innerhalb einer angemessenen Frist nach dem
+/// Vertragsschluss", carrying Satz 2 Nr. 1–6.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VertragszusammenfassungView {
+    pub datum: String,
+    /// Nr. 1 — die Kontaktdaten des Energielieferanten.
+    pub absender: PartyView,
+    pub empfaenger: PartyView,
+    pub vertragsnummer: String,
+    pub sparte: Option<String>,
+    /// Nr. 2 — die Verbrauchsstelle.
+    pub verbrauchsstelle: String,
+    pub malo_id: Option<String>,
+    /// Nr. 3 — geltende Preise.
+    pub preise: Vec<PreisZeile>,
+    /// Nr. 4 — der voraussichtliche Belieferungsbeginn, ISO 8601.
+    pub belieferungsbeginn: String,
+    /// Nr. 5 — die Kündigungsfrist.
+    pub kuendigungsfrist: String,
+    /// Nr. 6 — etwaige Bonusvereinbarungen.
+    pub bonus: Option<String>,
+    /// Nr. 6 — etwaige Mindestvertragslaufzeiten.
+    pub mindestvertragslaufzeit: Option<String>,
+}
+
+/// The Widerrufsbelehrung a Vertragsbestätigung carries (Art. 246a § 1 Abs. 2
+/// Satz 1 Nr. 1 and Nr. 3 EGBGB).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WiderrufsbelehrungView {
+    pub frist: String,
+    /// The operator's registered Widerrufsbelehrung, printed.
+    pub belehrung_text: String,
+    /// The operator's registered Muster-Widerrufsformular, printed.
+    pub muster_widerrufsformular: String,
+    pub widerrufsfunktion: Option<String>,
+    pub wertersatz_hinweis: String,
+}
+
+/// The § 312f Abs. 2 BGB Vertragsbestätigung on a durable medium.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VertragsbestaetigungView {
+    pub datum: String,
+    pub absender: PartyView,
+    pub empfaenger: PartyView,
+    pub vertragsnummer: String,
+    /// ISO 8601 date-time in Berlin local time.
+    pub vertragsschluss_am: String,
+    pub sparte: Option<String>,
+    pub verbrauchsstelle: String,
+    pub malo_id: Option<String>,
+    pub produkt: String,
+    pub preise: Vec<PreisZeile>,
+    pub belieferungsbeginn: String,
+    pub laufzeit: String,
+    pub kuendigungsfrist: String,
+    pub widerruf: WiderrufsbelehrungView,
+    pub lieferung_in_widerrufsfrist_verlangt: bool,
+}
+
+/// The declaration a Widerrufsbestätigung repeats (§ 356a Abs. 2 BGB).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErklaerungView {
+    pub name: String,
+    pub vertrag: String,
+    pub bestaetigung_an: String,
+}
+
+/// The § 356a Abs. 4 BGB Eingangsbestätigung: the declaration's content and
+/// the date and time of receipt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WiderrufsbestaetigungView {
+    pub datum: String,
+    pub absender: PartyView,
+    pub empfaenger: PartyView,
+    pub vertragsnummer: String,
+    /// ISO 8601 date-time in Berlin local time.
+    pub eingegangen_am: String,
+    pub abgesendet_am: Option<String>,
+    pub kanal: String,
+    pub erklaerung: ErklaerungView,
+}
+
+/// The Art. 246a § 1 Abs. 2 Satz 1 Nr. 3 EGBGB notice on Wertersatz for
+/// Strom and Gas delivered after an express request — the page's wording.
+pub const WERTERSATZ_HINWEIS: &str = "Haben Sie verlangt, dass die Belieferung mit Strom oder \
+     Gas während der Widerrufsfrist beginnen soll, so haben Sie uns für die bis zu Ihrem Widerruf \
+     gelieferte Energie Wertersatz zu leisten (§ 357a Abs. 2 BGB). Grundlage ist der vereinbarte \
+     Gesamtpreis.";
+
+/// An instant as the page prints it: ISO 8601 in gesetzlicher deutscher Zeit.
+/// `outputd` prints the clock time as it stands and converts nothing.
+#[must_use]
+pub fn berlin_iso(t: time::OffsetDateTime) -> String {
+    mako_fristen::in_berlin(t)
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| t.to_string())
+}
+
+/// The customer of an order as the page addresses him, from the canonical
+/// BO4E `Geschaeftspartner` and the order's e-mail.
+#[must_use]
+pub fn empfaenger(geschaeftspartner: &serde_json::Value, email: Option<&str>) -> PartyView {
+    let s = |v: &serde_json::Value, k: &str| {
+        v.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let name = s(geschaeftspartner, "name1").or_else(|| {
+        let teile: Vec<String> = ["vorname", "nachname"]
+            .iter()
+            .filter_map(|k| s(geschaeftspartner, k))
+            .collect();
+        (!teile.is_empty()).then(|| teile.join(" "))
+    });
+    let adresse = geschaeftspartner
+        .get("adresse")
+        .cloned()
+        .unwrap_or_default();
+    let line1 = s(&adresse, "strasse").map(|strasse| match s(&adresse, "hausnummer") {
+        Some(nr) => format!("{strasse} {nr}"),
+        None => strasse,
+    });
+    PartyView {
+        name,
+        line1,
+        post_code: s(&adresse, "postleitzahl"),
+        city: s(&adresse, "ort"),
+        country: s(&adresse, "landescode"),
+        email: email.map(str::to_owned),
+        ..PartyView::default()
+    }
+}
+
+/// The body of `POST /api/v1/documents/issue/{kind}` for one document:
+/// delivered by e-mail where the customer gave one, by post where the address
+/// is complete, and to the portal always.
+#[must_use]
+pub fn issue_body(
+    view: serde_json::Value,
+    empfaenger: &PartyView,
+    subject_ref: &str,
+    malo_id: Option<&str>,
+    datum: &str,
+) -> serde_json::Value {
+    let mut channels = vec!["PORTAL"];
+    if empfaenger.email.is_some() {
+        channels.push("EMAIL");
+    }
+    if empfaenger.postal_address().is_some() {
+        channels.push("POST");
+    }
+    serde_json::json!({
+        "view":        view,
+        "subject_ref": subject_ref,
+        "malo_id":     malo_id,
+        "recipient": {
+            "name":    empfaenger.name,
+            "email":   empfaenger.email,
+            "address": empfaenger.postal_address(),
+        },
+        "channels":    channels,
+        "date":        datum,
+        "ident":       subject_ref,
+    })
+}
+
+/// One delivery track of an issued document, as `outputd` reports it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Zustellung {
+    pub status: String,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub delivered_at: Option<time::OffsetDateTime>,
+}
+
+/// An issued document with its delivery tracks.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DokumentMitZustellung {
+    #[serde(default)]
+    pub deliveries: Vec<Zustellung>,
+}
+
+impl DokumentMitZustellung {
+    /// The earliest proven delivery — a `DELIVERED` track's `delivered_at`. A
+    /// `SENT` e-mail without a delivery report proves no Zugang.
+    #[must_use]
+    pub fn zugestellt_am(&self) -> Option<time::OffsetDateTime> {
+        self.deliveries
+            .iter()
+            .filter(|d| d.status == "DELIVERED")
+            .filter_map(|d| d.delivered_at)
+            .min()
+    }
+}
+
+impl OutputdClient {
+    /// `GET /api/v1/documents/by-subject/{kind}/{subject_ref}` — the document
+    /// and its delivery tracks; `None` when none was issued.
+    ///
+    /// # Errors
+    ///
+    /// Propagates transport failures and outputd's refusals.
+    pub async fn by_subject(
+        &self,
+        kind: &str,
+        subject_ref: &str,
+    ) -> Result<Option<DokumentMitZustellung>> {
+        self.up
+            .json(self.up.get(&format!(
+                "/api/v1/documents/by-subject/{kind}/{subject_ref}"
+            )))
+            .await
+            .context("outputd GET document by subject")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_natural_person_is_addressed_by_name_and_street() {
+        let p = empfaenger(
+            &serde_json::json!({
+                "vorname": "Erika", "nachname": "Mustermann",
+                "adresse": { "strasse": "Hauptstraße", "hausnummer": "1",
+                             "postleitzahl": "50667", "ort": "Köln", "landescode": "DE" }
+            }),
+            Some("erika@example.org"),
+        );
+        assert_eq!(p.name.as_deref(), Some("Erika Mustermann"));
+        assert_eq!(p.line1.as_deref(), Some("Hauptstraße 1"));
+        assert!(p.postal_address().is_some());
+    }
+
+    /// § 356 Abs. 3 BGB reads Zugang: only a `DELIVERED` track counts.
+    #[test]
+    fn a_sent_email_is_no_delivery() {
+        let d: DokumentMitZustellung = serde_json::from_value(serde_json::json!({
+            "deliveries": [
+                { "status": "SENT", "delivered_at": null },
+                { "status": "DELIVERED", "delivered_at": "2026-11-20T10:00:00Z" }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            d.zugestellt_am(),
+            Some(time::macros::datetime!(2026-11-20 10:00 UTC))
+        );
+        let nur_gesendet: DokumentMitZustellung = serde_json::from_value(serde_json::json!({
+            "deliveries": [{ "status": "SENT", "delivered_at": null }]
+        }))
+        .unwrap();
+        assert_eq!(nur_gesendet.zugestellt_am(), None);
+    }
+}

@@ -19,6 +19,9 @@ the Mahnung.
 | **Mahnung** | dunning letter, computed by [accountingd](@/docs/services/accountingd.md) | Textform (§ 126b BGB: a readable declaration on a durable medium naming sender and recipient; no signature) |
 | **Preisanpassung** | the price-change notice of § 41 Abs. 5 EnWG | Textform |
 | **Gebührenbescheid** | a public-law Gebühr from billingd, issued beside the supply invoice (§ 157 Abs. 1 AO content) | letter, no carrier |
+| **Vertragszusammenfassung** | the summary of § 41 Abs. 4 EnWG every Letztverbraucher is owed after conclusion, from vertragd | Textform |
+| **Vertragsbestätigung** | the § 312f Abs. 2 BGB confirmation of a consumer's Fernabsatz contract with the Widerrufsbelehrung and the Muster-Widerrufsformular, from vertragd | Textform |
+| **Widerrufsbestätigung** | the § 356a Abs. 4 BGB Eingangsbestätigung of a Widerruf, from vertragd | Textform |
 | **Invoice** | from billingd | **ZUGFeRD**: a PDF/A-3 carrying the EN 16931 invoice XML; **XRechnung** is the German CIUS. The document declares which in **BT-24**, and outputd stamps the carrier from that |
 
 Port: `:9880`
@@ -30,6 +33,8 @@ Port: `:9880`
 | `GET` | `/api/v1/documents` | A customer's documents (`?malo_id=` or `?kunden_nr=`, `&kind=`) — the portal inbox |
 | `GET` | `/api/v1/documents/{id}` | One document with every delivery track |
 | `GET` | `/api/v1/documents/{id}/content` | The bytes as issued — a reproduction, never a re-render |
+| `GET` | `/api/v1/documents/by-subject/{kind}/{subject_ref}` | The document a `(kind, subject_ref)` was issued as, with every delivery track — how vertragd reads a Vertragsbestätigung's `delivered_at` |
+| `GET` | `/api/v1/deliveries?status=FAILED&kind=` | Every delivery that ended `FAILED`, with its document's `kind` and `subject_ref` — the operator's work list |
 | `POST` | `/api/v1/deliveries/{id}/read` | The customer opened it in the portal |
 | `POST` | `/api/v1/deliveries/{id}/status` | A channel reports arrival or a bounce |
 | `GET` | `/api/v1/spool` | What a print service collects |
@@ -54,10 +59,20 @@ What "about" means depends on the kind:
 | Kind | Field | Why |
 |---|---|---|
 | `INVOICE` | `model` — the EN 16931 semantic model | outputd projects the page view from it, so the projection the publish gate proves templates against is the one production feeds them |
-| `MAHNUNG`, `PREISANPASSUNG`, `GEBUEHRENBESCHEID` | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
+| every other kind | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
 
-`POST /api/v1/documents/issue/{kind}` takes the same body plus `subject_ref`,
-`recipient` and `channels`.
+A Textform letter is written in the deployment's
+[`[policy] anrede`](#policy-anrede): outputd adds `anrede` (`"sie"` or `"du"`)
+to the view before its template renders it, and answers with
+`X-Mako-Anrede`. The producer does not send one — a view carrying `anrede` is
+**`422 ANREDE_IN_VIEW`**. A re-print pins the form an issued document recorded
+with the request's top-level `anrede`, the way `template_hash` pins its layout;
+a value that is neither `sie` nor `du` is **`422 ANREDE_UNKNOWN`**, and `du` on a
+`GEBUEHRENBESCHEID` is **`422 ANREDE_FIXED`**.
+
+`POST /api/v1/documents/issue/{kind}` takes the same body, without `anrede`,
+plus `subject_ref`, `recipient` and `channels`. The stored document records the
+`anrede` it was written in.
 
 An `INVOICE` sent by `POST` alone is a sonstige Rechnung, which § 14 Abs. 2
 Satz 2 Nr. 1 UStG does not admit for a Leistung „an einen anderen Unternehmer
@@ -112,7 +127,8 @@ is tenant-scoped).
 | `render-document` | `POST /render/{kind}` | `LF`, `MSB`, `ESA` |
 | `issue-document` | `POST /documents/issue/{kind}` | `LF`, `MSB`, `ESA` |
 | `report-delivery` | `POST /deliveries/{id}/status` | `LF`, `MSB`, `ESA` |
-| `read-document` | `GET /documents…`, `/spool`, `POST /deliveries/{id}/read` | any authenticated caller in the tenant |
+| `read-document` | `GET /documents…` (`/by-subject/{kind}/{subject_ref}` included), `/spool`, `POST /deliveries/{id}/read` | any authenticated caller in the tenant |
+| `read-delivery-failures` | `GET /deliveries?status=FAILED` | `LF`, `MSB`, `ESA` — the list is tenant-wide, not scoped by its query |
 
 A template is the shape of every document, so publishing, rolling out and
 rendering need a market role. `tests/it/authorization.rs` holds handler checks
@@ -202,7 +218,8 @@ operator's file:
 | `TEMPLATE_IDENTITY_TAKEN` | 409 | you have already published this exact source under another kind |
 | `TEMPLATE_DID_NOT_COMPILE`, `TEMPLATE_REJECTED_BY_GATE` | 422 | with `diagnostics` |
 | `TEMPLATE_NOT_PUBLISHED` | 422 | the rollout names a hash never published as this kind |
-| `TEMPLATE_WRONG_KIND`, `SUBJECT_REQUIRED`, `SUBJECT_MUST_BE_A_MODEL`, `SUBJECT_MUST_BE_A_VIEW` | 422 | the render's parts do not agree |
+| `TEMPLATE_WRONG_KIND`, `SUBJECT_REQUIRED`, `SUBJECT_MUST_BE_A_MODEL`, `SUBJECT_MUST_BE_A_VIEW`, `VIEW_NOT_AN_OBJECT` | 422 | the render's parts do not agree |
+| `ANREDE_IN_VIEW`, `ANREDE_UNKNOWN`, `ANREDE_FIXED` | 422 | the form of address came from the view, names no option, or asks `du` of a Gebührenbescheid |
 | `PAPIER_UNZULAESSIG` | 422 | a `POST`-only invoice the UStG does not admit on paper, or a missing fact |
 | `CROSS_BORDER_SUPPLY_UNSUPPORTED`, `EXPORT_SUPPLY_UNSUPPORTED`, `RECIPIENT_COUNTRY_MISSING`, `RECIPIENT_COUNTRY_INVALID` | 422 | an `INVOICE` whose buyer is not in Germany, or whose BT-55 is absent or malformed |
 | `ATTACHMENT_REQUIRED`, `ATTACHMENT_NOT_ALLOWED`, `ATTACHMENT_UNUSABLE`, `ATTACHMENT_NAME_INVALID` | 422 | the carrier contract |
@@ -313,8 +330,7 @@ then:
 4. reads the **page** text and requires the invoice number (§ 14 Abs. 4 Nr. 4
    UStG), both party names (Nr. 1) and the USt-IdNr. (BT-31) *or* Steuernummer
    (BT-32) (Nr. 2) — so `#let render(invoice) = []` fails;
-5. refuses more than 8 pages on the specimen (3 for a Mahnung, Preisanpassung
-   or Gebührenbescheid).
+5. refuses more than 8 pages on the specimen (3 for every Textform kind).
 
 The specimen is a real `en16931::Invoice`, rendered through
 `DocumentView::of` and `facturx::cii_payload` (`en16931_formats::write_unchecked`
@@ -324,9 +340,9 @@ stamps. A failing template answers `422` with diagnostics.
 `document_templates.proof` records `RENDERED_PDFA` or `RENDERED_TEXTFORM`, and a
 `CHECK` ties each kind to its proof.
 
-`POST /api/v1/templates/preview` runs the same render for `INVOICE`, `MAHNUNG`
-and `GEBUEHRENBESCHEID` and stores nothing; `PREISANPASSUNG` answers
-`422 NO_SPECIMEN` and is checked by publishing.
+`POST /api/v1/templates/preview` runs the same render for every kind but
+`PREISANPASSUNG` and stores nothing; `PREISANPASSUNG` answers `422 NO_SPECIMEN`
+and is checked by publishing.
 
 ### Renders are reproducible
 
@@ -353,23 +369,24 @@ mutable pointer per `(tenant, kind)`.
 | `MAHNUNG` | Textform (§ 126b BGB) | — | `RENDERED_TEXTFORM` |
 | `PREISANPASSUNG` | § 41 Abs. 5 EnWG notice, Textform | — | `RENDERED_TEXTFORM` |
 | `GEBUEHRENBESCHEID` | Bescheid over a public-law Gebühr | — | `RENDERED_TEXTFORM` |
+| `VERTRAGSZUSAMMENFASSUNG` | § 41 Abs. 4 EnWG summary, Textform | — | `RENDERED_TEXTFORM` |
+| `VERTRAGSBESTAETIGUNG` | § 312f Abs. 2 BGB confirmation, Textform | — | `RENDERED_TEXTFORM` |
+| `WIDERRUFSBESTAETIGUNG` | § 356a Abs. 4 BGB Eingangsbestätigung, Textform | — | `RENDERED_TEXTFORM` |
 
-A **Mahnung** is proven against the Stufe-3 specimen and must show the § 126b
-declarant, the Gesamtforderung, the Zahlungsfrist and the § 41f Sperrtermin;
-`document::mahnung::MahnungView` projects accountingd's Mahnwesen (Stufe 1–3,
-open Posten, § 288 BGB Verzugszinsen, Mahngebühr, Sperrandrohung). A
-**Preisanpassung** must state the change, its Anlass and Umfang and the
-Sonderkündigungsrecht in the same notice (§ 41 Abs. 5 Satz 1 and 4 EnWG); the
-gate renders a mixed specimen (one price up, one down) and requires the
-declarant, the Wirksamkeit, both changed prices and the Kündigungsrecht date.
-A **Gebührenbescheid** states what § 157 Abs. 1 AO attaches to a Bescheid: the
-levy „nach Art und Betrag", „wer die Steuer schuldet", and a Belehrung „welcher
-Rechtsbehelf zulässig ist und binnen welcher Frist und bei welcher Behörde er
-einzulegen ist"; the gate renders a two-Gebühren specimen and requires the
-issuing body, the Schuldner, each Gebühr's Art and Betrag, the sum and the
-Rechtsbehelf, Frist and Behörde.
-The views live with the renderer; `accountingd`, `vertragd` and `billingd`
-conform to them.
+| Document | Source | The gate requires |
+|---|---|---|
+| Mahnung (Stufe-3 specimen) | § 126b BGB (Textform) | the § 126b declarant, the Gesamtforderung, the Zahlungsfrist and the § 41f Sperrtermin |
+| Preisanpassung (one price up, one down) | § 41 Abs. 5 Satz 1 and 4 EnWG: the change, its Anlass and Umfang and the Sonderkündigungsrecht in the same notice | the declarant, the Wirksamkeit, both changed prices and the Kündigungsrecht date |
+| Gebührenbescheid (two Gebühren) | § 157 Abs. 1 AO: the levy „nach Art und Betrag", „wer die Steuer schuldet", and a Belehrung „welcher Rechtsbehelf zulässig ist und binnen welcher Frist und bei welcher Behörde er einzulegen ist" | the issuing body, the Schuldner, each Gebühr's Art and Betrag, the sum, and the Rechtsbehelf, Frist and Behörde |
+| Vertragszusammenfassung | § 41 Abs. 4 Satz 2 EnWG: „1. die Kontaktdaten des Energielieferanten, 2. die Verbrauchsstelle, 3. geltende Preise, 4. den voraussichtlichen Belieferungsbeginn, 5. die Kündigungsfrist sowie 6. etwaige Bonusvereinbarungen und Mindestvertragslaufzeiten" | the supplier's name and one of its telephone number, e-mail or address, the Verbrauchsstelle, both specimen prices, the Belieferungsbeginn, the Kündigungsfrist, the Bonus and the Mindestvertragslaufzeit — the specimen carries Nr. 6, so a template that drops it is refused |
+| Vertragsbestätigung | Art. 246a § 1 Abs. 2 Satz 1 Nr. 1 and 3 EGBGB | the declarant, the Vertragsnummer, the date of the Vertragsschluss, the product, both prices, the Belieferungsbeginn, the Laufzeit, the Kündigungsfrist and the Widerrufsbelehrung — its Frist, its text, the Muster-Widerrufsformular and the Wertersatz notice |
+| Widerrufsbestätigung | § 356a Abs. 4 BGB | the declarant, the Vertragsnummer, the date **and** the time of receipt, and the declaration's name, contract and address for the confirmation |
+
+Each mandated item has its own refused-template test in `document::gate`, and
+the views (`document::mahnung::MahnungView` projects accountingd's Mahnwesen:
+Stufe 1–3, open Posten, § 288 BGB Verzugszinsen, Mahngebühr, Sperrandrohung)
+live with the renderer, which `accountingd`, `vertragd` and `billingd` conform
+to.
 
 Publishing returns the hash, proof, page count and any Typst warnings;
 identical source stores nothing new. Publishing and rolling out are separate
@@ -435,13 +452,54 @@ postal_relay_api_key = "env:OUTPUTD_PRINT_KEY"
 erp_webhook_url     = "https://erp.internal/api/v1/documents"
 erp_api_key         = "env:OUTPUTD_ERP_KEY"
 
-# Subject lines per kind; a kind with no entry falls back to a built-in.
+# Subject lines per kind, used verbatim; a kind with no entry falls back to a
+# built-in in the document's anrede („Ihre Rechnung“ / „Deine Rechnung“).
 [delivery.subjects]
 INVOICE        = "Ihre Rechnung"
 MAHNUNG        = "Zahlungserinnerung"
 PREISANPASSUNG = "Änderung Ihrer Preise"
 GEBUEHRENBESCHEID = "Gebührenbescheid"
+VERTRAGSZUSAMMENFASSUNG = "Zusammenfassung Ihres Vertrags"
+VERTRAGSBESTAETIGUNG    = "Bestätigung Ihres Vertrags"
+WIDERRUFSBESTAETIGUNG   = "Eingangsbestätigung Ihres Widerrufs"
 ```
+
+### `[policy] anrede` {#policy-anrede}
+
+```toml
+[policy]
+anrede = "du"   # default "sie"
+```
+
+How a customer letter addresses its reader. § 126b BGB asks a Textform letter
+for a readable declaration that names the declarant and fixes no form of
+address, so the voice is the operator's.
+
+| `anrede` | Effect |
+|---|---|
+| `sie` (default) | „Sie“, „Ihr“, capitalised; „Sehr geehrte Damen und Herren“, „Mit freundlichen Grüßen“ |
+| `du` | „du“, „dein“, lower-case in a letter as current spelling writes it; „Hallo“, „Viele Grüße“ |
+
+It covers the reference layouts of the Mahnung, Preisanpassung,
+Vertragsbestätigung, Vertragszusammenfassung and Widerrufsbestätigung, and the
+built-in mail subjects (`[delivery.subjects]` entries are the operator's own
+words and go out verbatim). outputd writes no mail body; a relay receives the
+subject and the document. Two texts do not follow it and stay „Sie“:
+
+- the **Widerrufsbelehrung** with its Muster-Widerrufsformular inside the
+  Vertragsbestätigung — the statutory Muster (Art. 246a § 1 Abs. 2 EGBGB) keeps
+  its effect only as published, so the template prints it as vertragd sends it;
+- the **Gebührenbescheid** — a Verwaltungsakt of a municipal operator, not a
+  supplier's letter. Its view gets no `anrede` and it records `sie`.
+
+A template reads the setting as `anrede` on its view; the reference layouts pick
+each phrase with `form[Sie text][du text]`. A free-text field a producer sends
+— the Mahnung's `sperrandrohung`, the Preisanpassung's `anlass` and `hinweis` —
+is printed verbatim, so producers phrase it without a pronoun of address. The
+publish gate proves a template against its specimen in `sie`; a preview renders
+in the deployment's setting. Each issued document records its `anrede`
+(`GET /api/v1/documents/{id}`), and the setting is reported at
+`GET /api/v1/policy` with its source.
 
 Callers configure the counterpart: `outputd_url` plus an optional
 `outputd_api_key` bearer in billingd, accountingd, vertragd and portald. Without

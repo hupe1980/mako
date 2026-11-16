@@ -1,4 +1,4 @@
-use edifact_rs::{OwnedSegment, ProfileRulePack, ValidationIssue};
+use edifact::{OwnedSegment, ProfileRulePack, ValidationIssue};
 
 use crate::{
     MessageType,
@@ -109,7 +109,7 @@ fn insrpt_semantic_pack() -> ProfileRulePack {
         .with_scoped_group_rule_fn(
             "SG7",
             "SEM-INSRPT-SG7-PERIOD-ORDER",
-            |_group, segs: &[edifact_rs::Segment<'_>], _ctx, issues: &mut Vec<ValidationIssue>| {
+            |_group, segs: &[edifact::Segment<'_>], _ctx, issues: &mut Vec<ValidationIssue>| {
                 super::common::check_period_order(segs, "SEM-INSRPT-SG7-PERIOD-ORDER", issues);
             },
         )

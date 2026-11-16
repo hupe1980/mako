@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::channel::Channel;
-use crate::config::DeliveryConfig;
+use crate::config::{Anrede, DeliveryConfig};
 
 /// The outbox key of a delivery: the Standard Webhooks message id a relay
 /// deduplicates on. The delivery, not the attempt — a retry is the same
@@ -70,6 +70,8 @@ pub struct NewDocument<'a> {
     pub kunden_nr: Option<&'a str>,
     pub content: &'a [u8],
     pub media_type: &'a str,
+    /// The form of address the document is written in.
+    pub anrede: Anrede,
     pub recipient: Recipient,
     pub issued_by: Option<&'a str>,
 }
@@ -149,6 +151,9 @@ pub struct DocumentRow {
     pub content_sha256: String,
     pub byte_size: i32,
     pub media_type: String,
+    /// `sie` or `du` — the form of address it was written in, which a re-print
+    /// pins as `anrede`.
+    pub anrede: String,
     pub recipient_name: Option<String>,
     pub recipient_email: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -197,6 +202,7 @@ fn document_row(r: &sqlx::postgres::PgRow) -> Result<DocumentRow> {
         content_sha256: r.try_get("content_sha256")?,
         byte_size: r.try_get("byte_size")?,
         media_type: r.try_get("media_type")?,
+        anrede: r.try_get("anrede")?,
         recipient_name: r.try_get("recipient_name")?,
         recipient_email: r.try_get("recipient_email")?,
         issued_at: r.try_get("issued_at")?,
@@ -273,12 +279,12 @@ pub async fn issue(
     let inserted = sqlx::query(
         r"INSERT INTO documents
             (tenant, kind, template_hash, subject_ref, malo_id, kunden_nr,
-             content, content_sha256, byte_size, media_type,
+             content, content_sha256, byte_size, media_type, anrede,
              recipient_name, recipient_email, recipient_address, issued_by)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
           ON CONFLICT (tenant, kind, subject_ref) DO NOTHING
           RETURNING document_id, kind, template_hash, subject_ref, malo_id, kunden_nr,
-                    content_sha256, byte_size, media_type,
+                    content_sha256, byte_size, media_type, anrede,
                     recipient_name, recipient_email, issued_at",
     )
     .bind(doc.tenant)
@@ -291,6 +297,7 @@ pub async fn issue(
     .bind(&sha)
     .bind(byte_size)
     .bind(doc.media_type)
+    .bind(doc.anrede.as_str())
     .bind(doc.recipient.name.as_deref())
     .bind(doc.recipient.email.as_deref())
     .bind(
@@ -474,7 +481,7 @@ fn relay_body(
         "from":           cfg.from_address,
         "to":             to,
         "recipient_name": doc.recipient.name,
-        "subject":        cfg.subject_for(doc.kind),
+        "subject":        cfg.subject_for(doc.kind, doc.anrede),
         "filename":       filename,
         "media_type":     doc.media_type,
         "content_base64": base64::engine::general_purpose::STANDARD.encode(doc.content),
@@ -494,7 +501,7 @@ pub async fn by_subject(
 ) -> Result<Option<IssuedDocument>> {
     let row = sqlx::query(
         r"SELECT document_id, kind, template_hash, subject_ref, malo_id, kunden_nr,
-                 content_sha256, byte_size, media_type,
+                 content_sha256, byte_size, media_type, anrede,
                  recipient_name, recipient_email, issued_at
           FROM documents
           WHERE tenant = $1 AND kind = $2 AND subject_ref = $3",
@@ -522,7 +529,7 @@ pub async fn by_subject(
 pub async fn by_id(pool: &PgPool, tenant: &str, id: Uuid) -> Result<Option<IssuedDocument>> {
     let row = sqlx::query(
         r"SELECT document_id, kind, template_hash, subject_ref, malo_id, kunden_nr,
-                 content_sha256, byte_size, media_type,
+                 content_sha256, byte_size, media_type, anrede,
                  recipient_name, recipient_email, issued_at
           FROM documents WHERE tenant = $1 AND document_id = $2",
     )
@@ -616,7 +623,7 @@ pub async fn list(
     }
     let rows = sqlx::query(
         r"SELECT document_id, kind, template_hash, subject_ref, malo_id, kunden_nr,
-                 content_sha256, byte_size, media_type,
+                 content_sha256, byte_size, media_type, anrede,
                  recipient_name, recipient_email, issued_at
           FROM documents
           WHERE tenant = $1
@@ -764,6 +771,77 @@ pub async fn fail_dead_lettered(pool: &PgPool, tenant: &str) -> Result<Vec<GaveU
                 channel: r.try_get("channel")?,
                 attempts: r.try_get("attempts")?,
                 error: r.try_get("last_error")?,
+            })
+        })
+        .collect()
+}
+
+/// A delivery that ended `FAILED`, with the document it was carrying.
+///
+/// `subject_ref` names what the document is about in its issuer's terms — the
+/// contract a Vertragsbestätigung confirms — so the operator sees which
+/// obligation went undelivered, not only which bytes.
+#[derive(Debug, Clone, Serialize)]
+pub struct FailedDelivery {
+    pub delivery_id: Uuid,
+    pub document_id: Uuid,
+    pub kind: String,
+    pub subject_ref: String,
+    pub malo_id: Option<String>,
+    pub kunden_nr: Option<String>,
+    pub channel: String,
+    pub target: Option<String>,
+    pub last_error: Option<String>,
+    /// When the row turned `FAILED`.
+    #[serde(with = "time::serde::rfc3339")]
+    pub failed_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub issued_at: OffsetDateTime,
+}
+
+/// This tenant's `FAILED` deliveries, newest first, optionally of one kind —
+/// the operator's list of documents that never reached their recipient.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn failed_deliveries(
+    pool: &PgPool,
+    tenant: &str,
+    kind: Option<&str>,
+    limit: i64,
+) -> Result<Vec<FailedDelivery>> {
+    let rows = sqlx::query(
+        r"SELECT dd.delivery_id, dd.document_id, d.kind, d.subject_ref, d.malo_id,
+                 d.kunden_nr, dd.channel, dd.target, dd.last_error,
+                 dd.updated_at AS failed_at, d.issued_at
+          FROM document_deliveries dd
+          JOIN documents d ON d.document_id = dd.document_id AND d.tenant = dd.tenant
+          WHERE dd.tenant = $1 AND dd.status = 'FAILED'
+            AND ($2::text IS NULL OR d.kind = $2)
+          ORDER BY dd.updated_at DESC
+          LIMIT $3",
+    )
+    .bind(tenant)
+    .bind(kind)
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(pool)
+    .await
+    .context("failed deliveries")?;
+    rows.iter()
+        .map(|r| {
+            Ok(FailedDelivery {
+                delivery_id: r.try_get("delivery_id")?,
+                document_id: r.try_get("document_id")?,
+                kind: r.try_get("kind")?,
+                subject_ref: r.try_get("subject_ref")?,
+                malo_id: r.try_get("malo_id")?,
+                kunden_nr: r.try_get("kunden_nr")?,
+                channel: r.try_get("channel")?,
+                target: r.try_get("target")?,
+                last_error: r.try_get("last_error")?,
+                failed_at: r.try_get("failed_at")?,
+                issued_at: r.try_get("issued_at")?,
             })
         })
         .collect()

@@ -26,12 +26,28 @@
 //! the views to the same rule at runtime, string literals in expressions
 //! included.
 //!
+//! **One page shape, one type ramp.** A view sits in `design/Page.tsx`, so a
+//! title's leading edge is the same in every view: a `.tsx` under
+//! `desk/src/views/` that sets its own width (`max-w-*`, `mx-auto`) is
+//! refused. Anywhere in `desk/src`, the macOS ramp in `design/tokens.css` is
+//! the only type: an all-caps label, letter tracking, an arbitrary size
+//! (`text-[17px]`) or a weight other than Regular and Semibold is refused.
+//!
+//! **A service's enum is never shown as it arrived.** `running`, `gpke`,
+//! `STROM` are a service's codes; the operator reads the catalogue's word for
+//! them. A code field (`state`, `status`, `family`, `sparte`, …) interpolated
+//! straight into shown text — `${p.state}`, `{s.sparte}`, `grund: p.family`,
+//! a fallback `?? a.art` — is refused; pass it through the catalogue's table.
+//!
 //! **The Desk's version is the workspace's.** It ships as the `mako-desk`
 //! image beside the service images of one release, so `desk/package.json` and
 //! its lockfile's root entries carry `[workspace.package] version`;
 //! `bump-version` moves all three.
 
 use std::path::Path;
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 /// Calls that construct or parse a date or a number. Outside `src/format/`
 /// any of them is arithmetic on a value the service owns.
@@ -89,12 +105,16 @@ pub fn run(root: &Path) -> bool {
     let mut sources = 0;
     let mut computing = Vec::new();
     let mut hardcoded = Vec::new();
+    let mut styled = Vec::new();
+    let mut raw = Vec::new();
     walk(&root.join("desk/src"), &mut |path, text| {
         sources += 1;
         let rel = path.strip_prefix(root).unwrap_or(path);
         computing.extend(computing_lines(rel, text));
         hardcoded.extend(hardcoded_strings(rel, text));
         hardcoded.extend(text_properties(rel, text));
+        styled.extend(styling_lines(rel, text));
+        raw.extend(raw_enums(rel, text));
     });
 
     let mut ok = true;
@@ -121,16 +141,33 @@ pub fn run(root: &Path) -> bool {
         eprintln!("check-desk: {h}");
         ok = false;
     }
+    for h in styled.iter().chain(&raw) {
+        eprintln!("check-desk: {h}");
+        ok = false;
+    }
     if ok {
         println!(
             "check-desk: {packages} npm packages within deny.toml's licences; \
              {sources} sources compute no date or number outside src/format/; \
-             every word on screen comes from the catalogue"
+             every word on screen comes from the catalogue, no service code is shown raw; \
+             every view sits in design/Page.tsx on the type ramp"
         );
     } else if !hardcoded.is_empty() {
         eprintln!(
             "check-desk: put the text into desk/src/i18n/de.ts and en.ts and read it with \
              useT() — the market's vocabulary stays German in both"
+        );
+    }
+    if !styled.is_empty() {
+        eprintln!(
+            "check-desk: wrap the view in design/Page.tsx (reading or work) and use the ramp's \
+             classes (text-large-title … text-caption, font-semibold) — a label is sentence case"
+        );
+    }
+    if !raw.is_empty() {
+        eprintln!(
+            "check-desk: read a service's code through its catalogue table \
+             (src/app/codes.ts, eintrag(…)) — never onto the screen as it arrived"
         );
     }
     if !ok && !computing.is_empty() {
@@ -449,6 +486,110 @@ fn text_properties(rel: &Path, text: &str) -> Vec<String> {
     out
 }
 
+/// Class tokens no source uses: the ramp has two weights, no all-caps, no
+/// tracking and no size outside its eight steps.
+fn type_off_ramp(token: &str) -> bool {
+    let t = token.rsplit(':').next().unwrap_or(token);
+    t == "uppercase"
+        || t.starts_with("tracking-")
+        || matches!(
+            t,
+            "font-thin"
+                | "font-extralight"
+                | "font-light"
+                | "font-medium"
+                | "font-bold"
+                | "font-extrabold"
+                | "font-black"
+        )
+        || t.strip_prefix("text-[")
+            .is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// One line per class token that leaves the page shape or the type ramp.
+fn styling_lines(rel: &Path, text: &str) -> Vec<String> {
+    let path = rel.to_string_lossy().replace('\\', "/");
+    if path.contains(".test.") || path.contains("/src/data/gen/") || path.contains("/src/i18n/") {
+        return Vec::new();
+    }
+    let view = path.contains("/src/views/") && path.ends_with(".tsx");
+    let mut out = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let l = line.trim_start();
+        if l.starts_with("//") || l.starts_with('*') || l.starts_with("/*") {
+            continue;
+        }
+        for token in line.split(|c: char| c.is_whitespace() || "\"'`{}$".contains(c)) {
+            let t = token.rsplit(':').next().unwrap_or(token);
+            if view && (t.starts_with("max-w-") || t == "mx-auto") {
+                out.push(format!(
+                    "{path}:{}: `{t}` — a view takes its width from design/Page.tsx",
+                    n + 1
+                ));
+            } else if type_off_ramp(token) {
+                out.push(format!("{path}:{}: `{t}` is off the type ramp", n + 1));
+            }
+        }
+    }
+    out
+}
+
+/// The fields a service fills with a code from a closed set.
+const CODE_FIELDS: &str =
+    "state|status|family|sparte|anlass|risk_band|deadline_risk|mdm_role|kundentyp|art";
+
+/// A code field straight into shown text: interpolated (`${p.state}`), a JSX
+/// child (`{s.sparte}`), a text property's value (`grund: p.family`) or a
+/// fallback (`?? a.art`).
+static RAW_ENUM: LazyLock<Regex> = LazyLock::new(|| {
+    let member = format!(r"[A-Za-z_][\w?.!\]\[]*\.(?:{CODE_FIELDS})");
+    Regex::new(&format!(
+        r#"(?:\$\{{\s*{member}\s*\}}|(?:^|[^=\w])\{{\s*{member}\s*\}}|\b(?:{keys}):\s*{member}\s*(?:[,}}]|$)|\?\?\s*{member}\s*(?:[,;)}}]|$))"#,
+        keys = TEXT_KEYS.join("|"),
+    ))
+    .expect("the raw-enum pattern compiles")
+});
+
+static KEY_ATTR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bkey=\{(?:`[^`]*`|[^}]*)\}").expect("the key pattern compiles"));
+
+/// One line per service code a source shows as it arrived.
+fn raw_enums(rel: &Path, text: &str) -> Vec<String> {
+    let path = rel.to_string_lossy().replace('\\', "/");
+    if path.contains(".test.")
+        || path.contains("/src/gallery/")
+        || path.contains("/src/test-support/")
+        || path.contains("/src/i18n/")
+        || path.contains("/src/data/gen/")
+    {
+        return Vec::new();
+    }
+    text.lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            let l = line.trim_start();
+            !(l.starts_with("//") || l.starts_with('*') || l.starts_with("/*"))
+        })
+        .filter_map(|(n, line)| {
+            // A React key is never shown.
+            let line = KEY_ATTR.replace_all(line, "");
+            // An HTTP response's status is a number, not a service's code.
+            RAW_ENUM
+                .find_iter(&line)
+                .find(|m| {
+                    !m.as_str().contains("res.status") && !m.as_str().contains("response.status")
+                })
+                .map(|m| {
+                    format!(
+                        "{path}:{}: `{}` shows a service's code raw",
+                        n + 1,
+                        m.as_str().trim()
+                    )
+                })
+        })
+        .collect()
+}
+
 /// A value that names something rather than says it: a path, a URL, a
 /// dotted or snake_case key, a CSS class list.
 fn looks_like_identifier(value: &str) -> bool {
@@ -625,5 +766,39 @@ mod tests {
         );
         assert!(text_properties(Path::new("desk/src/i18n/de.ts"), planted).is_empty());
         assert!(text_properties(Path::new("desk/src/app/a.test.ts"), planted).is_empty());
+    }
+
+    /// A raw service value on screen — `PID 55001 · running` — and its
+    /// siblings are refused; a code read through the catalogue passes.
+    #[test]
+    fn a_service_code_shown_raw_is_refused() {
+        let planted = "    detail: `PID ${p.pid} · ${p.state}`,\n    grund: p.deadline_source ?? p.family,\n\
+                       <span>{s.sparte}</span>\n      return { text: l.status, tone: \"calm\" };\n\
+                       {k.anker[a.art] ?? a.art}\n";
+        let hits = raw_enums(Path::new("desk/src/inbox/quellen.ts"), planted);
+        assert_eq!(hits.len(), 5, "{hits:#?}");
+        assert!(hits[0].contains(":1: `${p.state}`"), "{hits:#?}");
+        let clean = "    detail: `PID ${p.pid} · ${zustand(p.state)}`,\n\
+                     if (res.status === 403) throw x;\n  <span>{sparte(s.sparte)}</span>\n\
+                     data-art={z.art}\n  <li key={`${b.art}:${b.text}`}>\n";
+        let hits = raw_enums(Path::new("desk/src/inbox/quellen.ts"), clean);
+        assert!(hits.is_empty(), "{hits:#?}");
+    }
+
+    #[test]
+    fn a_view_with_its_own_width_or_an_off_ramp_type_is_refused() {
+        let view = r#"<div className="mx-auto flex max-w-3xl flex-col">
+  <h1 className="text-[28px] font-bold uppercase tracking-tight">{t.x}</h1>
+  <p className="text-body font-semibold md:font-medium">{t.y}</p>
+</div>"#;
+        let hits = styling_lines(Path::new("desk/src/views/Heute.tsx"), view);
+        assert_eq!(hits.len(), 7, "{hits:#?}");
+        // A design control may bound its own width; the ramp holds everywhere.
+        let control = r#"<div className="max-w-xs text-caption font-semibold">"#;
+        assert!(styling_lines(Path::new("desk/src/design/Panel.tsx"), control).is_empty());
+        assert_eq!(
+            styling_lines(Path::new("desk/src/design/Tile.tsx"), "\"font-bold\"").len(),
+            1
+        );
     }
 }

@@ -65,7 +65,7 @@
 use std::sync::Arc;
 
 use edi_energy::{AnyMessage, EdiEnergyMessage as _};
-use edifact_rs::{ContrlLocation, RecoveredInterchange, RecoveryConfig};
+use edifact::{ContrlLocation, RecoveredInterchange, RecoveryConfig};
 use mako_engine::{
     deadline::Deadline,
     error::EngineError,
@@ -125,7 +125,7 @@ impl Verdict {
 ///
 /// CONTRL AHB 1.0 Kap. 3 lists thirteen; these are the ones mako can decide from
 /// what it knows about a rejected Übertragungsdatei. Each is also an
-/// [`edifact_rs::contrl::SyntaxError`], which is where the code value comes
+/// [`edifact::contrl::SyntaxError`], which is where the code value comes
 /// from — ISO 9735-4 Annex A fixes it, and reading it off the upstream enum
 /// keeps a literal out of this file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,7 +143,7 @@ pub enum SyntaxFehler {
 impl SyntaxFehler {
     /// The DE 0085 code, read off the ISO 9735-4 Annex A enum.
     const fn de0085(self) -> &'static str {
-        use edifact_rs::contrl::SyntaxError as E;
+        use edifact::contrl::SyntaxError as E;
         match self {
             Self::UngueltigerWert => E::InvalidValue.code(),
             Self::TestKennzeichen => E::TestIndicatorNotSupported.code(),
@@ -153,7 +153,7 @@ impl SyntaxFehler {
 
     /// The Syntaxfehler a failed parse reports.
     ///
-    /// [`edifact_rs::contrl::SyntaxError::for_error`] maps the parser's own
+    /// [`edifact::contrl::SyntaxError::for_error`] maps the parser's own
     /// error to the Annex-A code; anything it resolves to a code the AHB does
     /// not admit at interchange level falls back to `12` „Ungültiger Wert",
     /// which Kap. 3 does admit and which the AHB itself treats as the catch-all.
@@ -162,7 +162,7 @@ impl SyntaxFehler {
         let edi_energy::Error::Parse(inner) = error else {
             return Self::UngueltigerWert;
         };
-        use edifact_rs::contrl::SyntaxError as E;
+        use edifact::contrl::SyntaxError as E;
         match E::for_error(inner) {
             E::TestIndicatorNotSupported => Self::TestKennzeichen,
             E::NotActualRecipient => Self::FalscherEmpfaenger,
@@ -355,10 +355,10 @@ pub fn syntaxpruefung(
 ///
 /// Errors of the edi-energy layer — the message type or release in `UNH` names
 /// nothing this side reads — are `UCM` DE 0085 `12` „Ungültiger Wert" on `UNH`:
-/// `locate` knows only [`edifact_rs::EdifactError`]s.
+/// `locate` knows only [`edifact::EdifactError`]s.
 fn fehlerort(
     recovered: &RecoveredInterchange<'_>,
-    faults: &[(&edifact_rs::EdifactError, ContrlLocation)],
+    faults: &[(&edifact::EdifactError, ContrlLocation)],
     message: usize,
     error: &edi_energy::Error,
 ) -> Option<Fehlerort> {
@@ -368,9 +368,7 @@ fn fehlerort(
         | edi_energy::Error::MissingRelease
         | edi_energy::Error::InvalidRelease(_)
         | edi_energy::Error::ProfileNotFound { .. } => Some(Fehlerort::Nachricht {
-            code: edifact_rs::contrl::SyntaxError::InvalidValue
-                .code()
-                .to_owned(),
+            code: edifact::contrl::SyntaxError::InvalidValue.code().to_owned(),
             service_segment: "UNH".to_owned(),
         }),
         edi_energy::Error::Parse(inner) => {
@@ -391,7 +389,7 @@ fn ort_of(
     message: usize,
     location: &ContrlLocation,
 ) -> Option<Fehlerort> {
-    use edifact_rs::contrl::ReportingLevel as L;
+    use edifact::contrl::ReportingLevel as L;
     if location.message() != Some(message) {
         return None;
     }
@@ -453,7 +451,7 @@ fn tag_is_unique(recovered: &RecoveredInterchange<'_>, message: usize, position:
     let Some(tag) = position
         .checked_sub(1)
         .and_then(|i| items.get(i))
-        .and_then(edifact_rs::recover::Scanned::tag)
+        .and_then(edifact::recover::Scanned::tag)
     else {
         return false;
     };
@@ -464,10 +462,10 @@ fn tag_is_unique(recovered: &RecoveredInterchange<'_>, message: usize, position:
 /// fault has no location, so the two lists cannot be paired.
 fn located_faults<'r>(
     recovered: &'r RecoveredInterchange<'_>,
-) -> Option<Vec<(&'r edifact_rs::EdifactError, ContrlLocation)>> {
+) -> Option<Vec<(&'r edifact::EdifactError, ContrlLocation)>> {
     let faults: Vec<_> = recovered
         .faults()
-        .map(edifact_rs::recover::Fault::error)
+        .map(edifact::recover::Fault::error)
         .collect();
     let locations = recovered.fault_locations();
     (faults.len() == locations.len()).then(|| faults.into_iter().zip(locations).collect())
@@ -481,7 +479,7 @@ fn located_faults<'r>(
 /// decode leaves the raw bytes — the parse failed on it, and the scan reports
 /// what it can.
 fn decoded(raw: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    edifact_rs::decode_interchange(raw).unwrap_or(std::borrow::Cow::Borrowed(raw))
+    edifact::decode_interchange(raw).unwrap_or(std::borrow::Cow::Borrowed(raw))
 }
 
 /// The `UNB` of a raw interchange: (sender, recipient, control reference).
@@ -1192,7 +1190,7 @@ fn unh_message_types(interchange: &[u8]) -> Vec<String> {
     RecoveredInterchange::scan(&decoded, &RecoveryConfig::default())
         .messages()
         .iter()
-        .filter_map(edifact_rs::recover::MessageWindow::identity)
+        .filter_map(edifact::recover::MessageWindow::identity)
         .map(|identity| identity.message_type().to_owned())
         .filter(|code| !code.is_empty())
         .collect()
@@ -1614,7 +1612,7 @@ mod tests {
                            DTM+137:202610010000?+00:303'DTM+163:202610012200?+00:303'\
                            UNT+5+1'UNZ+1+IC1'";
 
-    fn parse_error(error: edifact_rs::EdifactError) -> Vec<Result<AnyMessage, edi_energy::Error>> {
+    fn parse_error(error: edifact::EdifactError) -> Vec<Result<AnyMessage, edi_energy::Error>> {
         vec![Err(edi_energy::Error::Parse(error))]
     }
 
@@ -1623,7 +1621,7 @@ mod tests {
     #[test]
     fn an_offset_fault_in_the_second_dtm_names_the_second_dtm() {
         let at = TWO_DTM.find("DTM+163").expect("second DTM") + "DTM+163:".len();
-        let results = parse_error(edifact_rs::EdifactError::InvalidText { offset: at });
+        let results = parse_error(edifact::EdifactError::InvalidText { offset: at });
         let Syntaxpruefung::Nachrichten(fehler) = syntaxpruefung(TWO_DTM.as_bytes(), &results)
         else {
             panic!("an exact fault is reported on the message");
@@ -1654,7 +1652,7 @@ mod tests {
     /// the file is reported at the `UCI`, never at the first `DTM`.
     #[test]
     fn a_tag_only_fault_in_a_repeated_segment_is_not_given_a_ucs_position() {
-        let results = parse_error(edifact_rs::EdifactError::MissingRequiredElement {
+        let results = parse_error(edifact::EdifactError::MissingRequiredElement {
             tag: "DTM".into(),
             element_index: 1,
         });
@@ -1667,7 +1665,7 @@ mod tests {
     /// The same error on a tag the message carries once is exact after all.
     #[test]
     fn a_tag_only_fault_in_a_unique_segment_is_placed_on_it() {
-        let results = parse_error(edifact_rs::EdifactError::MissingRequiredElement {
+        let results = parse_error(edifact::EdifactError::MissingRequiredElement {
             tag: "BGM".into(),
             element_index: 1,
         });

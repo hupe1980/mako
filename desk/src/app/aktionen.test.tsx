@@ -514,7 +514,7 @@ describe("the prefill", () => {
       expect((screen.getByRole("radio", { name: /A02/ }) as HTMLInputElement).checked).toBe(true),
     );
     const marke = screen.getByRole("region", { name: "Von einem Modell verfasst" });
-    expect(marke.textContent).toMatch(/^AgentAI-generated\./);
+    expect(marke.textContent).toMatch(/^AgentKI-generiert\./);
     // The skill's record, as M74 shows it under every proposal.
     expect(await within(marke).findByText(/In 30 Tagen:/)).toBeTruthy();
     expect(

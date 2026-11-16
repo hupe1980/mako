@@ -41,19 +41,25 @@ let as4 = builder.build()?; // the startup check: asx::ErrorKind::Config names t
 
 `client_builder` refuses two of an identity's signing, encryption and TLS
 certificates that certify one key pair (BDEW AS4-Profil 1.2 §2.3.4.4) — compared
-by public key, which `build()` does not do — and registers the CRL signer.
+by public key, which `build()` does not do — and a certificate whose subject OU
+is not the identity's MP-ID (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2),
+and registers the CRL signer. `PartnerDirectory::insert` refuses an endpoint on
+an IP address (SNI, Kap. 3), an encryption certificate of another MP-ID, one
+naming several URI addresses, and an endpoint other than the address the
+certificate names (Kap. 2, Kap. 5.2).
 
 ## API
 
 | Module | Contents |
 |---|---|
 | `identity` | `LocalIdentity` (MP-ID, signer, decrypter, TLS key pair) and `client_builder` |
-| `partner_directory` | `PartnerDirectory` / `PartnerEntry` — one `asx::Partner` per counterparty; `parse_quirk` |
+| `partner_directory` | `PartnerDirectory` / `PartnerEntry` — one `asx::Partner` per counterparty |
 | `action` | `BdewAction` — the 16 standard EDIFACT message types, `Custom` for any other; `service()` |
 | `service` | `Service` — the five `eb:Service` URIs of §2.3.1.2.1 |
 | `file_name` | `uebertragungsdatei_name` — Allgemeine Festlegungen V6.1d Kap. 2.12 |
 | `message_id` | `MessageIdDomain` — RFC 2822 `eb:MessageId` values |
 | `keys` | `subject_public_key_info`, `same_public_key` |
+| `certificate` | `subject_organisational_units`, `carries_mp_id`, `uri_subject_alt_names` |
 | `constants` | party types per issuing agency (§2.3.1.1), `PAYLOAD_MIME_TYPE`, `MAX_MESSAGE_BYTES`, `MAX_RETRY_DURATION_SECS` (72 h) |
 
 Tests use `asx::testkit` (`asx-rs` feature `test-util`, dev-dependencies only):

@@ -17,91 +17,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Deserialize;
-
 use crate::config::PartyConfig;
 
-/// One deployment role: a Marktrolle in one Sparte.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Rolle {
-    /// Lieferant Strom.
-    LfStrom,
-    /// Lieferant Gas.
-    LfGas,
-    /// Netzbetreiber Strom (VNB, ANB, and the LPB of NZR-EMob, whose wire role is NB).
-    NbStrom,
-    /// Gasnetzbetreiber.
-    NbGas,
-    /// Messstellenbetreiber Strom.
-    MsbStrom,
-    /// Messstellenbetreiber Gas.
-    MsbGas,
-    /// Energieserviceanbieter (WiM Strom Teil 2), Strom only.
-    EsaStrom,
-}
-
-impl Rolle {
-    /// Every deployment role, in declaration order.
-    pub const ALL: [Self; 7] = [
-        Self::LfStrom,
-        Self::LfGas,
-        Self::NbStrom,
-        Self::NbGas,
-        Self::MsbStrom,
-        Self::MsbGas,
-        Self::EsaStrom,
-    ];
-
-    /// The token `[deployment] rollen` spells this role with.
-    #[must_use]
-    pub const fn token(self) -> &'static str {
-        match self {
-            Self::LfStrom => "lf-strom",
-            Self::LfGas => "lf-gas",
-            Self::NbStrom => "nb-strom",
-            Self::NbGas => "nb-gas",
-            Self::MsbStrom => "msb-strom",
-            Self::MsbGas => "msb-gas",
-            Self::EsaStrom => "esa-strom",
-        }
-    }
-
-    /// The `[[party]]` role abbreviations whose MP-ID is this role's MP-ID.
-    ///
-    /// The AHB sub-qualifiers (`ANB`/`VNB`, `NMSB`/`AMSB`) name the same
-    /// Marktrolle in one Sparte, so they share its one MP-ID.
-    #[must_use]
-    pub const fn party_roles(self) -> &'static [&'static str] {
-        match self {
-            Self::LfStrom => &["LF"],
-            Self::LfGas => &["LFG"],
-            Self::NbStrom => &["NB", "ANB", "VNB"],
-            Self::NbGas => &["GNB"],
-            Self::MsbStrom => &["MSB", "NMSB", "AMSB"],
-            Self::MsbGas => &["GMSB"],
-            Self::EsaStrom => &["ESA"],
-        }
-    }
-
-    /// The deployment role a `[[party]]` role abbreviation belongs to.
-    ///
-    /// `None` for a Marktrolle no engine module answers for (`BKV`, `UNB`,
-    /// `BIKO`, `FNB`, `MGV`, `KN`, `DP`, `EIV`, `RB`).
-    #[must_use]
-    pub fn of_party_role(abbrev: &str) -> Option<Self> {
-        let upper = abbrev.to_uppercase();
-        Self::ALL
-            .into_iter()
-            .find(|r| r.party_roles().contains(&upper.as_str()))
-    }
-}
-
-impl std::fmt::Display for Rolle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.token())
-    }
-}
+/// One deployment role: a Marktrolle in one Sparte. The setup interview asks
+/// for the same type, so every role makod loads is one it can propose.
+pub use mako_service::einrichtung::befragung::Rolle;
 
 /// Check `rollen` against the `[[party]]` table and return the declared set,
 /// refusing with every finding joined.
@@ -151,13 +71,16 @@ pub fn pruefe_rollen(
         out.push(
             Befund::blockiert(
                 "deployment.rollen",
-                "makod.toml declares no deployment role. Name the roles this instance plays:\n\
+                format!(
+                    "makod.toml declares no deployment role. Name the roles this instance plays:\n\
                  \n\
                  [deployment]\n\
-                 rollen = [\"nb-strom\"]  # lf-strom, lf-gas, nb-strom, nb-gas, msb-strom, msb-gas, esa-strom\n\
+                 rollen = [\"nb-strom\"]  # {}\n\
                  \n\
                  A makod that registers no engine module routes nothing and dead-letters \
                  every inbound message.",
+                    Rolle::ALLE.map(Rolle::token).join(", ")
+                ),
             )
             .bereich(Bereich::Identitaeten),
         );
@@ -169,7 +92,7 @@ pub fn pruefe_rollen(
     let mut mp_ids: BTreeMap<Rolle, BTreeSet<&str>> = BTreeMap::new();
     for (i, party) in parties.iter().enumerate() {
         for role in &party.roles {
-            let Some(rolle) = Rolle::of_party_role(role) else {
+            let Some(rolle) = Rolle::von_kuerzel(role) else {
                 out.push(
                     Befund::blockiert(
                         format!("party[{i}].roles"),
@@ -217,7 +140,7 @@ pub fn pruefe_rollen(
                          jede Sparte (Gas bzw. Strom) und jede Rolle hat ein Markteilnehmer genau \
                          eine MP-ID.\"). Party roles for {rolle}: {:?}.",
                         mp_ids.get(rolle).cloned().unwrap_or_default(),
-                        rolle.party_roles(),
+                        rolle.alle_kuerzel(),
                     ),
                 )
                 .bereich(Bereich::Identitaeten)
@@ -251,7 +174,7 @@ mod tests {
 
     #[test]
     fn tokens_parse_and_print_the_same() {
-        for rolle in Rolle::ALL {
+        for rolle in Rolle::ALLE {
             let parsed: Rolle = serde_json::from_value(serde_json::json!(rolle.token()))
                 .expect("every token parses");
             assert_eq!(parsed, rolle);
@@ -261,13 +184,14 @@ mod tests {
 
     #[test]
     fn every_party_role_maps_to_one_deployment_role() {
-        for rolle in Rolle::ALL {
-            for abbrev in rolle.party_roles() {
-                assert_eq!(Rolle::of_party_role(abbrev), Some(rolle), "{abbrev}");
+        for rolle in Rolle::ALLE {
+            for abbrev in rolle.alle_kuerzel() {
+                assert_eq!(Rolle::von_kuerzel(abbrev), Some(rolle), "{abbrev}");
             }
         }
-        assert_eq!(Rolle::of_party_role("gmsb"), Some(Rolle::MsbGas));
-        assert_eq!(Rolle::of_party_role("BKV"), None);
+        assert_eq!(Rolle::von_kuerzel("gmsb"), Some(Rolle::MsbGas));
+        assert_eq!(Rolle::von_kuerzel("BKV"), Some(Rolle::BkvStrom));
+        assert_eq!(Rolle::von_kuerzel("BIKO"), None);
     }
 
     #[test]
@@ -316,8 +240,11 @@ mod tests {
 
     #[test]
     fn a_party_role_no_module_answers_for_is_refused() {
-        let msg = err(&[Rolle::LfStrom], &[party("9900001000001", &["LF", "BKV"])]);
-        assert!(msg.contains("BKV"), "{msg}");
+        let msg = err(
+            &[Rolle::LfStrom],
+            &[party("9900001000001", &["LF", "BIKO"])],
+        );
+        assert!(msg.contains("BIKO"), "{msg}");
     }
 
     /// Two defects are two findings, each at its path.
@@ -339,6 +266,49 @@ mod tests {
                 .as_deref()
                 .is_some_and(|q| q.contains("Kap. 2.1"))
         );
+    }
+
+    /// Every MaBiS command only a BKV may send is reachable under exactly one
+    /// deployment role, the BKV's.
+    ///
+    /// Each role is declared the way an operator does it — `rollen` plus one
+    /// `[[party]]` MP-ID — and must pass the boot's role checks; the command is
+    /// then licensed against the engine roles that `[[party]]` table yields. A
+    /// command no declarable role reaches is catalogued and unsendable.
+    #[test]
+    fn every_bkv_only_command_is_reachable_under_the_bkv_role_alone() {
+        use mako_engine::marktrolle::Marktrolle;
+
+        let bkv_only: Vec<&str> = crate::commands_api::COMMAND_REGISTRY
+            .iter()
+            .filter(|d| d.permitted_roles == [Marktrolle::Bkv])
+            .filter(|d| d.workflow.is_some_and(|w| w.starts_with("mabis-")))
+            .map(|d| d.name)
+            .collect();
+        assert!(
+            bkv_only.contains(&"mabis.abrechnung.einleiten"),
+            "{bkv_only:?}"
+        );
+        for command in bkv_only {
+            let mut reaching = Vec::new();
+            for rolle in Rolle::ALLE {
+                let mp_id = if rolle.token().ends_with("-gas") {
+                    "9800001000001"
+                } else {
+                    "9900001000001"
+                };
+                let parties = [party(mp_id, &[rolle.alle_kuerzel()[0]])];
+                validate_rollen(&[rolle], &parties)
+                    .unwrap_or_else(|e| panic!("{rolle} must be declarable: {e}"));
+                let registry = crate::party_registry::MpIdRegistry::from_config(&parties)
+                    .expect("one MP-ID per role is a valid party table");
+                let engine_roles = registry.deployment_role_strings();
+                if crate::commands_api::validate_command(command, None, &engine_roles).is_ok() {
+                    reaching.push(rolle.token());
+                }
+            }
+            assert_eq!(reaching, ["bkv-strom"], "{command}");
+        }
     }
 
     #[test]

@@ -266,6 +266,7 @@ impl MockNb {
                     process_date,
                     message_ref,
                     bilanzierungsgebiet: None,
+                    bilanzkreis: None,
                     bilanzierungsmethode: None,
                     fallgruppe: None,
                     transaktionsgrund: None,

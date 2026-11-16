@@ -52,7 +52,7 @@ export function Tile({
         breach ? "border-[color-mix(in_srgb,var(--critical)_45%,transparent)]" : "border-separator"
       }`}
     >
-      <span className="flex items-center gap-2 text-caption font-semibold uppercase tracking-wide text-text-2">
+      <span className="flex items-center gap-2 text-body text-text-2">
         {breach && <span aria-hidden="true" className="size-2 rounded-full bg-critical" />}
         {label}
       </span>
@@ -62,10 +62,10 @@ export function Tile({
             <span className="sr-only">{t.steuer.laedt}</span>
           </span>
         ) : state.kind === "wert" && !state.wert ? (
-          <span className="block text-title font-semibold text-text-2">{value}</span>
+          <span className="block text-title2 font-semibold text-text-2">{value}</span>
         ) : (
           <span
-            className={`block text-[40px] leading-none font-bold tracking-tight tabular-nums ${
+            className={`block text-large-title font-semibold tabular-nums ${
               breach ? "text-critical" : state.kind === "failed" ? "text-text-2" : "text-text"
             }`}
           >
@@ -81,7 +81,7 @@ export function Tile({
         </span>
       )}
       <span className="mt-3 flex items-center justify-between text-caption text-text-2">
-        <span>{state.kind === "failed" ? `${state.service} nicht erreichbar` : source}</span>
+        <span>{state.kind === "failed" ? t.dienst.nichtErreichbar(state.service) : source}</span>
         <span
           aria-hidden="true"
           className="opacity-0 transition-opacity group-data-[hovered]:opacity-100"

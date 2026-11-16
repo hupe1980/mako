@@ -133,7 +133,7 @@ fn the_upsert_body_gates_its_bo4e_vertrag() {
 
     // `deny_unknown_fields`: a body naming a field the API does not have is a
     // refusal, not a silently discarded value — `gnb_mp_id` included, which
-    // is the Gas-only name the registry no longer has.
+    // a Gas-only name the registry does not have.
     for unknown in ["vertragsnummer", "gnb_mp_id"] {
         let mut b = body(serde_json::json!({}));
         b[unknown] = serde_json::json!(GNB);

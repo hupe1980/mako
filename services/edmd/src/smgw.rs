@@ -16,8 +16,8 @@
 //!
 //! ### Citations this module must not carry
 //!
-//! Four earlier ones were wrong, and each pointed a reader somewhere real but
-//! irrelevant, which is worse than pointing nowhere:
+//! Each points a reader somewhere real but irrelevant, which is worse than
+//! pointing nowhere:
 //!
 //! - **§ 21c MsbG does not exist.** The MsbG runs § 21 → § 22.
 //! - **§ 29 MsbG** is *Ausstattung von Messstellen mit intelligenten Messsystemen*

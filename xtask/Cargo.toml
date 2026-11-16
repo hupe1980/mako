@@ -7,6 +7,9 @@ publish = false
 
 [dependencies]
 mako-fristen = { workspace = true }
+# `check-referenzreihen` reads the Referenzreihen catalogue itself, so the guard
+# and the readers cannot disagree about what a series is.
+mako-markt = { workspace = true }
 # `setup` folds the daemons' `--check-config --json` reports with the very
 # checklist makod serves, so the terminal and the Desk cannot disagree.
 mako-service = { workspace = true }

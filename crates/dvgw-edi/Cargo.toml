@@ -12,7 +12,7 @@ keywords     = ["dvgw", "edifact", "gas", "alocat", "nomint"]
 categories   = ["parser-implementations", "encoding"]
 
 [dependencies]
-edifact-rs   = { workspace = true }
+edifact      = { workspace = true }
 rust_decimal = { workspace = true }
 time         = { workspace = true }
 serde        = { workspace = true, optional = true }

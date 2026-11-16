@@ -86,12 +86,11 @@ class TestReport:
 
     def test_a_single_answer_is_refused_for_a_multi_message_interchange(self):
         """One PID cannot speak for two messages, so it raises instead of guessing."""
-        message = _message(55001)
         wire = build_interchange(
             sender=LF_ID,
             receiver=NB_ID,
             dar="REF3",
-            messages=[message, message],
+            messages=[_message(55001), _message(55001, message_ref="2")],
             on=ON,
         )
         report = validate_edifact(wire, ON)

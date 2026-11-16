@@ -55,11 +55,10 @@ const MCP_GATE: &str = "use-mcp";
 /// The two § 41c EnWG comparison-feed routes.
 ///
 /// They are the only routed handlers that take no `Claims`, and that is
-/// deliberate: § 41c obliges the supplier to make its tariff data available to
-/// independent comparison instruments (Verivox, Check24, the BNetzA
-/// Markttransparenzstelle), and an obligation that is only discharged behind a
-/// bearer token is not discharged — requiring a credential would put the
-/// operator in breach.
+/// deliberate: § 41c Abs. 5 Satz 2 EnWG obliges a Stromlieferant to let
+/// comparison instruments use its offer-relevant information free of charge,
+/// and an obligation that is only discharged behind a bearer token is not
+/// discharged — requiring a credential would put the operator in breach.
 ///
 /// The exemption is bounded by the query rather than by the caller, which
 /// [`the_public_feeds_serve_only_published_rows`] pins: unlike the HMAC-signed
@@ -315,8 +314,8 @@ fn only_the_two_statutory_feeds_are_unauthenticated() {
 
 /// The exemption's justification, made checkable.
 ///
-/// § 41c obliges publication of the *tariff offer* — not of the draft that is
-/// still being priced, and not of the categories that never appear in a
+/// § 41c Abs. 5 covers the *tariff offer* — not the draft that is
+/// still being priced, and not the categories that never appear in a
 /// comparison portal. Both feeds serve `fetch_comparison_feed`, so the bound
 /// lives in one query, and it is that bound rather than a credential which
 /// makes the open route safe.
@@ -439,6 +438,9 @@ fn a_role_less_token_cannot_reprice_the_catalogue() {
         "versenden-angebot",
         "entscheiden-angebot",
         "expire-angebote",
+        // A binding B2C offer a consumer can order against.
+        "quote-endkunde",
+        "read-endkunden-angebot",
         // The MCP tools read the Angebot register — named prospects and the
         // bespoke prices quoted to them.
         MCP_GATE,
@@ -463,9 +465,14 @@ fn an_operator_reaches_every_action_of_its_own_tenant() {
     }
 }
 
+/// The Endkunden-Angebot actions — an energy-supply offer a consumer orders
+/// against, so the Lieferant's (and the operator's) alone.
+const ENDKUNDEN_ACTIONS: [&str; 2] = ["quote-endkunde", "read-endkunden-angebot"];
+
 /// The three roles that are not the LF but do operate a catalogue of their own:
 /// ENERGIEDIENSTLEISTUNG covers Messstellenbetrieb an MSB sells, and an ESA
-/// sells the same catalogue of services.
+/// sells the same catalogue of services. The Endkunden-Angebot is not theirs:
+/// it prices Strom or Gas supply.
 #[test]
 fn the_msb_and_esa_deployments_reach_their_own_catalogue() {
     let enforcer = enforcer();
@@ -476,6 +483,14 @@ fn the_msb_and_esa_deployments_reach_their_own_catalogue() {
             roles: vec![role.to_owned()],
         };
         for action in actions_permitted_in_policy() {
+            if role != "ADMIN" && ENDKUNDEN_ACTIONS.contains(&action.as_str()) {
+                assert!(
+                    enforcer.check(&principal, &action, TENANT).is_err(),
+                    "a {role} deployment reaches {action:?} — a binding energy-supply offer \
+                     to a consumer is the Lieferant's"
+                );
+                continue;
+            }
             assert!(
                 enforcer.check(&principal, &action, TENANT).is_ok(),
                 "a {role} deployment is refused {action:?} in its own catalogue"
@@ -521,6 +536,7 @@ fn the_repricing_routes_authorize_a_write_action() {
         ("put_nehs_price", "write-marktpreise"),
         ("post_angebot_annehmen", "entscheiden-angebot"),
         ("post_angebot_versenden", "versenden-angebot"),
+        ("post_endkunden_angebot", "quote-endkunde"),
     ] {
         let start = text
             .find(&format!("pub async fn {handler}("))

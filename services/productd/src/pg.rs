@@ -505,7 +505,7 @@ pub async fn fetch_energiemix(
     }))
 }
 
-/// Delete the `Energiemix` + `Oekolabel` for a product (hard cut, no archive).
+/// Delete the `Energiemix` + `Oekolabel` for a product outright, with no archive.
 pub async fn delete_energiemix(
     pool: &PgPool,
     lf_mp_id: &str,
@@ -1561,10 +1561,9 @@ pub struct ComparisonFeedEntry {
     /// Full validated BO4E `Tarifpreisblatt` payload.
     /// Portal integrators may use this for deep tariff analysis.
     pub tarifpreisblatt: serde_json::Value,
-    /// § 41c EnWG: Full BO4E `Tarifinfo` Business Object envelope.
+    /// Full BO4E `Tarifinfo` Business Object envelope.
     ///
-    /// Ready for direct schema-validated import by Verivox, Check24, and the
-    /// BNetzA Markttransparenzstelle.  Eliminates the manual ETL step for portal
+    /// Ready for direct schema-validated import by a comparison portal.  Eliminates the manual ETL step for portal
     /// integration: the portal receives a standard BO4E object, not a custom JSON.
     ///
     /// Fields mapped:
@@ -1632,7 +1631,7 @@ pub struct ComparisonFeedResponse {
 /// | Dynamic only | `dyn_source IS NOT NULL` |
 /// | Exclude dynamic | `dyn_source IS NULL` |
 /// | Cursor | `(updated_at, product_code) < (cursor_ts, cursor_code)` |
-/// The § 41c Abs. 2 EnWG comparison feed for one supplier within one tenant.
+/// The § 41c Abs. 5 EnWG comparison feed for one supplier within one tenant.
 ///
 /// `tenant` is the data-isolation key and `lf_mp_id` is the supplier filter;
 /// they are not interchangeable and only one of them is the caller's to choose.

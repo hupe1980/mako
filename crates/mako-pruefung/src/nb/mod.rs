@@ -121,5 +121,5 @@ pub use types::{
     Abmeldeanfrage, AbmeldungAnfrage, AnmeldungAnfrage, AntwortDetail, ErzeugungsAnmeldung,
     Geschaeftsvorfall, LfaAntwort, MaloGridRecord, Marktlokationsart, Messtyp, NbEntscheidung,
     RejectReason, RuhendeAnmeldung, TranchenAntwort, TranchenLage, TranchenZuordnung,
-    Veraeusserungsform,
+    Veraeusserungsform, ZuordnungsermaechtigungRecord,
 };

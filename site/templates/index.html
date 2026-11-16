@@ -47,7 +47,7 @@
     <div><strong>77</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>14</strong><span>services</span></div>
-    <div><strong>4</strong><span>deployable roles</span></div>
+    <div><strong>5</strong><span>deployable roles</span></div>
   </div>
   <p class="stats-note wrap">Three views of one catalogue. Every one of the 482
     Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported; 498 are
@@ -62,7 +62,7 @@
   <div class="wrap">
     <h2 id="who">Who runs this</h2>
     <p class="section-lead">Every MaKo message names a Marktrolle on each end. The BDEW
-      Rollenmodell V2.2 defines twelve of them; these four carry the mass-market processes.
+      Rollenmodell V2.2 defines twelve of them; these five carry the mass-market processes and their balancing.
       A deployment declares the roles it plays and registers only their processes; which
       principal may read which role's processes is a Cedar policy.</p>
     <div class="card-grid card-grid-4">
@@ -97,6 +97,14 @@
           measurement products, and invoices the service against the quotation the
           counterparty accepted.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/makod.md') | safe }}">makod — ESA messages →</a>
+      </div>
+      <div class="card">
+        <h3><span class="role-abbr">BKV</span> Bilanzkreisverantwortlicher</h3>
+        <p class="role-gloss">Balance responsible party</p>
+        <p>Receives its Bilanzkreissummenzeitreihen from the BIKO, answers them with a
+          Prüfmitteilung, takes the Datenstatus, and requests its Bilanzkreiszuordnungsliste
+          and Clearingliste BAS under MaBiS.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/makod.md') | safe }}">makod — MaBiS messages →</a>
       </div>
     </div>
   </div>
@@ -256,7 +264,7 @@ graph TB
           portal, and an
           <!-- check-tool-grants pins the two phrases below verbatim; keep each on one
                line, and update the counts only via the guard's own numbers. -->
-          agent plane over the platform's 181 MCP tools.
+          agent plane over the platform's 183 MCP tools.
           Its 30 declarative specialists are advisory by
           construction: no active manifest grants a mutating tool, every model and tool call
           is a journaled effect, and a triage worklist carries what a person has to see.</p>
@@ -286,7 +294,7 @@ graph TB
       <ul class="check">
         <li><strong>AI-first, code decides</strong> — agents and people work one typed tool surface; no model sits in a calculation path, and no agent sends a market message.</li>
         <li><strong>Auditable by construction</strong> — event-sourced processes, replayable state, hash-chained ledger with § 147 AO period seals.</li>
-        <li><strong>Four market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, and a deployment registers only the processes of the roles it declares.</li>
+        <li><strong>Five market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, the BKV takes its MaBiS share, and a deployment registers only the processes of the roles it declares.</li>
         <li><strong>Validation that fails loudly</strong> — an unregistered Prüfidentifikator is reported, never quietly accepted.</li>
         <li><strong>Fristen that agree with each other</strong> — one BDEW Werktag calendar, from the APERAK clock to an agent's approval window.</li>
       </ul>

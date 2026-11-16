@@ -28,11 +28,11 @@ function Message({ entry }: { entry: HistoryEntry }) {
         <span className={`font-semibold ${eingang ? "text-text" : "text-accent"}`}>
           {eingang ? t.verlauf.eingang : t.verlauf.ausgang}
         </span>
-        {entry.pid && <span className="font-mono text-text">PID {entry.pid}</span>}
+        {entry.pid && <span className="text-text">PID {entry.pid}</span>}
       </p>
       {antwort && (
         <p className="m-0 mt-1 text-body text-text">
-          <span className="font-mono font-semibold">{antwort.code}</span>
+          <span className="font-semibold">{antwort.code}</span>
           {" — "}
           <span className={entry.bedeutung ? undefined : "text-text-2"}>{antwort.text}</span>
         </p>
@@ -42,7 +42,7 @@ function Message({ entry }: { entry: HistoryEntry }) {
         {entry.message_ref && (
           <>
             {" · "}
-            <span className="font-mono">{entry.message_ref}</span>
+            <span>{entry.message_ref}</span>
           </>
         )}
       </p>
@@ -136,7 +136,7 @@ export function Verlauf({
       className="border-t border-separator px-6 py-5"
     >
       <div className="mb-3 flex items-baseline gap-3">
-        <h3 id={`verlauf-${processId}`} className="m-0 text-callout font-semibold">
+        <h3 id={`verlauf-${processId}`} className="m-0 text-body font-semibold">
           {t.verlauf.titel}
         </h3>
         <span className="flex-1" />

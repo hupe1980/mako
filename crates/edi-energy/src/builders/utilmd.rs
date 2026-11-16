@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use edifact_rs::Writer;
+use edifact::Writer;
 
 use crate::AgencyCode;
 use crate::utilmd_codes::{
@@ -488,7 +488,7 @@ fn write_elements<W: std::io::Write>(
         .map(|e| e.iter().map(String::as_str).collect())
         .collect();
     let slices: Vec<&[&str]> = owned.iter().map(Vec::as_slice).collect();
-    w.write_composites(tag, &slices).map_err(Error::Parse)
+    w.write_composites(tag, &slices).map_err(Error::write)
 }
 
 /// The rank of every `SEQ` code in the MIG's list of `SG8` places, so blocks
@@ -741,7 +741,7 @@ fn emit_sg12<W: std::io::Write>(
             "NAD",
             &[&[nad_q.as_str()][..], &[""][..], &[""][..], &c080[..]],
         )
-        .map_err(Error::Parse)?;
+        .map_err(Error::write)?;
     }
     for a in &tx.addressed_nads {
         let mut c080: Vec<&str> = a.name_parts.iter().map(String::as_str).take(5).collect();
@@ -761,7 +761,7 @@ fn emit_sg12<W: std::io::Write>(
                 &[a.land.as_str()][..],
             ],
         )
-        .map_err(Error::Parse)?;
+        .map_err(Error::write)?;
     }
     for (nad_q, nad_id) in &tx.customer_nads {
         // SG12 NAD names a *third* party (the Altlieferant on a 55036, the
@@ -905,7 +905,7 @@ impl<S, R> UtilmdBuilder<S, R> {
             emit_sg4(&mut w, &pid_str, tx, carries_pid, &ranks)?;
         }
         w.finish_unt(&self.inner.message_ref)
-            .map_err(Error::Parse)?;
+            .map_err(Error::write)?;
         Ok(buf)
     }
     /// Build and serialize the message to EDIFACT bytes.

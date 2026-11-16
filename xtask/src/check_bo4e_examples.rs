@@ -59,10 +59,9 @@ pub fn run(workspace_root: &Path) -> bool {
     let mut findings: Vec<String> = Vec::new();
     let mut checked = 0usize;
 
-    // `demos/` is in the scan for the same reason the other two are — more so,
-    // in fact: a demo payload is what gets copied into a ticket as "this is
-    // what a request looks like", and `demos/o2c` shipped a customer payload
-    // whose fields the API did not have at all.
+    // `demos/` is in the scan for the same reason the other two are — more so:
+    // a demo payload is what gets copied into a ticket as "this is what a
+    // request looks like".
     for dir in ["site/content", "concepts", "specs", "demos"] {
         let root = workspace_root.join(dir);
         if !root.is_dir() {
@@ -471,10 +470,9 @@ mod tests {
     }
     use super::check_one;
 
-    /// The spelling that shipped: `marktd`'s price-sheet examples documented
-    /// `PREISBLATT_NETZNUTZUNG`, which BO4E spells without the underscore, so
-    /// nothing decoded and nothing was checked while the success line counted
-    /// the object anyway.
+    /// `PREISBLATT_NETZNUTZUNG` is not BO4E's spelling (it has no underscore),
+    /// so nothing decodes and nothing is checked; the success line must not
+    /// count the object anyway.
     #[test]
     fn an_unknown_typ_is_a_finding_and_is_not_counted() {
         let mut findings = Vec::new();

@@ -13,7 +13,7 @@
 //! envelope-only routing path, and typed deserialization — so a routing decision
 //! can never resolve a different code from the parse of the same bytes.
 
-use edifact_rs::Segment;
+use edifact::Segment;
 
 use crate::{Pruefidentifikator, registry::PidSource};
 
@@ -73,7 +73,7 @@ pub(crate) fn detect<S: PidSegment>(segments: &[S], source: PidSource) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edifact_rs::{Element, OwnedSegment};
+    use edifact::{Element, OwnedSegment};
 
     fn seg(tag: &str, elements: &[&[&str]]) -> OwnedSegment {
         Segment::new(

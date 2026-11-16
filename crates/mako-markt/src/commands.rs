@@ -204,6 +204,11 @@ pub const GPKE_KUENDIGUNG_ABLEHNEN: &str = "gpke.kuendigung.ablehnen";
 pub const GELI_NB_LIEFERENDE_BESTAETIGEN: &str = "geli.nb-lieferende.bestaetigen";
 /// UTILMD G 44009 — the LF refuses an Abmeldung NN vom NB (`E_3002`).
 pub const GELI_NB_LIEFERENDE_ABLEHNEN: &str = "geli.nb-lieferende.ablehnen";
+/// GNB → LFA: UTILMD G 44010 Abmeldungsanfrage, answered 44011 / 44012
+/// (`E_3020`) — `GeLi` Gas 3.0 Kap. 3.2.3 (S. 9), AWH `GeLi` Gas V1.2 Kap. 2.5.2
+/// SD Lieferbeginn Nr. 3. The Strom twin is [`GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN`].
+/// Body: [`GeliBeendigungZuordnungAnfragen`].
+pub const GELI_BEENDIGUNG_ZUORDNUNG_ANFRAGEN: &str = "geli.beendigung-zuordnung.anfragen";
 /// UTILMD G 44011 — the LFA agrees to an Abmeldeanfrage des NB (`E_3020`).
 pub const GELI_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN: &str = "geli.beendigung-zuordnung.bestaetigen";
 /// UTILMD G 44012 — the LFA refuses an Abmeldeanfrage des NB (`E_3020`).
@@ -375,6 +380,7 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_KUENDIGUNG_ABLEHNEN,
     GELI_NB_LIEFERENDE_BESTAETIGEN,
     GELI_NB_LIEFERENDE_ABLEHNEN,
+    GELI_BEENDIGUNG_ZUORDNUNG_ANFRAGEN,
     GELI_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
     GELI_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
     GELI_ZUORDNUNG_INFORMIEREN,
@@ -534,6 +540,37 @@ pub struct GeliEogAnmelden {
     pub bilanzierungsbeginn: String,
     /// `SG4 STS+7` DE 9013 Transaktionsgrund.
     pub transaktionsgrund: String,
+}
+
+/// The `payload` of [`GELI_BEENDIGUNG_ZUORDNUNG_ANFRAGEN`] — the GNB's
+/// Abmeldungsanfrage 44010 to the Altlieferant (UTILMD AHB Gas 1.2 Kap. 5.7).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeliBeendigungZuordnungAnfragen {
+    /// The Marktlokation.
+    pub malo_id: String,
+    /// The Altlieferant asked to release it.
+    pub lfa_mp_id: String,
+    /// The Neulieferant, `SG12 NAD+VY` (Bedingung `[567]`).
+    pub lfn_mp_id: String,
+    /// `SG4 DTM+93` — the Anmeldedatum of the LFN, `YYYY-MM-DD` or `YYYYMMDD`:
+    /// the LFA's Zuordnung ends with the Gastag before it.
+    pub process_date: String,
+    /// The Anmeldung's own `SG4 STS+7`; `E02` is restated as `E01` (Bedingung
+    /// `[644]`).
+    pub transaktionsgrund: String,
+    /// The GNB's process answering the Anmeldung 44001 this Anfrage serves.
+    pub anmeldung_process_id: String,
+    /// RFC 3339 — the instant the Anmeldung arrived, which the Information
+    /// 44036's window counts from.
+    pub anmeldung_eingang: String,
+    /// `SG12 NAD+Z09` DE 3036 „Kundenname aus Anmeldung Lieferant neu"
+    /// (Bedingung `[572]`).
+    #[serde(default)]
+    pub kunde_name: Option<String>,
+    /// `NAD` DE 3045 — `Z01` Personenname, `Z02` Firmenbezeichnung.
+    #[serde(default)]
+    pub kunde_namensformat: Option<String>,
 }
 
 /// The Abrechnungsintervalle des LF a 44001 or 44014 may state in `SG6

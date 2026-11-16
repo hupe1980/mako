@@ -14,7 +14,7 @@
   --bg: light-dark(#f5f5f7, #0b0b0d);
   --surface: light-dark(#ffffff, #1c1c1e);
   --surface-raised: light-dark(#ffffff, #2c2c2e);
-  --sidebar: light-dark(#ededf0, #151517);
+  --sidebar: light-dark(#f0f0f3, #111113);
   --fill: light-dark(rgb(0 0 0 / 0.045), rgb(255 255 255 / 0.07));
   --fill-strong: light-dark(rgb(0 0 0 / 0.08), rgb(255 255 255 / 0.12));
   --separator: light-dark(rgb(0 0 0 / 0.09), rgb(255 255 255 / 0.1));
@@ -29,15 +29,22 @@
   /* The accent follows the Rolle (see [data-rolle] below). */
   --accent: light-dark(#0066cc, #3d9bff);
 
-  /* Status — each always paired with an icon and a word, never colour alone. */
-  --critical: light-dark(#c4001a, #ff6961);
-  --critical-fill: light-dark(rgb(196 0 26 / 0.08), rgb(255 105 97 / 0.14));
-  --soon: light-dark(#a14a00, #ffb340);
-  --soon-fill: light-dark(rgb(161 74 0 / 0.08), rgb(255 179 64 / 0.14));
-  --done: light-dark(#1d7a34, #4cd964);
-  --done-fill: light-dark(rgb(29 122 52 / 0.08), rgb(76 217 100 / 0.14));
+  /* Status — tinted text on its own faint fill, always with an icon and a
+     word, never colour alone. A solid fill belongs to the one primary Button.
+     Each text meets 4.5:1 on its fill over --surface, --bg and --sidebar, in
+     both appearances, on a selected row too. --soon means one thing: a Frist is near; a state still
+     in progress is --info. */
+  --critical: light-dark(#a50016, #ff8a82);
+  --critical-fill: light-dark(rgb(165 0 22 / 0.1), rgb(255 138 130 / 0.16));
+  --soon: light-dark(#853d00, #ffb340);
+  --soon-fill: light-dark(rgb(133 61 0 / 0.1), rgb(255 179 64 / 0.16));
+  --done: light-dark(#135d26, #4cd964);
+  --done-fill: light-dark(rgb(19 93 38 / 0.1), rgb(76 217 100 / 0.16));
+  --info: light-dark(#08519a, #7cc0ff);
+  --info-fill: light-dark(rgb(8 81 154 / 0.1), rgb(124 192 255 / 0.16));
 
-  /* What a model wrote sits on this tint, under its disclosure sentence. */
+  /* What a model wrote: a 2px leading rule and the sparkle in this colour,
+     the text itself upright and in --text, under its disclosure sentence. */
   --ai: light-dark(#6a2fd0, #c9b3ff);
   --ai-fill: light-dark(rgb(106 47 208 / 0.06), rgb(201 179 255 / 0.09));
   --ai-border: light-dark(rgb(106 47 208 / 0.22), rgb(201 179 255 / 0.25));
@@ -57,6 +64,15 @@
 
   /* The docked sidebar; below the `md` width it is a sheet over the view. */
   --pane-sidebar: 232px;
+
+  /* The page container's two widths (design/Page.tsx): reading for a
+     document-like view, work for a list or a grid that wants the window. The
+     gutter is the same in both, so a title's leading edge never moves. */
+  --page-reading: 720px;
+  --page-gutter: 24px;
+  --page-gutter-wide: 32px;
+  /* A paragraph's measure inside any page. */
+  --measure: 68ch;
 
   /* The list–detail–inspector layout's fixed panes; the detail takes the rest. */
   --pane-list: 340px;
@@ -93,6 +109,12 @@
   :root {
     --text-2: var(--text);
     --separator: light-dark(rgb(0 0 0 / 0.4), rgb(255 255 255 / 0.45));
+    /* Status text on its tint goes one step deeper, the tints one step stronger. */
+    --critical: light-dark(#8f0013, #ffb0aa);
+    --soon: light-dark(#753500, #ffcc80);
+    --done: light-dark(#0f4f20, #8ff0a0);
+    --info: light-dark(#06457f, #b0d9ff);
+    --ai: light-dark(#4f1fa3, #e0d4ff);
     --material: var(--surface);
   }
 }
@@ -127,6 +149,8 @@
   --color-soon-fill: var(--soon-fill);
   --color-done: var(--done);
   --color-done-fill: var(--done-fill);
+  --color-info: var(--info);
+  --color-info-fill: var(--info-fill);
   --color-ai: var(--ai);
   --color-ai-fill: var(--ai-fill);
   --color-ai-border: var(--ai-border);
@@ -134,16 +158,25 @@
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  --text-caption: 11px;
-  --text-caption--line-height: 14px;
+  /* The macOS type ramp — Regular and Semibold only (check-desk refuses any
+     other weight, an arbitrary size, all-caps and tracking). */
+  --text-large-title: 26px;
+  --text-large-title--line-height: 32px;
+  --text-title1: 22px;
+  --text-title1--line-height: 26px;
+  --text-title2: 17px;
+  --text-title2--line-height: 22px;
+  --text-title3: 15px;
+  --text-title3--line-height: 20px;
+  --text-headline: 13px;
+  --text-headline--line-height: 16px;
+  --text-headline--font-weight: 600;
   --text-body: 13px;
   --text-body--line-height: 18px;
-  --text-callout: 15px;
-  --text-callout--line-height: 20px;
-  --text-title: 20px;
-  --text-title--line-height: 25px;
-  --text-large: 28px;
-  --text-large--line-height: 34px;
+  --text-callout: 12px;
+  --text-callout--line-height: 15px;
+  --text-caption: 11px;
+  --text-caption--line-height: 14px;
 
   --radius-control: 10px;
   --radius-panel: 14px;
@@ -182,6 +215,11 @@
   .focus-ring:focus-visible {
     outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
     outline-offset: 1px;
+  }
+
+  /* A paragraph's line length, inside any page width. */
+  .measure {
+    max-width: var(--measure);
   }
 
   /* Chrome material, with the solid fallbacks declared on :root above. */

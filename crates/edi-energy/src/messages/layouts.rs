@@ -1,6 +1,6 @@
 //! BDEW segment layouts for the user segments EDI@Energy messages carry.
 //!
-//! `edifact-rs` ships the ISO 9735 service segments (`UNB`…`UNZ`, `UCI`…`UCD`)
+//! `edifact` ships the ISO 9735 service segments (`UNB`…`UNZ`, `UCI`…`UCD`)
 //! because the syntax standard fixes them. The user segments below come from
 //! the separately-licensed UN/EDIFACT directory, so they are declared here.
 //!
@@ -30,7 +30,7 @@
 //! Sources: BDEW EDI@Energy `UTILMD MIG Strom S2.2`, `UTILMD MIG Gas G1.2`,
 //! `MSCONS MIG 2.5`, `ORDERS MIG 1.4c`, `INVOIC MIG 2.8e`, `APERAK MIG 2.2`.
 
-use edifact_rs::{ComponentRef, ElementRef, SegmentDefinition, Status};
+use edifact::{ComponentRef, ElementRef, SegmentDefinition, Status};
 
 use Status::{Conditional as C, Mandatory as M};
 

@@ -658,8 +658,7 @@ fn a_complete_as4_configuration_passes_the_check() {
     write_as4_material(dir.path());
     let partner = r#"endpoint = "https://partner.example/as4/inbox/9900001000002"
 encryption_cert_pem_file = "DIR/partner.enc.pem"
-signing_cert_pem_files = ["DIR/partner.sig.pem"]
-quirks = ["receipt-without-non-repudiation"]"#;
+signing_cert_pem_files = ["DIR/partner.sig.pem"]"#;
     let (ok, out) = as4_check(
         dir.path(),
         &as4_config(dir.path(), AS4_TRUST, partner),
@@ -734,7 +733,7 @@ trust_anchor_pem_file = "DIR/root.pem""#;
 }
 
 /// The removed lenient-receipts switch is refused — from the config file and
-/// from the environment — naming the per-partner setting that replaces it.
+/// from the environment — naming the rule that settles it.
 #[test]
 fn the_removed_lenient_receipts_switch_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -742,10 +741,7 @@ fn the_removed_lenient_receipts_switch_is_refused() {
     let trust = format!("{AS4_TRUST}\nlenient_receipts = true");
     let (ok, out) = as4_check(dir.path(), &as4_config(dir.path(), &trust, ""), None);
     assert!(!ok);
-    assert!(
-        out.contains("quirks = [\"receipt-without-non-repudiation\"]"),
-        "{out}"
-    );
+    assert!(out.contains("Kap. 7.3"), "{out}");
 
     let (ok, out) = as4_check(
         dir.path(),
@@ -753,7 +749,7 @@ fn the_removed_lenient_receipts_switch_is_refused() {
         Some(("MAKOD_AS4_LENIENT_RECEIPTS", "true")),
     );
     assert!(!ok);
-    assert!(out.contains("receipt-without-non-repudiation"), "{out}");
+    assert!(out.contains("Kap. 7.3"), "{out}");
 }
 
 /// `--check-config` reports every finding, not the first: a Gas role under a

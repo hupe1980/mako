@@ -41,6 +41,9 @@ secrecy       = { version = "0.10" }
 rmcp          = { workspace = true, features = ["transport-streamable-http-server","transport-io"] }
 schemars      = { workspace = true }
 tokio-util    = { workspace = true }
+sha2          = "0.10"
+serde_jcs     = "0.1"
+base64        = { version = "0.22" }
 
 [dev-dependencies]
 # The contract test reads every body vertragd sends processd through

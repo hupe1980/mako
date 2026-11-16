@@ -50,7 +50,7 @@ holds every document that states the totals to it. The PID-level map is the
 
 `[deployment] rollen` in `makod.toml` decides which modules register:
 `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`,
-`esa-strom`. Startup refuses a configuration that declares none, a declared
+`esa-strom`, `bkv-strom`. Startup refuses a configuration that declares none, a declared
 role without exactly one `[[party]]` MP-ID, and an MP-ID for a role the
 deployment does not declare. `startup::MODULE_TABLE` maps each role to its
 modules. makod has no role cargo features, and SlateDB is enabled through the

@@ -207,7 +207,7 @@ fn mscons_line_items_within_time_series() {
     // PIA+5+1-1?:1.29.0:Z12' — BDEW AHB-compliant: '?:' escapes the colon inside
     // the OBIS code so the parser treats "1-1:1.29.0" as component 0 (DE 7140)
     // and "Z12" as component 1 (DE 7143).  Release chars are stripped by
-    // edifact-rs during parsing, so item_number is the clean OBIS string.
+    // edifact during parsing, so item_number is the clean OBIS string.
     let pia = item0.pia.as_ref().expect("PIA must be present on item 0");
     assert_eq!(
         pia.item_number.as_deref(),

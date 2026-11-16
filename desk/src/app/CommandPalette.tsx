@@ -53,6 +53,7 @@ import {
   wartendAuf,
 } from "./aktionen";
 import { DIENST } from "./dienste";
+import { disclosure } from "./disclosure";
 import { FaktFelder } from "./FaktFelder";
 import { frageMoeglich, frageStellen } from "./frage";
 import { PALETTE, STOPP } from "./keys";
@@ -92,7 +93,7 @@ export function keyKind(key: string): string {
 }
 
 const ITEM =
-  "flex cursor-default items-center gap-3 rounded-[8px] px-3 py-2 text-callout text-text outline-none data-[focused]:bg-accent data-[focused]:text-on-accent";
+  "flex cursor-default items-center gap-3 rounded-[8px] px-3 py-2 text-body text-text outline-none data-[focused]:bg-accent data-[focused]:text-on-accent";
 
 /**
  * ⌘K: every view and every action, by name. Typing a business key offers to
@@ -340,7 +341,7 @@ export function CommandPalette({
                   <Icon name="search" size={18} className="text-text-2" />
                   <Input
                     placeholder={p.platzhalter}
-                    className="h-14 flex-1 bg-transparent text-[17px] text-text outline-none placeholder:text-text-2 [&::-webkit-search-cancel-button]:hidden"
+                    className="h-14 flex-1 bg-transparent text-title2 text-text outline-none placeholder:text-text-2 [&::-webkit-search-cancel-button]:hidden"
                   />
                   <Kbd>{STOPP.keys}</Kbd>
                 </div>
@@ -361,7 +362,7 @@ export function CommandPalette({
               >
                 {sections.map(([title, items]) => (
                   <MenuSection key={title} className="mb-1">
-                    <Header className="px-3 pb-1 pt-2 text-caption font-semibold uppercase tracking-wide text-text-2">
+                    <Header className="px-3 pb-1 pt-2 text-caption font-semibold text-text-2">
                       {title}
                     </Header>
                     {items.map((c) => (
@@ -402,15 +403,11 @@ function Kopf({ g, zusatz }: { g: Gefunden; zusatz?: string }) {
         <Icon name="check" size={16} />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block text-caption font-semibold tracking-wide text-text-2 uppercase">
+        <span className="block text-caption font-semibold text-text-2">
           {ART[g.ding.art]}
           {zusatz && <> · {zusatz}</>}
         </span>
-        <span
-          className={`block truncate text-callout font-medium text-text ${g.kennung ? "font-mono" : ""}`}
-        >
-          {g.titel}
-        </span>
+        <span className={`block truncate text-body text-text`}>{g.titel}</span>
         <span className="block truncate text-body text-text-2">{g.grund}</span>
       </span>
       {g.frist && (
@@ -499,7 +496,7 @@ export function AktionPanel({
           }}
           onKeyDown={onKeyDown}
           placeholder={t.palette.aktionPlatzhalter}
-          className="h-12 flex-1 bg-transparent text-[17px] text-text outline-none placeholder:text-text-2"
+          className="h-12 flex-1 bg-transparent text-title2 text-text outline-none placeholder:text-text-2"
         />
         <Kbd>{STOPP.keys}</Kbd>
       </div>
@@ -519,10 +516,10 @@ export function AktionPanel({
               aria-disabled={grund ? true : undefined}
               onClick={() => !grund && onWaehlen(a)}
               onMouseMove={() => setMarkiert(i)}
-              className={`flex cursor-default items-center gap-3 rounded-[8px] px-3 py-2 text-callout aria-disabled:opacity-60 ${i === markiert ? "bg-fill-strong" : ""} ${a.destruktiv ? "text-critical" : "text-text"}`}
+              className={`flex cursor-default items-center gap-3 rounded-[8px] px-3 py-2 text-body aria-disabled:opacity-60 ${i === markiert ? "bg-fill-strong" : ""} ${a.destruktiv ? "text-critical" : "text-text"}`}
             >
               <span className="min-w-0 flex-1">
-                <span className="block font-medium">{a.verb}</span>
+                <span className="block">{a.verb}</span>
                 {grund && <span className="block text-body text-text-2">{grund}</span>}
               </span>
               {vorgeschlagen && (
@@ -646,8 +643,8 @@ export function AktionForm({
           </Notice>
         )}
         {a.id === "freigeben" && f?.art === "gehalten" && f.antwort && (
-          <p className="m-0 text-callout text-text">
-            {t.freigabenAnsicht.festgehalten} <span className="font-mono">{f.antwort.code}</span>
+          <p className="m-0 text-body text-text">
+            {t.freigabenAnsicht.festgehalten} <span>{f.antwort.code}</span>
             {f.antwort.bedeutung && <> — {f.antwort.bedeutung}</>}
           </p>
         )}
@@ -664,7 +661,7 @@ export function AktionForm({
           >
             <Label className="flex items-center gap-1.5 text-caption text-text-2">
               {codeMarke && <Icon name="sparkle" size={11} className="text-ai" />}
-              {t.freigabenAnsicht.antwortcodeAus} <span className="font-mono">{a.codes.ebd}</span>
+              {t.freigabenAnsicht.antwortcodeAus} <span>{a.codes.ebd}</span>
             </Label>
             {a.codes.codes.map((c) => (
               <Radio
@@ -672,7 +669,7 @@ export function AktionForm({
                 value={c.code}
                 className="focus-ring flex cursor-default items-start gap-3 rounded-[10px] border border-separator bg-surface px-3 py-2 data-[hovered]:bg-fill data-[selected]:border-accent"
               >
-                <span className="font-mono text-body font-semibold text-text">{c.code}</span>
+                <span className="text-body font-semibold text-text">{c.code}</span>
                 <span className="text-body text-text-2">{c.bedeutung}</span>
               </Radio>
             ))}
@@ -715,7 +712,7 @@ export function AktionForm({
         )}
         {marke && wartend?.vorschlag && (
           <AiNote
-            text={`${wartend.disclosure} ${wartend.vorschlag.begruendung}`}
+            text={`${disclosure(wartend.disclosure)} ${wartend.vorschlag.begruendung}`}
             footer={
               <>
                 <p className="m-0 text-caption text-text-2">{t.palette.vorgeschlagen}</p>

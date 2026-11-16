@@ -29,7 +29,7 @@ use std::any::Any;
 
 use dvgw_edi::{DvgwDocument, DvgwMessage, DvgwMessageType};
 use edi_energy::{AnyMessage, EdiEnergyMessage};
-use edifact_rs::OwnedSegment;
+use edifact::OwnedSegment;
 use mako_engine::{
     error::EngineError,
     message_adapter::{AdapterRegistry, FnAdapter},
@@ -177,10 +177,12 @@ fn convert_pid(p: edi_energy::Pruefidentifikator) -> Result<Pruefidentifikator, 
 
 /// Parse a `DTM` value into a UTC datetime, honouring the segment's own DE 2379.
 ///
-/// `102` is `CCYYMMDD` (midnight UTC) and `303` is `CCYYMMDDHHMMZZZ` with the
-/// zone as a signed hour offset. A `DTM` whose DE 2379 says neither is not a
-/// point in time — `273` is a duration, `802` a month count — so it yields
-/// `None` rather than a guess.
+/// The one `DTM` codec of the adapters, on `edifact::DtmValue`: `102` is
+/// `CCYYMMDD` (midnight UTC), `303`/`304` the instant `CCYYMMDDHHMM[SS]ZZZ`
+/// names with its zone. A `DTM` whose DE 2379 says anything else is not a point
+/// in time — `203` carries no zone, `273` is a duration, `802` a month count —
+/// so it yields `None` rather than a guess, and so does a value that does not
+/// match its format: a `303` without its zone is refused, not read as UTC.
 ///
 /// The format element decides, never the caller's expectation: the AHBs put
 /// nearly every date in `303`, and reading one as `CCYYMMDD` yields nothing.
@@ -188,43 +190,16 @@ pub(crate) fn parse_dtm_datetime(
     value: &str,
     format: Option<&str>,
 ) -> Option<time::OffsetDateTime> {
-    match format {
-        Some("102") => parse_ccyymmdd(value),
-        Some("303") => {
-            let stamp: String = value
-                .chars()
-                .filter(char::is_ascii_digit)
-                .take(12)
-                .collect();
-            if stamp.len() != 12 {
-                return None;
-            }
-            let day = parse_ccyymmdd(&stamp[0..8])?;
-            let hour: u8 = stamp[8..10].parse().ok()?;
-            let minute: u8 = stamp[10..12].parse().ok()?;
-            let offset_hours: i8 = value
-                .rfind(['+', '-'])
-                .and_then(|i| value[i..].parse::<i8>().ok())
-                .unwrap_or(0);
-            day.replace_time(time::Time::from_hms(hour, minute, 0).ok()?)
-                .replace_offset(time::UtcOffset::from_hms(offset_hours, 0, 0).ok()?)
-                .checked_to_offset(time::UtcOffset::UTC)
-        }
+    let dtm = edifact::DtmValue::parse(value, format?).ok()?;
+    match dtm.format() {
+        edifact::DtmFormat::Ccyymmdd => Some(dtm.to_date().ok()?.midnight().assume_utc()),
+        f if f.is_zoned() => Some(
+            dtm.to_offset_date_time()
+                .ok()?
+                .to_offset(time::UtcOffset::UTC),
+        ),
         _ => None,
     }
-}
-
-/// Parse a `CCYYMMDD` DTM value (format 102) into a UTC datetime at midnight.
-pub(crate) fn parse_ccyymmdd(v: &str) -> Option<time::OffsetDateTime> {
-    if v.len() != 8 || !v.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let year: i32 = v[0..4].parse().ok()?;
-    let month = time::Month::try_from(v[4..6].parse::<u8>().ok()?).ok()?;
-    let day: u8 = v[6..8].parse().ok()?;
-    time::Date::from_calendar_date(year, month, day)
-        .ok()
-        .map(|d| d.midnight().assume_utc())
 }
 use mako_gabi_gas::{
     AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow,
@@ -362,7 +337,7 @@ pub(crate) fn ahb_findings(
 ) -> impl Iterator<
     Item = (
         crate::ingest_dispatcher::Fehlerklasse,
-        &edifact_rs::ValidationIssue,
+        &edifact::ValidationIssue,
     ),
 > {
     use crate::ingest_dispatcher::Fehlerklasse;
@@ -372,7 +347,7 @@ pub(crate) fn ahb_findings(
         let counted = match klasse {
             Fehlerklasse::Fmt => true,
             Fehlerklasse::Mig | Fehlerklasse::Ahb => {
-                e.severity == edifact_rs::ValidationSeverity::Error
+                e.severity == edifact::ValidationSeverity::Error
                     && !rule.ends_with("-NOT-PERMITTED")
             }
         };
@@ -457,7 +432,7 @@ pub(crate) fn ahb_befund(msg: &AnyMessage, formatbedingungen: bool) -> AhbBefund
         if rule.is_some_and(|r| r.starts_with(edi_energy::profile::validate::FMT_PREFIX)) {
             return formatbedingungen;
         }
-        e.severity == edifact_rs::ValidationSeverity::Error
+        e.severity == edifact::ValidationSeverity::Error
             && !rule.is_some_and(|r| r.ends_with("-NOT-PERMITTED"))
     });
     let mut fehler: Vec<AhbFehler> = Vec::new();
@@ -506,33 +481,23 @@ fn dtm303_to_rfc3339(value: &str, format: Option<&str>) -> Option<String> {
     if format != Some(DTM_FORMAT_CCYYMMDDHHMMZZZ) {
         return None;
     }
-    // `202606010000+00` — 12 digits, then a signed two-digit hour offset.
-    //
-    // The value is a wire string a counterparty controls, and `split_at` panics
-    // on a byte index that is not a char boundary — a UNOC:3 interchange can put
-    // a multi-byte character here. A malformed DTM is a fact about the message,
-    // so it has to become `None` rather than unwind the ingest task.
-    let split = value.len().checked_sub(3)?;
-    if !value.is_char_boundary(split) {
-        return None;
-    }
-    let (stamp, offset) = value.split_at(split);
-    if stamp.len() != 12 || !stamp.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let sign = offset.as_bytes().first()?;
-    if !matches!(sign, b'+' | b'-') || !offset[1..].bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
+    // `202606010000+00`, decoded by the one codec: a malformed value — a
+    // missing zone, a multi-byte character a UNOC:3 interchange can put here —
+    // is a fact about the message and becomes `None`, never a panic. Hour `24`
+    // is the next day's `00`.
+    let dtm = edifact::DtmValue::parse(value, DTM_FORMAT_CCYYMMDDHHMMZZZ).ok()?;
+    let zone = time::UtcOffset::from_hms(dtm.offset_hours()?, 0, 0).ok()?;
+    let at = dtm.to_offset_date_time().ok()?.to_offset(zone);
+    let hours = at.offset().whole_hours();
     Some(format!(
-        "{}-{}-{}T{}:{}:00{}{}:00",
-        &stamp[0..4],
-        &stamp[4..6],
-        &stamp[6..8],
-        &stamp[8..10],
-        &stamp[10..12],
-        offset.get(0..1)?,
-        &offset[1..],
+        "{:04}-{:02}-{:02}T{:02}:{:02}:00{}{:02}:00",
+        at.year(),
+        u8::from(at.month()),
+        at.day(),
+        at.hour(),
+        at.minute(),
+        if hours < 0 { '-' } else { '+' },
+        hours.unsigned_abs(),
     ))
 }
 
@@ -1201,7 +1166,7 @@ coverage_table! {
 /// exclusive (MIG 2.8e 00007/00008); BO4E's `Zeitraum` is inclusive on both
 /// ends, so the Ende is read as the Berlin day before it.
 #[must_use]
-pub(crate) fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
+pub(crate) fn build_rechnung(segs: &[OwnedSegment], mark: char) -> bo4e::Rechnung {
     let uns = segs
         .iter()
         .position(|s| s.tag == "UNS")
@@ -1228,16 +1193,16 @@ pub(crate) fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
     for (i, seg) in segs[lin..uns].iter().enumerate() {
         if seg.tag == "LIN" {
             if let Some(s) = start {
-                rechnungspositionen.push(build_position(&segs[lin + s..lin + i]));
+                rechnungspositionen.push(build_position(&segs[lin + s..lin + i], mark));
             }
             start = Some(i);
         }
     }
     if let Some(s) = start {
-        rechnungspositionen.push(build_position(&segs[lin + s..uns]));
+        rechnungspositionen.push(build_position(&segs[lin + s..uns], mark));
     }
 
-    let steuerbetraege = build_steuerbetraege(summary);
+    let steuerbetraege = build_steuerbetraege(summary, mark);
     let summe = |f: fn(&bo4e::Steuerbetrag) -> Option<Decimal>| {
         steuerbetraege
             .iter()
@@ -1268,7 +1233,7 @@ pub(crate) fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
                 .unwrap_or(rest.len());
             let sg51 = &rest[..next_moa];
             bo4e::Vorauszahlung {
-                betrag: moa_wert(s).map(betrag),
+                betrag: moa_wert(s, mark).map(betrag),
                 referenz: sg51
                     .iter()
                     .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("AFL"))
@@ -1310,8 +1275,8 @@ pub(crate) fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
             }),
         gesamtnetto,
         gesamtsteuer,
-        gesamtbrutto: moa(sg50, "77"),
-        zu_zahlen: moa(sg50, "9"),
+        gesamtbrutto: moa(sg50, "77", mark),
+        zu_zahlen: moa(sg50, "9", mark),
         vorauszahlungen: (!vorauszahlungen.is_empty()).then_some(vorauszahlungen),
         steuerbetraege: (!steuerbetraege.is_empty()).then_some(steuerbetraege),
         rechnungspositionen: (!rechnungspositionen.is_empty()).then_some(rechnungspositionen),
@@ -1418,7 +1383,7 @@ fn rechnungstyp_von(code: &str) -> Option<bo4e::NetznutzungRechnungstyp> {
 /// EDIFACT states the rate on `TAX` (`TAX+7+VAT+++:::<rate>+<category>`).
 /// Where it carries category `AE`, the supply is reverse-charged: the
 /// recipient owes the tax.
-fn build_steuerbetraege(summary: &[OwnedSegment]) -> Vec<bo4e::Steuerbetrag> {
+fn build_steuerbetraege(summary: &[OwnedSegment], mark: char) -> Vec<bo4e::Steuerbetrag> {
     let mut out = Vec::new();
     for (i, seg) in summary.iter().enumerate().filter(|(_, s)| s.tag == "TAX") {
         let rest = &summary[i + 1..];
@@ -1426,13 +1391,13 @@ fn build_steuerbetraege(summary: &[OwnedSegment]) -> Vec<bo4e::Steuerbetrag> {
             .iter()
             .position(|s| s.tag == "TAX")
             .unwrap_or(rest.len())];
-        let (steuerart, steuersatz, kategorie) = tax(seg);
+        let (steuerart, steuersatz, kategorie) = tax(seg, mark);
         out.push(bo4e::Steuerbetrag {
             steuerart: Some(steuerart),
             steuersatz,
             zusatz_attribute: kategorie,
-            basiswert: moa(group, "125").and_then(|b| b.wert),
-            steuerwert: moa(group, "161").and_then(|b| b.wert),
+            basiswert: moa(group, "125", mark).and_then(|b| b.wert),
+            steuerwert: moa(group, "161", mark).and_then(|b| b.wert),
             ..Default::default()
         });
     }
@@ -1443,12 +1408,13 @@ fn build_steuerbetraege(summary: &[OwnedSegment]) -> Vec<bo4e::Steuerbetrag> {
 /// `O` or `AE` (reverse charge) — as [`STEUERKATEGORIE_ATTRIBUT`].
 fn tax(
     seg: &OwnedSegment,
+    mark: char,
 ) -> (
     bo4e::Steuerart,
     Option<Decimal>,
     Option<Vec<bo4e::ZusatzAttribut>>,
 ) {
-    let satz = seg.component_str(4, 3).and_then(decimal);
+    let satz = seg.component_str(4, 3).and_then(|v| decimal(v, mark));
     let kategorie = seg.component_str(5, 0).filter(|k| !k.is_empty());
     let art = if kategorie.is_some_and(|k| k.eq_ignore_ascii_case("AE")) {
         bo4e::Steuerart::Rcv
@@ -1463,7 +1429,7 @@ fn tax(
 }
 
 /// One `SG26`, `LIN` up to the next `LIN` or `UNS`.
-fn build_position(group: &[OwnedSegment]) -> bo4e::Rechnungsposition {
+fn build_position(group: &[OwnedSegment], mark: char) -> bo4e::Rechnungsposition {
     let lin = group.first();
     let menge = |qualifier: &str, einheit: fn(&str) -> Option<bo4e::Mengeneinheit>| {
         group
@@ -1471,7 +1437,7 @@ fn build_position(group: &[OwnedSegment]) -> bo4e::Rechnungsposition {
             .find(|s| s.tag == "QTY" && s.component_str(0, 0) == Some(qualifier))
             .and_then(|s| {
                 Some(bo4e::Menge {
-                    wert: Some(decimal(s.component_str(0, 1)?)?),
+                    wert: Some(decimal(s.component_str(0, 1)?, mark)?),
                     einheit: s.component_str(0, 2).and_then(einheit),
                     ..Default::default()
                 })
@@ -1487,7 +1453,7 @@ fn build_position(group: &[OwnedSegment]) -> bo4e::Rechnungsposition {
         .iter()
         .find(|s| s.tag == "QTY" && s.component_str(0, 0) == Some("Z17"))
         .and_then(|s| s.component_str(0, 1))
-        .and_then(decimal)
+        .and_then(|v| decimal(v, mark))
         .unwrap_or(Decimal::ONE);
     bo4e::Rechnungsposition {
         positionsnummer: lin
@@ -1505,14 +1471,14 @@ fn build_position(group: &[OwnedSegment]) -> bo4e::Rechnungsposition {
             .and_then(zeit_einheit),
         einzelpreis: pri
             .and_then(|s| s.component_str(0, 1))
-            .and_then(decimal)
+            .and_then(|v| decimal(v, mark))
             .map(|d| bo4e::Preis {
                 wert: Some(d * korrektur),
                 ..Default::default()
             }),
-        gesamtpreis: moa(group, "203"),
+        gesamtpreis: moa(group, "203", mark),
         steuerbetrag: group.iter().find(|s| s.tag == "TAX").map(|s| {
-            let (steuerart, steuersatz, kategorie) = tax(s);
+            let (steuerart, steuersatz, kategorie) = tax(s, mark);
             bo4e::Steuerbetrag {
                 steuerart: Some(steuerart),
                 steuersatz,
@@ -1550,26 +1516,16 @@ fn zeit_einheit(code: &str) -> Option<bo4e::Mengeneinheit> {
 
 // ── EDIFACT segment accessor helpers ─────────────────────────────────────────
 
-/// Find the value of a `DTM` segment with a given qualifier in a slice.
-fn dtm<'a>(segs: &'a [OwnedSegment], qualifier: &str) -> Option<&'a str> {
-    segs.iter()
-        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
-        .and_then(|s| s.component_str(0, 1))
-}
-
-/// A `DTM` of format `303` (`CCYYMMDDHHMMZZZ`) as the instant it names.
+/// The `DTM` with `qualifier` in `segs` as the instant it names, when its DE
+/// 2379 is a zoned one (`303`, `304`); [`parse_dtm_datetime`] decodes it.
 fn dtm_instant(segs: &[OwnedSegment], qualifier: &str) -> Option<time::OffsetDateTime> {
-    let v = dtm(segs, qualifier)?;
-    let (stamp, zone) = v.split_at_checked(12)?;
-    let date = edifact_date_to_date(stamp.get(..8)?)?;
-    let hour: u8 = stamp.get(8..10)?.parse().ok()?;
-    let minute: u8 = stamp.get(10..12)?.parse().ok()?;
-    let offset: i8 = zone.parse().ok()?;
-    let at = date
-        .with_hms(hour, minute, 0)
-        .ok()?
-        .assume_offset(time::UtcOffset::from_hms(offset, 0, 0).ok()?);
-    Some(at.to_offset(time::UtcOffset::UTC))
+    let seg = segs
+        .iter()
+        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))?;
+    let format = seg
+        .component_str(0, 2)
+        .filter(|f| matches!(*f, "303" | "304"))?;
+    parse_dtm_datetime(seg.component_str(0, 1)?, Some(format))
 }
 
 /// A Beginn/Ende pair of `DTM`s as the inclusive `Zeitraum` BO4E states.
@@ -1584,8 +1540,10 @@ fn zeitraum(segs: &[OwnedSegment], von: &str, bis: &str) -> Option<bo4e::Zeitrau
     })
 }
 
-fn decimal(v: &str) -> Option<Decimal> {
-    v.replace(',', ".").parse::<Decimal>().ok()
+/// A wire number under the interchange's decimal `mark`
+/// ([`edi_energy::wire_decimal`]): the other mark is no number of it.
+fn decimal(v: &str, mark: char) -> Option<Decimal> {
+    edi_energy::wire_decimal(v, mark)?.parse::<Decimal>().ok()
 }
 
 fn betrag(d: Decimal) -> bo4e::Betrag {
@@ -1595,15 +1553,15 @@ fn betrag(d: Decimal) -> bo4e::Betrag {
     }
 }
 
-fn moa_wert(s: &OwnedSegment) -> Option<Decimal> {
-    s.component_str(0, 1).and_then(decimal)
+fn moa_wert(s: &OwnedSegment, mark: char) -> Option<Decimal> {
+    s.component_str(0, 1).and_then(|v| decimal(v, mark))
 }
 
 /// The amount of the `MOA` with `qualifier` in `segs`.
-fn moa(segs: &[OwnedSegment], qualifier: &str) -> Option<bo4e::Betrag> {
+fn moa(segs: &[OwnedSegment], qualifier: &str, mark: char) -> Option<bo4e::Betrag> {
     segs.iter()
         .find(|s| s.tag == "MOA" && s.component_str(0, 0) == Some(qualifier))
-        .and_then(moa_wert)
+        .and_then(|s| moa_wert(s, mark))
         .map(betrag)
 }
 
@@ -1657,22 +1615,6 @@ fn imd_rechnungstyp(segs: &[OwnedSegment]) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Parse an EDIFACT date string (`YYYYMMDD`) to a `time::Date`.
-///
-/// Returns `None` if the string is not exactly 8 digits or cannot be parsed as a
-/// valid calendar date.
-fn edifact_date_to_date(yyyymmdd: &str) -> Option<time::Date> {
-    use time::{Date, Month};
-    if yyyymmdd.len() != 8 {
-        return None;
-    }
-    let year: i32 = yyyymmdd[..4].parse().ok()?;
-    let month: u8 = yyyymmdd[4..6].parse().ok()?;
-    let day: u8 = yyyymmdd[6..8].parse().ok()?;
-    let month = Month::try_from(month).ok()?;
-    Date::from_calendar_date(year, month, day).ok()
-}
-
 // ── Gas quality helpers (PID 13007 Gasbeschaffenheitsdaten) ──────────────────
 //
 // PID 13007 MSCONS carries Brennwert and Zustandszahl in QTY segments:
@@ -1695,7 +1637,8 @@ fn extract_qty_z08(m: &edi_energy::messages::mscons::MsconsMessage) -> Option<St
                             .qty
                             .value
                             .as_deref()
-                            .map(|v| v.replace(',', "."))
+                            .and_then(|v| edi_energy::wire_decimal(v, m.decimal_mark()))
+                            .map(std::borrow::Cow::into_owned)
                             .unwrap_or_default();
                         if !normalized.is_empty() {
                             return Some(normalized);
@@ -1722,7 +1665,8 @@ fn extract_qty_z10(m: &edi_energy::messages::mscons::MsconsMessage) -> Option<St
                             .qty
                             .value
                             .as_deref()
-                            .map(|v| v.replace(',', "."))
+                            .and_then(|v| edi_energy::wire_decimal(v, m.decimal_mark()))
+                            .map(std::borrow::Cow::into_owned)
                             .unwrap_or_default();
                         if !normalized.is_empty() {
                             return Some(normalized);
@@ -2271,7 +2215,7 @@ fn dvgw_gas_day(msg: &DvgwMessage) -> Option<mako_gabi_gas::GasDay> {
 #[cfg(test)]
 mod fernsteuerbarkeit_tests {
     use super::*;
-    use edifact_rs::{Element, Segment};
+    use edifact::{Element, Segment};
 
     fn seg(tag: &str, elements: Vec<Vec<&str>>) -> OwnedSegment {
         Segment::new(
@@ -2637,8 +2581,8 @@ mod rechnung_ustg_tests {
     use super::*;
 
     fn segments(nachricht: &str) -> Vec<OwnedSegment> {
-        edifact_rs::from_bytes(nachricht.as_bytes())
-            .map(|s| s.map(edifact_rs::Segment::into_owned))
+        edifact::from_bytes(nachricht.as_bytes())
+            .map(|s| s.map(edifact::Segment::into_owned))
             .collect::<Result<Vec<_>, _>>()
             .expect("the message parses")
     }
@@ -2677,7 +2621,7 @@ mod rechnung_ustg_tests {
             STEUERKATEGORIE_ATTRIBUT,
             invoic_checker::ustg::STEUERKATEGORIE_ATTRIBUT
         );
-        let r = build_rechnung(&segments(INVOIC));
+        let r = build_rechnung(&segments(INVOIC), '.');
         assert_eq!(
             invoic_checker::ustg::ustg_14_4_maengel(&r),
             Vec::<String>::new(),
@@ -2715,9 +2659,34 @@ mod rechnung_ustg_tests {
     /// and the check names § 14 Abs. 4 Nr. 2.
     #[test]
     fn an_invoice_without_steuernummer_or_ust_id_lacks_nr_2() {
-        let r = build_rechnung(&segments(&INVOIC.replace("RFF+FC:123/456/78901'", "")));
+        let r = build_rechnung(&segments(&INVOIC.replace("RFF+FC:123/456/78901'", "")), '.');
         let m = invoic_checker::ustg::ustg_14_4_maengel(&r);
         assert!(m.iter().any(|m| m.starts_with("Nr. 2")), "{m:?}");
+    }
+
+    /// An amount is read under the interchange's decimal mark and no other
+    /// (Allgemeine Festlegungen V6.1d Kap. 2.18): under `,` the `.` amounts of
+    /// this invoice are no numbers, and under `.` a `,` amount is none either.
+    #[test]
+    fn an_amount_is_read_under_the_interchanges_decimal_mark_only() {
+        let read = build_rechnung(&segments(INVOIC), '.');
+        let brutto = read.gesamtbrutto.as_ref().and_then(|b| b.wert);
+        assert!(brutto.is_some(), "{read:#?}");
+
+        let wrong_mark = build_rechnung(&segments(INVOIC), ',');
+        assert_eq!(wrong_mark.gesamtbrutto, None);
+
+        let text = brutto.expect("read").to_string();
+        let comma = text.replace('.', ",");
+        let swapped = INVOIC.replacen(&format!("MOA+77:{text}'"), &format!("MOA+77:{comma}'"), 1);
+        assert_ne!(swapped, INVOIC, "MOA+77:{text} in the fixture");
+        assert_eq!(build_rechnung(&segments(&swapped), '.').gesamtbrutto, None);
+        assert_eq!(
+            build_rechnung(&segments(&swapped), ',')
+                .gesamtbrutto
+                .and_then(|b| b.wert),
+            brutto
+        );
     }
 }
 
@@ -2870,5 +2839,36 @@ mod mscons_interval_tests {
         let (reads, _) = mscons_intervals(&energiemenge(""));
         assert!(reads[0].plausibilisierung.is_empty());
         assert_eq!(reads[0].herkunft(), None);
+    }
+}
+
+#[cfg(test)]
+mod dtm_codec_tests {
+    use super::*;
+
+    /// One codec for every `DTM` read: a `303` names its instant with its
+    /// zone, and one without the zone is refused rather than read as UTC.
+    #[test]
+    fn a_303_without_its_zone_is_refused_not_read_as_utc() {
+        let at = parse_dtm_datetime("202610010000+02", Some("303")).expect("a 303 instant");
+        assert_eq!(at, time::macros::datetime!(2026-09-30 22:00 UTC));
+        assert_eq!(parse_dtm_datetime("202610010000", Some("303")), None);
+        assert_eq!(dtm303_to_rfc3339("202610010000", Some("303")), None);
+        assert_eq!(
+            dtm303_to_rfc3339("202610010000+02", Some("303")).as_deref(),
+            Some("2026-10-01T00:00:00+02:00")
+        );
+    }
+
+    /// A format that names no instant yields nothing — `203` has no zone.
+    #[test]
+    fn a_format_without_an_instant_reads_as_absent() {
+        assert_eq!(parse_dtm_datetime("202610010000", Some("203")), None);
+        assert_eq!(parse_dtm_datetime("202610", Some("610")), None);
+        assert_eq!(
+            parse_dtm_datetime("20261001", Some("102")),
+            Some(time::macros::datetime!(2026-10-01 00:00 UTC))
+        );
+        assert_eq!(parse_dtm_datetime("20261001", None), None);
     }
 }

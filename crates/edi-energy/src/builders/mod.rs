@@ -91,10 +91,8 @@ pub struct Unset;
 // ── Shared helpers (pub(super) for child modules) ─────────────────────────────
 
 #[cfg(any_builder)]
-pub(super) fn bytes_to_segments(
-    bytes: &[u8],
-) -> Result<Vec<edifact_rs::OwnedSegment>, crate::Error> {
-    edifact_rs::from_reader(bytes)
+pub(super) fn bytes_to_segments(bytes: &[u8]) -> Result<Vec<edifact::OwnedSegment>, crate::Error> {
+    edifact::from_reader(bytes)
         .collect::<Result<_, _>>()
         .map_err(crate::Error::Parse)
 }
@@ -168,17 +166,12 @@ pub(super) fn now_ccyymmddhhmm() -> String {
 //
 // One shared pair for every builder.
 //
-// `emit_seg!` writes elements through `Writer::write_simple`: a `:` inside an
-// element string is a **component boundary**. Only compile-time constants may
-// carry composites through it — never interpolate runtime data into an
-// element, because a literal separator inside the value would be promoted to
-// a boundary instead of escaped. A guard test enforces that no `format!`
-// appears inside an `emit_seg!` call.
-//
-// `emit_comp!` writes explicit element/component structure through
-// `Writer::write_composites`: boundaries are structural, so a literal
-// separator inside a runtime value is escaped. Each `[...]` group is one
-// element; its entries are the components.
+// `emit_seg!` writes simple elements through `Writer::write_simple`, which
+// escapes every separator inside a value: a `:` there is data, never a
+// component boundary. `emit_comp!` writes explicit element/component structure
+// through `Writer::write_composites`: each `[...]` group is one element, its
+// entries the components, and a separator inside a value is escaped as well.
+// Reach for `emit_comp!` whenever an element has components.
 //
 // ```ignore
 // emit_comp!(w, "RFF", ["ACW", runtime_ref]);          // RFF+ACW:<ref>
@@ -207,7 +200,7 @@ macro_rules! emit_seg {
         let elements: &[&str] = &[$($elem),+];
         $writer
             .write_simple($tag, elements)
-            .map_err(|e| $crate::Error::Parse(e.into()))?;
+            .map_err($crate::Error::write)?;
     }};
 }
 
@@ -217,7 +210,7 @@ macro_rules! emit_comp {
         let elements: &[&[&str]] = &[$(&[$($comp),*]),+];
         $writer
             .write_composites($tag, elements)
-            .map_err(|e| $crate::Error::Parse(e.into()))?;
+            .map_err($crate::Error::write)?;
     }};
 }
 

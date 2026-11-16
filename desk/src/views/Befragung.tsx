@@ -17,6 +17,7 @@ import {
   TextField,
 } from "react-aria-components";
 import { nichtErreichbar } from "../app/dienste";
+import { disclosure } from "../app/disclosure";
 import { useRolle } from "../app/rollen";
 import { AgentAbgelehnt, AgentUnavailable, type Angaben, antwort, vorbelegen } from "../data/agent";
 import {
@@ -46,15 +47,22 @@ type SparteToken = NonNullable<Antworten["bilanzkreise"]>[number]["sparte"];
 type As4 = NonNullable<Antworten["as4"]>;
 type Schluessel = NonNullable<As4["schluessel"]>[number];
 
-const ROLLEN: RolleToken[] = [
-  "lf-strom",
-  "lf-gas",
-  "nb-strom",
-  "nb-gas",
-  "msb-strom",
-  "msb-gas",
-  "esa-strom",
-];
+/**
+ * Every Rolle makod's `[deployment] rollen` takes, in the order the interview
+ * asks. A Record over the generated token type, so a Rolle makod adds fails
+ * the type check until the interview asks for it.
+ */
+const GEFRAGT: Record<RolleToken, true> = {
+  "lf-strom": true,
+  "lf-gas": true,
+  "nb-strom": true,
+  "nb-gas": true,
+  "msb-strom": true,
+  "msb-gas": true,
+  "esa-strom": true,
+  "bkv-strom": true,
+};
+const ROLLEN = Object.keys(GEFRAGT) as RolleToken[];
 const LIEFERANT: Partial<Record<RolleToken, SparteToken>> = {
   "lf-strom": "strom",
   "lf-gas": "gas",
@@ -150,10 +158,10 @@ export function Befragung() {
     <Panel className="flex flex-col gap-5 p-4 md:p-6">
       <section aria-labelledby={titel} className="contents">
         <div>
-          <h2 id={titel} className="m-0 text-title font-semibold">
+          <h2 id={titel} className="m-0 text-title2 font-semibold">
             {b.titel}
           </h2>
-          <p className="m-0 mt-1 max-w-3xl text-body text-text-2">{b.text}</p>
+          <p className="m-0 mt-1 measure text-body text-text-2">{b.text}</p>
         </div>
         <div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
           <div ref={wurzel} className="flex min-w-0 flex-col gap-5">
@@ -195,7 +203,7 @@ function Abschnitt({
       className="m-0 flex min-w-0 flex-col gap-2.5 border-0 p-0 outline-none"
     >
       <legend id={id} className="contents">
-        <span className="text-callout font-semibold text-text">{titel}</span>
+        <span className="text-body font-semibold text-text">{titel}</span>
       </legend>
       {text && <p className="m-0 text-caption text-text-2">{text}</p>}
       {children}
@@ -224,7 +232,7 @@ function Feld({
       className="flex min-w-0 flex-col gap-1"
       data-frage={frage}
     >
-      <Label className="text-caption font-medium text-text-2">{label}</Label>
+      <Label className="text-caption text-text-2">{label}</Label>
       <Input className={FELD} spellCheck={false} autoComplete="off" />
     </TextField>
   );
@@ -418,7 +426,7 @@ function Fragen({
           <Heading className="m-0">
             <AriaButton
               slot="trigger"
-              className="focus-ring flex w-full cursor-default items-center gap-2 rounded-control py-1 text-left text-callout font-semibold text-text"
+              className="focus-ring flex w-full cursor-default items-center gap-2 rounded-control py-1 text-left text-body font-semibold text-text"
             >
               <Icon
                 name="chevron"
@@ -655,7 +663,7 @@ function Vorbelegen({
   };
 
   return (
-    <div className="squircle flex flex-col gap-3 rounded-panel border border-ai-border bg-ai-fill/40 p-3.5">
+    <div className="flex flex-col gap-3 border-l-2 border-ai py-1 pl-4">
       <form
         className="flex flex-col gap-2"
         onSubmit={(e) => {
@@ -699,7 +707,7 @@ function Vorbelegen({
         )}
         {fertig && (
           <AiNote
-            text={`${fertig.disclosure} ${fertig.angaben && offen.length + Object.keys(erledigt).length > 0 ? b.satz.vorgeschlagen : b.satz.keine}`}
+            text={`${disclosure(fertig.disclosure)} ${fertig.angaben && offen.length + Object.keys(erledigt).length > 0 ? b.satz.vorgeschlagen : b.satz.keine}`}
             footer={
               offen.length > 0 ? (
                 <div className="flex flex-col gap-2">
@@ -778,7 +786,7 @@ function Ergebnis({
   return (
     <section aria-label={titel} aria-busy={laedt} className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h3 className="m-0 text-callout font-semibold text-text">{titel}</h3>
+        <h3 className="m-0 text-body font-semibold text-text">{titel}</h3>
         <span className="text-caption text-text-2">{laedt ? e.rechnet : e.nichtsAngewendet}</span>
       </div>
       {vorschlag.dateien.length === 0 ? (
@@ -795,7 +803,7 @@ function Ergebnis({
             <Icon
               name={vorschlag.vollstaendig ? "check" : "warn"}
               size={16}
-              className={vorschlag.vollstaendig ? "text-done" : "text-soon"}
+              className={vorschlag.vollstaendig ? "text-done" : "text-info"}
             />
             <p className="m-0 text-body text-text">
               <span className="font-semibold">
@@ -806,9 +814,7 @@ function Ergebnis({
           </div>
           {vorschlag.abgelehnt.length > 0 && (
             <div className="flex flex-col gap-2">
-              <h4 className="m-0 text-caption font-semibold uppercase text-text-2">
-                {e.abgelehnt}
-              </h4>
+              <h4 className="m-0 text-caption font-semibold text-text-2">{e.abgelehnt}</h4>
               <ul aria-label={e.abgelehnt} className="m-0 flex list-none flex-col gap-2 p-0">
                 {vorschlag.abgelehnt.map((x) => (
                   <li
@@ -879,7 +885,7 @@ const ZEILE: Record<string, string> = {
   neu: "bg-done-fill text-text",
   weg: "bg-critical-fill text-text-2",
   gleich: "text-text-2",
-  fehlt: "bg-soon-fill text-text",
+  fehlt: "bg-info-fill text-text",
   abschnitt: "text-text font-semibold",
 };
 
@@ -949,7 +955,7 @@ export function DateiAnsicht({ datei }: { datei: Datei }) {
                 {z.art === "fehlt" && z.frage && (
                   <AriaButton
                     onPress={() => zurFrage(z.frage ?? "")}
-                    className="focus-ring shrink-0 rounded-[6px] px-1.5 font-sans text-caption font-medium text-accent data-[hovered]:bg-fill"
+                    className="focus-ring shrink-0 rounded-[6px] px-1.5 font-sans text-caption text-accent data-[hovered]:bg-fill"
                   >
                     {e.zurFrage}
                   </AriaButton>

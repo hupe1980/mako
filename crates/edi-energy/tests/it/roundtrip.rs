@@ -1980,7 +1980,7 @@ fn a_strom_anmeldung_round_trips_its_bilanzkreis_produktpaket() {
     let report = msg.validate().expect("profile is registered");
     let errors: Vec<_> = report
         .iter_issues()
-        .filter(|i| i.severity == edifact_rs::ValidationSeverity::Error)
+        .filter(|i| i.severity == edifact::ValidationSeverity::Error)
         .map(|i| i.message.clone())
         .collect();
     assert!(errors.is_empty(), "{errors:?}");
@@ -2160,7 +2160,7 @@ fn a_gas_anmeldung_round_trips_its_bilanzkreis_cci() {
     let report = msg.validate().expect("profile is registered");
     let errors: Vec<_> = report
         .iter_issues()
-        .filter(|i| i.severity == edifact_rs::ValidationSeverity::Error)
+        .filter(|i| i.severity == edifact::ValidationSeverity::Error)
         .map(|i| i.message.clone())
         .collect();
     assert!(errors.is_empty(), "{errors:?}");

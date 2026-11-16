@@ -14,8 +14,7 @@
 //!
 //! The second is the answer-obligation catalogue and its two splits. A total on
 //! its own does not hold them: an obligation that moves between family tables
-//! leaves the total right and two family figures wrong, which is how "GPKE 28,
-//! WIM 20" outlived a catalogue holding 29 and 19.
+//! leaves the total right and two family figures wrong.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,18 +31,16 @@ const CLAIMANTS: &[&str] = &[
     "../../README.md",
     "../../site/content/docs/services/_index.md",
     "../../site/content/docs/services/makod.md",
-    // makod's own README states both numbers and was not a claimant, so the
-    // service most likely to be read by someone changing the registry was the
-    // one document free to drift.
+    // makod's own README states both numbers, and is the document most likely
+    // to be read by someone changing the registry.
     "README.md",
     "../../site/content/docs/architecture/_index.md",
     "../../concepts/AGENTD.md",
     // States the same two figures plus a per-family breakdown that has to sum
-    // to them, which is how it drifted while every other claimant held.
+    // to them.
     "../../concepts/MARKET_LANDSCAPE.md",
-    // Names this guard as what holds it, which only became true once it was
-    // listed here. It writes both figures in bold, which is why `collapse`
-    // strips emphasis.
+    // Names this guard as what holds it. It writes both figures in bold, which
+    // is why `collapse` strips emphasis.
     "../../site/content/docs/architecture/domain-model.md",
 ];
 

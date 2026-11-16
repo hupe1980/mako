@@ -8,7 +8,7 @@
 //! evidence — the MIG import and the hand-authored table were written from the
 //! same documents by the same reading.
 //!
-//! `edifact-rs`'s `audit_directory` asks the question the corpus can answer:
+//! `edifact`'s `audit_directory` asks the question the corpus can answer:
 //! *which of these definitions does real traffic disprove?* A fixture that
 //! populates a component the layout does not declare is a contradiction, and no
 //! amount of internal agreement reveals it.
@@ -34,7 +34,7 @@
 use std::path::{Path, PathBuf};
 
 use edi_energy::messages::layouts;
-use edifact_rs::{SegmentDefinition, audit_directory, from_bytes};
+use edifact::{SegmentDefinition, audit_directory, from_bytes};
 
 /// Every hand-authored layout, by tag.
 ///

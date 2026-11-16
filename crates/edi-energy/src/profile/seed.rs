@@ -8,7 +8,7 @@
 //! profile. A builder written this way cannot disagree with the MIG on which
 //! qualifier a place carries, because it never spells one.
 
-use edifact_rs::{Element as WireElement, OwnedSegment, Segment};
+use edifact::{Element as WireElement, OwnedSegment, Segment};
 
 use super::Profile;
 use super::structure::Kind;

@@ -1,6 +1,6 @@
 [package]
 name        = "netzbilanzd"
-description = "Grid operator daemon: issues INVOIC 31001, 31002, 31005, 31009 and 31011, tracks REMADV, computes Redispatch Kostenblätter and files MaBiS Summenzeitreihen (MSCONS 13003) with the BIKO"
+description = "Grid operator billing daemon: Netznutzung, MMM, MSB and Sperr-AWH invoices with their REMADV, Redispatch Kostenblätter and MaBiS Summenzeitreihen"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true

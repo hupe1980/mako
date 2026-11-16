@@ -106,9 +106,14 @@ interchange's sender (UNB DE0004, the same MP-ID as `NAD+MS`) signs — so the
 certificate a partner checks is the one issued to the MP-ID it reads in
 `eb:From`.
 
-**The TLS key pair is outbound only.** `makod` presents it when it connects to a
-partner MSH. Inbound, `--as4-addr` binds a plain HTTP listener: the server side
-of mutual TLS belongs to whatever terminates TLS in front of it.
+**The TLS key pair is outbound only.** `tls_cert_pem_file` / `tls_key_pem_file`
+become the party's `LocalParty::tls_identity`, and `asx-rs`'s HTTP client
+presents it when a partner MSH asks for a client certificate. The connection
+names the partner's host by Server Name Indication, which Regelungen zum
+Übertragungsweg für AS4 2.6 Kap. 3 (S. 5) requires — so a partner endpoint is a
+host name, never an IP address. Inbound, `--as4-addr` binds a plain HTTP
+listener: the server side of mutual TLS, and its SNI, belong to whatever
+terminates TLS in front of it.
 
 ### Trust: the SM-PKI root and the CRL signer
 
@@ -129,12 +134,20 @@ preflight, so `--check` reports what the boot would refuse:
 |---|---|
 | A `[[party]]` without `[party.as4]` beside one with it, or `--as4-addr` with none | Each MP-ID needs its own key pairs |
 | No `trust_anchor_pem_file`, `crl_signer_pem_file` or `message_id_domain` | No verification, no revocation check, no message id |
-| A signer that does not chain to the root, a certificate without the MP-ID in its OU, an expired certificate, a missing decrypter | The `asx-rs` `Config` refusal names the setting and the section |
+| A signer that does not chain to the root, a partner signing certificate without the partner's MP-ID in its OU, an expired certificate, a missing decrypter | The `asx-rs` `Config` refusal names the setting and the section |
+| A `[party.as4]` signing, encryption or TLS certificate whose subject OU is not that party's MP-ID | Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2 (S. 6) |
 | Two of a party's three certificates certifying one key pair | §2.3.4.4 — compared by public key |
 | A partner endpoint on `http://` or without an encryption certificate | §2.2.6.2.2 |
+| A partner endpoint on an IP address | SNI carries a host name (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 3, S. 5) |
+| A partner encryption certificate whose subject OU is not the partner's MP-ID | Kap. 5.2 (S. 6) |
+| A partner encryption certificate naming several URI addresses, or one other than `endpoint` | Kap. 5.2 (S. 6), Kap. 2 (S. 4) |
+| `as4.zertifikat_warnfenster_tage` below 14 | Ten Werktage are never fewer than 14 days; a shorter window reports an own certificate after its successor was due (Kap. 5.3, S. 6) |
 | A `[[as4.partner]]` naming one of the deployment's own MP-IDs | A self-addressed message is delivered in-process |
-| An unknown `quirks` entry | Only `receipt-without-non-repudiation` exists |
-| `as4.lenient_receipts` or `MAKOD_AS4_LENIENT_RECEIPTS` | No global receipt relaxation exists — see [Receipt quirks](#receipt-quirks) |
+| `[[as4.partner]] quirks`, `as4.lenient_receipts` or `MAKOD_AS4_LENIENT_RECEIPTS` | No receipt relaxation exists — see [Receipts](#receipts) |
+
+Each `de0004_ausnahme` entry and each
+partner endpoint whose encryption certificate names no URI address is a
+startup warning in `GET /admin/einrichtung`.
 
 ---
 
@@ -159,11 +172,10 @@ encryption_cert_pem_file = "/etc/makod/partners/9800000000002.enc.pem"
 
 | Key | Meaning |
 |---|---|
-| `endpoint` | The partner's inbox. Omit it for a partner `makod` only receives from |
-| `encryption_cert_pem_file` | What `makod` encrypts **to**; required with `endpoint` |
+| `endpoint` | The partner's inbox, a host name over `https`. Take it from the URI subject alternative name of the partner's certificate (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 2, S. 4); one that differs is refused. Omit it for a partner `makod` only receives from |
+| `encryption_cert_pem_file` | What `makod` encrypts **to**; required with `endpoint`, and its OU must be the partner's MP-ID |
 | `signing_cert_pem_files` | Pins: the partner's messages must be signed by one of these (list both for a rollover, Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.3). Without pins the SM-PKI chain and the OU decide |
 | `agency` | NAD DE3055 agency of the MP-ID; derived from its prefix when omitted |
-| `quirks` | See [Receipt quirks](#receipt-quirks) |
 | `de0004_ausnahme` | MP-IDs this partner may name in `UNB` DE0004; see [The interchange envelope](#the-interchange-envelope) |
 
 The party type in `eb:PartyId/@type` follows the agency — `…iso6523:0088` (GLN),
@@ -210,20 +222,14 @@ mp_id           = "9900000000001"
 de0004_ausnahme = ["9900000000002"]
 ```
 
-### Receipt quirks
+### Receipts
 
 Every synchronous receipt is verified: signed by the partner, referring to the
 sent message id, and echoing the signed digests as NonRepudiationInformation. A
-partner whose **signed** receipt carries no NonRepudiationInformation is declared
-per partner:
-
-```toml
-[[as4.partner]]
-mp_id  = "9900000000001"
-quirks = ["receipt-without-non-repudiation"]
-```
-
-An unsigned or mis-signed receipt is never accepted.
+receipt without NonRepudiationInformation is no delivery, for every partner:
+Regelungen zum Übertragungsweg für AS4 2.6 Kap. 7.3 (S. 8): „Ohne eine NRR gilt
+die Übertragung als gescheitert." No setting relaxes it; a `[[as4.partner]]
+quirks` key or `as4.lenient_receipts` stops the boot, naming that rule.
 
 ---
 
@@ -376,10 +382,15 @@ inbox this way.
 
 makod re-reads every `[party.as4]` and `[[as4.partner]]` certificate while it
 runs. `GET /admin/einrichtung` reports one that expires inside
-`as4.zertifikat_warnfenster_tage` (default 30) and `/metrics` exports
-`makod_certificate_expiry_days{pfad}`. The successor is due at least 10
-Werktage before a certificate becomes invalid (Regelungen zum Übertragungsweg
-für AS4 2.6 Kap. 5.3, S. 6).
+`as4.zertifikat_warnfenster_tage` (default 30, at least 14) and an expired one
+as blocking, and `/metrics` exports `makod_certificate_expiry_days{pfad}`. The
+successor is due at least 10 Werktage before a certificate becomes invalid
+(Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.3, S. 6).
+
+Requesting a certificate from the Sub-CA, renewing it, installing it and keeping
+its private key are the operator's, in its own key store: makod reads the key
+material from the configured files, reports its expiry and picks up a replaced
+file. It holds no HSM integration and talks to no CA.
 
 Replace the files in place to rotate. Every five minutes makod rebuilds the AS4
 clients and inboxes from changed key material, with no restart:
@@ -392,6 +403,29 @@ clients and inboxes from changed key material, with no restart:
 | Partner pins | Several `signing_cert_pem_files` admit a partner's rollover |
 
 Material that does not build is logged and the running clients stay.
+
+### What Regelungen zum Übertragungsweg für AS4 2.6 binds
+
+| Rule | Kap., S. | In makod |
+|---|---|---|
+| Signing, encryption and TLS certificate form one Zertifikatstripel | 1.3, S. 3 | Three key pairs per `[party.as4]`, distinct by public key |
+| The AS4 address is taken from the certificate's URI alternative name | 2, S. 4 | `endpoint` must equal it; a certificate without one is a warning |
+| Exchange and enter communication data within 3 Werktage, keep a path 3 years, announce a change 10 Werktage ahead | 2, S. 4 | The operator's |
+| A partner's expired or revoked certificate is replaced from the CA | 2.2, S. 5 | The monitor reports partner certificates too; the replacement is the operator's |
+| TLS uses SNI | 3, S. 5 | `asx-rs` sends the host name; an IP-address endpoint is refused |
+| One path with one endpoint between two MP-IDs | 4, S. 5 | One `[[as4.partner]]` per MP-ID, one inbox per `[[party]]` |
+| Messages under any valid published certificate of an MP-ID are processed | 4, S. 5 | Several `signing_cert_pem_files`; retired decryption keys |
+| A failed delivery is repeated within the process Fristen | 4, S. 5 | The outbox retries the same message for 72 hours |
+| SM-PKI, Sub-CA per its CP | 5, 5.1, S. 6 | `trust_anchor_pem_file` is the SM-PKI root, the only anchor |
+| OU carries the MP-ID; one URI alternative name | 5.2, S. 6 | Refused at startup for own and partner certificates |
+| Successor 10 Werktage before expiry; both generations processed in the overlap | 5.3, S. 6 | Warning window ≥ 14 days; restart-free rotation keeps the replaced decryption key |
+| CRL revocation; a CA without a CRL for 3 days is distrusted | 5.4, S. 7 | `Profile::bdew()`; `crl_signer_pem_file` |
+| `PartProperties` `BDEWDocumentType` … `BDEWDocumentNo` | 6, S. 7 | Not sent: `asx-rs` 0.16 writes `MimeType` and `CompressionType` only, and BDEW AS4-Profil 1.2 §2.3.5 (S. 18) makes the properties optional |
+| Test service before the first exchange | 7.1, S. 7 | Received and receipted by `asx-rs`; sending one is the operator's |
+| Service MP and the fixed Action; no pre-compressed file; one file per message | 7.2, S. 8 | `BdewAction::service`; gzip by `asx-rs` only; one payload |
+| Success only on a synchronous NRR | 7.3, S. 8 | The outbox acknowledges a receipt with verified NonRepudiationInformation only; no setting relaxes it |
+| Processing stops for a revoked or invalid certificate | 8, S. 8 | `asx-rs` chain, validity and CRL check |
+| `EBMS:0101`, `EBMS:0102`, `EBMS:0103` | 9, S. 10 | `asx-rs` answers each |
 
 ### Certificate requests with OpenSSL
 
@@ -453,8 +487,7 @@ assert_eq!(BdewAction::Mscons.service(), Service::Marktprozesse);
 
 ## BDEW Verzeichnisdienst — API-Webdienste endpoint discovery
 
-The BDEW Verzeichnisdienst ("Regelungen zum Verzeichnisdienst" v1.0, applicable 03.04.2025)
-is a registry for **API-Webdienste Strom endpoints** (SM-PKI certificate class EMT.API).
+The BDEW Verzeichnisdienst (Regelungen zum Verzeichnisdienst 1.1) is a registry for **API-Webdienste Strom endpoints** (SM-PKI certificate class EMT.API).
 It is **not** used for AS4 EDIFACT delivery — AS4 inbox endpoints are configured per
 `[[as4.partner]]` and exchanged via PARTIN Kommunikationsdaten (PIDs 37000–37006
 Strom, 37008–37014 Gas).
@@ -468,7 +501,10 @@ partner store):
 ```
 
 At startup and every 5 minutes, `makod` queries
-`GET <base-url>/record/<lf_mp_id>/maloIdV1/1/v1` for each known LF.
+`GET <base-url>/record/<lf_mp_id>/maloIdV1/1/v1` for each known LF and refuses a
+record whose signature does not verify against the provider's EMT.API
+certificate in `[maloid] verzeichnisdienst_signing_certs`, which must chain to
+`verzeichnisdienst_trust_anchor_pem_file`.
 Static `--maloid-partner GLN=URL` entries always take priority.
 
 ---
@@ -507,6 +543,19 @@ Static `--maloid-partner GLN=URL` entries always take priority.
 | `a_tampered_request_is_refused_ebms_0101` | Signature integrity, no claim taken |
 
 Run with: `cargo test -p makod --test it -- as4_security`
+
+The Regelungen zum Übertragungsweg für AS4 2.6 checks:
+
+| Test | Verifies |
+|---|---|
+| `mako-as4` `identity::tests::the_tls_key_pair_is_the_local_partys_tls_identity` | `tls_cert_pem_file` / `tls_key_pem_file` become `LocalParty::tls_identity` |
+| `mako-as4` `identity::tests::a_certificate_of_another_mp_id_is_refused` | Own certificates carry the MP-ID in their OU (Kap. 5.2) |
+| `mako-as4` `partner_directory::tests::an_endpoint_on_an_ip_address_is_refused` | SNI needs a host name (Kap. 3) |
+| `mako-as4` `partner_directory::tests::an_encryption_certificate_of_another_mp_id_is_refused` | The partner encryption certificate's OU (Kap. 5.2) |
+| `mako-as4` `partner_directory::tests::the_endpoint_is_the_address_of_the_certificate` | One URI address, equal to `endpoint` (Kap. 2, 5.2) |
+| `makod` `core::preflight::tests::the_as4_2_6_certificate_and_endpoint_rules_stop_the_boot` | The refusals reach the boot |
+| `makod` `core::preflight::tests::a_configured_quirks_key_is_refused` | No receipt relaxation (Kap. 7.3) |
+| `makod` `core::einrichtung::tests::a_warning_window_shorter_than_ten_werktage_blocks`, `an_endpoint_the_certificate_does_not_name_is_warned` | Kap. 5.3 and 2 findings |
 
 ---
 

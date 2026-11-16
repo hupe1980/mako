@@ -162,6 +162,8 @@ de.mako.process.initiated
            → INSERT abmeldeanfragen (the waiting AnmeldungAnfrage)
            → makod gpke.beendigung-zuordnung.anfragen  → UTILMD 55010 to the LFA
              …09:00 Uhr des 1. WT, or the LFA answers 55011/55012…
+           → Gas: makod geli.beendigung-zuordnung.anfragen → UTILMD 44010
+             …Ablauf des 3. WT, or the LFA answers 44011/44012…
 de.mako.abmeldeanfrage.beantwortet
            → take abmeldeanfragen → mako_pruefung::evaluate_lieferbeginn(…)
            → the Accept / Reject / Escalate paths above
@@ -172,13 +174,17 @@ Vorprüfung: surviving it means only that the Anmeldung is not directly
 refusable. If the Marktlokation is assigned at the Zuordnungsbeginn, the NB owes
 the incumbent LFA an Anfrage zur Beendigung der Zuordnung (55010) before
 answering the LFN, because `E_0623` Prüfschritte 20–50 read that answer (GPKE
-Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4, Nr. 3).
+Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4, Nr. 3). A Gas Anmeldung
+44001 takes the same path with the GNB's Abmeldungsanfrage 44010 (GeLi Gas 3.0
+Kap. 3.2.3; AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 3), which the LFA answers
+44011/44012 by Ablauf des 3. WT nach Eingang (Nr. 4); processd never sends a
+55010 for a Gas Marktlokation.
 
 The waiting `AnmeldungAnfrage` is written to `abmeldeanfragen` **before** the
 Anfrage goes out, so a fast loopback answer always finds it; phase two replays
 the same pure evaluation with one more fact. Resolution is a single
 `UPDATE … WHERE resolved_at IS NULL`, so of the LFA's answer and the 09:00 lapse
-exactly one answers the LFN.
+exactly one answers the LFN — the 09:00 lapse in Strom, Ablauf des 3. WT in Gas.
 
 **Silence releases the Marktlokation.** „Verstreicht die Frist, ohne dass eine
 Antwort beim NB eingeht, gilt dies als Bestätigung nach Fall a)." A Widerspruch
@@ -230,7 +236,7 @@ Muss), so `NbEntscheidung::Accept` carries `A51` / `A58` / `E15`.
 | 16–28 | Ruhende Marktlokation (`ZAP`): verbrauchend, Kundenanlage, Netzlokationen, iMS | `Reject A09` / `A08` / `A37` / `A47` / `A46`; no store records these facts, so a ruhende Marktlokation escalates at 18 |
 | 30 | MaLo participates in MaKo | `Reject A02` |
 | 50 | Neuanlage? A MaLo `marktd` has never seen supplied may be one | `Escalate` — no store records an Inbetriebnahme, so `A04` is never stated |
-| 60 | Zuordnungsermächtigung: Bilanzierungsgebiet matches, LF in the partner directory | `Reject A05` |
+| 60 | Bilanzierungsgebiet matches, LF in the partner directory, and a Zuordnungsermächtigung in `marktd` (UTILMD 55071, not ended by a 55072) covers the Anmeldung's Bilanzkreis for this LF and Bilanzierungsgebiet on the Zuordnungsbeginn (MaBiS Kap. 10.2.1) | `Reject A05` — also with none on file or no Bilanzkreis in the Anmeldung; an unreadable store fails the event for redelivery |
 | 70 | No other Anmeldung in Bearbeitung | `Reject A06` |
 
 A **ruhende** Marktlokation is not refused at 30: its Hinweis names only
@@ -516,8 +522,12 @@ The 44014 carries no `CCI+Z36` and both of its facts are Muss (UTILMD AHB Gas
 an EnFG privilege's prerequisites — that no Festlegung fixes for the supplier,
 so it has no setting: every Strom E/G Zustimmung is queued for the operator to
 state it. A fact that does not resolve queues the answer with its Frist and
-the fact named. `eog_auto_respond = true` in a Gas build without
-`eog_abrechnungsintervall_monate` is refused at startup. A queue entry for an
+the fact named.
+
+`eog_auto_respond = true` in a Gas build without
+`eog_abrechnungsintervall_monate` is refused at startup.
+
+A queue entry for an
 E/G Anmeldung starts its Bestätigung from the facts that resolved, frozen; the
 view lists the rest in `fakten_freigeben` / `fakten_ablehnen`, and the operator
 states them on the decision as `bilanzkreis`, `versorgungsart` (`ZC9`, `ZD0`,
@@ -785,9 +795,14 @@ Antwortfrist sweep.
 | `deadline_source` | The Festlegung `deadline_at` came from |
 | `deadline_risk` | `unknown` \| `green` \| `amber` (< 24 h) \| `red` (past) |
 | `erc_code` | APERAK ERC code when an APERAK refused the message — not the Antwortcode of a business refusal |
-| `antwort_code` / `antwort_codeliste` | The Antwortcode the counterparty's business answer carried and the tree or Codeliste it named (`SG4 STS+E01` on a UTILMD, `SG2 AJT` on an ORDRSP), read from `data.antwortcode` / `data.codeliste` of the event. makod states them on the `de.mako.process.completed` of an answered Lieferbeginn (55002/55003, 44002/44003 and the other answers the LF Anmeldung receives); every other event leaves them unchanged. The two move as one pair |
+| `antwort_code` / `antwort_codeliste` | The Antwortcode of the counterparty's business answer and the tree or Codeliste it named (`SG4 STS+E01` on a UTILMD, `SG2 AJT` on an ORDRSP); one pair, see below |
 | `bedeutung` | The BDEW's wording of `antwort_code` within `antwort_codeliste` (`mako_pruefung::codes::lies`), on `get_process` and `GET /obs/processes/{process_id}`. Absent when the answer named no list or the list does not publish the code — never read from another tree |
 | `initiator_is_affiliate` | The Lieferant belongs to this operator's own undertaking |
+
+`antwort_code` and `antwort_codeliste` are read from `data.antwortcode` /
+`data.codeliste`. makod states them on the `de.mako.process.completed` of an
+answered Lieferbeginn (55002/55003, 44002/44003 and the other answers the LF
+Anmeldung receives); every other event leaves them unchanged.
 
 `completed_at` (not on the wire) is the time the first terminal event carries.
 It feeds cycle time and caps the breach test

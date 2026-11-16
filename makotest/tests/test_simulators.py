@@ -684,3 +684,19 @@ class TestReadingQuality:
         gap = ImsysSim(melo_id=MELO).deliver("2026-11-01", luecken=[41])
         assert len(substituted.as_direct_push(sender_mp_id=NB_ID)["intervals"]) == 96
         assert len(gap.as_direct_push(sender_mp_id=NB_ID)["intervals"]) == 95
+
+
+def test_wire_text_respells_what_unoc_cannot_carry():
+    from makotest.simulators.marktpartner import _wire_text
+
+    assert (
+        _wire_text("Wert ∉ Liste — 5 ≥ 3, Größe") == "Wert not in Liste - 5 >= 3, Größe"
+    )
+    assert _wire_text("ﬁle") == "file"  # compatibility decomposition
+
+
+def test_wire_text_refuses_a_character_with_no_unoc_spelling():
+    from makotest.simulators.marktpartner import _wire_text
+
+    with pytest.raises(ValueError, match="U\\+20AC"):
+        _wire_text("Preis 5 €")

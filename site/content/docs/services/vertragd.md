@@ -97,7 +97,9 @@ Every service-to-service call — `LIEFERBEGINN`, `LIEFERENDE`,
 30 s × 4ⁿ capped at 2 h, then dead-lettered; a 4xx other than 429 dead-letters
 at once). The key makes the enqueue exactly-once: a repeatable action keys on
 what makes it distinct (`ABLESUNG_ENDE:{komp}:{geplant_am}`), a one-shot one
-does not (`LIEFERBEGINN:{komp}`). **A delivered call is never repeated**: the
+does not (`LIEFERBEGINN:{komp}`).
+
+**A delivered call is never repeated**: the
 follow-up write (the component `ANGEMELDET` with processd's `process_id`, the
 edmd reading order on the component) runs in a savepoint of the transaction
 that marks the delivery done, and a failure there is recorded in the row's
@@ -127,7 +129,7 @@ credential.
 
 ## Authorization
 
-`policies/vertragd.cedar` states 25 actions over two kinds of principal:
+`policies/vertragd.cedar` states 33 actions over two kinds of principal:
 **operators** (staff and peer services) carry a market role — `LF`, `MSB`, `ESA`
 or `ADMIN`; **portal customers** carry none. Two actions are customer-scoped and
 need no role: `authenticate-portal-identity` and `read-own-portal-identity`
@@ -138,7 +140,7 @@ market role and a matching tenant.
 > IdP that puts a market role on a customer token makes that customer an operator
 > of this service, with reach across every customer in the tenant.
 
-### The 25 actions
+### The 33 actions
 
 Each is checked with `authorize(&enforcer, &claims, …)` in its handler; the
 policy reads only `context.*`. A denial is a `403`.
@@ -165,6 +167,11 @@ policy reads only `context.*`. A denial is a `403`.
 | `create-rahmenvertrag` | `POST /kunden/{id}/rahmenvertraege` |
 | `kuendigen-rahmenvertrag` | `POST /rahmenvertraege/{id}/kuendigen` |
 | `read-stammdaten` · `write-stammdaten` | `GET` / `PUT` of `/ggv/{id}/betreiber`, `/aggregatorvertraege`, `/messstellenvertraege/{melo}/{msb}` |
+| `bestellen` | `POST /bestellungen` |
+| `annehmen-bestellung` | `POST /bestellungen/{id}/annehmen`, `/ablehnen` |
+| `read-bestellung` | `GET /bestellungen/{id}/nachweis` |
+| `widerrufen` | `POST /vertraege/{id}/widerruf`, `POST /bestellungen/{id}/widerruf` |
+| `pflegen-rechtsdokument` · `read-rechtsdokument` | `PUT /rechtsdokumente/{art}` / `GET /rechtsdokumente/{sha256}` |
 | `read-outbound-tasks` | `GET /outbound/dead` |
 | `retry-outbound-task` | `POST /outbound/dead/{id}/retry` |
 | `use-mcp` | the whole `/mcp` surface, gated once by the shared `McpAuth` middleware rather than per tool |
@@ -373,6 +380,117 @@ is keyed by component **and date**, so a re-issued Kündigung supersedes the old
 one. `POST /api/v1/vertraege/{id}/stornieren` cancels a contract that never went
 into supply and withdraws a queued registration (or cancels one already at
 `processd`, saying which).
+
+## Online Vertragsschluss
+
+An online order becomes a contract only together with its **Bestellnachweis**:
+„Ein Vertrag nach Absatz 2 kommt nur zustande, wenn der Unternehmer seine
+Pflicht aus Absatz 3 erfüllt." (§ 312j Abs. 4 BGB). The front end — the
+operator's website or a portal partner's — first freezes an Endkunden-Angebot
+in [`productd`](@/docs/services/productd.md), then posts the order here. The
+record holds what the consumer was shown immediately before the order (§ 312j
+Abs. 2 BGB), the button label (Abs. 3), the documents shown by their SHA-256,
+whether the Widerrufsbelehrung and the Wertersatz information were shown, and
+whether the consumer expressly asked for supply to start inside the
+Widerrufsfrist. It is stored as RFC 8785 JSON with its hash; a `CHECK` ties the
+hash to the bytes and a trigger refuses any `UPDATE` or `DELETE`.
+
+The schema holds the rule, whatever writes the row: a consumer contract with
+`abschlussweg = 'ONLINE'` and no `bestellnachweis_id` and `vertragsschluss_am`
+is refused by `vv_online_verbraucher_nachweis`. The generic `POST
+/kunden/{id}/vertraege` cannot write `ONLINE` — its body has no such field, so
+`Json` refuses it.
+
+| Route | Cedar | What it does |
+|---|---|---|
+| `PUT /api/v1/rechtsdokumente/{art}` | `pflegen-rechtsdokument` | Registers a version of `AGB`, `WIDERRUFSBELEHRUNG`, `MUSTER_WIDERRUFSFORMULAR` or `DATENSCHUTZ` from `{ "text", "gueltig_ab" }`; `201` new, `200` when the bytes are already held. Append-only |
+| `GET /api/v1/rechtsdokumente/{sha256}` | `read-rechtsdokument` | The bytes an order's hash names |
+| `POST /api/v1/bestellungen` | `bestellen` | The order. `Idempotency-Key` header required once |
+| `POST /api/v1/bestellungen/{id}/annehmen` · `/ablehnen` | `annehmen-bestellung` | The operator's decision under `mit_annahme`; `{ "bonitaet_ref" }` (opaque, stored, never read) / `{ "grund" }` |
+| `GET /api/v1/bestellungen/{id}/nachweis` | `read-bestellung` | The record's canonical bytes, its stored hash and the hash recomputed from the bytes |
+| `POST /api/v1/vertraege/{id}/widerruf` · `POST /api/v1/bestellungen/{id}/widerruf` | `widerrufen` | A consumer's Widerruf of an online contract or of an order not yet accepted |
+
+All six actions are granted to `LF` and `ADMIN` only. A consumer's Widerruf
+reaches the route through a service credential, never the customer's own
+token.
+
+### The order
+
+`POST /api/v1/bestellungen` checks, before anything is stored: every element
+the record must hold (all missing ones named in `fehlend`), the button label,
+every document hash against `rechtsdokumente` (the `PREISBLATT` against the
+offer's product version), the frozen offer `angebot_ref` names (`id`, `sha256`)
+— its hash, validity and MaLo-ID and its earliest Lieferbeginn — and the facts
+the Anmeldung needs. Each refusal is a stable
+`code`:
+
+| Code | Status | When |
+|---|---|---|
+| `policy_nicht_gesetzt` | 409 | `[policy] vertragsschluss` is unset |
+| `idempotency_key_missing` | 400 | no `Idempotency-Key` |
+| `idempotency_key_reused` | 422 | the same key with another body |
+| `idempotency_request_in_flight` | 409 | the first request under the key is still running |
+| `bestellnachweis_unvollstaendig` | 422 | `fehlend: [...]` |
+| `bestellbutton_nicht_zulaessig` | 422 | a label `bestellbutton_beschriftungen` does not admit |
+| `dokument_unbekannt` | 422 | `unbekannt: [...]` — a hash no registered document has |
+| `angebot_unbekannt` · `angebot_abgelaufen` · `angebot_hash_abweichend` | 422 | the offer |
+| `malo_id_abweichend` | 422 | the order's MaLo-ID is not the offer's |
+| `lieferbeginn_zu_frueh` | 422 | `fruehestens` — the offer's, or the Widerrufsfrist's below |
+| `anmeldedaten_unvollstaendig` | 422 | `fehlend: [...]` — a fact the Anmeldung needs |
+
+The same key with the same body answers the first response unchanged; a
+hundred concurrent replays conclude one contract. Under `mit_bestellung` the
+Bestellnachweis, the Bestellung, the contract, the Anmeldung's outbox command,
+the documents' commands and the events commit in **one** transaction and the
+answer is `201`; under `mit_annahme` it is `202` with the Bestellung
+`EINGEGANGEN`, and the same conclusion runs at `/annehmen`.
+
+Every online conclusion owes the § 41 Abs. 4 EnWG `VERTRAGSZUSAMMENFASSUNG`
+and, for a Verbraucher, the § 312f Abs. 2 BGB `VERTRAGSBESTAETIGUNG` with the
+Widerrufsbelehrung and the Muster-Widerrufsformular printed from the
+registered bytes. Both are outbox commands to
+[`outputd`](@/docs/services/outputd.md), drained by the outbound worker and
+idempotent on `(kind, contract)`.
+
+### `[policy] vertragsschluss` {#policy-vertragsschluss}
+
+| Key | Options | Default |
+|---|---|---|
+| `vertragsschluss` | `mit_bestellung` — the frozen offer is binding and the click concludes the contract; `mit_annahme` — the order is the consumer's offer, the contract comes about at the operator's acceptance | **none**: unset, `POST /api/v1/bestellungen` refuses with `policy_nicht_gesetzt`; every other route is unaffected |
+| `lieferbeginn_in_widerrufsfrist` | `nur_auf_verlangen` — without the consumer's express request the earliest Lieferbeginn is the day after the Widerrufsfrist ends; `immer` | `nur_auf_verlangen` |
+| `bestellbutton_beschriftungen` | the admitted labels | `["zahlungspflichtig bestellen"]` — § 312j Abs. 3 Satz 2 BGB; any other wording is the operator's reading |
+
+Which `vertragsschluss` applies is the operator's AGB; either way the
+Widerrufsfrist starts „mit Vertragsschluss" (§ 356 Abs. 2 Nr. 2 BGB).
+`nur_auf_verlangen` holds Lieferbeginn back because Wertersatz is owed only
+when „der Verbraucher von dem Unternehmer ausdrücklich verlangt hat, dass mit
+der Leistung vor Ablauf der Widerrufsfrist begonnen werden soll" (§ 357a Abs. 2
+Satz 1 Nr. 1 BGB). Once it
+is set, `productd_url`, `outputd_url` and `[absender] name` are required, and
+`--check-config` names each one missing.
+
+### Widerruf
+
+The Frist is `mako_fristen::vorlauf::widerrufsfrist`: fourteen days (§ 355
+Abs. 2 Satz 1 BGB) from the later of the Vertragsschluss and the Belehrung, the
+end moved past a Sunday, Saturday or holiday (§ 193 BGB), and extinguished at
+the latest twelve months and fourteen days after conclusion (§ 356 Abs. 4
+Satz 1 BGB). The Belehrung is the order's day when the record proves it was
+shown; otherwise the day `outputd` records the Vertragsbestätigung as
+delivered; otherwise none, and only the cap runs. The **sending** decides
+timeliness (§ 355 Abs. 1 Satz 5 BGB), so the body carries `abgesendet_am`.
+
+A timely Widerruf, in one transaction: before Lieferbeginn the Anmeldung is
+withdrawn on the Stornierung path (`wirkung: "STORNIERT"`); after it, supply
+ends on the Lieferende path (`"LIEFERENDE"`) and the record states whether
+Wertersatz is owed — only when it holds both the express request and the
+Wertersatz information (§ 357a Abs. 2 Satz 1 Nr. 1 and Nr. 3 BGB). The contract
+becomes `WIDERRUFEN`, and the § 356a Abs. 4 BGB `WIDERRUFSBESTAETIGUNG` and
+`de.vertrag.widerruf.eingegangen` are owed. A second timely Widerruf answers
+`200` with the first. A late one is recorded, its receipt confirmed, and
+refused `422 widerrufsfrist_abgelaufen` with the `frist`. A Widerruf of an
+order not yet accepted closes it `WIDERRUFEN`. A contract not concluded online
+by a Verbraucher answers `kein_online_vertrag` / `kein_widerrufsrecht`.
 
 ## Tarifwechsel
 
@@ -605,10 +723,13 @@ A **consumer** contract becomes **unbefristet** with at most a month's notice
 
 ## CloudEvents emitted
 
-Eleven `de.vertrag.*` types, all through `event_outbox` and all HMAC-signed. Each
-carries `subject` = the Vertrags-UUID, plus the `tenantid` and `correlationid`
-extensions — `correlationid` repeats the subject, so a consumer can join every
-event of one contract without parsing `data`.
+Fifteen `de.vertrag.*` types, all through `event_outbox` and all HMAC-signed.
+Each carries the `tenantid` and `correlationid` extensions. The eleven contract
+events carry `subject` = the Vertrags-UUID and `correlationid` repeats it, so a
+consumer can join every event of one contract without parsing `data`. The four
+order events below carry `subject` = the front end's `bestellreferenz` and
+`correlationid` = the `bestellung_id`, so a sales partner finds its own order
+by its own reference.
 
 | `type` | When | Beyond `vertrag_id` |
 |---|---|---|
@@ -623,6 +744,13 @@ event of one contract without parsing `data`.
 | `de.vertrag.preisgarantie-hinterlegt` | `PUT /vertraege/{id}/preisgarantie` stored or replaced a price lock | `preisgarantie_bis` |
 | `de.vertrag.autoerneuerung.ankuendigung` | 30 days before an automatic extension | `vertragsende`, `verlaengerung` (`UNBEFRISTET` with § 309 Nr. 9 lit. b BGB, or `BEFRISTET` with the new end) |
 | `de.vertrag.ablauf.ankuendigung` | 30 days before a `vertragsende` or a `preisgarantie_bis` | `faellig_am`, `auto_renewal`, `standort_bezeichnung` |
+
+| `type` | When | `data` |
+|---|---|---|
+| `de.vertrag.bestellung.eingegangen` | An order was recorded | `bestellung_id`, `bestellreferenz`, `bestellnachweis` (`id`, `sha256`), `eingegangen_am` |
+| `de.vertrag.bestellung.angenommen` | The contract came about — at the order under `mit_bestellung`, at `/annehmen` under `mit_annahme` | `bestellung_id`, `bestellreferenz`, `vertrag_id`, `vertrags_nr`, `vertragsschluss_am`, `widerrufsfrist` |
+| `de.vertrag.bestellung.abgelehnt` | `/ablehnen` refused an order | `bestellung_id`, `bestellreferenz`, `grund` |
+| `de.vertrag.widerruf.eingegangen` | A Widerruf was recorded, timely or late | `bestellung_id`, `bestellreferenz`, `vertrag_id`, `widerruf` (`rechtzeitig`, `frist`, `wirkung`, `lieferende`, `wertersatz_geschuldet`) |
 
 Subscribe to `de.vertrag.kuendigung` and `de.vertrag.kuendigung-widerrufen`
 together, or a revoked termination stays acted on.
@@ -702,6 +830,10 @@ edmd_api_key    = "env:VERTRAGD_EDMD_SERVICE_KEY"
 outputd_url     = "http://outputd:9880"
 # outputd_api_key = "env:VERTRAGD_OUTPUTD_KEY"
 
+# Required once [policy] vertragsschluss is set: the frozen Endkunden-Angebot.
+# productd_url     = "http://productd:9080"
+# productd_api_key = "env:VERTRAGD_PRODUCTD_KEY"
+
 erp_webhook_url = "http://erp:8000/events"
 erp_hmac_secret = "env:VERTRAGD_ERP_HMAC_SECRET"
 inbound_secret  = "env:VERTRAGD_INBOUND_SECRET"
@@ -729,6 +861,10 @@ audience = "vertragd"
 # [mcp]
 # api_key       = "env:VERTRAGD_MCP_API_KEY"
 # api_key_roles = ["LF"]
+
+# [policy]                       # see [policy] vertragsschluss
+# vertragsschluss = "mit_bestellung"
+# lieferbeginn_in_widerrufsfrist = "nur_auf_verlangen"
 
 # [policy.dsr.portabel]          # see [policy.dsr]; every entry defaults to true
 # zahlungsinformation = false

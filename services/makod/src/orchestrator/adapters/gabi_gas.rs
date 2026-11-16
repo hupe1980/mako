@@ -74,7 +74,7 @@ pub fn gabi_gas_invoic_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
                 // The BO4E `Rechnung` rides along so `invoicd` can run its
                 // plausibility checks straight off the ProcessInitiated
                 // payload, as it already does for GPKE and WiM.
-                rechnung: Some(Box::new(build_rechnung(inv.segments()))),
+                rechnung: Some(Box::new(build_rechnung(inv.segments(), inv.decimal_mark()))),
                 // `SG1 RFF+ACE` and `IMD+7081` — Muss on the wire, and BO4E
                 // has no field for either. The first is what `E_0264`
                 // Prüfschritt 40 compares against the order on record; the

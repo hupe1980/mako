@@ -244,7 +244,7 @@ async function durchgang(browser: Browser, base: string, theme: "light" | "dark"
     await zeile.waitFor();
     await tabZu(page, zeile, zustand("Fristen, Liste"));
     await page.keyboard.press("Enter");
-    await page.getByRole("heading", { name: "51238696012", level: 2 }).waitFor();
+    await page.getByText(/^51238696012 · PID/).waitFor();
     const imDetail = await page
       .waitForFunction(() => document.activeElement?.tagName === "SECTION", null, {
         timeout: 2000,

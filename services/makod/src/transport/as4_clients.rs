@@ -176,11 +176,12 @@ impl As4Setup {
                 .iter()
                 .map(|f| certificate(&at("signing_cert_pem_files"), f))
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            let quirks = p
-                .quirks
-                .iter()
-                .map(|q| mako_as4::parse_quirk(&p.mp_id, q))
-                .collect::<Result<Vec<_>, _>>()?;
+            anyhow::ensure!(
+                p.quirks.is_none(),
+                "[[as4.partner]] {} quirks {}",
+                p.mp_id,
+                crate::config::QUIRKS_REMOVED
+            );
             partners.insert(PartnerEntry {
                 mp_id: p.mp_id.clone(),
                 agency: match &p.agency {
@@ -200,7 +201,6 @@ impl As4Setup {
                 endpoint: p.endpoint.clone(),
                 encryption_cert,
                 signing_certs,
-                quirks,
             })?;
             for vertreten in &p.de0004_ausnahme {
                 anyhow::ensure!(

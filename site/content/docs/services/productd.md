@@ -34,9 +34,12 @@ re-checks it.
 | `versenden-angebot` | `POST /angebote/{id}/versenden` | LF, MSB, ESA, ADMIN |
 | `entscheiden-angebot` | `POST /angebote/{id}/annehmen`, `/ablehnen` | LF, MSB, ESA, ADMIN |
 | `expire-angebote` | `POST /angebote/expire` | LF, MSB, ESA, ADMIN |
+| `quote-endkunde` | `POST /products/{lf_mp_id}/endkunden-angebote` | LF, ADMIN |
+| `read-endkunden-angebot` | `GET /endkunden-angebote/{id}` | LF, ADMIN |
 | `use-mcp` | the whole `/mcp` surface | LF, MSB, ESA, ADMIN |
 
-MSB and ESA write because `ENERGIEDIENSTLEISTUNG` covers what they sell. A
+MSB and ESA write because `ENERGIEDIENSTLEISTUNG` covers what they sell; the
+Endkunden-Angebot prices Strom or Gas supply and is the Lieferant's. A
 denial is a bare `403` with the reason in the log. There is no four-eyes split
 (`mako_roles` carries market roles only); `product_history` keeps every
 superseded version. An `[mcp]` key needs one of the `use-mcp` roles in
@@ -79,12 +82,14 @@ graph LR
 | `POST` | `/api/v1/products/{lf_mp_id}/resolve` | Product versions by code + date, batched — what `billingd` prices each leg of a period from |
 | `PUT/GET/DELETE` | `/api/v1/products/{lf_mp_id}/{product_code}/energiemix` | §42 EnWG Energiemix sub-resource — does not archive the product. The payload is a `Bo4e<Energiemix>` here and on the product `PUT` alike |
 | `GET` | `/api/v1/comparison-feed` | **Comparison portal feed** — ETag-cached, cursor-paginated tariff listing (PUBLISHED non-expired only); `jahreskosten_supply_*` for `verbrauch_kwh` |
-| `GET` | `/api/v1/comparison-feed/bo4e` | **BO4E Tarifinfo array** — § 41c EnWG canonical form; direct import by Verivox / Check24 / BNetzA MTS |
+| `GET` | `/api/v1/comparison-feed/bo4e` | **BO4E Tarifinfo array** — the § 41c Abs. 5 feed in BO4E form; direct import by comparison portals |
 | `PUT` | `/api/v1/epex-prices/{date}` | Import EPEX day-ahead prices (96/92/100 15-min MTUs, or 24 hourly; idempotent) |
 | `GET` | `/api/v1/epex-prices/{date}/quarter-hourly` | 15-min MTU points `{mtu_start, price_ct_kwh}` |
 | `GET` | `/api/v1/epex-prices/{year}/{month}/average` | Monthly average — used by `einsd` Direktvermarktung |
 | `PUT` | `/api/v1/nehs-prices/{date}` | Import a dated nEHS certificate price (EUR/t CO₂) — `source` ∈ `auktion`/`verkaufsphase`/`nachkauf`/`manual`, CHECK-constrained; anything else → 422. Each source is checked against what § 10 BEHG fixes for that year — see [nEHS certificate prices](#nehs-certificate-prices-behg) |
 | `GET` | `/api/v1/nehs-prices/latest?date=` | Most recent nEHS price at or before `date` — used by `billingd` for the Gas CO₂ component (CO2KostAufG §3) |
+| `POST` | `/api/v1/products/{lf_mp_id}/endkunden-angebote` | Price and freeze a binding B2C offer — see [Endkunden-Angebot](#endkunden-angebot) |
+| `GET` | `/api/v1/endkunden-angebote/{id}` | The frozen offer as stored, expired ones included; `404` for an unknown id |
 | `POST/GET` | `/api/v1/angebote` | B2B Angebot (quotation) — ANGELEGT→VERSANDT→ANGENOMMEN/ABGELEHNT/ABGELAUFEN |
 | `GET` | `/api/v1/angebote/{id}` | One Angebot |
 | `GET` | `/api/v1/angebote/{id}/comparison` | Prices the scenarios and persists the BO4E `Angebot` to `angebote.bo4e` |
@@ -183,6 +188,48 @@ field, then the attribute, and both `productd` and `billingd` go through it.
 through `rubo4e` with no enum falling through to `Unknown`.
 
 ---
+
+## Endkunden-Angebot
+
+The binding offer an online order is placed against. `vertragd` names it by
+`id` and `content_sha256` when the consumer orders, so it is stored
+append-only and never re-quoted: an expired offer is answered with a new one.
+
+```http
+POST /api/v1/products/9900357000004/endkunden-angebote
+Content-Type: application/json
+
+{ "product_code": "STROM-OEKO-24", "sparte": "STROM", "verbrauch_kwh": "3500",
+  "malo_id": "51238696012", "gewuenschter_lieferbeginn": "2027-02-01" }
+```
+
+Exactly one of `malo_id` (the NB is read from `marktd`
+`GET /api/v1/malos/{id}/grid`) and `nb_mp_id`; `plz` is refused
+`plz_nicht_unterstuetzt`. Every input is read for the gewünschte Lieferbeginn:
+
+| Line (`preise[].art`) | Source |
+|---|---|
+| `ARBEITSPREIS`, `GRUNDPREIS` | the product version in force and `PUBLISHED` |
+| `NETZENTGELT_ARBEITSPREIS`, `NETZENTGELT_GRUNDPREIS` | `marktd` Preisblatt Netznutzung of the NB — positions `ARBEITSPREIS_WIRKARBEIT`, `GRUNDPREIS` |
+| `MESSSTELLENBETRIEB` | `marktd` Preisblatt Messung of the NB as grundzuständiger Messstellenbetreiber — position `MESSSTELLENBETRIEB` |
+| `KONZESSIONSABGABE` | `marktd` Preisblatt Konzessionsabgabe — Strom: Tarifkunden up to 30 000 kWh (§ 2 Abs. 7 KAV), refused above; Gas: only a sheet for every Kundengruppe |
+| `SECT19_STROMNEV_UMLAGE`, `OFFSHORE_NETZUMLAGE`, `KWKG_UMLAGE` (Strom) | the dated series, group A′ |
+| `STROMSTEUER` / `ENERGIESTEUER`, `BEHG` (Gas) | the dated series; BEHG as for a B2B Gas quotation |
+| `UMSATZSTEUER`, `ARBEITSPREIS_GESAMT_BRUTTO`, `GRUNDPREIS_GESAMT_BRUTTO` | § 12 Abs. 1 UStG unless the product states its own rate |
+
+A sheet position needs its unit (`preiseinheit`, and `bezugsgroesse` or
+`zeitbasis`); a sheet with two positions of one kind does not say which
+applies. Anything missing refuses `422 eingabe_fehlt` with `fehlend` naming
+every item at once — never a zero. The answer carries `jahreskosten_brutto_eur`,
+`abschlag_monat_brutto_eur` (a twelfth), `gueltig_bis` (end of the fourteenth
+Berlin day), `lieferbeginn_fruehestens` (the day asked for) and
+`content_sha256`: SHA-256 over the RFC 8785 bytes of every field except `id`,
+`content_sha256` and `created_at`. `product_version` is the same hash over the
+product's `data`. The schema holds the hash to the stored bytes
+(`CHECK (content_sha256 = encode(sha256(kanonisch), 'hex'))`), and the
+`GET` answer is read back out of them.
+
+Without `marktd_url` the route answers `503 marktd_nicht_konfiguriert`.
 
 ## What productd is *not*
 
@@ -306,12 +353,14 @@ EnergieStG); a year the series has not read is refused with
 
 ## § 41c EnWG comparison feed
 
-§ 41c EnWG obliges suppliers to let independent comparison tools use
-offer-relevant information free of charge, in open data formats, for
-Haushaltskunden and Kleinstunternehmen below 100 000 kWh. So these two routes —
-and only these — carry no token and no Cedar action, and list only `PUBLISHED`
-products of the comparison categories (`STROM`, `GAS`, `WAERME`, `SOLAR`,
-`WAERMEPUMPE`, `WALLBOX`).
+§ 41c Abs. 5 Satz 2 EnWG: „Stromlieferanten müssen eine kostenlose Nutzung
+unmittelbar angebotsrelevanter Informationen in offenen Datenformaten
+ermöglichen." The duty is the Stromlieferant's and has no customer threshold;
+the 100 000 kWh of Abs. 1 bounds the BNetzA's duty to secure a free comparison
+instrument, not the supplier's. Publishing the other categories is the
+operator's choice, not a duty. So these two routes — and only these — carry no
+token and no Cedar action, and list only `PUBLISHED` products of the comparison
+categories (`STROM`, `GAS`, `WAERME`, `SOLAR`, `WAERMEPUMPE`, `WALLBOX`).
 
 `GET /api/v1/comparison-feed` is the tariff listing for Verivox, Check24, the
 BNetzA Markttransparenzstelle and similar integrators. Prices are the ones that
@@ -319,7 +368,7 @@ apply at the requested `verbrauch_kwh`: the Preisstaffel is chosen by BO4E's
 rule (a gap „rutscht in die obere Zone"); a kW-tiered Leistungspreis is reported
 absent. Each entry carries a `tarifinfo` BO4E object.
 
-### BO4E Tarifinfo endpoint (§ 41c EnWG canonical form)
+### BO4E Tarifinfo endpoint
 
 `GET /api/v1/comparison-feed/bo4e` returns the same products as a pure BO4E `Tarifinfo` array:
 
@@ -551,6 +600,14 @@ digit).
 | `data` | JSONB | `Tarifpreisblatt` / `Preisblatt` BO4E payload, validated on PUT (`_typ`, `_version` series `202607`, enums, `preistyp` whitelist) |
 | `energiemix` | JSONB | §42 EnWG `Energiemix` COM — CO₂ emissions, fuel mix, certification labels |
 | `oekolabel` | TEXT[] | Extracted from energiemix for GIN `@>` filter queries |
+
+### `endkunden_angebote`
+
+Append-only (row triggers refuse `UPDATE` and `DELETE`, a statement trigger
+`TRUNCATE`). `kanonisch` holds the RFC 8785 bytes `content_sha256` is computed
+over, and a `CHECK` ties the two; the typed columns beside them (`product_version`,
+`nb_mp_id`, `verbrauch_kwh`, `preise`, `jahreskosten_brutto_eur`, `gueltig_bis`,
+…) serve queries.
 
 ### `epex_prices`
 

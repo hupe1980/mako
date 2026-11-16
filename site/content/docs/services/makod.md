@@ -290,7 +290,7 @@ declaration that could widen them.
 
 | TOML key | Required | Description |
 |---|---|---|
-| `rollen` | yes | `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`, `esa-strom`. Each needs exactly one `[[party]]` MP-ID; see [Deployment roles](#deployment-roles) |
+| `rollen` | yes | `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`, `esa-strom`, `bkv-strom`. Each needs exactly one `[[party]]` MP-ID; see [Deployment roles](#deployment-roles) |
 
 ### `[[party]]` — operator identities (required)
 
@@ -299,7 +299,7 @@ At least one entry; one per Marktpartner-ID.
 | TOML key | Required | Description |
 |---|---|---|
 | `mp_id` | yes | 13-digit BDEW- (`99…`) or DVGW-Codenummer (`98…`) or GS1 GLN. An EIC is refused: it is not an MP-ID (BDEW-AWH Identifikatoren V1.2 Kap. 2.1, S. 4). A Gas role under a `99…` code, or a Strom role under a `98…` code, is refused (BDEW-AWH Identifikatoren V1.2 Kap. 2.2, S. 5: Stelle 1+2 „99 = BDEW/Strom", „98 = DVGW/Gas") |
-| `roles` | yes | Case-insensitive. Strom: `NB`, `ANB`, `VNB` (`nb-strom`), `LF` (`lf-strom`), `MSB`, `NMSB`, `AMSB` (`msb-strom`), `ESA` (`esa-strom`). Gas: `GNB` (`nb-gas`), `LFG` (`lf-gas`), `GMSB` (`msb-gas`). Each must belong to a declared `rollen` token; `BKV`, `UNB`, `BIKO`, `DP`, `EIV`, `MGV`, `FNB`, `KN` and `RB` have no module and are refused |
+| `roles` | yes | Case-insensitive. Strom: `NB`, `ANB`, `VNB` (`nb-strom`), `LF` (`lf-strom`), `MSB`, `NMSB`, `AMSB` (`msb-strom`), `ESA` (`esa-strom`), `BKV` (`bkv-strom`). Gas: `GNB` (`nb-gas`), `LFG` (`lf-gas`), `GMSB` (`msb-gas`). Each must belong to a declared `rollen` token; `UNB`, `BIKO`, `DP`, `EIV`, `MGV`, `FNB`, `KN` and `RB` have no module and are refused |
 | `primary` | no | Storage partition key (derives the `TenantId`) and default sender MP-ID; the first entry when none is marked |
 | `agency` | no | NAD DE 3055 override, one of `9`, `293`, `332` — the MIGs' NAD code list (UTILMD MIG Strom S2.2 S. 32–33, UTILMD MIG Gas G1.2 S. 17–18); anything else is refused. Derived from the MP-ID otherwise, by the same rule that renders the NAD: `99…` → `293`, `98…` → `332`, other 13 digits → `9` |
 
@@ -325,8 +325,8 @@ OIDC issuer, and when neither a policy directory nor `permit_all` is set.
 `startup::MODULE_TABLE` maps each role to its modules. Startup — and `--check` —
 refuses a configuration that declares no role, a declared role without exactly
 one `[[party]]` MP-ID, an MP-ID for a role the deployment does not declare, and
-a `[[party]]` role no module answers for (`BKV`, `UNB`, `BIKO`, `FNB`, `MGV`,
-`KN`, `DP`, `EIV`, `RB`). One MP-ID per role and Sparte is BDEW-AWH
+a `[[party]]` role no module answers for (`UNB`, `BIKO`, `FNB`, `MGV`, `KN`,
+`DP`, `EIV`, `RB`). One MP-ID per role and Sparte is BDEW-AWH
 Identifikatoren V1.2 Kap. 2.1 (S. 4): „Für jede Sparte (Gas bzw. Strom) und
 jede Rolle hat ein Markteilnehmer genau eine MP-ID."
 
@@ -341,15 +341,21 @@ roles = ["NB", "MSB"]
 
 | `rollen` token | `[[party]]` roles | Modules registered |
 |---|---|---|
-| `lf-strom` | `LF` | `GpkeModule` (LF side) · `EmobModule` (the LF answers 55240) |
+| `lf-strom` | `LF` | `GpkeModule` (LF side) · `MabisModule` (`mako_mabis::LF_PIDS`) · `EmobModule` (the LF answers 55240) |
 | `nb-strom` | `NB` · `ANB` · `VNB` | `GpkeModule` · `WimModule` · `MabisModule` · `EmobModule` · `RedispatchModule` |
-| `lf-gas` | `LFG` | `GeliGasModule` (LF side) |
+| `lf-gas` | `LFG` | `GeliGasModule` (LF side) · `GaBiGasModule` (the Allokationsliste 13013 only) |
 | `nb-gas` | `GNB` | `GeliGasModule` (GNB side) · `WimModule` · `GaBiGasModule` |
 | `msb-strom` | `MSB` · `NMSB` · `AMSB` | `GpkeModule` (the ORDERS a MSB receives: 17116, 17004/17102/17113, the GPKE Teil 3 Konfiguration ORDERS) · `WimModule` |
 | `msb-gas` | `GMSB` | `GeliGasModule` (the Anfrage Sperrung 17116 only) · `WimModule` |
 | `esa-strom` | `ESA` | `WimModule` (`esa-wertebestellung` and its `wim-wertebestellung` counterpart) |
+| `bkv-strom` | `BKV` | `MabisModule` (`mako_mabis::BKV_PIDS`: 13003, 13020, 21004, 21005, 55067, 55070, 17203, 17204, 17207, 19204) |
 
-`WimModule` covers both Sparten. `RedispatchModule` is NB Strom only — LF, MSB
+`WimModule` covers both Sparten. `bkv-strom` is the BKV of MaBiS, which is
+Strom; it makes the `mabis.abrechnung.*` commands licensable. The BKV's
+forwarded MaBiS-ZP (55062/55063, 55205/55208, 55211/55214) and its
+Zuordnungsermächtigung (55071/55072) are not routed to it, so a 13003 for a
+MaBiS-ZP whose Aktivierung it has not recorded is refused by name.
+`RedispatchModule` is NB Strom only — LF, MSB
 and gas-only deployments have no §§ 13/13a obligations (BK6-20-059/060/061 as
 consolidated by BK6-23-241).
 
@@ -486,16 +492,15 @@ its own AS4 client**: a combined Strom+Gas deployment holds two `[party.as4]`.
 | `[as4] message_id_domain` | The `id-right` of every `eb:MessageId`: `<outbox id>@<domain>` (RFC 2822 §3.6.4) |
 | `[as4] trust_anchor_pem_file` | SM-PKI root certificate |
 | `[as4] crl_signer_pem_file` | SM-PKI CCRL-S(Root) certificate |
-| `[as4] zertifikat_warnfenster_tage` | Days before expiry a `[party.as4]` or `[[as4.partner]]` certificate is reported as a warning, with its date; an expired one blocks. Default `30`. Re-read every six hours and on each request, so `GET /admin/einrichtung` and `makod_certificate_expiry_days` show the files as they stand. Key rotation without a restart: [Certificate expiry and rotation](@/docs/reference/as4-bdew.md#certificate-expiry-and-rotation) |
+| `[as4] zertifikat_warnfenster_tage` | Days before expiry a `[party.as4]` or `[[as4.partner]]` certificate warns; an expired one blocks. Default `30`, below `14` blocks (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.3) — see [Certificate expiry and rotation](@/docs/reference/as4-bdew.md#certificate-expiry-and-rotation) |
 | `[as4] allow_no_signing` (`MAKOD_ALLOW_NO_AS4_SIGNING`, `--allow-no-as4-signing`) | **Dev/test:** start without AS4 key material and without an outbox webhook; outbound EDIFACT is logged |
 | `[party.as4] signing_cert_pem_file` · `signing_key_pem_file` | The MP-ID's EMT.MAK signing certificate (leaf first, then intermediates) and key |
 | `[party.as4] encryption_cert_pem_file` · `encryption_key_pem_file` | Its encryption certificate and decryption key |
-| `[party.as4] tls_cert_pem_file` · `tls_key_pem_file` | Its TLS client certificate and key |
+| `[party.as4] tls_cert_pem_file` · `tls_key_pem_file` | Its TLS client certificate and key, presented when a partner MSH asks for one. Each certificate of the three carries the MP-ID as subject OU (Kap. 5.2) |
 | `[[as4.partner]] mp_id` · `agency` | The partner's MP-ID; the agency (party type) is derived from its prefix unless set |
-| `[[as4.partner]] endpoint` | Its inbox, `https://` only; omit for a partner makod only receives from |
-| `[[as4.partner]] encryption_cert_pem_file` | Required with `endpoint` |
+| `[[as4.partner]] endpoint` | Its inbox, `https://` on a host name (SNI, Kap. 3); the address the partner's certificate names, when it names one (Kap. 2); omit for a partner makod only receives from |
+| `[[as4.partner]] encryption_cert_pem_file` | Required with `endpoint`; its OU is the partner's MP-ID, and it names at most one URI address (Kap. 5.2) |
 | `[[as4.partner]] signing_cert_pem_files` | Pinned signing certificates; without any, the SM-PKI chain and the OU decide |
-| `[[as4.partner]] quirks` | `["receipt-without-non-repudiation"]` accepts that partner's **signed** receipt without NonRepudiationInformation |
 | `[[as4.partner]] de0004_ausnahme` | MP-IDs the partner may name in `UNB` DE0004 while authenticating as itself (a Dienstleister); without it DE0004 must be the partner's own MP-ID, and each entry is a startup warning |
 
 Partner endpoints are seeded into the durable `PartnerStore`; runtime changes via
@@ -542,7 +547,7 @@ operator. Set it back once the cutover is complete.
 | `As4::builder(..).build()` refuses (a signer not chaining to the root, no MP-ID in a certificate's OU, an expired certificate, …) | The `asx-rs` refusal names the setting and the profile section |
 | Two of a party's signing, encryption and TLS certificates certify one key pair | §2.3.4.4; compared by public key, not by certificate |
 | A partner endpoint on `http://`, or an endpoint without an encryption certificate | §2.2.6.2.2 encrypts every message for its recipient |
-| `as4.lenient_receipts` or `MAKOD_AS4_LENIENT_RECEIPTS` set | Every receipt is verified; the refusal names the per-partner `quirks` setting |
+| `[[as4.partner]] quirks`, `as4.lenient_receipts` or `MAKOD_AS4_LENIENT_RECEIPTS` set | Every receipt is verified with its NonRepudiationInformation; a transmission without an NRR has failed (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 7.3, S. 8) |
 
 **Sending.** A message for a partner goes out through the client of the
 interchange's sender (UNB DE0004) under Service
@@ -559,8 +564,7 @@ up to 7 days old; the retry window is 72 hours).
 
 - A delivery counts only when `As4::send` returns a verified receipt: signed by
   a pinned or SM-PKI certificate of the partner, referring to the sent message
-  id, echoing the signed digests as NonRepudiationInformation (unless the
-  partner's `quirks` say otherwise). Its evidence is kept (`as4ev/` in the store)
+  id, echoing the signed digests as NonRepudiationInformation. Its evidence is kept (`as4ev/` in the store)
   before the outbox entry is acknowledged.
 - A partner `eb:Error`, an unverifiable receipt and a transport failure back off
   and retry inside the **72-hour** window — protocol-safe with the same id and
@@ -1109,11 +1113,12 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55016 | LFN terminates the old supply contract (Kündigung LFN → LFA; 55017 is the Bestätigung) |
 | `gpke.beendigung-zuordnung.anfragen` | `NB` | GPKE | 55010 | Asks the LFA to release the Marktlokation (SD Lieferbeginn Nr. 3). The LFA answers 55011/55012 by **09:00 Uhr des 1. WT** nach dem ÜT der Anmeldung (`anmeldung_eingang`); silence counts as Zustimmung. The Anfrage also carries the windows of the Meldepflichten 55036 (07:00) and 55037 (12:00), which `gpke.zuordnung.informieren` / `.beenden` discharge |
-| `gpke.nb-lieferende.ankuendigen` | `NB` | GPKE | 55007 | Announces the end of an LF's Zuordnung (SD Lieferende von NB an LF Nr. 1, `Z33`/`ZQ7`/`ZT0`). The LF's 55008/55009 resume the process; on silence it sends the Beendigung aufgrund fehlender Antwort (55007 `BGM+Z90`) between **05:00 and 06:00 Uhr des 1. WT** (Nr. 3). A Stilllegung (`Z33`) takes `geraeteausbaudatum` and `msb_mp_id` (optionally `msbz`/`lfz`) and its ending sends 55611 and 55038 with their 07:00 Meldepflicht windows |
+| `gpke.nb-lieferende.ankuendigen` | `NB` | GPKE | 55007 | Announces the end of an LF's Zuordnung (SD Lieferende von NB an LF Nr. 1, `Z33`/`ZQ7`/`ZT0`); on silence the Beendigung (55007 `BGM+Z90`) leaves 05:00–06:00 Uhr des 1. WT (Nr. 3). A Stilllegung (`Z33`) also takes `geraeteausbaudatum` and `msb_mp_id` and ends with 55611 and 55038 |
 | `gpke.zuordnung.informieren` | `NB` | GPKE | 55036 | Tells the LFN **die Identität des LFA** (SD Lieferbeginn Nr. 2, 07:00 Uhr des 1. WT nach dem ÜT) |
 | `gpke.zuordnung.beenden` | `NB` | GPKE | 55037 | Ends the LFA's Zuordnung, naming Grund and Zuordnungsende (Nr. 10, 12:00 Uhr des 1. WT) |
 | `gpke.zuordnung.aufheben` | `NB` | GPKE | 55038 | Cancels a future LFZ Zuordnung (Nr. 13, 12:00 Uhr des 1. WT) |
 | `gpke.msb-zuordnung.beenden` | `NB` | GPKE | 55611 | Tells the MSB its Zuordnung ends (`ZC8`) or the MSBZ that a future one is cancelled (`ZH1`) — SD Lieferende von NB an LF Nr. 11 / 13 |
+| `geli.beendigung-zuordnung.anfragen` | `GNB` | GeLi Gas | 44010 | Gas twin of `gpke.beendigung-zuordnung.anfragen`: the Abmeldungsanfrage to the Altlieferant (GeLi Gas 3.0 Kap. 3.2.3; SD Lieferbeginn Nr. 3). The LFA answers 44011/44012 by **Ablauf des 3. WT** nach Eingang (AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 4); silence releases the Marktlokation. The Anfrage carries the 44036 window, which `geli.zuordnung.informieren` discharges; the 44037 window opens when the 44002 goes out |
 | `geli.zuordnung.informieren` | `GNB` | GeLi Gas | 44036 | Gas twin — Ablauf des 4. WT nach Eingang der Anmeldung |
 | `geli.zuordnung.beenden` | `GNB` | GeLi Gas | 44037 | Gas twin — am selben Tag wie die Antwort, nur bei Bestätigung |
 | `geli.zuordnung.aufheben` | `GNB` | GeLi Gas | 44038 | Gas twin — am selben Tag wie die Antwort |
@@ -1230,6 +1235,7 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `gabi.mehrmindermengen.melden` | `NB` | GaBi Gas (DVGW) | 70095 | Reports a Netzkonto's Mehr-/Mindermenge (SSQNOT); `verfahren` `slp` or `rlm` |
 | `geli.lieferbeginn.ablehnen` | `GNB` | GeLi Gas | 44003 | GNB rejects the Anmeldung Netznutzung (`G_0011`) |
 | `geli.nb-lieferende.bestaetigen` | `LFG` | GeLi Gas | 44008 | LFG confirms the GNB-initiated Lieferende |
+| `geli.beendigung-zuordnung.anfragen` | `GNB` | GeLi Gas | 44010 | Asks the LFA to release the Marktlokation (SD Lieferbeginn Nr. 3, GeLi Gas 3.0 Kap. 3.2.3). The LFA answers 44011/44012 by **Ablauf des 3. WT**; silence releases the Marktlokation. The process also carries the windows of the Meldepflichten 44036 (Ablauf des 4. WT nach Eingang der Anmeldung) and 44037 (the day of the 44002), which `geli.zuordnung.informieren` / `.beenden` discharge |
 | `geli.beendigung-zuordnung.bestaetigen` | `LFG` | GeLi Gas | 44011 | LFA confirms the Abmeldungsanfrage |
 | `geli.kuendigung.bestaetigen` | `LFG` | GeLi Gas | 44017 | LFA confirms the Kündigung (`G_0006`) |
 | `geli.eog.bestaetigen` | `LFG` | GeLi Gas | 44014 | E/G confirms the EoG Zuordnung |
@@ -1237,6 +1243,10 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 The ESA commands are listed under [ESA messages](#esa-messages) and the §20b
 commands under [Netzzugangsplattform](#netzzugangsplattform).
 Commands listing two Marktrollen always require `marktrolle`.
+
+The NB's Lieferende (`gpke.nb-lieferende.ankuendigen`) waits for the LF's
+55008/55009, which resume the process. A Stilllegung may also name `msbz` and
+`lfz`, and its 55611 and 55038 leave inside their 07:00 Meldepflicht windows.
 
 ### Outbound INVOIC and the E-Rechnung {#outbound-invoic-and-the-e-rechnung}
 
@@ -1382,11 +1392,15 @@ key it does not declare is refused; a missing fact is refused naming it, and the
 `mako_markt::commands::GpkeNeuanlageBeantworten`. An Anmeldung neue
 Marktlokation names its MaLo-ID only „Wenn bekannt", so `process_id` finds the
 process and `malo_id` is the Marktlokation the NB identified, which the
-Bestätigung names in `LOC+Z16`. A 55602 states `ZW6` or `ZW7` (`ZW7` when it
+Bestätigung names in `LOC+Z16`.
+
+A 55602 states `ZW6` or `ZW7` (`ZW7` when it
 names Messlokationen); a 55603 restates the Anmeldung's `ZW0`/`ZW2`. The
 `RFF+Z60` Produktpaket is the Anmeldung's unless stated. Messlokationen with
 their MSB are Muss behind `ZW7` and on every 55603, and a `ZW2` 55603 names
-its Tranche (`LOC+Z21`, `SEQ+Z15`, Bedingung `[478]`) or is refused. A
+its Tranche (`LOC+Z21`, `SEQ+Z15`, Bedingung `[478]`) or is refused.
+
+A
 Bestätigung that names the `malo_id` and states no Ergänzung, Messlokation or
 MSB — the one processd sends — takes them from marktd's record of the
 Marktlokation on the Anmeldung's Vertragsbeginn, the 55602 `ZW7` where marktd
@@ -1396,7 +1410,9 @@ refused.
 ⁶ An inbound Anfrage zur Stammdatenänderung opens the NB's
 `geli-gas-stammdatenaenderung` process and sends nothing: the NB checks it and
 answers within 10 WT (AWH GeLi Gas V1.2 Kap. 4.4.2 Nr. 2), and an unanswered
-Anfrage lapses into `FristAbgelaufen`. On `ZG2` the 44142 carries „die zum
+Anfrage lapses into `FristAbgelaufen`.
+
+On `ZG2` the 44142 carries „die zum
 Änderungsdatum gültigen Stammdaten" (EBD 4.3 Codeliste `G_0031`), which makod
 reads from marktd on the Anfrage's `DTM+157` for each group the Anfrage filled
 (UTILMD AHB Gas 1.2 Kap. 5.12.1, `[336]`): Termine (`RFF+Z18`), the
@@ -1526,7 +1542,9 @@ A process the Netzbetreiber opens itself is keyed apart from the bare MaLo:
 column names no Lokation, so the answer's `RFF+TN` is the only key it carries
 (UTILMD AHB Strom 2.2 Kap. 8.6, S. 127) —, `geli.eog.anmelden` (44013) under
 `gnb-anfrage:{MaLo}` (`mako_geli_gas::gnb_anfrage_key`); every process
-answering an inbound Anfrage stays on the bare MaLo. On a deployment that is NB
+answering an inbound Anfrage stays on the bare MaLo.
+
+On a deployment that is NB
 and LF at once both sides of one EoG run one workflow name (`gpke-eog`,
 `geli-gas-supplier-change`) on the same Marktlokation: the LF's copy of the
 55013/44013 opens the LF's own process, `gpke.eog.bestaetigen` /
@@ -2096,7 +2114,7 @@ A Formatumstellung the BNetzA dates elsewhere is not modelled.
 | `UNB` unreadable | **No CONTRL** (Kap. 2.2.2.1) — dead-lettered |
 | The interchange is a CONTRL | **No CONTRL** (Kap. 2.2.2.2) |
 
-DE 0085 codes come from `edifact_rs::contrl::SyntaxError` (ISO 9735-4 Annex A)
+DE 0085 codes come from `edifact::contrl::SyntaxError` (ISO 9735-4 Annex A)
 and are tested against CONTRL AHB 1.0 Kap. 3. The CONTRL and its escalation
 deadline are written in one transaction (`enqueue_outbox_with_deadlines`); the
 outbox worker discharges the deadline on delivery. The sender is the recipient

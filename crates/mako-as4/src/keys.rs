@@ -44,7 +44,7 @@ pub fn same_public_key(a: &asx::Certificate, b: &asx::Certificate) -> bool {
 
 /// The content of the TLV at the head of `der` when its tag is `tag`, and
 /// what follows it.
-fn tlv(der: &[u8], tag: u8) -> Option<(&[u8], &[u8])> {
+pub(crate) fn tlv(der: &[u8], tag: u8) -> Option<(&[u8], &[u8])> {
     if *der.first()? != tag {
         return None;
     }
@@ -54,12 +54,12 @@ fn tlv(der: &[u8], tag: u8) -> Option<(&[u8], &[u8])> {
 }
 
 /// `der` without its first TLV.
-fn skip(der: &[u8]) -> Option<&[u8]> {
+pub(crate) fn skip(der: &[u8]) -> Option<&[u8]> {
     der.get(element_len(der)?..)
 }
 
 /// The total length (header and content) of the TLV at the head of `der`.
-fn element_len(der: &[u8]) -> Option<usize> {
+pub(crate) fn element_len(der: &[u8]) -> Option<usize> {
     let (header, len) = header_and_len(der)?;
     let total = header.checked_add(len)?;
     (total <= der.len()).then_some(total)

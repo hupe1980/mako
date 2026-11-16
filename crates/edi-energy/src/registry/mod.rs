@@ -587,7 +587,7 @@ impl ReleaseRegistry {
     /// considered (e.g. [`ReleaseTrack::Strom`](crate::ReleaseTrack) for UTILMD
     /// Strom). This takes the typed track rather than a string prefix because
     /// prefix matching is the failure mode [`ReleaseTrack`](crate::ReleaseTrack)
-    /// was introduced to remove — `"S"` also prefixes any future BDEW code that
+    /// exists to remove — `"S"` also prefixes any future BDEW code that
     /// happens to start with it.
     ///
     /// # Algorithm

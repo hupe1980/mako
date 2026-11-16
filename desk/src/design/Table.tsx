@@ -48,7 +48,7 @@ export function Table<T>({
             key={s.id}
             id={s.id}
             {...(s.rowHeader ? { isRowHeader: true } : {})}
-            className={`px-5 py-2 text-left text-caption font-semibold uppercase tracking-wide text-text-2 ${s.className ?? ""}`}
+            className={`px-5 py-2 text-left text-caption font-semibold text-text-2 ${s.className ?? ""}`}
           >
             {s.titel}
           </Column>

@@ -1,4 +1,4 @@
-use edifact_rs::{
+use edifact::{
     EdifactDeserialize, EdifactSerialize, EventEmitter, OwnedSegment, ProfileRulePack,
     ValidationIssue, ValidationSeverity,
 };
@@ -531,14 +531,14 @@ impl UtilmdMessage {
 
 impl EdifactDeserialize for UtilmdMessage {
     fn edifact_deserialize(
-        segments: &[edifact_rs::Segment<'_>],
-    ) -> Result<Self, edifact_rs::EdifactError> {
+        segments: &[edifact::Segment<'_>],
+    ) -> Result<Self, edifact::EdifactError> {
         let (message_ref, assoc_code) = MessageCore::extract_unh_fields(segments)?;
         let pid = MessageCore::extract_bgm_pid(segments);
         let owned: Vec<OwnedSegment> = segments
             .iter()
             .cloned()
-            .map(edifact_rs::Segment::into_owned)
+            .map(edifact::Segment::into_owned)
             .collect();
         Ok(Self::from_parts(owned, message_ref, assoc_code, pid))
     }
@@ -550,7 +550,7 @@ impl EdifactSerialize for UtilmdMessage {
     fn edifact_serialize<E: EventEmitter>(
         &self,
         emitter: &mut E,
-    ) -> Result<(), edifact_rs::EdifactError> {
+    ) -> Result<(), edifact::EdifactError> {
         self.core.emit_segments(emitter)
     }
 }
@@ -560,7 +560,7 @@ impl_edi_energy_message!(UtilmdMessage, sem = utilmd_semantic_pack());
 // ── segment group parsers ─────────────────────────────────────────────────────
 
 /// Parse SG1 reference groups (RFF + optional DTM) from the header section.
-fn parse_references(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdReference> {
+fn parse_references(segments: &[edifact::Segment<'_>]) -> Vec<UtilmdReference> {
     // Header references appear before the first IDE segment.
     let end = segments
         .iter()
@@ -611,7 +611,7 @@ struct Sg4Acc {
 /// `SG8` opens on `SEQ` and everything until the next `SEQ` belongs to it;
 /// `CAV` attaches to the `CCI` above it, which is the only thing that says
 /// which Merkmal a value belongs to.
-fn collect_sg4_segment(seg: &edifact_rs::Segment<'_>, ctx: &mut Sg4Acc) {
+fn collect_sg4_segment(seg: &edifact::Segment<'_>, ctx: &mut Sg4Acc) {
     match &*seg.tag {
         "DTM" => {
             if let Some(d) = try_deserialize::<Dtm>(seg) {
@@ -725,7 +725,7 @@ fn collect_sg4_segment(seg: &edifact_rs::Segment<'_>, ctx: &mut Sg4Acc) {
 /// Parse SG4 transaction groups (IDE + nested DTM/LOC/RFF) from the message.
 ///
 /// Each `IDE` starts a new [`UtilmdTransaction`].
-fn parse_transactions(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdTransaction> {
+fn parse_transactions(segments: &[edifact::Segment<'_>]) -> Vec<UtilmdTransaction> {
     let mut result = Vec::new();
     let mut i = 0;
 
@@ -780,7 +780,7 @@ fn parse_transactions(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdTransac
 /// first — so the parts of a person's name past the Nachname are invisible to
 /// it. `C080`'s sixth component is DE 3045, the Namensformat, and is skipped
 /// here; [`Nad::name_format`] reads it.
-fn c080_name_parts(seg: &edifact_rs::Segment<'_>) -> Vec<String> {
+fn c080_name_parts(seg: &edifact::Segment<'_>) -> Vec<String> {
     seg.get_element(3)
         .map(|e| {
             (0..5)
@@ -793,7 +793,7 @@ fn c080_name_parts(seg: &edifact_rs::Segment<'_>) -> Vec<String> {
 }
 
 /// `STS` DE 9015 — the Statuskategorie, read from element 1 component 0.
-fn sts_category<'a>(seg: &'a edifact_rs::Segment<'_>) -> Option<&'a str> {
+fn sts_category<'a>(seg: &'a edifact::Segment<'_>) -> Option<&'a str> {
     seg.get_element(0)
         .and_then(|e| e.get_component(0))
         .filter(|c| !c.is_empty())
@@ -802,7 +802,7 @@ fn sts_category<'a>(seg: &'a edifact_rs::Segment<'_>) -> Option<&'a str> {
 /// `STS+7++<grund>+<ergaenzung>+<befristet>` — the three repeated `C556`
 /// composites at elements 3, 4 and 5 (zero-based 2, 3, 4).
 fn parse_transaktionsgrund(
-    seg: &edifact_rs::Segment<'_>,
+    seg: &edifact::Segment<'_>,
 ) -> Option<crate::utilmd_codes::Transaktionsgrund> {
     let at = |idx: usize| {
         seg.get_element(idx)
@@ -825,7 +825,7 @@ fn parse_transaktionsgrund(
 /// (`E_0622`) and an `S_00xx`/`G_00xx` identifier for the `WiM` MSB-Wechsel
 /// answers (`S_0090`). Both are valid values of the same
 /// element; the AHB says which per Anwendungsfall.
-fn parse_antwort(seg: &edifact_rs::Segment<'_>) -> Option<crate::utilmd_codes::AntwortStatus> {
+fn parse_antwort(seg: &edifact::Segment<'_>) -> Option<crate::utilmd_codes::AntwortStatus> {
     let c556 = seg.get_element(2)?;
     let code = c556.get_component(0).filter(|c| !c.is_empty())?;
     Some(crate::utilmd_codes::AntwortStatus {
@@ -861,7 +861,7 @@ fn utilmd_semantic_pack() -> ProfileRulePack {
 /// `Z16`/`Z22` Marktlokation (11 chars) and `Z17` Messlokation (33 chars). A
 /// Netzlokation, Tranche or Ressourcen-ID has its own scheme and is left alone.
 fn rule_sem_lokations_id_format(
-    segments: &[edifact_rs::Segment<'_>],
+    segments: &[edifact::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
     use crate::utilmd_codes::loc;

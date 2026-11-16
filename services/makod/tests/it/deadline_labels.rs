@@ -18,7 +18,7 @@
 //!    answered `None` on every firing.
 //! 3. **The `TimeoutExpired` arm asks the same guard** — a `handle` arm that
 //!    checks only `is_terminal()` acts on every label in every waiting state,
-//!    which is how a healthy, answered process came to be rejected.
+//!    and so rejects a healthy, answered process.
 //! 4. **No guard decides a delivery window** — the APERAK and CONTRL windows
 //!    are alerts about a message, never steps of the process beside them.
 //! 5. **No label is written twice**, and **no `on_deadline` is a catch-all**.

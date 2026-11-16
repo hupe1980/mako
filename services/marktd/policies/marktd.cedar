@@ -54,12 +54,14 @@ permit(
         Action::"read-melo-msb",
         Action::"read-bilanzierung",
         Action::"read-mabis-zp",
+        Action::"read-zuordnungsermaechtigung",
         Action::"read-grundversorger",
         Action::"read-energiemix",
         Action::"read-correlation",
         Action::"read-lokationszuordnung",
         Action::"read-pricat",
         Action::"read-mmma-preis",
+        Action::"read-referenzreihen",
         Action::"read-utilmd-stammdaten",
         Action::"use-mcp",
         Action::"read-policy",
@@ -169,10 +171,18 @@ permit(
 //   operator capabilities, not market-role ones.
 // manage-fanout — the dead-letter queue and the CloudEvent replay log. § 147 AO
 //   / GoBD evidence; requeueing a dead letter re-emits a market event.
+// import-referenzreihen — a published figure (the KAV Grenzpreis basis, an EEG
+//   Marktwert, the day-ahead price) every billing reads; a wrong one misprices
+//   every unit of its period, and the operator loads it under the publisher's
+//   licence, which is an operator decision rather than a market-role one.
 
 permit(
     principal,
-    action in [Action::"manage-subscription", Action::"manage-fanout"],
+    action in [
+        Action::"manage-subscription",
+        Action::"manage-fanout",
+        Action::"import-referenzreihen"
+    ],
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&

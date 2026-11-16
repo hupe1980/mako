@@ -47,11 +47,42 @@ pub mod gebuehrenbescheid;
 pub mod mahnung;
 pub mod preisanpassung;
 pub mod render;
+pub mod vertragsbestaetigung;
+pub mod vertragszusammenfassung;
 pub mod view;
+pub mod widerrufsbestaetigung;
 pub mod world;
 
 pub use render::{RenderError, RenderRequest, Rendered, render};
 pub use view::{DocumentView, LineView, PartyView, TotalsView, VatView};
+
+use crate::config::Anrede;
+
+/// A Textform view as its template receives it: the producer's view plus
+/// `anrede` (`"sie"` or `"du"`), the form of address the letter is written in.
+///
+/// outputd sets the field, never the producer — the form of address is the
+/// operator's `[policy] anrede`, and a producer's copy would be a second source
+/// for it. `None` when the view is not a JSON object.
+#[must_use]
+pub fn mit_anrede(view: &serde_json::Value, anrede: Anrede) -> Option<serde_json::Value> {
+    let mut object = view.as_object()?.clone();
+    object.insert("anrede".to_owned(), anrede.as_str().into());
+    Some(serde_json::Value::Object(object))
+}
+
+/// A typed specimen, serialised the way production hands a view to its
+/// template: with `anrede` set.
+///
+/// # Errors
+///
+/// A view that does not serialise to a JSON object.
+pub fn specimen_data<T: serde::Serialize>(view: &T, anrede: Anrede) -> anyhow::Result<String> {
+    let value = serde_json::to_value(view)?;
+    let data = mit_anrede(&value, anrede)
+        .ok_or_else(|| anyhow::anyhow!("a specimen view is a JSON object"))?;
+    Ok(data.to_string())
+}
 
 /// The reference invoice layout, published as a tenant's template on request.
 ///
@@ -76,3 +107,18 @@ pub const REFERENCE_PREISANPASSUNG: &str = include_str!("templates/preisanpassun
 /// The reference Gebührenbescheid layout — same rationale, same gate: the page
 /// must print what § 157 Abs. 1 AO attaches to a Bescheid.
 pub const REFERENCE_GEBUEHRENBESCHEID: &str = include_str!("templates/gebuehrenbescheid.typ");
+
+/// The reference Vertragszusammenfassung layout — same rationale, same gate:
+/// the page must print every item of § 41 Abs. 4 Satz 2 Nr. 1–6 EnWG.
+pub const REFERENCE_VERTRAGSZUSAMMENFASSUNG: &str =
+    include_str!("templates/vertragszusammenfassung.typ");
+
+/// The reference Vertragsbestätigung layout — same rationale, same gate: the
+/// page must print the contract's content and the Widerrufsbelehrung with the
+/// Muster-Widerrufsformular and the Wertersatz notice.
+pub const REFERENCE_VERTRAGSBESTAETIGUNG: &str = include_str!("templates/vertragsbestaetigung.typ");
+
+/// The reference Widerrufsbestätigung layout — same rationale, same gate: the
+/// page must print the declaration and the date and time of its receipt.
+pub const REFERENCE_WIDERRUFSBESTAETIGUNG: &str =
+    include_str!("templates/widerrufsbestaetigung.typ");

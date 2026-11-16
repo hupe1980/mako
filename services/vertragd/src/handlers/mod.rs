@@ -7,6 +7,7 @@
 //! | [`rahmenvertraege`] | B2B framework contracts and their cascade Kündigung |
 //! | [`stammdaten`] | GGV-Betreiber, § 41e Aggregatorverträge, dead-lettered outbound tasks |
 //! | [`inbound`] | Signed CloudEvent webhooks: MaKo outcomes and CPQ Angebote |
+//! | [`bestellungen`] | Online Vertragsschluss: Rechtsdokumente, Bestellungen, Annahme, Widerruf |
 //!
 //! ## Authentication and authorization are two gates
 //!
@@ -19,6 +20,7 @@
 //! customer-scoped actions from the operator ones. `tests/it/authorization_guard.rs`
 //! pins that every routed handler does both.
 
+pub mod bestellungen;
 pub mod inbound;
 pub mod kunden;
 pub mod rahmenvertraege;
@@ -157,6 +159,32 @@ pub fn router(ctx: Arc<Ctx>, enforcer: Arc<CedarEnforcer>) -> Router {
         .route(
             "/api/v1/vertraege/{id}/preisgarantie",
             get(vertraege::get_preisgarantie).put(vertraege::put_preisgarantie),
+        )
+        // ── Online-Vertragsschluss ───────────────────────────────────────────
+        .route(
+            "/api/v1/rechtsdokumente/{key}",
+            get(bestellungen::get_rechtsdokument).put(bestellungen::put_rechtsdokument),
+        )
+        .route("/api/v1/bestellungen", post(bestellungen::bestellen))
+        .route(
+            "/api/v1/bestellungen/{id}/annehmen",
+            post(bestellungen::annehmen),
+        )
+        .route(
+            "/api/v1/bestellungen/{id}/ablehnen",
+            post(bestellungen::ablehnen),
+        )
+        .route(
+            "/api/v1/bestellungen/{id}/nachweis",
+            get(bestellungen::nachweis),
+        )
+        .route(
+            "/api/v1/bestellungen/{id}/widerruf",
+            post(bestellungen::widerruf_bestellung),
+        )
+        .route(
+            "/api/v1/vertraege/{id}/widerruf",
+            post(bestellungen::widerruf_vertrag),
         )
         // ── Stammdaten & Betrieb ─────────────────────────────────────────────
         .route(

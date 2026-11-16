@@ -154,11 +154,13 @@ test-vertragd-db:
     {{ just_executable() }} suite vertragd dispatch_integration --include-ignored --test-threads=1
     {{ just_executable() }} suite vertragd bo4e_bodies --include-ignored --test-threads=1
     {{ just_executable() }} suite vertragd inbound_marker --include-ignored --test-threads=1
+    {{ just_executable() }} suite vertragd online_vertragsschluss --include-ignored --test-threads=1
 
 # Catalog integration tests for productd.
 test-productd-db:
     {{ just_executable() }} suite productd catalog_integration --include-ignored --test-threads=1
     {{ just_executable() }} suite productd angebot_acceptance --include-ignored --test-threads=1
+    {{ just_executable() }} suite productd endkunden_angebot --include-ignored --test-threads=1
 
 # All marktd integration suites (VersorgungsStatus, MeLo graph, ESA, registries,
 # durable fan-out, MaBiS-Zählpunkt, temporal constraints, tenant isolation, and
@@ -168,10 +170,11 @@ test-marktd-db:
         versorgung_integration:: melo_graph_integration:: \
         esa_integration:: registries_integration:: \
         fanout_durable_integration:: mabis_zp_integration:: \
+        zuordnungsermaechtigung_integration:: \
         temporal_constraints_integration:: tenant_isolation_integration:: \
         overlap_is_a_client_error:: konfigurationsprodukte_body:: \
         utilmd_stammdaten_integration:: lokationsbuendel_integration:: \
-        write_and_event_commit_together::
+        write_and_event_commit_together:: referenzreihen_integration::
 
 # invoicd's receipt store — the § 147 AO / GoBD audit trail, its per-tenant
 # uniqueness and the outbox delivery of the receipt event — and the ESA's
@@ -237,6 +240,11 @@ check-vorlauf-consulted:
 # No BEHG price table carries a year no enacted statute prices (from 2027)
 check-behg-prices:
     cargo xtask check-behg-prices
+
+# Every catalogued Referenzreihe is sourced, licensed and read; no value ships
+# for a series mako may not distribute (no EPEX value in the repository)
+check-referenzreihen:
+    cargo xtask check-referenzreihen
 
 # Local, not in `ci`: every spec's Status agrees with its tasks (or is Parked,
 # with nothing open and the roadmap's parked list naming it), and specs/ and
@@ -418,7 +426,7 @@ smoke-roles:
     for row in "nb-strom:NB:9900001000001" "lf-strom:LF:9900001000001" \
                "msb-strom:MSB:9900001000001" "esa-strom:ESA:9900001000001" \
                "nb-gas:GNB:9800001000001" "lf-gas:LFG:9800001000001" \
-               "msb-gas:GMSB:9800001000001"; do
+               "msb-gas:GMSB:9800001000001" "bkv-strom:BKV:9900001000001"; do
         IFS=: read -r rolle role mp_id <<< "$row"
         echo "==> rollen = [\"$rolle\"] (party role $role)"
         printf '[deployment]\nrollen = ["%s"]\n\n[[party]]\nmp_id = "%s"\nroles = ["%s"]\nprimary = true\n' \
@@ -505,7 +513,7 @@ ci:
     RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
 
 [private]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-referenzreihen check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the

@@ -8,8 +8,10 @@
 //! | [`aggregator`] | § 41e EnWG Aggregatorverträge |
 //! | [`sect14a`] | The § 14a EnWG module state of a supply component, valid-time |
 //! | [`gdpr`] | DSGVO Art. 15 export and Art. 17 pseudonymisation |
+//! | [`bestellungen`] | Online orders: Rechtsdokumente, Bestellnachweise, Bestellungen, Widerrufe |
 
 pub mod aggregator;
+pub mod bestellungen;
 pub mod gdpr;
 pub mod kunden;
 pub mod lifecycle;
@@ -57,14 +59,15 @@ pub use vertraege::{
     BillingCandidateRow, CreateKomponenteInput, CreateRahmenvertragInput,
     CreateVersorgungsvertragInput, InsertedKomponente, InsertedVertrag, KuendigungInput,
     KuendigungResult, KundeAnmeldedaten, PortfolioItemRow, RahmenvertragMaloRow, TarifwechselInput,
-    WiderrufResult, close_due_supply, derive_vertrag_status, fetch_komponente, fetch_preisgarantie,
-    fetch_rahmenvertrag, fetch_vertrag, fetch_vertrag_by_malo, insert_rahmenvertrag,
-    insert_versorgungsvertrag, kuendige_vertrag, kunde_anmeldedaten, list_aktive_malo_ids,
-    list_all_rahmenvertraege, list_billing_candidates, list_komponenten, list_offene_vertraege,
-    list_pending_kuendigungen, list_portfolio_by_kunde, list_rahmenvertraege_by_kunde,
-    list_rahmenvertrag_malos, list_versorgungsvertraege_by_rahmenvertrag, list_vertraege_by_kunde,
-    mark_kuendigung_bestaetigt, storniere_vertrag, update_komponente_status, update_vertrag_status,
-    upsert_preisgarantie, widerruf_kuendigung,
+    WiderrufResult, beende_komponenten, close_due_supply, derive_vertrag_status, fetch_komponente,
+    fetch_preisgarantie, fetch_rahmenvertrag, fetch_vertrag, fetch_vertrag_by_malo,
+    insert_rahmenvertrag, insert_versorgungsvertrag, insert_versorgungsvertrag_tx,
+    kuendige_vertrag, kunde_anmeldedaten, list_aktive_malo_ids, list_all_rahmenvertraege,
+    list_billing_candidates, list_komponenten, list_offene_vertraege, list_pending_kuendigungen,
+    list_portfolio_by_kunde, list_rahmenvertraege_by_kunde, list_rahmenvertrag_malos,
+    list_versorgungsvertraege_by_rahmenvertrag, list_vertraege_by_kunde,
+    mark_kuendigung_bestaetigt, storniere_vertrag, storniere_vertrag_tx, update_komponente_status,
+    update_vertrag_status, upsert_preisgarantie, widerruf_kuendigung,
 };
 
 // ── Row types ─────────────────────────────────────────────────────────────────
@@ -179,6 +182,14 @@ pub struct VersorgungsvertragRow {
     pub zahlungsziel_tage: Option<i32>,
     pub erp_contract_id: Option<String>,
     pub notizen: Option<String>,
+    /// `ONLINE` (concluded on `POST /api/v1/bestellungen`) or `SONSTIG`.
+    pub abschlussweg: String,
+    /// The Bestellnachweis of an online contract.
+    pub bestellnachweis_id: Option<Uuid>,
+    /// When the contract came about — the Widerrufsfrist's anchor
+    /// (§ 356 Abs. 2 Nr. 2 BGB). Recorded for online contracts.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub vertragsschluss_am: Option<time::OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]

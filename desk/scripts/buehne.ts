@@ -153,7 +153,10 @@ export const KONTEXT = {
 
 /** Build the Desk and serve the build, with the recorded runs in front of it. */
 export async function buehne(): Promise<{ base: string; schliessen: () => Promise<void> }> {
-  await build({ root: desk, logLevel: "error" });
+  // A production build whatever ran before it in this process: a dev server
+  // leaves NODE_ENV at development, and Vite then builds with DEV true.
+  process.env.NODE_ENV = "production";
+  await build({ root: desk, mode: "production", logLevel: "error" });
   // The build is the config file's; the preview takes none of it, so no dev
   // proxy stands behind the stage and no request can reach a running service.
   const server = await preview({

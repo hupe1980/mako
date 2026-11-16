@@ -325,6 +325,7 @@ With `dunning_auto_enabled = true` a daily worker escalates (idempotent through
 `auto_dunning_runs`) and then runs the [Sperr-Sequenz](#sperr-sequenz). Its
 first step closes every open case whose account owes nothing and clears its
 §§ 41f/41g state, so a paid-up customer is never walked into disconnection.
+
 `POST /api/v1/dunning/{account_id}/escalate` is the manual override. It takes
 the Mahnstufe and the Zahlungsfrist in days as required fields — they are what
 the Mahnung tells the customer, so an omitted one is refused, not defaulted.

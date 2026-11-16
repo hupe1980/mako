@@ -9,6 +9,7 @@
 //! | `GET` | `/api/v1/malos/{malo_id}/grid` | `Option<MaloGridRecord>` |
 //! | `GET` | `/api/v1/malos/{malo_id}/utilmd-stammdaten?stichtag=…` | `Option<MaloUtilmdStammdaten>` |
 //! | `GET` | `/api/v1/partners/{mp_id}` | `bool` (partner known) / `Option<PartnerEdi>` |
+//! | `GET` | `/api/v1/zuordnungsermaechtigungen/{lf_mp_id}` | `Vec<ZuordnungsermaechtigungRecord>` |
 //! | `GET` | `/api/v1/preisblaetter/{nb_mp_id}?date=…` | `Option<PreisblattNetznutzung>` |
 //! | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}?date=…` | `Option<PreisblattMessung>` |
 //! | `GET` | `/api/v1/energiemix/{nb_mp_id}?year=…` | `Option<NbEnergiemixRecord>` |
@@ -1366,6 +1367,40 @@ impl MarktdClient {
         Err(MarktdClientError::Http(format!("HTTP {}", status.as_u16())))
     }
 
+    /// `GET /api/v1/zuordnungsermaechtigungen/{lf_mp_id}` — every
+    /// Zuordnungsermächtigung on file that names this Lieferant, active or
+    /// ended.
+    ///
+    /// An empty list is an answer — no BKV has authorised this Lieferant — and
+    /// the NB's `E_0622` walk refuses on it; it is never a reason to skip the
+    /// check.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on a network error or any non-success
+    /// status, [`MarktdClientError::Deserialization`] on a body that does not
+    /// decode.
+    pub async fn zuordnungsermaechtigungen(
+        &self,
+        lf_mp_id: &str,
+    ) -> Result<Vec<crate::repository::ZuordnungsermaechtigungRecord>, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/zuordnungsermaechtigungen/{}",
+            self.base_url, lf_mp_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
     /// `GET /api/v1/partners/{mp_id}` — the EDI agreement recorded for the
     /// partner, read for every outbound INVOIC.
     ///
@@ -2294,6 +2329,78 @@ impl MarktdClient {
             .await
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
         Ok(Some(body))
+    }
+
+    /// `GET /api/v1/referenzreihen/{reihe}/wert` — the value of `reihe` for one
+    /// calendar `zeitraum`, as marktd knew it at `stand` (now when `None`).
+    ///
+    /// The inner `Err` is marktd's `422 referenzwert_fehlt`: no value for the
+    /// period is known. A caller refuses on it — substituting a zero or the
+    /// neighbouring period misprices every unit of the period.
+    ///
+    /// # Errors
+    /// Transport, any other non-2xx status, or deserialisation failure.
+    pub async fn referenzwert(
+        &self,
+        reihe: crate::referenzreihen::Reihe,
+        zeitraum: crate::referenzreihen::Zeitraum,
+        dim: &str,
+        stand: Option<OffsetDateTime>,
+    ) -> Result<
+        Result<crate::referenzreihen::Referenzwert, crate::referenzreihen::ReferenzwertFehlt>,
+        MarktdClientError,
+    > {
+        use crate::referenzreihen::{REFERENZWERT_FEHLT, Zeitraum};
+        let url = format!(
+            "{}/api/v1/referenzreihen/{}/wert",
+            self.base_url,
+            reihe.schluessel()
+        );
+        let mut query: Vec<(&str, String)> = vec![("dim", dim.to_owned())];
+        match zeitraum {
+            Zeitraum::Jahr { jahr } => query.push(("jahr", jahr.to_string())),
+            Zeitraum::Monat { jahr, monat } => {
+                query.push(("jahr", jahr.to_string()));
+                query.push(("monat", monat.to_string()));
+            }
+        }
+        if let Some(stand) = stand {
+            let s = stand
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|e| MarktdClientError::Http(format!("stand: {e}")))?;
+            query.push(("stand", s));
+        }
+        let resp = self
+            .client
+            .get(&url)
+            .query(&query)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+            let body: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+            if body["code"] == REFERENZWERT_FEHLT {
+                return serde_json::from_value(body)
+                    .map(Err)
+                    .map_err(|e| MarktdClientError::Deserialization(e.to_string()));
+            }
+            return Err(MarktdClientError::Http(format!(
+                "marktd refused the Referenzwert read: {}",
+                body["detail"]
+                    .as_str()
+                    .or(body["error"].as_str())
+                    .unwrap_or("422")
+            )));
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map(Ok)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 }
 

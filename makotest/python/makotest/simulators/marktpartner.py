@@ -42,6 +42,7 @@ on top instead of being a dependency of everyone who does not need one.
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -75,19 +76,60 @@ __all__ = [
 AntwortModus = Literal["bestaetigung", "ablehnung", "timeout"]
 
 
+#: How a character a finding message may carry, and UNOC (ISO 8859-1) cannot,
+#: travels on the wire.
+_UNOC_SPELLING = {
+    "\u2013": "-",  # en dash
+    "\u2014": "-",  # em dash
+    "\u2212": "-",  # minus sign
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u201e": '"',
+    "\u2026": "...",
+    "\u2192": "->",
+    "\u2208": "in",
+    "\u2209": "not in",
+    "\u2260": "!=",
+    "\u2264": "<=",
+    "\u2265": ">=",
+}
+
+
 def _wire_text(text: str | None, *, limit: int = 70) -> str | None:
-    """Trim derived prose to what the interchange charset can carry.
+    """Spell derived prose in the characters the interchange charset carries.
 
     The simulator *composes* this text from a validation finding rather than
     taking it from the caller, so it owns the result's encodability: an
     interchange declares `UNB+UNOC:3` (ISO 8859-1), and a finding message may
-    carry an em-dash or `∈`. Dropping the characters that cannot travel keeps a
-    refusal from failing on its own explanation — a caller-supplied text is
-    refused instead, where naming the problem is the useful answer.
+    carry an em-dash or `∈`. Such a character is respelled in UNOC — from
+    `_UNOC_SPELLING`, else from its compatibility decomposition — so a refusal
+    does not fail on its own explanation. A character with no UNOC spelling is
+    refused by name: dropping it would change what the text says.
     """
     if text is None:
         return None
-    return "".join(c for c in text if ord(c) <= 0xFF)[:limit] or None
+    spelled = []
+    for c in text:
+        if ord(c) <= 0xFF:
+            spelled.append(c)
+            continue
+        respelled = _UNOC_SPELLING.get(c)
+        if respelled is None:
+            respelled = "".join(
+                d
+                for d in unicodedata.normalize("NFKD", c)
+                if ord(d) <= 0xFF and not unicodedata.combining(d)
+            )
+        if not respelled:
+            raise ValueError(
+                f"U+{ord(c):04X} {c!r} has no spelling in UNOC (ISO 8859-1); "
+                "add one to _UNOC_SPELLING"
+            )
+        spelled.append(respelled)
+    return "".join(spelled)[:limit] or None
 
 
 #: Validation layers whose findings are a *syntax* problem, answered with a

@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use edifact_rs::Segment;
+use edifact::Segment;
 
 use super::model::{Element, MigProfile, Node, SegmentNode};
 
@@ -648,9 +648,9 @@ mod tests {
         serde_json::from_str(json).unwrap()
     }
 
-    fn segs(edi: &str) -> Vec<edifact_rs::OwnedSegment> {
-        edifact_rs::from_bytes(edi.as_bytes())
-            .map(|s| s.map(edifact_rs::Segment::into_owned))
+    fn segs(edi: &str) -> Vec<edifact::OwnedSegment> {
+        edifact::from_bytes(edi.as_bytes())
+            .map(|s| s.map(edifact::Segment::into_owned))
             .collect::<Result<Vec<_>, _>>()
             .unwrap()
     }
