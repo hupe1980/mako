@@ -9,7 +9,7 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
-## [0.34.2] — 2026-11-16
+## [0.35.0] — 2026-11-16
 
 ### Added
 
@@ -19,26 +19,13 @@ History before this file is in `git log`.
 - site: every docs page has its Markdown source at `<page URL>index.md`, `@/` links resolved to absolute URLs, with „View as Markdown" and „Copy page as Markdown" under the lead.
 - site: `/mako/llms.txt` (llmstxt.org) lists every page's Markdown twin with its description by section; `/mako/llms-full.txt` holds them all. Both are generated from `content/`.
 - `just build-site` builds the site as deployed; `just check-site` runs it and refuses a content page with no built HTML, a section `llms.txt` has no group for, and a search index whose page count differs from the content tree.
-
-### Changed
-
-- site: Zola builds no search index (`build_search_index = false`); the 1 MB `search_index.en.json` is gone. Mermaid is included only on a page whose content holds a diagram, decided at build time.
-
-### Fixed
-
-- READMEs: the root, crate and service READMEs follow one shape each and state current truth — corrected workflow and MCP counts, routes and config keys; facts held only in a README moved to the operator guides.
-- eeg-billing: `Eigenverbrauch` no longer cites § 21 Abs. 3 EEG, which is the Mieterstromzuschlag; `check-known-wrong` refuses that pairing.
-
-## [0.34.1] — 2026-11-16
-
-### Added
-
 - mako-as4: `part_properties::PartProperties` — the `eb:PartProperties` of Regelungen zum Übertragungsweg für AS4 2.6 Kap. 6 (`BDEWDocumentType` ← UNH DE0065, `BDEWApplicationReference` ← UNB DE0026 when present, `BDEWDocumentDate` ← UNB DE0017 as `YYYY-MM-DD`, `BDEWDocumentNo` ← UNB DE0020). makod sets them on every outbound Übertragungsdatei and records an inbound message's on the receive log line.
 - makod: `As4Clients::build_with_resolve` — the built-in client reaching a host at a pinned address (`asx::Builder::resolve`); the AS4 tests drive a real mutual-TLS handshake against `asx::testkit::tls::TlsMsh`.
 - xtask: `check-as4-controls` also requires the TLS identity, the `MAX_MESSAGE_BYTES` cap and the outbound part properties.
 
 ### Changed
 
+- site: Zola builds no search index (`build_search_index = false`); the 1 MB `search_index.en.json` is gone. Mermaid is included only on a page whose content holds a diagram, decided at build time.
 - **Breaking:** asx-rs 0.17 (was 0.16.2). The built-in client is OpenSSL: mutual TLS under BSI TR-03116-3 with Brainpool, the SM-PKI root as the only TLS root, SNI, the server chain CRL-checked before a request is written; a TLS refusal is a retryable transport error. `build()` now holds the RzÜ AS4 2.6 certificate rules — the MP-ID in the OU and exactly one URI subject alternative name on every certificate of the local and the partner triple (Kap. 5.2), the partner endpoint equal to the encryption certificate's address (Kap. 2) on a DNS host (Kap. 3) — and an inbound BDEW signer without one URI is `EBMS:0101`. Certificates without the URI no longer build: re-issue them with the AS4 address.
 - **Breaking:** makod `[[as4.partner]] endpoint` is optional: omitted, the address is taken from the encryption certificate (Kap. 2); a partner is deliverable when it has an encryption certificate, not an endpoint.
 - **Breaking:** makod `[party.as4] tls_cert_pem_file` / `tls_key_pem_file` missing stop the boot naming BDEW AS4-Profil 1.2 Kap. 2.2.6.1 and RzÜ AS4 2.6 Kap. 1.3, for a receive-only party too; an AS4 build refusal's finding cites RzÜ AS4 2.6 Kap. 1.3, 2, 3, 5.2.
@@ -53,6 +40,8 @@ History before this file is in `git log`.
 
 ### Fixed
 
+- READMEs: the root, crate and service READMEs follow one shape each and state current truth — corrected workflow and MCP counts, routes and config keys; facts held only in a README moved to the operator guides.
+- eeg-billing: `Eigenverbrauch` no longer cites § 21 Abs. 3 EEG, which is the Mieterstromzuschlag; `check-known-wrong` refuses that pairing.
 - Landing page: the total of 498 routed Prüfidentifikatoren is split against the published inventory — 460 of the 482 published ones, five more from AHB editions in force, 33 further DVGW codes; `published_counts` holds each part.
 - The BDEW AS4-Profil and the Regelungen zum Übertragungsweg are cited by Kapitel; `check-known-wrong` refuses a `§` on their chapters.
 
