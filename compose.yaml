@@ -1,0 +1,323 @@
+# `just demo` — Stadtwerke Musterstadt on the released images: PostgreSQL, the
+# fourteen services, the Desk and a seeder, one published port.
+#
+#     just demo            # deploy/demo/up.sh: pull, start, seed, print the URL
+#     just demo --build    # the same, the images built from this tree
+#     just demo-down       # stop it and forget its data
+#
+# **A demonstration, not a deployment.** Each service runs its
+# deploy/demo/<service>.toml: `[oidc] mode = "demo"` accepts the persona tokens
+# of deploy/demo/personas.json (`just token <persona>`), the configuration
+# check reports it, and every secret is a development literal.
+#
+# Only the Desk publishes a port. Its edge (deploy/demo/desk/nginx.conf) serves
+# the bundle and routes `/svc/<service>/` to the service with the token of the
+# persona its `mako_persona` cookie names; the services listen on the compose
+# network alone. One PostgreSQL holds a database per service
+# (deploy/postgres/init.sql). The seeder (`mako-seed seed --compose --verify`)
+# runs once when every service is healthy, writes through the public APIs only
+# and leaves an already seeded estate as it is.
+#
+# The image tag is `MAKO_VERSION`, which `just demo` sets to the workspace
+# version — the configurations here are that version's.
+
+name: mako-demo
+
+x-image: &build
+  context: .
+  args:
+    PROFILE: ${MAKO_BUILD_PROFILE:-release}
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+    environment:
+      POSTGRES_USER: mako
+      POSTGRES_PASSWORD: mako
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Runs once, on an empty data directory, before the server accepts
+      # connections — so a healthy postgres is one whose databases exist.
+      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mako"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  marktd:
+    image: ghcr.io/hupe1980/mako-marktd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: marktd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MARKTD_CONFIG: /etc/mako/marktd.toml
+    volumes:
+      - ./deploy/demo/marktd.toml:/etc/mako/marktd.toml:ro
+    # `just listen --host host.docker.internal` subscribes a receiver on the
+    # host; Docker Desktop resolves the name itself, on Linux this maps it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  makod:
+    image: ghcr.io/hupe1980/mako-makod:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: runtime
+    environment:
+      MAKOD_CONFIG: /etc/mako/makod.toml
+      # In memory: the demo config allows a volatile store, and the image's
+      # default data directory would select a persistent one.
+      MAKOD_DATA_DIR: ""
+    volumes:
+      - ./deploy/demo/makod.toml:/etc/mako/makod.toml:ro
+    restart: unless-stopped
+
+  processd:
+    image: ghcr.io/hupe1980/mako-processd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: processd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PROCESSD_CONFIG: /etc/mako/processd.toml
+    volumes:
+      - ./deploy/demo/processd.toml:/etc/mako/processd.toml:ro
+    restart: unless-stopped
+
+  invoicd:
+    image: ghcr.io/hupe1980/mako-invoicd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: invoicd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      INVOICD_CONFIG: /etc/mako/invoicd.toml
+    volumes:
+      - ./deploy/demo/invoicd.toml:/etc/mako/invoicd.toml:ro
+    restart: unless-stopped
+
+  edmd:
+    image: ghcr.io/hupe1980/mako-edmd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: edmd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      EDMD_CONFIG: /etc/mako/edmd.toml
+    volumes:
+      - ./deploy/demo/edmd.toml:/etc/mako/edmd.toml:ro
+      - edmd-warehouse:/var/lib/edmd/warehouse
+    restart: unless-stopped
+
+  netzbilanzd:
+    image: ghcr.io/hupe1980/mako-netzbilanzd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: netzbilanzd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NETZBILANZD_CONFIG: /etc/mako/netzbilanzd.toml
+    volumes:
+      - ./deploy/demo/netzbilanzd.toml:/etc/mako/netzbilanzd.toml:ro
+    restart: unless-stopped
+
+  productd:
+    image: ghcr.io/hupe1980/mako-productd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: productd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PRODUCTD_CONFIG: /etc/mako/productd.toml
+    volumes:
+      - ./deploy/demo/productd.toml:/etc/mako/productd.toml:ro
+    restart: unless-stopped
+
+  einsd:
+    image: ghcr.io/hupe1980/mako-einsd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: einsd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      EINSD_CONFIG: /etc/mako/einsd.toml
+    volumes:
+      - ./deploy/demo/einsd.toml:/etc/mako/einsd.toml:ro
+    restart: unless-stopped
+
+  billingd:
+    image: ghcr.io/hupe1980/mako-billingd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: billingd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BILLINGD_CONFIG: /etc/mako/billingd.toml
+    volumes:
+      - ./deploy/demo/billingd.toml:/etc/mako/billingd.toml:ro
+    restart: unless-stopped
+
+  outputd:
+    image: ghcr.io/hupe1980/mako-outputd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: outputd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      OUTPUTD_CONFIG: /etc/mako/outputd.toml
+    volumes:
+      - ./deploy/demo/outputd.toml:/etc/mako/outputd.toml:ro
+    restart: unless-stopped
+
+  accountingd:
+    image: ghcr.io/hupe1980/mako-accountingd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: accountingd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ACCOUNTINGD_CONFIG: /etc/mako/accountingd.toml
+    volumes:
+      - ./deploy/demo/accountingd.toml:/etc/mako/accountingd.toml:ro
+    restart: unless-stopped
+
+  vertragd:
+    image: ghcr.io/hupe1980/mako-vertragd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: vertragd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      VERTRAGD_CONFIG: /etc/mako/vertragd.toml
+    volumes:
+      - ./deploy/demo/vertragd.toml:/etc/mako/vertragd.toml:ro
+    restart: unless-stopped
+
+  portald:
+    image: ghcr.io/hupe1980/mako-portald:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: portald-runtime
+    environment:
+      PORTALD_CONFIG: /etc/mako/portald.toml
+    volumes:
+      - ./deploy/demo/portald.toml:/etc/mako/portald.toml:ro
+    restart: unless-stopped
+
+  agentd:
+    image: ghcr.io/hupe1980/mako-agentd:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: agentd-runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+      makod:
+        condition: service_healthy
+      marktd:
+        condition: service_healthy
+      invoicd:
+        condition: service_healthy
+      edmd:
+        condition: service_healthy
+      processd:
+        condition: service_healthy
+      netzbilanzd:
+        condition: service_healthy
+      productd:
+        condition: service_healthy
+      einsd:
+        condition: service_healthy
+      billingd:
+        condition: service_healthy
+      accountingd:
+        condition: service_healthy
+      vertragd:
+        condition: service_healthy
+    environment:
+      AGENTD_CONFIG: /etc/mako/agentd.toml
+    volumes:
+      - ./deploy/demo/agentd.toml:/etc/mako/agentd.toml:ro
+    restart: unless-stopped
+
+  desk:
+    image: ghcr.io/hupe1980/mako-desk:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: desk-runtime
+    ports:
+      - "127.0.0.1:${MAKO_PORT:-8000}:8080"
+    volumes:
+      - ./deploy/demo/desk/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/demo/desk/personas.conf:/etc/nginx/conf.d/00-personas.conf:ro
+      - ./deploy/demo/desk/config.json:/usr/share/nginx/html/config.json:ro
+    restart: unless-stopped
+
+  # Once, after every service answers its health check; an estate it has
+  # already seeded is left as it is.
+  seed:
+    image: ghcr.io/hupe1980/mako-seed:${MAKO_VERSION:-latest}
+    build:
+      <<: *build
+      target: seed-runtime
+    command: ["seed", "--compose", "--verify"]
+    depends_on:
+      marktd:
+        condition: service_healthy
+      makod:
+        condition: service_healthy
+      processd:
+        condition: service_healthy
+      invoicd:
+        condition: service_healthy
+      edmd:
+        condition: service_healthy
+      netzbilanzd:
+        condition: service_healthy
+      productd:
+        condition: service_healthy
+      einsd:
+        condition: service_healthy
+      billingd:
+        condition: service_healthy
+      outputd:
+        condition: service_healthy
+      accountingd:
+        condition: service_healthy
+      vertragd:
+        condition: service_healthy
+      portald:
+        condition: service_healthy
+      agentd:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  pgdata:
+  edmd-warehouse:

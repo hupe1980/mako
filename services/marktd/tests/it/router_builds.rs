@@ -1,6 +1,6 @@
 //! The router builds the way `mako_service::run` mounts it.
 //!
-//! `build` runs with the dev and the demo configuration and a lazy pool, and
+//! `build` runs with the demo configuration and a lazy pool, and
 //! the runner's infra routes are merged in exactly as at boot — so a route axum
 //! refuses, a merge collision with the runner's `/metrics` or `/health/*`, or a
 //! `build` that panics fails `cargo test` instead of the container start.
@@ -14,15 +14,8 @@ pub(crate) fn load(path: &str) -> marktd::config::Config {
 }
 
 #[tokio::test]
-async fn the_router_builds_from_the_dev_config() {
-    let _app = mako_service::build_for_test::<Marktd>(load("../../dev/config/marktd.toml"))
-        .await
-        .expect("the router builds");
-}
-
-#[tokio::test]
 async fn the_router_builds_from_the_demo_config() {
-    let _app = mako_service::build_for_test::<Marktd>(load("../../demos/eeg-billing/marktd.toml"))
+    let _app = mako_service::build_for_test::<Marktd>(load("../../deploy/demo/marktd.toml"))
         .await
         .expect("the router builds");
 }
@@ -33,7 +26,7 @@ async fn the_router_builds_from_the_demo_config() {
 /// The lazy pool points at a closed port, so the repository read is the fault.
 #[tokio::test]
 async fn a_database_failure_answers_with_an_error_id_and_no_driver_text() {
-    let app = mako_service::build_for_test::<Marktd>(load("../../dev/config/marktd.toml"))
+    let app = mako_service::build_for_test::<Marktd>(load("../../deploy/demo/marktd.toml"))
         .await
         .expect("the router builds");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -61,7 +54,7 @@ async fn a_database_failure_answers_with_an_error_id_and_no_driver_text() {
 /// boot are served read-only, through marktd's own authentication and Cedar.
 #[tokio::test]
 async fn the_policy_and_the_findings_are_served() {
-    let app = mako_service::build_for_test::<Marktd>(load("../../dev/config/marktd.toml"))
+    let app = mako_service::build_for_test::<Marktd>(load("../../deploy/demo/marktd.toml"))
         .await
         .expect("the router builds");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -75,7 +75,7 @@ pub const WORKFLOW_NAME: &str = "geli-gas-lf-anmeldung";
 /// | 44004 | Abmeldung NN — Lieferende (supply end)      | GNB | 3 WT |
 /// | 44016 | Kündigung beim Altlieferanten (LFN → LFA)   | LFA | 3 WT |
 ///
-/// 44016 does not go to the grid operator: GeLi Gas 3.0 § 3.1 has the
+/// 44016 does not go to the grid operator: GeLi Gas 3.0 Kap. 3.1 has the
 /// Neulieferant send the Kündigung straight to the Altlieferant, who must
 /// answer „unverzüglich, spätestens jedoch bis zum Ablauf des 3. Werktages".
 pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44004, 44016];

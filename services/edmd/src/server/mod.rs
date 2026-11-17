@@ -672,37 +672,48 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
             cfg.marktd_api_key.clone(),
             default_client(),
         );
-        marktd
-            .put_subscription(
-                &cfg.subscriber_id,
-                &SubscriptionRequest {
-                    webhook_url: &cfg.webhook_url,
-                    webhook_secret: cfg.webhook_secret.as_ref().map(|s| {
-                        use secrecy::ExposeSecret;
-                        let secret: &str = s.expose_secret();
-                        secret
-                    }),
-                    // Exactly the types `handler.rs` branches on: process
-                    // completions — MSCONS deliveries for meter-data storage and
-                    // Lieferbeginn/Lieferende for supply-handover readings — and
-                    // MaLo updates, which refresh the cached Bundesland. Not an
-                    // operator choice — a narrower set drops deliveries edmd
-                    // needs and a wider one registers a marktd fan-out edge it
-                    // discards.
-                    event_types: &[
-                        mako_events::mako::PROCESS_COMPLETED,
-                        mako_events::markt::MALO_UPDATED,
-                    ],
-                    // No PID filter exists to send: `marktd`'s `subscriptions`
-                    // table narrows on `roles`, `event_types` and `sparten` only.
-                    // The narrowing that actually runs is `handler.rs`'s branch on
-                    // `ALL_MSCONS_PIDS` — a strict superset of `MSCONS_PIDS`
-                    // adding the Redispatch PIDs 13020–13023/13026 — applied to
-                    // every event marktd fans out.
-                    active: true,
-                },
-            )
-            .await;
+        let subscriber_id = cfg.subscriber_id.clone();
+        let webhook_url = cfg.webhook_url.clone();
+        let webhook_secret = cfg.webhook_secret.clone();
+        let shutdown = cfg.shutdown.clone();
+        // In the background: marktd may come up after edmd, and edmd receives
+        // nothing until the subscription stands.
+        tokio::spawn(async move {
+            let secret = webhook_secret.as_ref().map(|s| {
+                use secrecy::ExposeSecret;
+                let secret: &str = s.expose_secret();
+                secret
+            });
+            marktd
+                .subscribe_until_registered(
+                    &subscriber_id,
+                    &SubscriptionRequest {
+                        webhook_url: &webhook_url,
+                        webhook_secret: secret,
+                        // Exactly the types `handler.rs` branches on: process
+                        // completions — MSCONS deliveries for meter-data storage
+                        // and Lieferbeginn/Lieferende for supply-handover
+                        // readings — and MaLo updates, which refresh the cached
+                        // Bundesland. Not an operator choice — a narrower set
+                        // drops deliveries edmd needs and a wider one registers a
+                        // marktd fan-out edge it discards.
+                        event_types: &[
+                            mako_events::mako::PROCESS_COMPLETED,
+                            mako_events::markt::MALO_UPDATED,
+                        ],
+                        // No PID filter exists to send: `marktd`'s
+                        // `subscriptions` table narrows on `roles`, `event_types`
+                        // and `sparten` only. The narrowing that actually runs is
+                        // `handler.rs`'s branch on `ALL_MSCONS_PIDS` — a strict
+                        // superset of `MSCONS_PIDS` adding the Redispatch PIDs
+                        // 13020–13023/13026 — applied to every event marktd fans
+                        // out.
+                        active: true,
+                    },
+                    shutdown.cancelled_owned(),
+                )
+                .await;
+        });
     }
 
     let pool_arc = Arc::new(pool);

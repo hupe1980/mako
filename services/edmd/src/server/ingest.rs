@@ -502,8 +502,9 @@ pub(crate) async fn post_direct_reads_inner(
     );
 
     if let Err(e) = state.repo.store_reads(validated).await {
-        tracing::error!(malo_id, error = %e, "edmd: direct push batch insert failed");
-        return ApiError::internal(e).into_response();
+        tracing::warn!(malo_id, error = %e, "edmd: direct push batch not stored");
+        return crate::handler::ingest_refusal(e, format!("direct push for MaLo {malo_id}"))
+            .into_response();
     }
 
     // Recorded once the readings are stored. Written first, the verdict stands
@@ -955,10 +956,10 @@ pub async fn post_corrections(
             )
                 .into_response()
         }
-        Err(e) => ApiError::internal(anyhow::Error::new(e).context(format!(
-            "edmd: corrections for MaLo {malo_id} could not be stored"
-        )))
-        .into_response(),
+        Err(e) => {
+            crate::handler::ingest_refusal(e, format!("corrections for MaLo {malo_id} not stored"))
+                .into_response()
+        }
     }
 }
 
@@ -1230,9 +1231,10 @@ pub async fn post_bulk_reads(
     if let Err(e) = state.repo.store_reads(validated).await {
         // Nothing committed: the batch is one statement. The body says so, so
         // the caller resubmits under the same `session_id`.
-        return ApiError::internal(anyhow::Error::new(e).context(format!(
-            "edmd: bulk import batch insert for MaLo {malo_id} failed"
-        )))
+        return crate::handler::ingest_refusal(
+            e,
+            format!("bulk import batch for MaLo {malo_id} not stored"),
+        )
         .with_fields(serde_json::json!({ "stored_count": 0, "session_id": session_id }))
         .into_response();
     }

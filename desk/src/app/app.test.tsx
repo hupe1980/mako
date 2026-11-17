@@ -68,8 +68,10 @@ describe("the Desk", () => {
     );
     await open("/prozess?key=51238696012");
     expect(await screen.findByText("Kein Prozess für „51238696012“")).toBeTruthy();
-    const sent = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls
-      .map(([, init]) => JSON.parse(String(init.body)))
+    // Only the tool calls: the runtime configuration is a GET without a body.
+    const sent = (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls
+      .filter(([, init]) => init?.body !== undefined)
+      .map(([, init]) => JSON.parse(String(init?.body)))
       .find((m) => m.method === "tools/call" && m.params.name === "get_process");
     // An identifier leaves the URL as the string it was — never a number.
     expect(sent?.params.arguments.business_key).toBe("51238696012");

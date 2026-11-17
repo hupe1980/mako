@@ -1,0 +1,54 @@
+{
+  "data": {
+    "_typ": "PREISBLATTNETZNUTZUNG",
+    "_version": "v202607.0.0",
+    "bezeichnung": "Netzentgelte Gas 2026 — Gasnetz Nachbarstadt 9800468000003",
+    "sparte": "GAS",
+    "preisstatus": "ENDGUELTIG",
+    "bilanzierungsmethode": "SLP",
+    "gueltigkeit": {
+      "_typ": "ZEITRAUM",
+      "startdatum": "2026-01-01",
+      "enddatum": "2026-12-31"
+    },
+    "herausgeber": {
+      "_typ": "MARKTTEILNEHMER",
+      "marktrolle": "NB",
+      "rollencodenummer": "9800468000003",
+      "rollencodetyp": "DVGW",
+      "sparte": "GAS"
+    },
+    "preispositionen": [
+      {
+        "_typ": "PREISPOSITION",
+        "berechnungsmethode": "STUFEN",
+        "leistungstyp": "ARBEITSPREIS_WIRKARBEIT",
+        "leistungsbezeichnung": "Arbeitspreis Gas",
+        "preiseinheit": "EUR",
+        "bezugsgroesse": "KWH",
+        "preisstaffeln": [
+          {
+            "_typ": "PREISSTAFFEL",
+            "preis": 0.0112,
+            "staffelgrenzeVon": 0
+          }
+        ]
+      },
+      {
+        "_typ": "PREISPOSITION",
+        "berechnungsmethode": "STUFEN",
+        "leistungstyp": "GRUNDPREIS",
+        "leistungsbezeichnung": "Grundpreis Gas",
+        "preiseinheit": "EUR",
+        "preisstaffeln": [
+          {
+            "_typ": "PREISSTAFFEL",
+            "preis": 48,
+            "staffelgrenzeVon": 0
+          }
+        ],
+        "zeitbasis": "JAHR"
+      }
+    ]
+  }
+}

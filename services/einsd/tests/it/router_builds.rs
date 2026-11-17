@@ -5,12 +5,13 @@
 //! runner's `/metrics` or `/health/*`, or a `build` that refuses its own config
 //! fails `cargo test` instead of the container start.
 
-/// `dev/config/einsd.toml` — what `just dev einsd` starts — builds a router.
+/// `deploy/demo/einsd.toml` — what `just dev` and `just demo` start — builds a router.
 #[tokio::test]
-async fn the_dev_config_builds_a_router() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/config/einsd.toml");
+async fn the_demo_config_builds_a_router() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/demo/einsd.toml");
     let cfg = mako_service::load_config_file::<einsd::config::EinsdConfig>("einsd", &path)
-        .expect("the dev configuration loads");
+        .expect("the demo configuration loads");
     let _app = mako_service::build_for_test::<einsd::Einsd>(cfg)
         .await
         .expect("the router builds");

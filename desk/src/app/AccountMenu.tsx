@@ -15,6 +15,7 @@ import { monogram } from "../views/kundenSuche";
 import { type Appearance, useAppearance } from "./appearance";
 import { useIdentity } from "./identity";
 import { SHEET } from "./keys";
+import { usePersona } from "./persona";
 import { ROLLEN, useRolle } from "./rollen";
 
 const ITEM =
@@ -35,6 +36,7 @@ const SECTION = "px-2.5 pt-1 pb-1 text-caption font-semibold text-text-2";
  */
 export function AccountMenu({ onShortcuts }: { onShortcuts: () => void }) {
   const identity = useIdentity();
+  const { personas, aktiv, waehlen } = usePersona();
   const { held } = useRolle();
   const [appearance, setAppearance] = useAppearance();
   const [sprache, setSprache] = useSprache();
@@ -80,6 +82,34 @@ export function AccountMenu({ onShortcuts }: { onShortcuts: () => void }) {
               </span>
             </Header>
           </MenuSection>
+          {aktiv && (
+            <>
+              <Separator className="my-1 border-t border-separator" />
+              {/* The demo sign-in only: the edge forwards the chosen persona's
+                  token, and Cedar answers the Desk as that persona. */}
+              <MenuSection
+                selectionMode="single"
+                disallowEmptySelection
+                selectedKeys={[aktiv.id]}
+                onSelectionChange={(keys) => {
+                  const [next] = [...keys];
+                  if (next) waehlen(String(next));
+                }}
+              >
+                <Header className={SECTION}>{t.konto.persona}</Header>
+                {personas.map((p) => (
+                  <MenuItem key={p.id} id={p.id} textValue={p.name} className={ITEM}>
+                    {({ isSelected }) => (
+                      <>
+                        <span className="flex-1">{p.name}</span>
+                        {isSelected && <Icon name="check" size={14} />}
+                      </>
+                    )}
+                  </MenuItem>
+                ))}
+              </MenuSection>
+            </>
+          )}
           <Separator className="my-1 border-t border-separator" />
           <MenuSection
             selectionMode="single"

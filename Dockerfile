@@ -7,8 +7,7 @@
 # Stages:
 #   chef           cargo-chef + Rust toolchain + native build deps
 #   planner        Analyse workspace, emit recipe.json
-#   demo-builder   makod, marktd, processd — what `just build-demo` builds
-#   builder        Every other service
+#   builder        Every service and the seeder (`mako-seed`)
 #   runtime-base   gcr.io/distroless/cc-debian12:nonroot + Europe/Berlin zone data
 #   *-runtime      One per binary, on runtime-base
 #
@@ -64,7 +63,6 @@ ARG PROFILE=release
 # default, or — in the release — the image a docker-builder job pushed of that
 # stage, so the bake copies finished binaries and compiles nothing.
 ARG BUILDER_IMAGE=builder
-ARG DEMO_BUILDER_IMAGE=demo-builder
 
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 1 — chef  (cargo-chef + Rust toolchain + native build deps)
@@ -131,39 +129,7 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3a — demo-builder  (makod, marktd, processd)
-# ╚══════════════════════════════════════════════════════════════════════════════
-# The three binaries `demos/nb-stp` starts, and the only ones whose runtime
-# stage copies from here. They pull in neither iceberg/datafusion (edmd, einsd)
-# nor LanceDB (agentd), which is what keeps this stage at a few minutes cold
-# while `builder` takes tens. A demo that needs a service from `builder` —
-# `demos/eeg-billing` needs edmd and einsd — builds that image on its own.
-FROM chef AS demo-builder
-ARG PROFILE=release
-
-COPY --from=planner /build/recipe.json recipe.json
-RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=cargo-target-demo,sharing=locked,target=/build/target \
-    cargo chef cook --profile ${PROFILE} \
-                    -p makod -p marktd -p processd \
-                    --recipe-path recipe.json
-
-COPY . .
-RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=cargo-target-demo,sharing=locked,target=/build/target \
-    CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} \
-                -p makod -p marktd \
-    && CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p processd --features integrated \
-    && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
-    && for bin in makod marktd processd; do \
-         cp "${BIN_DIR}/${bin}" "/usr/local/bin/${bin}" && strip "/usr/local/bin/${bin}" || exit 1; \
-         rust-audit-info "/usr/local/bin/${bin}" > /dev/null \
-           || { echo "${bin}: no cargo-auditable manifest after strip" >&2; exit 1; }; \
-       done \
-    && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3b — builder  (every service demo-builder does not build)
+# ║ Stage 3 — builder  (every service and the seeder)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM chef AS builder
 ARG PROFILE=release
@@ -180,9 +146,10 @@ COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     cargo chef cook --profile ${PROFILE} \
+                    -p makod -p marktd -p processd \
                     -p invoicd -p edmd -p netzbilanzd -p einsd \
                     -p productd -p billingd -p outputd -p accountingd -p vertragd \
-                    -p portald -p agentd \
+                    -p portald -p agentd -p mako-seed \
                     --recipe-path recipe.json
 
 # ── Application layer (rebuilt on every source change) ────────────────────────
@@ -190,20 +157,23 @@ COPY . .
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} \
+                -p makod -p marktd \
                 -p invoicd -p edmd -p netzbilanzd -p einsd \
                 -p productd -p billingd -p outputd -p accountingd -p vertragd \
-                -p portald -p agentd \
+                -p portald -p agentd -p mako-seed \
+    && CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p processd --features integrated \
     && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
-    && for bin in invoicd edmd netzbilanzd einsd \
-                  productd billingd outputd accountingd vertragd portald agentd; do \
+    && for bin in makod marktd processd invoicd edmd netzbilanzd einsd \
+                  productd billingd outputd accountingd vertragd portald agentd mako-seed; do \
          cp "${BIN_DIR}/${bin}" "/usr/local/bin/${bin}" && strip "/usr/local/bin/${bin}" || exit 1; \
          rust-audit-info "/usr/local/bin/${bin}" > /dev/null \
            || { echo "${bin}: no cargo-auditable manifest after strip" >&2; exit 1; }; \
-       done
+       done \
+    && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod \
+    && install -d -o 65532 -g 65532 -m 0700 /var/lib/edmd/warehouse
 
-# The binaries the runtime stages copy, from BUILDER_IMAGE / DEMO_BUILDER_IMAGE.
+# The binaries the runtime stages copy, from BUILDER_IMAGE.
 FROM ${BUILDER_IMAGE} AS service-binaries
-FROM ${DEMO_BUILDER_IMAGE} AS demo-binaries
 
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 4 — runtime-base (distroless)
@@ -249,7 +219,7 @@ LABEL org.opencontainers.image.version="${OCI_VERSION}" \
 # Binaries are root:root 0755 and run as uid 65532 (distroless nonroot).
 
 FROM runtime-base AS marktd-runtime
-COPY --from=demo-binaries --chown=root:root /usr/local/bin/marktd /usr/local/bin/marktd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/marktd /usr/local/bin/marktd
 EXPOSE 8180
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/marktd", "--check"]
@@ -258,7 +228,7 @@ LABEL org.opencontainers.image.title="marktd" \
       org.opencontainers.image.description="Market Data Hub daemon — MaLo/MeLo master data, Versorgungsstatus, Preisblätter, event fan-out"
 
 FROM runtime-base AS processd-runtime
-COPY --from=demo-binaries --chown=root:root /usr/local/bin/processd /usr/local/bin/processd
+COPY --from=service-binaries --chown=root:root /usr/local/bin/processd /usr/local/bin/processd
 EXPOSE 8580
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
     CMD ["/usr/local/bin/processd", "--check"]
@@ -277,6 +247,9 @@ LABEL org.opencontainers.image.title="invoicd" \
 
 FROM runtime-base AS edmd-runtime
 COPY --from=service-binaries --chown=root:root /usr/local/bin/edmd /usr/local/bin/edmd
+# The cold tier's filesystem warehouse, owned by uid 65532 so a named volume
+# mounted here (`just demo`) starts writable.
+COPY --from=service-binaries /var/lib/edmd /var/lib/edmd
 EXPOSE 8380
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/edmd", "--check"]
@@ -365,6 +338,14 @@ ENTRYPOINT ["/usr/local/bin/agentd"]
 LABEL org.opencontainers.image.title="agentd" \
       org.opencontainers.image.description="Multi-agent LLM orchestration daemon — agentplane durable runtime, LanceDB RAG, MCP tools"
 
+# The seeder — fills a running estate with Stadtwerke Musterstadt through the
+# services' public APIs and verifies it; `just demo` runs it once.
+FROM runtime-base AS seed-runtime
+COPY --from=service-binaries --chown=root:root /usr/local/bin/mako-seed /usr/local/bin/mako-seed
+ENTRYPOINT ["/usr/local/bin/mako-seed"]
+LABEL org.opencontainers.image.title="mako-seed" \
+      org.opencontainers.image.description="Demo seeder — one Stadtwerk through the public APIs, verified"
+
 # The Desk — the operator's web UI as a static bundle, served behind the
 # gateway (oauth2-proxy, `desk/deploy/gateway.yaml`), which signs the person
 # in and forwards `/svc/<service>/` with their access token.
@@ -394,13 +375,13 @@ LABEL org.opencontainers.image.title="desk" \
 
 # makod — last, so a plain `docker build .` builds it.
 FROM runtime-base AS runtime
-COPY --from=demo-binaries --chown=root:root /usr/local/bin/makod /usr/local/bin/makod
+COPY --from=service-binaries --chown=root:root /usr/local/bin/makod /usr/local/bin/makod
 
 # Persistent state directory — pre-created with uid 65532 ownership so that
 # SlateDB can write here even when no volume is mounted (e.g. --check mode).
 # VOLUME is declared AFTER this COPY so Docker does not discard the ownership.
 # Mount a named volume or PVC here; ensure it is writable by uid 65532.
-COPY --from=demo-binaries /var/lib/makod /var/lib/makod
+COPY --from=service-binaries /var/lib/makod /var/lib/makod
 VOLUME ["/var/lib/makod"]
 
 # makod reads its own MAKOD_* variables, not the mako-service fallbacks.

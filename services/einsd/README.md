@@ -9,7 +9,7 @@ a refusal, never a substitute.
 
 | | |
 |---|---|
-| **Port** | 9180 (`dev/ports.toml`) |
+| **Port** | 9180 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `einspeiser`, `eeg_anlagen`, `settlement_receipts`, `marktwert_preise`, `enfg_ledger`, … |
 | **MCP** | 20 tools, 6 prompts at `/mcp` |
 | **Emits** | `de.eeg.verguetung.berechnet`, `de.eeg.marktpraemie.berechnet`, `de.eeg.veraeusserungsform.gewechselt`, `de.eeg.anlage.*` |
@@ -19,8 +19,8 @@ a refusal, never a substitute.
 ## Run
 
 ```bash
-just dev einsd         # dev/config/einsd.toml against the dev PostgreSQL
-EINSD_CONFIG=dev/config/einsd.toml cargo run -p einsd -- --check-config
+just dev    # the whole estate, einsd on deploy/demo/einsd.toml, seeded
+EINSD_CONFIG=deploy/demo/einsd.toml cargo run -p einsd -- --check-config
 ```
 
 `just test-einsd-db` runs the PostgreSQL suite.

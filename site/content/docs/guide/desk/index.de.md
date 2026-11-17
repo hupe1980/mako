@@ -5,7 +5,8 @@ weight = 3
 
 [extra]
 translated_from = "content/docs/guide/desk/index.md"
-source_sha256 = "a9c69f901e58593eff65cac1c0b149d26701f0d73465a07dc654ba70d00bfb98"
+source_sha256 = "91c75d5321660d4c0f7c1fa6aaee237c34d491c47b43631f6a147b2340248fab"
+
 +++
 **mako Desk** ist deine Arbeitsoberfläche im Betrieb. Er liest die MCP-Tools
 der Dienste — dieselbe typisierte Leseschnittstelle, die auch die Agenten
@@ -19,10 +20,12 @@ das, was ein Dienst geliefert hat.
 ## Starten
 
 ```sh
-just desk
+just dev
 ```
 
-startet makod und den Desk mit Hot Reload und öffnet `http://localhost:5173`.
+startet jeden Dienst, das geseedete Stadtwerk und den Desk mit Hot Reload auf
+`http://localhost:5173`; `just dev-ui` startet den Desk allein auf seinen
+aufgezeichneten Antworten.
 
 In Produktion ist der Desk das Image `mako-desk` — das statische Bundle auf Port
 8080 — hinter [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) als
@@ -618,7 +621,8 @@ Screenshots auf dieser Seite stammen aus dem Produktions-Build.
 
 | Befehl | Was er tut |
 |---|---|
-| `just desk` | makod + der Desk mit Hot Reload |
+| `just dev` | jeder Dienst, der Seed und der Desk mit Hot Reload |
+| `just dev-ui` | der Desk allein auf seinen aufgezeichneten Antworten (`desk/fixtures`) |
 | `just desk-gen` | `services/*/mcp.snapshot.json` aktualisieren und die Typen des Desks neu erzeugen |
 | `just desk-check` | erzeugte Typen aktuell, `tsc`, Biome, Vitest — Teil von `just ci` |
 | `just desk-screenshots` | die Screenshots auf dieser Seite neu erzeugen |

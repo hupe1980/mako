@@ -8,7 +8,7 @@ they arrived. What a document says stays with the issuing service (`billingd`,
 
 | | |
 |---|---|
-| **Port** | 9880 (`dev/ports.toml`) |
+| **Port** | 9880 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL, `public` schema — template store, issued documents, delivery tracks |
 | **MCP** | none |
 | **Emits** | no CloudEvents; each pushed delivery is a signed `event_outbox` command to its relay |
@@ -21,8 +21,8 @@ Document kinds: `INVOICE`, `MAHNUNG`, `PREISANPASSUNG`, `GEBUEHRENBESCHEID`,
 ## Run
 
 ```bash
-just dev outputd    # dev/config/outputd.toml against the dev PostgreSQL
-OUTPUTD_CONFIG=dev/config/outputd.toml cargo run -p outputd -- --check-config
+just dev    # the whole estate, outputd on deploy/demo/outputd.toml, seeded
+OUTPUTD_CONFIG=deploy/demo/outputd.toml cargo run -p outputd -- --check-config
 just test-outputd-db
 just zugferd-verify # veraPDF + Mustang, containerized; not part of just ci
 ```

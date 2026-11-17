@@ -23,14 +23,14 @@ async fn the_mcp_server_passes_the_round_trips() {
     )]
     let pool = sqlx::PgPool::connect(&url).await.expect("connect");
 
-    let mut cfg: toml::Value = toml::from_str(include_str!("../../../../dev/config/edmd.toml"))
-        .expect("the dev configuration parses");
+    let mut cfg: toml::Value = toml::from_str(include_str!("../../../../deploy/demo/edmd.toml"))
+        .expect("the demo configuration parses");
     cfg["database"]["url"] = toml::Value::String(url);
     if let Some(db) = cfg["database"].as_table_mut() {
         db.remove("migration_url");
     }
-    // `dev/env.sh` supplies the warehouse the dev config's enabled `[archive]`
-    // needs; the suite gives it a throwaway one.
+    // The demo configuration's `[archive]` names a warehouse inside its
+    // container; the suite gives it a throwaway one.
     let warehouse = tempfile::tempdir().expect("warehouse tempdir");
     cfg["archive"]
         .as_table_mut()
@@ -41,7 +41,7 @@ async fn the_mcp_server_passes_the_round_trips() {
         );
     let cfg = cfg
         .try_into()
-        .expect("the dev configuration is an edmd one");
+        .expect("the demo configuration is an edmd one");
     let app = mako_service::build_for_test_on::<edmd::Edmd>(cfg, pool)
         .await
         .expect("the router builds");

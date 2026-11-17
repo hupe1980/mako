@@ -4,12 +4,11 @@
 
 mod authorization_guard;
 mod demo_config;
-mod demo_payloads;
-mod dev_config;
 mod mcp_round_trips;
 mod mutating_tools;
 mod router_builds;
 mod schema_code_guard;
+mod seed_payloads;
 mod settlement_integration;
 mod settlement_tests;
 mod verguetungssaetze_seed_guard;

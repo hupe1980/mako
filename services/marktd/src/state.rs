@@ -30,4 +30,7 @@ pub struct AppState {
     /// is compared against the caller's `mako_tenant` claim and written on
     /// tenant-scoped rows, never parsed.
     pub tenant: String,
+    /// `[webhook] allow_loopback_subscribers` — a subscriber endpoint on a
+    /// loopback host is admitted (`just dev`).
+    pub allow_loopback_subscribers: bool,
 }

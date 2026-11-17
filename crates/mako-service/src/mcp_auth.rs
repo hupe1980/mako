@@ -488,7 +488,9 @@ impl McpAuth {
         next: Next,
     ) -> axum::response::Response {
         // ── Dev mode: OIDC disabled and no API keys → allow all ────────────
-        if self.oidc.is_disabled() && self.api_keys.is_empty() {
+        // The demo sign-in is the same for a request carrying no persona
+        // token: only a JWT is verified, against the demo key.
+        if self.is_dev_request(request.headers()) {
             request.extensions_mut().insert(McpIdentity {
                 name: "dev-mode".to_owned(),
                 method: McpAuthMethod::DevMode,
@@ -620,7 +622,7 @@ impl McpAuth {
     ) -> Result<(), axum::response::Response> {
         // Same posture as `authenticate`: nothing to enforce without Cedar, and
         // dev mode (no OIDC and no keys) carries no caller to evaluate.
-        if self.cedar.is_none() || self.is_dev_mode() {
+        if self.cedar.is_none() || self.is_dev_request(headers) {
             return Ok(());
         }
         let token = headers
@@ -745,6 +747,22 @@ impl McpAuth {
         self.oidc.is_disabled() && self.api_keys.is_empty()
     }
 
+    /// Dev mode, or the demo sign-in (`[oidc] mode = "demo"`) for a request
+    /// carrying no persona token: only a JWT is verified there, against the
+    /// demo key; anything else is the dev principal, as with auth off.
+    fn is_dev_request(&self, headers: &axum::http::HeaderMap) -> bool {
+        if self.is_dev_mode() {
+            return true;
+        }
+        self.oidc.is_demo()
+            && self.api_keys.is_empty()
+            && !headers
+                .get("Authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.strip_prefix("Bearer "))
+                .is_some_and(OidcVerifier::looks_like_jwt)
+    }
+
     /// Evaluate `action` for a named key under the roles it declares.
     ///
     /// A key is issued by the operator running this deployment, so its principal
@@ -804,7 +822,7 @@ impl McpAuth {
     /// reads as evidence.
     #[must_use]
     pub fn identify(&self, headers: &axum::http::HeaderMap) -> Option<McpIdentity> {
-        if self.is_dev_mode() {
+        if self.is_dev_request(headers) {
             return Some(McpIdentity {
                 name: "dev-mode".to_owned(),
                 method: McpAuthMethod::DevMode,

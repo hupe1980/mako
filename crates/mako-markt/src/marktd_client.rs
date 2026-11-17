@@ -66,6 +66,10 @@ pub enum MarktdClientError {
     #[error("marktd response deserialization failed: {0}")]
     Deserialization(String),
 
+    /// marktd refused the credential (401/403): no retry fixes it.
+    #[error("marktd refused the request: {0}")]
+    Forbidden(String),
+
     /// The circuit breaker is open, so no request was made.
     ///
     /// Distinct from [`Self::Http`] because nothing was attempted, and — the
@@ -746,33 +750,6 @@ impl MarktdClient {
         })
     }
 
-    /// `GET /api/v1/esa/framework/{msb}/{esa}` — whether the bilateral
-    /// ESA-Rahmenvertrag is established (`E_0256` Prüfschritt 6).
-    ///
-    /// `true` requires both an EDI agreement on file and a certificate state
-    /// that is not negative. A `404` means no agreement was ever recorded,
-    /// which is `false`: UC 4.1.1 lists the vertragliche Grundlage among the
-    /// Vorbedingungen the MSB must hold.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MarktdClientError::Http`] on network or HTTP errors.
-    /// The prices an ESA accepted from an MSB, in force on `at`.
-    ///
-    /// **The ESA price basis for an INVOIC 31009.** `get_preisblatt_messung`
-    /// returns what an MSB *publishes* toward the NB and the LF; there is no
-    /// such sheet for the Kapitel-4.6 Messprodukte, because `§35 MsbG` leaves the
-    /// Entgelt for a Zusatzleistung to be agreed per request. The accepted
-    /// QUOTES 15003 Angebot is the agreement, and the invoice names the same
-    /// Artikel-IDs back.
-    ///
-    /// Empty when nothing is on record — which `invoic-checker` reports as a
-    /// warning and never a dispute, since a gap in mako's own records says
-    /// nothing about whether the MSB billed correctly.
-    ///
-    /// # Errors
-    ///
-    /// [`MarktdClientError::Http`] on a non-404 HTTP failure.
     /// Ask an MSB's ESA Messprodukt-Katalog about one product on one date.
     ///
     /// `E_0252` Prüfschritt 2 and `E_0256` Prüfschritte 4/5 ask the one
@@ -1573,8 +1550,13 @@ impl MarktdClient {
                 );
                 Err(MarktdClientError::Http(format!("HTTP {status}")))
             }
-            Ok(resp) => match resp.json::<T>().await {
-                Ok(sheet) => {
+            // marktd answers `{data, source, bo4e_version, updated_at, …}`:
+            // the sheet is `data`. Read as the sheet itself, the envelope
+            // decodes into a BO4E document with no field set — no Preis-
+            // positionen — and every price check passes on a sheet that has
+            // none.
+            Ok(resp) => match resp.json::<SheetEnvelope<T>>().await {
+                Ok(SheetEnvelope { data: sheet }) => {
                     inner.record_success();
                     cache_store(&mut inner, Some(sheet.clone()));
                     Ok(Some(sheet))
@@ -1852,11 +1834,18 @@ impl MarktdClient {
         Ok(Some(body))
     }
 
+    /// Register (or replace) the subscription `subscriber_id` with marktd —
+    /// an idempotent upsert, safe on every restart.
     ///
-    /// This is an idempotent upsert — safe to call on every service restart.
-    /// Non-2xx responses are logged as warnings but do **not** return an error
-    /// so that startup proceeds even when `marktd` is temporarily unavailable.
-    pub async fn put_subscription(&self, subscriber_id: &str, req: &SubscriptionRequest<'_>) {
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on a transport failure or a non-2xx answer;
+    /// [`MarktdClientError::Forbidden`] on 401/403, which waiting cannot fix.
+    pub async fn put_subscription(
+        &self,
+        subscriber_id: &str,
+        req: &SubscriptionRequest<'_>,
+    ) -> Result<(), MarktdClientError> {
         let url = format!("{}/api/v1/subscriptions/{}", self.base_url, subscriber_id);
         let body = serde_json::json!({
             "webhook_url":    req.webhook_url,
@@ -1865,30 +1854,72 @@ impl MarktdClient {
             "event_types":    req.event_types,
             "active":         req.active,
         });
-
-        match self
+        let resp = self
             .client
             .put(&url)
             .bearer_auth(self.api_key.expose_secret())
             .json(&body)
             .send()
             .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                info!(subscriber_id, "MarktdClient: subscription registered");
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        match resp.status() {
+            s if s.is_success() => Ok(()),
+            s if s == reqwest::StatusCode::UNAUTHORIZED || s == reqwest::StatusCode::FORBIDDEN => {
+                Err(MarktdClientError::Forbidden(format!(
+                    "HTTP {} — check `[marktd] api_key` and that its principal may manage \
+                     subscriptions (marktd Cedar action `manage-subscription`)",
+                    s.as_u16()
+                )))
             }
-            Ok(resp) => {
-                warn!(
-                    subscriber_id,
-                    status = resp.status().as_u16(),
-                    "MarktdClient: subscription registration returned non-2xx"
-                );
-            }
-            Err(e) => {
-                warn!(%e, subscriber_id, "MarktdClient: subscription registration failed");
-            }
+            s => Err(MarktdClientError::Http(format!("HTTP {}", s.as_u16()))),
         }
     }
+
+    /// [`Self::put_subscription`] until marktd accepts it or `shutdown`
+    /// resolves: 2 s, doubling to at most 60 s, between attempts.
+    ///
+    /// A subscriber whose registration is lost receives no event at all, and
+    /// marktd may come up after it (Compose, Kubernetes, a marktd restart), so
+    /// one attempt at startup is not enough. A 401/403 ends the loop with an
+    /// error log: the credential is wrong, and retrying it would only repeat
+    /// the refusal. Returns whether the subscription stands.
+    pub async fn subscribe_until_registered(
+        &self,
+        subscriber_id: &str,
+        req: &SubscriptionRequest<'_>,
+        shutdown: impl std::future::Future<Output = ()>,
+    ) -> bool {
+        let mut delay = std::time::Duration::from_secs(2);
+        tokio::pin!(shutdown);
+        loop {
+            match self.put_subscription(subscriber_id, req).await {
+                Ok(()) => {
+                    info!(subscriber_id, "MarktdClient: subscription registered");
+                    return true;
+                }
+                Err(MarktdClientError::Forbidden(why)) => {
+                    tracing::error!(
+                        subscriber_id,
+                        why,
+                        "MarktdClient: marktd refused the subscription; no event will arrive"
+                    );
+                    return false;
+                }
+                Err(e) => warn!(
+                    %e,
+                    subscriber_id,
+                    retry_in_secs = delay.as_secs(),
+                    "MarktdClient: subscription not registered yet; no event arrives until it is"
+                ),
+            }
+            tokio::select! {
+                () = &mut shutdown => return false,
+                () = tokio::time::sleep(delay) => {}
+            }
+            delay = (delay * 2).min(std::time::Duration::from_mins(1));
+        }
+    }
+
     /// Fetch Gas MMM Abrechnungspreise for a billing month from `marktd`.
     ///
     /// Returns `None` if no prices have been imported yet for that month.
@@ -2404,6 +2435,14 @@ impl MarktdClient {
     }
 }
 
+/// The answer of marktd's date-scoped Preisblatt reads
+/// (`GET /api/v1/preisblaetter{,-messung}/{mp_id}`): the BO4E sheet under
+/// `data`, beside metadata no caller here reads.
+#[derive(serde::Deserialize)]
+struct SheetEnvelope<T> {
+    data: T,
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2496,6 +2535,181 @@ mod tests {
             }
         });
         format!("http://{addr}")
+    }
+
+    /// Serve one `200` with `body` as JSON, then return the bound base URL.
+    async fn one_shot_json(body: serde_json::Value) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let body = body.to_string();
+                let _ = sock
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// A stand-in marktd answering the statuses in `answers` in turn, one
+    /// connection each, and counting the requests it saw.
+    async fn scripted(
+        answers: Vec<u16>,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = seen.clone();
+        tokio::spawn(async move {
+            for status in answers {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 4096];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                counter.fetch_add(1, Ordering::SeqCst);
+                let _ = sock
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status} X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    fn subscription() -> SubscriptionRequest<'static> {
+        SubscriptionRequest {
+            webhook_url: "http://invoicd:8280/webhook",
+            webhook_secret: None,
+            event_types: &["de.mako.process.initiated"],
+            active: true,
+        }
+    }
+
+    /// A marktd that is not ready yet is asked again until it accepts: the
+    /// subscriber would otherwise receive no event at all.
+    #[tokio::test]
+    async fn a_subscription_is_retried_until_marktd_accepts_it() {
+        let (url, seen) = scripted(vec![503, 200]).await;
+        let client = MarktdClient::new(&url, "k".to_owned().into(), reqwest::Client::new());
+        let registered = client
+            .subscribe_until_registered("invoicd", &subscription(), std::future::pending())
+            .await;
+        assert!(registered);
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// A refused credential ends the loop at once: waiting cannot fix it.
+    #[tokio::test]
+    async fn a_refused_credential_is_not_retried() {
+        let (url, seen) = scripted(vec![403, 200]).await;
+        let client = MarktdClient::new(&url, "k".to_owned().into(), reqwest::Client::new());
+        let registered = client
+            .subscribe_until_registered("invoicd", &subscription(), std::future::pending())
+            .await;
+        assert!(!registered);
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A Preisblatt is read from `data` of marktd's answer, as marktd's
+    /// `PreisblattResponse` / `PreisblattMessungResponse` serialise it.
+    ///
+    /// Read as the sheet itself, the envelope decodes into a document with
+    /// no Preispositionen — every BO4E field is optional — and invoicd's price
+    /// check then reports „keine Preisstaffeln" and passes an invoice at any
+    /// price.
+    #[tokio::test]
+    async fn a_preisblatt_is_read_from_the_answers_data() {
+        let date = time::Date::from_calendar_date(2026, time::Month::October, 1).expect("date");
+        let base = one_shot_json(serde_json::json!({
+            "data": {
+                "_typ": "PREISBLATTNETZNUTZUNG",
+                "sparte": "GAS",
+                "preispositionen": [{
+                    "_typ": "PREISPOSITION",
+                    "leistungstyp": "ARBEITSPREIS_WIRKARBEIT",
+                    "preisstaffeln": [{ "_typ": "PREISSTAFFEL", "preis": 0.0112, "staffelgrenzeVon": 0 }]
+                }]
+            },
+            "source": "api",
+            "bo4e_version": "202607.1.0",
+            "updated_at": "2026-11-16T17:03:54Z"
+        }))
+        .await;
+        let sheet = client_for(&base)
+            .get_preisblatt("9800468000003", date)
+            .await
+            .expect("answered")
+            .expect("a sheet");
+        let preise: Vec<String> = sheet
+            .preispositionen
+            .iter()
+            .flatten()
+            .flat_map(|p| p.preisstaffeln.iter().flatten())
+            .filter_map(|s| s.preis.map(|p| p.to_string()))
+            .collect();
+        assert_eq!(preise, ["0.0112"], "the sheet's prices are marktd's `data`");
+
+        // The MSB sheet the same way — its AufAbschläge stay on the sheet,
+        // under the key marktd stores them by.
+        let base = one_shot_json(serde_json::json!({
+            "data": {
+                "_typ": "PREISBLATTMESSUNG",
+                "preispositionen": [{ "_typ": "PREISPOSITION", "leistungstyp": "MESSPREIS" }],
+                "aufAbschlaege": [{ "name": "Fernauslesung" }]
+            },
+            "source": "api",
+            "bo4e_version": "202607.1.0",
+            "updated_at": "2026-11-16T17:03:54Z",
+            "auf_abschlaege": [{ "name": "Fernauslesung" }]
+        }))
+        .await;
+        let messung = client_for(&base)
+            .get_preisblatt_messung("9900357000004", date)
+            .await
+            .expect("answered")
+            .expect("a sheet");
+        assert_eq!(messung.preispositionen.as_ref().map(Vec::len), Some(1));
+        assert!(
+            rubo4e::json::Bo4eExtensionData::extension_data(&messung)
+                .get("aufAbschlaege")
+                .is_some()
+        );
     }
 
     fn client_for(base: &str) -> MarktdClient {

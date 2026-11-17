@@ -490,7 +490,7 @@ async fn a_55071_is_received_as_a_zuordnungsermaechtigung() {
     use mako_engine::process::Process;
     use mako_mabis::{MabisZpLifecycleWorkflow, ZpSerie, ZpVorgang};
 
-    let edi = include_str!("../../../../demos/nb-stp/fixtures/utilmd-55071.edi");
+    let edi = include_str!("../../../../tools/mako-seed/world/utilmd-55071.edi");
     let msg = edi_energy::parse(edi.as_bytes()).expect("the 55071 fixture parses");
     let store = Arc::new(
         SlateDbStore::open_in_memory()

@@ -5,7 +5,7 @@
 //!
 //! - `--berichte <dir>`: one `<daemon>.json` per daemon, each the stdout of
 //!   `<daemon> --check-config --json`, with its stderr beside it as
-//!   `<daemon>.err`. `just setup` writes them for every `dev/config/*.toml`.
+//!   `<daemon>.err`. `just setup` writes them for every `deploy/demo/*.toml`.
 //! - `--url <makod> [--token-env VAR]`: the checklist a running makod
 //!   assembles from its `[[einrichtung.dienst]]`, with the bearer token read
 //!   from the environment variable `VAR`.

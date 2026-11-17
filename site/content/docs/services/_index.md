@@ -16,8 +16,8 @@ Docker image built on the [`mako-service`](https://github.com/hupe1980/mako/tree
 SDK, with TOML configuration (`env:` and `_FILE` secrets), OIDC/JWT and API-key
 authentication, Cedar ABAC, OpenTelemetry, `/health/live` · `/health/ready` ·
 `/metrics`, and an MCP server at `/mcp` (Streamable HTTP) on 11 of the 14 —
-all except outputd, portald and agentd (the MCP host). `just dev <service>` runs one
-against `dev/config/<service>.toml`.
+all except outputd, portald and agentd (the MCP host). `just dev` runs them all,
+each on its `deploy/demo/<service>.toml`, seeded with one Stadtwerk.
 
 ---
 
@@ -178,18 +178,10 @@ All services are available as multi-stage Docker images built with `cargo-chef`:
 # Single all-in-one daemon (makod only)
 docker pull ghcr.io/hupe1980/mako-makod:latest
 
-# NB STP demo — UTILMD 55001 Lieferbeginn end-to-end
+# Every service and the Desk on the released images, seeded — one port, :8000
 git clone https://github.com/hupe1980/mako
-cd mako/demos/nb-stp
-docker compose up
-
-# EEG billing demo — solar plant registration + §21 EEG 2023 settlement
-cd ../eeg-billing
-docker compose up
-
-# Order-to-cash demo — Tarif → Vertrag → Rechnung → Dokument → Offener Posten
-cd ../o2c
-docker compose up
+cd mako
+just demo
 ```
 
 See the [Getting Started](@/docs/guide/getting-started.md) guide for the full deployment walkthrough.

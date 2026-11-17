@@ -1,9 +1,11 @@
-// Who is at the Desk. In development the services run with the `dev-admin`
+// Who is at the Desk. In the demo sign-in it is the persona the edge answers
+// as; otherwise, in development, the services run with the `dev-admin`
 // principal; behind the gateway (oauth2-proxy) the person is the one its
-// session names. Where neither answers, the Desk names nobody rather than
+// session names. Where none answers, the Desk names nobody rather than
 // guessing one.
 
 import { useQuery } from "@tanstack/react-query";
+import { usePersona } from "./persona";
 
 export interface Identity {
   name: string;
@@ -27,13 +29,15 @@ async function gatewayIdentity(): Promise<Identity | null> {
 }
 
 export function useIdentity(): Identity | null {
+  const { aktiv } = usePersona();
   const gateway = useQuery({
     queryKey: ["gateway", "userinfo"],
     queryFn: gatewayIdentity,
-    enabled: !import.meta.env.DEV,
+    enabled: !import.meta.env.DEV && !aktiv,
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
   });
+  if (aktiv) return { name: aktiv.name };
   if (import.meta.env.DEV) return { name: "dev-admin" };
   return gateway.data ?? null;
 }

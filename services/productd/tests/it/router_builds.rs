@@ -5,23 +5,13 @@
 //! runner's `/metrics` or `/health/*`, or a `build` that panics fails
 //! `cargo test` instead of the container start.
 
-/// `dev/config/productd.toml` — what `just dev productd` starts — builds a router.
-#[tokio::test]
-async fn the_dev_config_builds_a_router() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/config/productd.toml");
-    let cfg = mako_service::load_config_file::<productd::config::ProductdConfig>("productd", &path)
-        .expect("the dev configuration loads");
-    let _app = mako_service::build_for_test::<productd::Productd>(cfg)
-        .await
-        .expect("the router builds");
-}
-
-/// The shipped demo configuration builds a router.
+/// `deploy/demo/productd.toml` — what `just dev` and `just demo` start — builds a router.
 #[tokio::test]
 async fn the_demo_config_builds_a_router() {
-    let cfg = toml::from_str(include_str!("../../../../demos/o2c/productd.toml"))
-        .expect("the demo configuration parses");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/demo/productd.toml");
+    let cfg = mako_service::load_config_file::<productd::config::ProductdConfig>("productd", &path)
+        .expect("the demo configuration loads");
     let _app = mako_service::build_for_test::<productd::Productd>(cfg)
         .await
         .expect("the router builds");
@@ -33,7 +23,7 @@ async fn the_demo_config_builds_a_router() {
 async fn a_database_failure_answers_an_error_id_and_no_driver_text() {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-    let cfg = toml::from_str(include_str!("../../../../demos/o2c/productd.toml"))
+    let cfg = toml::from_str(include_str!("../../../../deploy/demo/productd.toml"))
         .expect("the demo configuration parses");
     let app = mako_service::build_for_test::<productd::Productd>(cfg)
         .await

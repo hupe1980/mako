@@ -6,8 +6,8 @@
 # driver with "push-by-digest is currently not implemented" — it is not the
 # command to reach for locally.
 #
-# For a local image the demos can run, use `just build-demo`, which tags
-# `makod:dev` / `marktd:dev` / `processd:dev` the way the compose files expect.
+# For local images, `just demo --build` builds them through the root
+# compose.yaml, tagged the way it expects.
 #
 # `services` below is the one list of released images: `release.yml` reads it
 # back with `docker buildx bake --print` to export each digest and tag each
@@ -41,7 +41,7 @@ variable "services" {
   default = [
     "makod", "marktd", "processd", "invoicd", "edmd", "netzbilanzd", "einsd",
     "productd", "billingd", "outputd", "accountingd", "vertragd", "portald",
-    "agentd", "desk",
+    "agentd", "desk", "seed",
   ]
 }
 

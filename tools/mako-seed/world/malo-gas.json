@@ -1,0 +1,26 @@
+{
+  "sparte": "GAS",
+  "data": {
+    "_typ": "MARKTLOKATION",
+    "marktlokationsId": "42000002008",
+    "sparte": "GAS",
+    "netzebene": "ND",
+    "gasqualitaet": "H_GAS",
+    "lokationsadresse": {
+      "_typ": "ADRESSE",
+      "strasse": "Gartenweg",
+      "hausnummer": "1",
+      "postleitzahl": "12345",
+      "ort": "Musterstadt",
+      "landescode": "DE"
+    }
+  },
+  "rollenzuordnung": [
+    {
+      "zuordnungstyp": "NB",
+      "rollencodenummer": "9800357000004",
+      "valid_from": "2024-01-01",
+      "valid_to": null
+    }
+  ]
+}

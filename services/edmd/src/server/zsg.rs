@@ -385,8 +385,9 @@ pub async fn post_zaehlerstandsgang(
         })
         .collect();
     if let Err(e) = state.repo.store_readings(&readings).await {
-        tracing::error!(malo_id, error = %e, "edmd: Zählerstandsgang store failed");
-        return ApiError::internal(e).into_response();
+        tracing::warn!(malo_id, error = %e, "edmd: Zählerstandsgang not stored");
+        return crate::handler::ingest_refusal(e, format!("Zählerstandsgang for MaLo {malo_id}"))
+            .into_response();
     }
 
     // ── The conversion audit (§ 146 Abs. 4 AO) ───────────────────────────────
@@ -489,8 +490,9 @@ pub async fn post_zaehlerstandsgang(
     let hampel = crate::server::score_batch(validated.as_slice());
     let stored = validated.len();
     if let Err(e) = state.repo.store_reads(validated).await {
-        tracing::error!(malo_id, error = %e, "edmd: derived Lastgang store failed");
-        return ApiError::internal(e).into_response();
+        tracing::warn!(malo_id, error = %e, "edmd: derived Lastgang not stored");
+        return crate::handler::ingest_refusal(e, format!("derived Lastgang for MaLo {malo_id}"))
+            .into_response();
     }
     if let Some(q) = &hampel {
         q.record(state.repo.pool(), &tenant, &malo_id).await;

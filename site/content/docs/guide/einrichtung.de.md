@@ -5,7 +5,8 @@ weight = 4
 
 [extra]
 translated_from = "content/docs/guide/einrichtung.md"
-source_sha256 = "d20576e2f6b51eb7f2eae9dab525081408da71db47c0ad15812d34eb65835c66"
+source_sha256 = "68c3550bdd1fa6949da5ebf78084b5d11d500591c1c381f5d1b18218176a8f41"
+
 +++
 Jeder Daemon prüft seine eigene Konfiguration und meldet **jeden** Befund,
 nicht nur den ersten. Jeder Befund nennt, was falsch ist, den Pfad der
@@ -21,8 +22,8 @@ nicht widersprechen.
 just setup
 ```
 
-baut jeden Daemon unter `dev/config/`, führt ihn mit `--check-config --json`
-gegen seine Dev-Konfiguration aus und fasst die Berichte zu einer Checkliste
+baut jeden Daemon mit einer Konfiguration unter `deploy/demo/`, führt ihn mit
+`--check-config --json` gegen sie aus und fasst die Berichte zu einer Checkliste
 zusammen. Der Befehl endet mit einem Fehlercode, solange etwas rot ist oder ein
 Daemon nicht gefragt werden konnte.
 
@@ -49,8 +50,9 @@ werden konnte — ein unerreichbarer Daemon ist weder bereit noch fehlerhaft.
 Nennen zwei Daemons für dieselbe Rolle und Sparte verschiedene MP-IDs, ist das
 ein eigener Befund, den kein einzelner Daemon treffen kann.
 
-`just doctor` gibt dieselben Berichte als eine Zeile je Daemon aus — bereit
-oder blockiert, und wie viele Befunde blockieren oder warnen.
+`just setup --tabelle` gibt dieselben Berichte als eine Zeile je Daemon aus —
+bereit oder blockiert, und wie viele Befunde blockieren oder warnen. `just
+doctor` gibt sie aus, nachdem er deinen Rechner für `just dev` geprüft hat.
 
 ## Der Vorschlag
 
@@ -195,6 +197,5 @@ Jeder Eintrag wird mit diesem Schlüssel als Bearer-Token nach
 `read-config`.
 
 Die Ansicht **Einrichtung** im Desk zeigt dieselbe Checkliste, gelesen über
-makods MCP-Tool `einrichtung_checkliste`, und fragt alle 15 Sekunden neu. Die
-Dev-`makod.toml` nennt jeden Dev-Daemon, sodass `just desk` die nicht
-gestarteten Daemons als unerreichbar zeigt.
+makods MCP-Tool `einrichtung_checkliste`, und fragt alle 15 Sekunden neu. `deploy/demo/makod.toml` nennt jeden Daemon der Installation, sodass ein
+Daemon, der nicht läuft, als unerreichbar erscheint.

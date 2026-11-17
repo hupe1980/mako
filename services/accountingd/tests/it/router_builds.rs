@@ -41,12 +41,12 @@ async fn build(mut cfg: toml::Value, url: String, pool: sqlx::PgPool) -> axum::R
         .expect("the router builds")
 }
 
-/// The router `just dev accountingd` starts, over a throwaway PostgreSQL, with
+/// The router `just dev` and `just demo` start, over a throwaway PostgreSQL, with
 /// a pool on the same database and the container that must outlive both.
 async fn dev_app() -> Option<(axum::Router, sqlx::PgPool, ContainerAsync<Postgres>)> {
     let (pg, url, pool) = postgres().await?;
-    let cfg = toml::from_str(include_str!("../../../../dev/config/accountingd.toml"))
-        .expect("the dev configuration parses");
+    let cfg = toml::from_str(include_str!("../../../../deploy/demo/accountingd.toml"))
+        .expect("the demo configuration parses");
     let app = build(cfg, url, pool.clone()).await;
     Some((app, pool, pg))
 }
@@ -178,26 +178,14 @@ async fn a_clearing_the_ledger_refuses_answers_422() {
     assert!(body.get("error_id").is_none(), "{body}");
 }
 
-/// `dev/config/accountingd.toml` — what `just dev accountingd` starts — builds a router.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn the_dev_config_builds_a_router() {
-    let Some((_pg, url, pool)) = postgres().await else {
-        return;
-    };
-    let cfg = toml::from_str(include_str!("../../../../dev/config/accountingd.toml"))
-        .expect("the dev configuration parses");
-    let _app = build(cfg, url, pool).await;
-}
-
-/// The shipped demo configuration builds a router.
+/// `deploy/demo/accountingd.toml` — what `just dev` and `just demo` start — builds a router.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_demo_config_builds_a_router() {
     let Some((_pg, url, pool)) = postgres().await else {
         return;
     };
-    let cfg = toml::from_str(include_str!("../../../../demos/o2c/accountingd.toml"))
+    let cfg = toml::from_str(include_str!("../../../../deploy/demo/accountingd.toml"))
         .expect("the demo configuration parses");
     let _app = build(cfg, url, pool).await;
 }

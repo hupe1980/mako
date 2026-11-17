@@ -133,7 +133,7 @@ Commands:
                         raw STS segment outside the admitted IFTSTA readers — codes ride C556
   check-config-findings Refuse a `bail!`/`anyhow!`/`ensure!` in a `Daemon::validate` or any
                         function that collects `Befund`s — every finding is reported, with its path
-  setup               The deployment checklist: every dev/config daemon's --check-config --json
+  setup               The deployment checklist: every deploy/demo daemon's --check-config --json
                         folded across daemons (--url <makod> [--token-env VAR] asks a running
                         makod's /admin/einrichtung/deployment instead); non-zero while not ready.
                         --tabelle prints one line per daemon; --vorschlag <answers.toml|json>
@@ -229,9 +229,9 @@ mod check_vorlauf_consulted;
 mod check_wire_timestamps;
 mod check_workflow_interpolation;
 mod check_workflow_purity;
-mod dep_age;
 #[cfg(test)]
-mod dev_configs;
+mod demo_configs;
+mod dep_age;
 mod erstlauf;
 mod evidence_pack;
 mod import_profiles;

@@ -14,10 +14,12 @@ on screen is the one a service returned.
 ## Run it
 
 ```sh
-just desk
+just dev
 ```
 
-starts makod and the Desk with hot reload, and opens `http://localhost:5173`.
+starts every service, the seeded Stadtwerk and the Desk with hot reload on
+`http://localhost:5173`; `just dev-ui` runs the Desk alone on its recorded
+answers.
 
 In production the Desk is the `mako-desk` image — the static bundle on port
 8080 — behind [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) as
@@ -557,7 +559,8 @@ taken from the production build.
 
 | Command | What it does |
 |---|---|
-| `just desk` | makod + the Desk with hot reload |
+| `just dev` | every service, the seed and the Desk with hot reload |
+| `just dev-ui` | the Desk alone on its recorded answers (`desk/fixtures`) |
 | `just desk-gen` | refresh `services/*/mcp.snapshot.json` and regenerate the Desk's types |
 | `just desk-check` | generated types current, `tsc`, Biome, Vitest — part of `just ci` |
 | `just desk-screenshots` | regenerate the screenshots on this page |

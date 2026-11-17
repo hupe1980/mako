@@ -1,0 +1,30 @@
+{
+  "sparte": "STROM",
+  "kundengruppe_ka": "Tarifkunden",
+  "data": {
+    "_typ": "PREISBLATTKONZESSIONSABGABE",
+    "bezeichnung": "Konzessionsabgabe Musterstadt, Tarifkunden",
+    "gueltigkeit": {
+      "_typ": "ZEITRAUM",
+      "startdatum": "2026-10-01",
+      "enddatum": "2027-09-30"
+    },
+    "preispositionen": [
+      {
+        "_typ": "PREISPOSITION",
+        "berechnungsmethode": "STUFEN",
+        "leistungstyp": "KONZESSIONS_ABGABE",
+        "leistungsbezeichnung": "Konzessionsabgabe",
+        "preiseinheit": "CT",
+        "bezugsgroesse": "KWH",
+        "preisstaffeln": [
+          {
+            "_typ": "PREISSTAFFEL",
+            "preis": "1.59",
+            "staffelgrenzeVon": 0
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -25,7 +25,7 @@ pub(super) fn cmd_geli_lieferende_anmelden<'a>(
 
 /// **44016** Kündigung beim Altlieferanten, LFN → LFA.
 ///
-/// The Gas twin of `gpke.kuendigung.anmelden`. GeLi Gas 3.0 § 3.1 makes the
+/// The Gas twin of `gpke.kuendigung.anmelden`. GeLi Gas 3.0 Kap. 3.1 makes the
 /// electronic Kündigung the Neulieferant's own message to the Altlieferant —
 /// the grid operator is not in it — and forbids the Altlieferant from refusing
 /// it for want of a contractually agreed form.

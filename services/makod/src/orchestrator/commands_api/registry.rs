@@ -573,7 +573,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         workflow: Some("geli-gas-lf-anmeldung"),
         dispatch: cmd_geli_lieferende_anmelden,
     },
-    // GeLi Gas 3.0 § 3.1 — the Neulieferant's Kündigung goes straight to the
+    // GeLi Gas 3.0 Kap. 3.1 — the Neulieferant's Kündigung goes straight to the
     // Altlieferant, without the grid operator. The Strom twin is
     // `gpke.kuendigung.anmelden`.
     CommandDescriptor {

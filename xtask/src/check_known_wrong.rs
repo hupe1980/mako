@@ -22,7 +22,7 @@
 //! whole file, so a second, unrefuted occurrence in the same file still fails.
 //!
 //! **Scope.** The root `*.md` files and every tracked or not-ignored file under
-//! `crates/`, `services/`, `site/`, `demos/` and `makotest/` with a text extension (`.rs`, `.md`,
+//! `crates/`, `services/`, `site/`, `tools/` and `makotest/` with a text extension (`.rs`, `.md`,
 //! `.sql`, `.cedar`, `.toml`, `.yaml`, `.yml`, `.sh`, `.py`, `.html`, `.txt`).
 //! `.json` is excluded: the JSON carrying regulatory text is
 //! `crates/edi-energy/profiles/**`, BDEW's own AHB extracted verbatim. The
@@ -131,10 +131,11 @@ const RULES: &[Rule] = &[
         // Aktenzeichen, parenthesised or not), then the `§` — nothing else
         // between. A statute `§` later on the line is not attached to the
         // name and passes: `GPKE Teil 3 Kap. 1.3 and §14a EnWG`.
-        pattern: r"\b(BK6-24-174|GPKE|WiM|MaBiS|Teil [1-4])(,? \(?(Strom|Gas|Teil [1-4]|Anlage [1-4][a-d]?|BK6-2[24]-(174|024)|GPKE|WiM|MaBiS)\)?)*\)?,? ?§§? \d",
-        reason: "BK6-24-174's Anlagen (GPKE Teil 1–3, WiM Teil 1–2, MaBiS) and GPKE Teil 4 \
-                 (BK6-22-024 Anlage 1d) are numbered in Kapitel, not §§ — cite \
-                 „GPKE Teil 2 Kap. n\", „MaBiS Kap. n\"",
+        pattern: r"\b(BK6-24-174|BK7-24-01-009|GPKE|WiM|MaBiS|(AWH )?GeLi Gas( \d+\.\d+)?|Teil [1-4])(,? \(?(Strom|Gas|Teil [1-4]|Anlage [1-4][a-d]?|BK6-2[24]-(174|024)|GPKE|WiM|MaBiS)\)?)*\)?,? ?§§? ?\d",
+        reason: "BK6-24-174's Anlagen (GPKE Teil 1–3, WiM Teil 1–2, MaBiS), GPKE Teil 4 \
+                 (BK6-22-024 Anlage 1d) and GeLi Gas 3.0 (BK7-24-01-009) are numbered in \
+                 Kapitel, not §§ — cite „GPKE Teil 2 Kap. n\", „MaBiS Kap. n\", „GeLi Gas \
+                 3.0 Kap. n\"",
     },
     Rule {
         id: "bdew-document-paragraph",
@@ -149,6 +150,8 @@ const RULES: &[Rule] = &[
             r"( ?\(?(V ?)?\d+\.\d+[a-z]?\)?|,? (Strom|Gas)\b| ?\(?FV ?\d{4}-?\d{2}-?\d{2}\)?| ?\(?fv\d{8}\)?| ?\(?E_\d{4}\)?)*\)?,? ?§§? \d",
             r"|§§? \d+(\.\d+)*,? ((der|des|of the|in the|in|of) )?",
             bdew_document!(),
+            // A `§` continuing a list a `Kap.` opened: „Kap. 2.3.1, §2.3.2".
+            r"|\bKap\. \d+(\.\d+)*[a-z]?( ?[,;/] ?| (und|and|or|oder) )§§? ?\d+\.\d",
         ),
         reason: "the Allgemeine Festlegungen, every AHB, MIG and EBD document, and the BDEW \
                  Anwendungshilfen Identifikatoren and Rollenmodell, the AS4-Profil and the Regelungen \
@@ -176,7 +179,7 @@ const RULES: &[Rule] = &[
         id: "asx-sign-only",
         row: "`asx-rs` accepts a sign-only override",
         pattern: r"(?i)asx-rs.{0,30}refuses (a|the) (policy )?layer only when|sign-only (override|overlay).{0,30}(passes|is valid|validates)",
-        reason: "asx-rs 0.17 has no setting that relaxes signing or encryption: \
+        reason: "asx-rs 0.19 has no setting that relaxes signing or encryption: \
                  Profile::bdew() signs and encrypts, build() refuses a client without a \
                  decrypter, and an unencrypted inbound message is answered EBMS:0103",
     },
@@ -561,7 +564,7 @@ const POINTER_SITES: &[(&str, &str)] = &[
 ];
 
 /// Trees rule 1 scans.
-const PHRASE_TREES: &[&str] = &["crates/", "services/", "site/", "demos/", "makotest/"];
+const PHRASE_TREES: &[&str] = &["crates/", "services/", "site/", "tools/", "makotest/"];
 
 /// Extensions rule 1 reads.
 const TEXT_EXTENSIONS: &[&str] = &[
@@ -948,6 +951,22 @@ mod tests {
             ),
             ("bk6-24-174-paragraph", "/// GPKE Teil 1 § 3.2.1.5: Tranche"),
             (
+                "bk6-24-174-paragraph",
+                "/// 44016 does not go to the grid operator: GeLi Gas 3.0 § 3.1",
+            ),
+            (
+                "bk6-24-174-paragraph",
+                "reference: \"GeLi Gas 3.0 (BK7-24-01-009) §5.4\",",
+            ),
+            (
+                "bk6-24-174-paragraph",
+                "/// AWH Sperrprozesse (BK7-24-01-009 §5.4)",
+            ),
+            (
+                "bdew-document-paragraph",
+                "| Signing | ECDSA | Kap. 2.2.6.2.1, §2.3.4.3 |",
+            ),
+            (
                 "bdew-document-paragraph",
                 "/// Allgemeine Festlegungen V6.1d §2.13: UNB and NAD agree",
             ),
@@ -1259,6 +1278,8 @@ mod tests {
             "/// Identifikatoren AWH V1.2 Kap. 2.1",
             "/// BDEW AS4-Profil 1.2 Kap. 2.3.4.4 (S. 17)",
             "/// Regelungen zum Übertragungsweg für AS4 2.6 Kap. 7.3",
+            "/// GeLi Gas 3.0 Kap. 3.1 and Kap. 4.5, § 41 Abs. 5 EnWG",
+            "/// Kap. 2.3.1, § 14 UStG",
         ] {
             assert!(
                 !hit_ids(line).contains(&"bdew-document-paragraph"),
@@ -1272,6 +1293,8 @@ mod tests {
             "/// BDEW AS4-Profil 1.2 §2.3.4.4: three key pairs",
             "// (AS4-Profil §2.3.1.1)",
             "/// Regelungen zum Übertragungsweg für AS4 2.6 § 7.3",
+            "| Sender | a signer | Kap. 2.3.2, §2.3.4.4 |",
+            "/// (Kap. 2.4.1 and § 2.4.2)",
         ] {
             assert!(
                 hit_ids(line).contains(&"bdew-document-paragraph"),

@@ -1,0 +1,34 @@
+# marktd.toml — the demo configuration: what `just demo` runs in Docker and
+# `just dev` runs on this machine (deploy/dev/up.sh moves every
+# `http://<service>:<port>` peer and the database host to loopback). One
+# Stadtwerk — Stadtwerke Musterstadt, NB, LF and MSB — whose world
+# tools/mako-seed fills. Authentication is the demo's and every secret is a
+# development literal. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `MARKTD_<KEY>`,
+# nested keys joined with `__`. `marktd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+[database]
+url = "postgres://mako:mako@postgres:5432/marktd"
+
+[http]
+addr = "0.0.0.0:8180"
+
+[markt]
+tenant = "9900357000004"
+
+[makod]
+base_url = "http://makod:8080"
+api_key  = "dev-makod-key"
+
+[webhook]
+inbound_path   = "/api/v1/events"
+inbound_secret = "dev-webhook-secret"
+
+# The demo sign-in: a token from `just token <persona>` or the Desk's persona
+# switcher is answered as that persona by Cedar; a request without one is the
+# dev principal. Reported as a warning by `--check-config`.
+[oidc]
+mode = "demo"

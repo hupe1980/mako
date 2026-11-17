@@ -230,21 +230,19 @@ pub struct GetQueueEntryParams {
 #[derive(Clone)]
 pub struct ProcessdMcpHandler {
     pub(crate) state: Arc<ProcessdMcpState>,
-    #[expect(
-        dead_code,
-        reason = "rmcp's `#[tool_handler]` / `#[prompt_handler]` call `Self::tool_router()` / `Self::prompt_router()` per request; the stored router is never read"
-    )]
+    /// The router every request is answered from (`#[tool_handler(router =
+    /// …)]`): the decision tools, the read model's and — in an NB build — the
+    /// Sperrauftrag's. rmcp's default answers from `Self::tool_router()` alone,
+    /// which would serve the decision tools and refuse the read model's as
+    /// unknown.
     tool_router: ToolRouter<ProcessdMcpHandler>,
-    #[expect(
-        dead_code,
-        reason = "rmcp's `#[tool_handler]` / `#[prompt_handler]` call `Self::tool_router()` / `Self::prompt_router()` per request; the stored router is never read"
-    )]
     prompt_router: PromptRouter<ProcessdMcpHandler>,
 }
 
-#[tool_router]
 impl ProcessdMcpHandler {
-    fn new(state: Arc<ProcessdMcpState>) -> Self {
+    /// Every tool and prompt this build serves, in one place for the handler
+    /// and the snapshot test.
+    fn routers() -> (ToolRouter<Self>, PromptRouter<Self>) {
         let tool_router = Self::tool_router() + Self::obs_tool_router();
         let prompt_router = Self::prompt_router() + Self::obs_prompt_router();
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
@@ -252,6 +250,14 @@ impl ProcessdMcpHandler {
             tool_router + Self::sperr_tool_router(),
             prompt_router + Self::sperr_prompt_router(),
         );
+        (tool_router, prompt_router)
+    }
+}
+
+#[tool_router]
+impl ProcessdMcpHandler {
+    fn new(state: Arc<ProcessdMcpState>) -> Self {
+        let (tool_router, prompt_router) = Self::routers();
         Self {
             state,
             tool_router,
@@ -733,8 +739,8 @@ impl ProcessdMcpHandler {
     }
 }
 
-#[tool_handler]
-#[prompt_handler]
+#[tool_handler(router = self.tool_router)]
+#[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for ProcessdMcpHandler {
     /// The revisions every mako MCP server speaks, not the SDK's set.
     fn supported_protocol_versions(

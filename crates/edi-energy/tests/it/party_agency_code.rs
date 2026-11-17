@@ -106,10 +106,11 @@ fn the_envelope_and_the_nad_agree_on_the_issuing_office() {
 /// generator believes, what landed on disk has to agree with
 /// [`AgencyCode::for_mp_id`].
 ///
-/// The `demos/` fixtures are in scope. They are the copy an evaluator reads
-/// first and the one a market partner is handed as "this is what you send us",
-/// and nothing else holds them to the derivation: `demo_fixtures.rs` validates
-/// them against the AHB, which says nothing about which office issued the code.
+/// The seeder's messages (`tools/mako-seed/world/`) are in scope. They are the
+/// copy an evaluator reads first and the one a market partner is handed as
+/// "this is what you send us", and nothing else holds them to the derivation:
+/// `seed_fixtures.rs` validates them against the AHB, which says nothing
+/// about which office issued the code.
 ///
 /// Fixtures that deliberately carry a wrong agency belong under `invalid/` with
 /// an `.expected.json` naming the rule that must fire.
@@ -119,11 +120,11 @@ fn every_checked_in_fixture_stamps_the_agency_its_mp_id_implies() {
     let mut checked = 0usize;
     let mut wrong: Vec<String> = Vec::new();
 
-    let demos = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../demos")
+    let world = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/mako-seed/world")
         .canonicalize()
-        .expect("demos/ is part of the workspace");
-    let mut dirs = vec![root.clone(), demos];
+        .expect("tools/mako-seed/world/ is part of the workspace");
+    let mut dirs = vec![root.clone(), world];
     while let Some(dir) = dirs.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -195,16 +196,16 @@ fn every_checked_in_fixture_stamps_the_agency_its_mp_id_implies() {
 /// That is not cosmetic. A fixture is what a reader copies and what the parser
 /// is exercised on, so a corpus stamping `14` everywhere means mako emits
 /// `9900357000004:500` and cannot point at a single inbound example of the shape
-/// it sends — and the demo that reads the fixture shows the same party
+/// it sends — and the seed that posts the fixture shows the same party
 /// identified two different ways in one exchange.
 #[test]
 fn every_checked_in_fixture_stamps_the_unb_qualifier_its_mp_id_implies() {
     let mut dirs = vec![
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../demos")
+            .join("../../tools/mako-seed/world")
             .canonicalize()
-            .expect("demos/ is part of the workspace"),
+            .expect("tools/mako-seed/world/ is part of the workspace"),
     ];
     let mut checked = 0usize;
     let mut wrong: Vec<String> = Vec::new();

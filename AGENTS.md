@@ -92,7 +92,7 @@ section.
 ```bash
 just check      # cargo check --workspace --all-targets --all-features — the minimum
 just ci         # the gate: test, doctests, clippy, deny, machete, each feature alone, every xtask guard
-just dev <svc>  # one service with dev/config/<svc>.toml against the dev PostgreSQL (Docker)
+just dev        # every service from deploy/demo/<svc>.toml, PostgreSQL in Docker, the Desk, the seeded Stadtwerk
 just check-site # mermaid + link + zola checks; NOT part of `just ci`
 just test-db    # schema-per-test suites against real PostgreSQL (needs Docker)
 ```
@@ -158,8 +158,8 @@ digits, *Lok- und Waggon-Kennzeichnungsverfahren*: odd positions + even
 positions×2, difference to the next multiple of ten — **not Luhn**) and **EIC**
 (16 characters; object type `X` = Party/Bilanzkreis, `Y` = Area/
 Bilanzierungsgebiet). `cargo xtask check-malo-ids` (in `just ci`) refuses a
-literal with a wrong check digit anywhere in `crates/`, `services/`, `demos/`
-or `site/content/`, using `metering` and `rubo4e` themselves so the guard cannot
+literal with a wrong check digit anywhere in `crates/`, `services/`, `tools/`,
+`deploy/`, `xtask/`, `makotest/` or `site/`, using `metering` and `rubo4e` themselves so the guard cannot
 disagree with the validators. Fixtures: `51238696012` is the canonical valid
 MaLo; `51238696782` is the refusal fixture (wrong check digit) and is
 allowlisted in the guard. Never invent an identifier — derive the check digit,
@@ -331,8 +331,8 @@ reads clap flags with its TOML file as an overlay — none of which `run()` host
   line carries, never the error's text. `check-error-tuples` refuses any ad-hoc
   `(StatusCode, …)` tuple outside `#[cfg(test)]`.
 - **Service shape.** The `Daemon` lives in `lib.rs`; `main.rs` is the one `run` call
-  (`check-thin-main`); a config listens on `[http] addr`, and `dev/ports.toml` is the dev port
-  table the `dev_configs` tests hold every dev config to.
+  (`check-thin-main`); a config listens on `[http] addr`, and `deploy/ports.toml` is the port
+  table the `demo_configs` tests hold every `deploy/demo/<svc>.toml` to.
 - **CloudEvent emission.** Build with `CloudEvent::new(source(svc, tenant), TYPE, subject, data)`
   (type constants from `mako-events`) and send via `post_ce_with_retry`. Never hand-roll a
   `json!({"specversion": ...})` envelope or compute a signature inline.
@@ -624,7 +624,7 @@ engine it silently becomes money.
 | "Blindmehrarbeit rests on StromNEV §18" | §18 StromNEV is the **Entgelt für dezentrale Erzeugung** (the crate's own `sect18.rs` says so). Reactive-energy excess is charged from the Netzbetreiber's **Preisblatt**, formed under StromNEV §17. §19 is Sonderformen der Netznutzung. The free share (cos φ 0,9 → tan φ ≈ 0,4843, often rounded to 50 %) is a price-sheet term and must be an input, not a constant |
 | "Parse-don't-validate applies uniformly to inbound and outbound" | It does not. A value the system **produces** should be a validating newtype (`MabisZaehlpunktId`) so a malformed one is unconstructible. A value it **receives** must stay representable — requiring the type on an inbound command leaves the workflow unable to record what arrived and therefore unable to reject it properly. Type the outbound side; keep the inbound side raw and refuse explicitly |
 | "A DB `CHECK` is enough to protect an identifier that reaches the wire" | A `CHECK` only guards rows written to *that* table. A payload assembled from a fixture, a replay, or a caller passing a value straight through never meets it. MSCONS SG6's `LOC+172`/`107`/`237` are free text at the MIG level, so a swapped pair parses, validates and is **accepted by the BIKO** — the guard has to live in the pure crate as well (`Summenzeitreihe::validate_identifiers`) |
-| "`asx-rs` accepts a sign-only override, so only our own floor rejects it" | **No such override exists.** asx-rs 0.17's `Profile::bdew()` fixes signing and encryption and exposes no setting that relaxes either; `As4::builder(..).build()` refuses a client without a decrypter, and an unencrypted inbound message is answered `EBMS:0103`. Run the repository's own tests before reporting an upstream defect. `build()` is only a control where something calls it, which is why `check-as4-controls` pins the preflight's `As4Clients::build` call site |
+| "`asx-rs` accepts a sign-only override, so only our own floor rejects it" | **No such override exists.** asx-rs 0.19's `Profile::bdew()` fixes signing and encryption and exposes no setting that relaxes either; `As4::builder(..).build()` refuses a client without a decrypter, and an unencrypted inbound message is answered `EBMS:0103`. Run the repository's own tests before reporting an upstream defect. `build()` is only a control where something calls it, which is why `check-as4-controls` pins the preflight's `As4Clients::build` call site |
 | "§13a Abs. 2 EnWG compensation uses one Ausfallarbeit basis" | The counterfactual differs by redispatch case: **Duldungsfall** derives it from the measured Lastgang (the NB steered, so nothing was transmitted), **Aufforderungsfall** from the schedule transmitted to the EIV (that schedule *is* the counterfactual). Resolving both from the Lastgang settles an Aufforderungsfall against what happened rather than what was instructed — a money error nothing downstream detects. `AusfallarbeitBasis` is a required input, carried into the result and trace |
 | "Gas NNE Grundpreis / Arbeitspreis rests on §14 GasNEV" | **§14 GasNEV is *Teilnetze*** — cost allocation when a Betreiber has formed Teilnetze under §6 Abs. 5 GasNZV. Netzentgelte are **§15 GasNEV** (*Ermittlung der Netzentgelte*), and the Verrechnungspreis specifically **§15 Abs. 7**: „Für leistungsgemessene Ausspeisepunkte sind … ein Entgelt für den Messstellenbetrieb, ein Entgelt … für die Messung und ein Entgelt für die Abrechnung festzulegen." A wrong § here lands in the audit trace of every gas NNE invoice |
 | "Gemeinschaftliche Gebäudeversorgung is §42b **EEG 2023**" | There is no §42b EEG 2023. GGV is **§42b EnWG**. §42a EnWG is Mieterstrom, §42c Energy Sharing; the Mieterstromzuschlag is §21 Abs. 3 EEG 2023 |

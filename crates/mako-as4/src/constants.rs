@@ -11,18 +11,18 @@
 /// ISO 6523, ICD 0088).
 pub const PARTY_TYPE_GLN: &str = "urn:oasis:names:tc:ebcore:partyid-type:iso6523:0088";
 
-/// `<eb:PartyId>/@type` for a BDEW-assigned MP-ID, per §2.3.1.1.
+/// `<eb:PartyId>/@type` for a BDEW-assigned MP-ID, per Kap. 2.3.1.1.
 pub const PARTY_TYPE_BDEW: &str = "urn:oasis:names:tc:ebcore:partyid-type:unregistered:BDEW";
 
-/// `<eb:PartyId>/@type` for a DVGW-assigned MP-ID, per §2.3.1.1.
+/// `<eb:PartyId>/@type` for a DVGW-assigned MP-ID, per Kap. 2.3.1.1.
 pub const PARTY_TYPE_DVGW: &str = "urn:oasis:names:tc:ebcore:partyid-type:unregistered:DVGW";
 
-/// `<eb:PartyId>/@type` for a DB (Bahnstromnetz) MP-ID, per §2.3.1.1.
+/// `<eb:PartyId>/@type` for a DB (Bahnstromnetz) MP-ID, per Kap. 2.3.1.1.
 pub const PARTY_TYPE_BAHN: &str = "urn:oasis:names:tc:ebcore:partyid-type:unregistered:BAHN";
 
 /// Map a NAD DE3055 agency code to its ebCore `<eb:PartyId>/@type`.
 ///
-/// §2.3.1.1 requires the attribute and derives it from the agency that issued
+/// Kap. 2.3.1.1 requires the attribute and derives it from the agency that issued
 /// the MP-ID, so the two identifier vocabularies — EDIFACT's numeric agency
 /// code and AS4's ebCore URI — must not drift apart. Unknown codes fall back
 /// to the BDEW scheme, matching the registry's own default agency.
@@ -41,7 +41,7 @@ pub const fn party_id_type_for_agency(agency: &str) -> &'static str {
 /// 72 hours.
 ///
 /// Every retry resends the same message id and `eb:Timestamp`, so a receiver
-/// that already holds the message answers it as a duplicate. `asx-rs` 0.17
+/// that already holds the message answers it as a duplicate. `asx-rs` 0.19
 /// accepts an `eb:Timestamp` up to 7 days old, which covers the whole window.
 pub const MAX_RETRY_DURATION_SECS: u64 = 72 * 3600;
 
@@ -69,7 +69,7 @@ pub const PAYLOAD_MIME_TYPE: &str = "application/octet-stream";
 mod tests {
     use super::*;
 
-    /// §2.3.1.1 — one party type per issuing agency, quoted verbatim: a
+    /// Kap. 2.3.1.1 — one party type per issuing agency, quoted verbatim: a
     /// counterparty resolves the sender from these strings.
     #[test]
     fn party_types_are_the_profiles() {
@@ -103,7 +103,7 @@ mod tests {
         assert_eq!(party_id_type_for_agency("500"), PARTY_TYPE_GLN);
     }
 
-    /// §2.2.3.2 — the payload is binary in its own part, never inline XML.
+    /// Kap. 2.2.3.2 — the payload is binary in its own part, never inline XML.
     #[test]
     fn payload_media_type_is_binary() {
         assert_eq!(PAYLOAD_MIME_TYPE, "application/octet-stream");

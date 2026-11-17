@@ -7,7 +7,7 @@
 //! refused as an unknown field: a caller does not get to state the tax on the
 //! Gutschrift it is owed.
 //!
-//! The router runs with the dev configuration and a lazy pool that points at a
+//! The router runs with the demo configuration and a lazy pool that points at a
 //! closed port. A refusal answers before the first query; a request that got
 //! past VAT resolution would reach the ledger lookup and answer `500`.
 
@@ -15,7 +15,7 @@ use billingd::daemon::Billingd;
 
 async fn serve() -> std::net::SocketAddr {
     let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/config/billingd.toml");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/demo/billingd.toml");
     let cfg = mako_service::load_config_file::<billingd::config::BillingdConfig>("billingd", &path)
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let app = mako_service::build_for_test::<Billingd>(cfg)

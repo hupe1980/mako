@@ -39,7 +39,7 @@ async fn harness() -> Harness {
     let port = pg.get_host_port_ipv4(5432).await.expect("port");
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     let pool = PgPool::connect(&url).await.expect("connect");
-    let mut cfg = super::router_builds::load("../../dev/config/marktd.toml");
+    let mut cfg = super::router_builds::load("../../deploy/demo/marktd.toml");
     cfg.database.url = url;
     let app = mako_service::build_for_test_on::<Marktd>(cfg, pool.clone())
         .await
@@ -346,7 +346,7 @@ async fn a_failed_stammdaten_apply_leaves_the_event_redeliverable() {
             .http
             .post(format!("{}/api/v1/events", h.base))
             .header("content-type", "application/cloudevents+json");
-        // Signed with the dev configuration's inbound secret, freshly stamped.
+        // Signed with the demo configuration's inbound secret, freshly stamped.
         for (name, value) in mako_service::webhook::headers(
             b"dev-webhook-secret",
             "evt-stammdaten-1",

@@ -31,13 +31,30 @@ use std::sync::Arc;
 /// 422 is the honest answer for the second: the delivery was received and
 /// understood, and it cannot be stored as sent.
 ///
+/// A fault of edmd's own — a configuration it was started with, a schema it
+/// disagrees with — is neither: it is a 500, because the sender did nothing
+/// wrong and a 422 would tell it so.
+///
 /// The 500 carries an `error_id` its log line carries; the 422 says what the
-/// store refused.
+/// store refused, under the stable code `reading_refused` and, where the store
+/// names one, the rule as `constraint`.
 pub(crate) fn ingest_refusal(err: crate::domain::error::EdmError, what: String) -> ApiError {
-    if err.is_retryable() {
-        ApiError::internal(anyhow::Error::new(err).context(what))
-    } else {
-        ApiError::unprocessable(format!("{what}: {err}"))
+    use crate::domain::error::EdmError;
+    match &err {
+        EdmError::Rejected { constraint, .. } => {
+            let constraint = constraint.clone();
+            ApiError::unprocessable(format!("{what}: {err}"))
+                .with_code("reading_refused")
+                .with_fields(serde_json::json!({ "constraint": constraint }))
+        }
+        EdmError::InvalidMaloId { .. }
+        | EdmError::MaloNotFound { .. }
+        | EdmError::NoData { .. } => {
+            ApiError::unprocessable(format!("{what}: {err}")).with_code("reading_refused")
+        }
+        EdmError::Database(_) | EdmError::Internal(_) => {
+            ApiError::internal(anyhow::Error::new(err).context(what))
+        }
     }
 }
 
@@ -519,5 +536,88 @@ mod ablese_anlass_tests {
         }
         // A confirming PID whose verdict says otherwise is not a Bestätigung.
         assert_eq!(ablese_anlass(t, 55002, &completed(55002, false)), None);
+    }
+}
+
+#[cfg(test)]
+mod ingest_refusal_tests {
+    use super::ingest_refusal;
+    use crate::domain::error::EdmError;
+    use axum::http::StatusCode;
+
+    /// A refusal about the delivery is 422 under `reading_refused`, so the
+    /// fan-out stops redelivering it; a transient failure and a fault of edmd's
+    /// own stay 500.
+    #[test]
+    fn only_a_statement_about_the_delivery_is_422() {
+        let refused = ingest_refusal(
+            EdmError::Rejected {
+                detail: "sender MP-ID is not a BDEW-Codenummer".to_owned(),
+                constraint: Some("sender_mp_id".to_owned()),
+            },
+            "direct push".to_owned(),
+        );
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(refused.code(), Some("reading_refused"));
+
+        let bad_malo = ingest_refusal(
+            EdmError::InvalidMaloId {
+                malo_id: "51238696782".to_owned(),
+                reason: "check digit".to_owned(),
+            },
+            "direct push".to_owned(),
+        );
+        assert_eq!(bad_malo.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        for own in [
+            EdmError::Database("connection reset".to_owned()),
+            EdmError::Internal("no subject registry".to_owned()),
+        ] {
+            assert_eq!(
+                ingest_refusal(own, "direct push".to_owned()).status(),
+                StatusCode::INTERNAL_SERVER_ERROR
+            );
+        }
+    }
+
+    /// Every door that writes readings answers a store failure through
+    /// [`ingest_refusal`]: a bare `ApiError::internal` there turns a refused
+    /// delivery into a 5xx the fan-out redelivers until its budget runs out.
+    #[test]
+    fn no_write_door_answers_a_store_failure_with_a_bare_500() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut stack = vec![src];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                let lines: Vec<&str> = text.lines().collect();
+                for (i, line) in lines.iter().enumerate() {
+                    let write = [
+                        "repo.store_reads(",
+                        "repo.store_readings(",
+                        "repo.store_corrections(",
+                    ]
+                    .iter()
+                    .any(|w| line.contains(w));
+                    if !write || line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    let window = lines[i..lines.len().min(i + 6)].join("\n");
+                    if window.contains("ApiError::internal") {
+                        offenders.push(format!("{}:{}", path.display(), i + 1));
+                    }
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "{offenders:#?}");
     }
 }

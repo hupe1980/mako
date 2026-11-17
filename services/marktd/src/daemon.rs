@@ -116,6 +116,16 @@ impl Daemon for Marktd {
     fn validate(cfg: &Config) -> Vec<mako_service::Befund> {
         use mako_service::befund::{Befund, Bereich};
         let mut out = Vec::new();
+        if cfg.webhook.allow_loopback_subscribers {
+            out.push(
+                Befund::warnung(
+                    "webhook.allow_loopback_subscribers",
+                    "a subscription may name a loopback endpoint — the posture of `just dev`, \
+                     where every service listens on this machine; a deployment leaves it off",
+                )
+                .bereich(Bereich::Zugriff),
+            );
+        }
         if cfg.allow_insecure_no_auth {
             return out;
         }
@@ -230,6 +240,7 @@ impl Daemon for Marktd {
             correlation_index: pg::PgCorrelationIndex::new(pool.clone()),
             partner_repo: pg::PgPartnerRepository::new(pool.clone()),
             tenant: tenant.clone(),
+            allow_loopback_subscribers: cfg.webhook.allow_loopback_subscribers,
         });
 
         spawn_workers(&cfg, &pool, sub_repo, &http, &shutdown, &tenant);

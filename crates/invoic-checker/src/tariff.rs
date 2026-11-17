@@ -46,11 +46,13 @@ pub trait PreisblattStore {
     /// default.
     fn get(&self, nb_mp_id: &str, billing_date: time::Date) -> Option<&PreisblattNetznutzung>;
 
-    /// Return `true` when the store has at least one entry for the given GLN.
-    fn has_preisblatt_for(&self, nb_mp_id: &str) -> bool {
-        self.get(nb_mp_id, time::macros::date!(9999 - 12 - 31))
-            .is_some()
-    }
+    /// Return `true` when the store has at least one entry for the given
+    /// MP-ID, whatever its validity.
+    ///
+    /// Not derivable from [`Self::get`]: asking for a sheet valid on some far
+    /// date finds only an open-ended one, so a Netzbetreiber whose every sheet
+    /// is dated would read as having published none.
+    fn has_preisblatt_for(&self, nb_mp_id: &str) -> bool;
 }
 
 // ── InMemoryPreisblattStore ───────────────────────────────────────────────────
@@ -106,6 +108,10 @@ impl PreisblattStore for InMemoryPreisblattStore {
     fn get(&self, nb_mp_id: &str, billing_date: time::Date) -> Option<&PreisblattNetznutzung> {
         let sheets = self.inner.get(nb_mp_id)?;
         sheets.iter().find(|s| sheet_is_valid(s, billing_date))
+    }
+
+    fn has_preisblatt_for(&self, nb_mp_id: &str) -> bool {
+        self.inner.get(nb_mp_id).is_some_and(|s| !s.is_empty())
     }
 }
 
@@ -192,5 +198,16 @@ mod tests {
         store.insert("9900000000003".to_owned(), sheet);
         assert!(store.has_preisblatt_for("9900000000003"));
         assert!(!store.has_preisblatt_for("9900000000999"));
+    }
+
+    /// A Netzbetreiber whose sheet is dated has published one: the store
+    /// holds it whatever its Gültigkeit. Read as „none", every invoice of a
+    /// Netzbetreiber with only dated sheets would go unpriced.
+    #[test]
+    fn a_dated_sheet_is_a_published_one() {
+        let mut store = InMemoryPreisblattStore::new();
+        let sheet = make_sheet(Some(date!(2026 - 01 - 01)), Some(date!(2026 - 12 - 31)));
+        store.insert("9800468000003".to_owned(), sheet);
+        assert!(store.has_preisblatt_for("9800468000003"));
     }
 }

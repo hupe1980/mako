@@ -1528,7 +1528,6 @@ async fn mcp_auth_middleware(
 /// Build the `/mcp` Axum router for `marktd`.
 pub fn router(state: Arc<MdmdMcpState>, _shutdown: CancellationToken) -> Router {
     let config = StreamableHttpServerConfig::default()
-        .disable_allowed_hosts()
         .with_sse_keep_alive(Some(std::time::Duration::from_secs(30)));
 
     let mcp_service = mako_service::mcp::service(

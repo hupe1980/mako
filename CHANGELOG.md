@@ -9,7 +9,48 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.36.0] — 2026-11-17
+
+### Added
+
+- `just dev`: every service built by cargo and run on this machine, PostgreSQL in Docker, the Desk under Vite and the seeded Stadtwerk, in one command. Each service's log carries a coloured prefix and is also written to `target/dev/<service>.log`. Ctrl-C keeps the data and `just dev-down` deletes it. Options: `--no-desk`, `--no-seed`, `--ci` (start, seed, verify, stop — the CI `dev-smoke` job).
+- `just doctor`: checks Docker, Compose v2, the pinned toolchain, Node, the ports in `deploy/ports.toml` and free disk, naming the command that fixes each miss, then prints each daemon's configuration verdict.
+- `tools/mako-seed` (`just seed [--verify]`): fills Stadtwerke Musterstadt (NB, LF and MSB, Strom and Gas) through the services' public APIs only, and running it again changes nothing. It covers decided and held Anmeldungen, a Klärfall, an EEG settlement, households with invoices, a document, a paid Offener Posten and an online order, plus a disputed Gas NN-Rechnung (INVOIC 31002) and a dead letter. `--verify` checks each outcome and that every Desk view it fills has rows.
+- `just demo [--build]`: the released images of every service, with the Desk on `http://localhost:8000` and a seed container; `just demo-down` stops it. The release builds a `mako-seed` image.
+- `[oidc] mode = "demo"`: accepts tokens signed by a published development key (`just token nb|lf|admin|agent`), still decided by the same Cedar policies, and reports this as a warning finding. A production issuer whose JWKS carries that key is refused at boot.
+- `just listen`: prints every CloudEvent of the running estate, signature-verified.
+- marktd: `[webhook] allow_loopback_subscribers` admits a loopback subscriber and reports it as a warning finding.
+
+### Changed
+
+- **Breaking:** `dev/` and `demos/` are removed. Each service has one configuration, `deploy/demo/<service>.toml`; the port table is `deploy/ports.toml`; the seeder's payloads are in `tools/mako-seed/world/`.
+- **Breaking:** `mako_service::oidc::OidcConfig` carries `mode` (`production` | `demo`); `issuer` and `audience` are refused empty in production. `ServiceConfig` gains `oidc()`.
+- **Breaking:** `mako_as4::client_builder` returns the builder instead of a `Result`. `mako_as4::IdentityError` and `mako_as4::keys` are removed.
+- `asx-rs` 0.19: `build()` refuses signing, encryption and TLS certificates that certify one key pair (BDEW AS4-Profil 1.2 Kap. 2.3.4.4), and under the BDEW profile two decrypters over one key. makod's certificate rotation keeps the replaced encryption certificate through the overlap, so a renewal over the current key is refused and the running clients stay.
+- The release builds every binary in one `builder` stage.
+- `just semver` compares against the versions published on crates.io, not the previous git tag.
+
+### Removed
+
+- **Breaking:** `just run`, `just desk`, `just dev <service>`, `just infra-*`, `just smoke-dev`, `just test-dev-configs`, `just test-demo-payloads` and `just build-demo*`. Their replacements are `just dev`, `just dev-ui`, `just test-demo-configs` and `just test-seed-payloads`.
+
+### Fixed
+
+- edmd and invoicd registered their marktd subscription only once at startup, so if they started before marktd they received no events. `MarktdClient::subscribe_until_registered` retries (2 s doubling to 60 s) and stops on a refused credential; `put_subscription` returns its result.
+- Eight MCP servers refused every caller that addressed them by host name (`403 Host header is not allowed`), and agentd failed to start as a result. `mako_service::mcp::service` accepts any `Host`, since every request is authenticated anyway.
+- processd's MCP server answered only its decision tools, so the Desk's open and overdue process lists were empty.
+- invoicd checked Netznutzungs- and MSB-Rechnungen against an empty Preisblatt, so an invoice at any price passed: the client decoded marktd's whole response instead of its `data` field. The same bug left processd's automatic Preisanfrage-Angebot with an empty `PreisblattMessung`. invoicd now also reads a sheet's AufAbschläge.
+- **Breaking:** `invoic_checker::tariff::PreisblattStore::has_preisblatt_for` has no default implementation. The default treated a Netzbetreiber whose sheets all carry end dates as having none.
+- edmd: every door that writes readings answers a refused write with `422` and code `reading_refused` instead of `500`, which had caused the fan-out to retry deliveries that can never be stored.
+- Chapter citations of the BDEW AS4-Profil, BK7-24-01-009 and the AHBs read „Kap.", not „§"; `check-known-wrong` holds it.
+
 ## [0.35.0] — 2026-11-16
+
+### Changed
+
+- **Breaking:** the code of 0.34.2 under a minor version. 0.34.2 reached crates.io as a patch of 0.34.0 although it removes public mako-as4 API (`IdentityError::MpIdNotInSubject`, `PartnerDirectoryError::{InsecureEndpoint, EndpointWithoutHostName, MpIdNotInSubject, SeveralAddresses, EndpointNotInCertificate}`); 0.35.0 carries that break under a version that admits it. 0.34.1 was tagged and never published.
+
+## [0.34.2] — 2026-11-16
 
 ### Added
 

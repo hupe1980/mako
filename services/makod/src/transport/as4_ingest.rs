@@ -50,7 +50,7 @@ pub const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long an accepted dedup key is remembered: 8 days.
 ///
-/// `asx-rs` 0.17 accepts an inbound `eb:Timestamp` up to 7 days old and
+/// `asx-rs` 0.19 accepts an inbound `eb:Timestamp` up to 7 days old and
 /// requires a `DedupStore` to remember accepted keys for at least that long,
 /// so a sender's retry — BDEW retries for 72 hours — is answered as a duplicate
 /// rather than processed twice. One day above the floor for the daily purge.

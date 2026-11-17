@@ -37,10 +37,10 @@ async fn pg() -> Option<(String, PgContainer)> {
 /// productd on `url`'s database, its ERP webhook pointing at `webhook`.
 async fn serve(url: &str, pool: &PgPool, webhook: &str) -> String {
     let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/config/productd.toml");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/demo/productd.toml");
     let mut cfg =
         mako_service::load_config_file::<productd::config::ProductdConfig>("productd", &path)
-            .expect("the dev configuration loads");
+            .expect("the demo configuration loads");
     cfg.database.url = url.to_owned();
     cfg.erp_webhook_url = Some(webhook.to_owned());
     let app = mako_service::build_for_test_on::<productd::Productd>(cfg, pool.clone())

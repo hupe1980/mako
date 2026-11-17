@@ -7,7 +7,7 @@
 
 #[tokio::test]
 async fn the_router_builds_as_the_runner_mounts_it() {
-    let cfg = toml::from_str(include_str!("../../../../demos/o2c/outputd.toml"))
+    let cfg = toml::from_str(include_str!("../../../../deploy/demo/outputd.toml"))
         .expect("the demo configuration parses");
     let _app = mako_service::build_for_test::<outputd::Outputd>(cfg)
         .await
@@ -20,7 +20,7 @@ async fn the_router_builds_as_the_runner_mounts_it() {
 fn a_config_with_two_defects_reports_both() {
     use mako_service::Daemon as _;
     let mut cfg: outputd::config::OutputdConfig =
-        toml::from_str(include_str!("../../../../demos/o2c/outputd.toml"))
+        toml::from_str(include_str!("../../../../deploy/demo/outputd.toml"))
             .expect("the demo configuration parses");
     cfg.allow_insecure_no_auth = false;
     cfg.oidc = None;

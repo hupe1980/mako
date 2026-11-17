@@ -9,7 +9,7 @@ records `makod`'s process events and fans them out; `processd` decides.
 
 | | |
 |---|---|
-| **Port** | 8180 (`dev/ports.toml`) |
+| **Port** | 8180 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL 15+ with `btree_gist`; validity is half-open `[valid_from, valid_to)` under `EXCLUDE` constraints |
 | **MCP** | 21 tools, 4 prompts at `/mcp` |
 | **Emits** | `de.markt.*` (e.g. `versorgung.changed`, `malo.updated`) and relayed `de.mako.*`, HMAC-signed, from `urn:mako:marktd:tenant:{tenant}` |
@@ -19,8 +19,8 @@ records `makod`'s process events and fans them out; `processd` decides.
 ## Run
 
 ```bash
-just dev marktd    # dev/config/marktd.toml against the dev PostgreSQL
-MARKTD_CONFIG=dev/config/marktd.toml cargo run -p marktd -- --check-config
+just dev    # the whole estate, marktd on deploy/demo/marktd.toml, seeded
+MARKTD_CONFIG=deploy/demo/marktd.toml cargo run -p marktd -- --check-config
 ```
 
 ## API

@@ -1,0 +1,30 @@
+{
+  "mp_id": "9900000000019",
+  "display_name": "Musterstadt Bilanzkreis GmbH",
+  "channels": [
+    {
+      "qualifier": "AK",
+      "address": "https://as4.example.com/as4/receive"
+    },
+    {
+      "qualifier": "EM",
+      "address": "edifact@musterstadt-bkv.example.com"
+    }
+  ],
+  "roles": [
+    "BKV"
+  ],
+  "contacts": [
+    {
+      "name": "EDI Support",
+      "channels": [
+        {
+          "qualifier": "TE",
+          "address": "+49 30 123456789"
+        }
+      ]
+    }
+  ],
+  "country_code": "DE",
+  "updated_at": "2026-07-01T00:00:00Z"
+}

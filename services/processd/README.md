@@ -12,7 +12,7 @@ Sperrauftrag queue that turns ORDERS 17115 / 17117 into field work and IFTSTA
 
 | | |
 |---|---|
-| **Port** | 8580 (`dev/ports.toml`) |
+| **Port** | 8580 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — approval queue, decisions, read model, Sperrauftrag queue |
 | **MCP** | 22 tools, 8 prompts at `/mcp` |
 | **Emits** | `de.obs.deadline.approaching`, `de.obs.stp.parity.alert`, `de.sperr.*` |
@@ -29,8 +29,8 @@ with UTILMD 44010.
 ## Run
 
 ```bash
-just dev processd    # dev/config/processd.toml against the dev PostgreSQL
-PROCESSD_CONFIG=dev/config/processd.toml cargo run -p processd -- --check-config
+just dev    # the whole estate, processd on deploy/demo/processd.toml, seeded
+PROCESSD_CONFIG=deploy/demo/processd.toml cargo run -p processd -- --check-config
 cargo run -p processd --no-default-features --features nb-only   # one role only
 ```
 

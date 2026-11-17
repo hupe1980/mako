@@ -341,7 +341,7 @@ pub enum SettlementType {
     MmmSelbstausstellt,
     /// Messstellenbetrieb settlement — PID 31009 (MSB → NB / LF / ESA).
     MsbRechnung,
-    /// GaBi Gas AWH Sperrprozesse settlement — PID 31011 (NB → LF, BK7-24-01-009 §5.4).
+    /// GaBi Gas AWH Sperrprozesse settlement — PID 31011 (NB → LF, BK7-24-01-009 Kap. 5.4).
     ///
     /// Rechnung sonstige Leistung: bills the LF (LFG/LFA) for abrechnungswürdige
     /// Handlungen (AWH) performed by the GNB/VNB during Sperrung/Entsperrung.
@@ -802,13 +802,13 @@ pub enum BillingPositionKind {
     /// MsbG §2. → `BdewArtikelnummer::EntgeltMessungAblesung`
     Messdienstleistung,
     /// Gas AWH Sperrung — abrechnungswürdige Handlung disconnection.
-    /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::Sperrkosten`
+    /// BK7-24-01-009 Kap. 5.4. → `BdewArtikelnummer::Sperrkosten`
     GasAwhSperrung,
     /// Gas AWH Entsperrung — abrechnungswürdige Handlung reconnection.
-    /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::Entsperrkosten`
+    /// BK7-24-01-009 Kap. 5.4. → `BdewArtikelnummer::Entsperrkosten`
     GasAwhEntsperrung,
     /// Gas AWH sonstige — other abrechnungswürdige Handlung.
-    /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::EntgeltAbrechnung`
+    /// BK7-24-01-009 Kap. 5.4. → `BdewArtikelnummer::EntgeltAbrechnung`
     GasAwhSonstige,
     /// Blindmehrarbeit — reactive energy beyond the free share.
     ///
@@ -2402,7 +2402,7 @@ impl MsbEmpfaengerRolle {
 ///
 /// Bills the Lieferant (LFG/LFA) for abrechnungswürdige Handlungen (AWH)
 /// performed by the GNB/VNB during the Sperrung/Entsperrung process.
-/// Governed by BK7-24-01-009 §5.4 (GeLi Gas 3.0).
+/// Governed by BK7-24-01-009 Kap. 5.4 (GeLi Gas 3.0).
 ///
 /// ## What counts as AWH
 ///
@@ -2457,7 +2457,7 @@ pub struct AwhPositionInput {
     pub preis_eur: Decimal,
     /// BDEW Artikel-ID from section 3.2 of the Codeliste Artikelnummern v5.6.
     ///
-    /// Standard values for Gas AWH Sperrprozesse (BK7-24-01-009 §5.4):
+    /// Standard values for Gas AWH Sperrprozesse (BK7-24-01-009 Kap. 5.4):
     /// - `"2-01-7-001"` — Unterbrechung der Anschlussnutzung (reguläre AZ)
     /// - `"2-01-7-002"` — Wiederherstellung der Anschlussnutzung (reguläre AZ)
     /// - `"2-01-7-003"` — Erfolglose Unterbrechung

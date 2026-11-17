@@ -22,7 +22,7 @@ async fn marktd() -> String {
 #[tokio::test]
 async fn the_router_builds_as_the_runner_mounts_it() {
     let mut cfg: toml::Value =
-        toml::from_str(include_str!("../../../../demos/nb-stp/processd.toml"))
+        toml::from_str(include_str!("../../../../deploy/demo/processd.toml"))
             .expect("the demo configuration parses");
     cfg["marktd"]["url"] = toml::Value::String(marktd().await);
     let cfg = cfg
@@ -37,7 +37,7 @@ async fn the_router_builds_as_the_runner_mounts_it() {
 /// it — so every query fails.
 async fn serve_without_a_database() -> String {
     let mut cfg: toml::Value =
-        toml::from_str(include_str!("../../../../demos/nb-stp/processd.toml"))
+        toml::from_str(include_str!("../../../../deploy/demo/processd.toml"))
             .expect("the demo configuration parses");
     cfg["marktd"]["url"] = toml::Value::String(marktd().await);
     let app = mako_service::build_for_test::<processd::Processd>(

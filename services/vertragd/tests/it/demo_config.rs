@@ -1,59 +1,53 @@
-//! Guard: every `demos/` config file `vertragd` loads is one `vertragd` accepts.
+//! Guard: `deploy/demo/vertragd.toml` is a configuration `vertragd` starts with.
 //!
-//! A demo config is shipped surface in the same way a demo request body is: it
-//! is what an operator copies when writing their own. `figment` merges the TOML
-//! with `VERTRAGD_*` environment variables, so a key the struct does not
-//! declare is dropped in silence unless the config denies unknown fields —
-//! which is how a setting can appear configured and do nothing.
-//!
-//! What this asserts is **no unknown key**. A *missing* one is fine: the demo
-//! stacks supply `database.url` and the secrets through the environment, so a
-//! file that does not deserialise for want of a required field still says
-//! nothing about the keys it does carry.
+//! The demo configuration is what `just dev` runs on the host and `just demo`
+//! runs in Docker, and what an operator copies when writing their own. A key
+//! the type renamed, a required key nobody added, or a value that no longer
+//! parses is an estate that does not start; a key the type does not declare is
+//! a setting that appears configured and does nothing.
 
-/// Every demo config this service is started with.
-const DEMO_CONFIGS: &[&str] = &["demos/o2c/vertragd.toml"];
+/// The demo configuration, from this crate's own location.
+fn demo_config() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/demo/vertragd.toml")
+}
 
+/// Loaded through the runner's loader, so the file is checked exactly as
+/// startup checks it — every missing, unknown or invalid key named.
 #[test]
-fn the_demo_configs_name_no_key_the_service_ignores() {
-    for rel in DEMO_CONFIGS {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(rel);
-        let src = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("{} is not readable: {e}", path.display()));
-        if let Err(e) = toml::from_str::<vertragd::config::VertragdConfig>(&src) {
-            let msg = e.to_string();
-            assert!(
-                !msg.contains("unknown field"),
-                "{rel} names a key `vertragd` does not have — fix the demo, or the config:\n{msg}"
-            );
-        }
+fn the_demo_config_loads() {
+    if let Err(e) = mako_service::load_config_file::<vertragd::config::VertragdConfig>(
+        "vertragd",
+        &demo_config(),
+    ) {
+        panic!("{e}");
     }
 }
 
-/// A demo config the service refuses to start with is a broken demo.
-///
-/// The sibling test asks only whether every key is one the struct declares. A
-/// config can pass that and still be refused at startup: the auth posture is a
-/// second gate, and `allow_insecure_no_auth` is how a demo stack opts out of it
-/// deliberately.
+/// The file alone, without the environment layer: a key `vertragd` does not
+/// declare is refused by name.
 #[test]
-fn the_demo_configs_start() {
-    for rel in DEMO_CONFIGS {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(rel);
-        let src = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("{} is not readable: {e}", path.display()));
-        let Ok(cfg) = toml::from_str::<vertragd::config::VertragdConfig>(&src) else {
-            continue;
-        };
-        if let Err(e) = cfg.check_auth_posture() {
-            panic!(
-                "{rel} parses but `vertragd` refuses to start with it. Set \
-                 `allow_insecure_no_auth = true` in the demo, or configure the door:\n{e}"
-            );
-        }
+fn the_demo_config_names_no_key_the_service_ignores() {
+    let path = demo_config();
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} is not readable: {e}", path.display()));
+    if let Err(e) = toml::from_str::<vertragd::config::VertragdConfig>(&src) {
+        let msg = e.to_string();
+        assert!(
+            !msg.contains("unknown field"),
+            "deploy/demo/vertragd.toml names a key `vertragd` does not have — fix the config, or the type:\n{msg}"
+        );
+    }
+}
+
+/// The auth posture is a second gate beside the parse: a demo configuration
+/// opts out of it by name (`allow_insecure_no_auth`), or the estate does not
+/// start.
+#[test]
+fn the_demo_config_passes_the_auth_posture() {
+    let path = demo_config();
+    let cfg = mako_service::load_config_file::<vertragd::config::VertragdConfig>("vertragd", &path)
+        .unwrap_or_else(|e| panic!("{e}"));
+    if let Err(e) = cfg.check_auth_posture() {
+        panic!("deploy/demo/vertragd.toml loads but `vertragd` refuses to start with it:\n{e}");
     }
 }

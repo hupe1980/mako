@@ -93,6 +93,9 @@ impl ServiceConfig for Config {
     fn bind_addr(&self) -> String {
         self.http.addr.clone()
     }
+    fn oidc(&self) -> Option<&mako_service::oidc::OidcConfig> {
+        self.oidc.as_ref()
+    }
 }
 
 fn default_http() -> HttpConfig {
@@ -144,6 +147,13 @@ pub struct WebhookConfig {
     pub delivery_timeout_secs: u64,
     #[serde(default = "default_max_retry_attempts")]
     pub max_retry_attempts: u32,
+    /// Admit a subscriber on a loopback host (`127.0.0.0/8`, `::1`,
+    /// `localhost`). Every service of `just dev` runs on this machine and
+    /// listens on loopback, so its subscriptions name loopback endpoints; any
+    /// other deployment leaves it off, and a private or link-local host stays
+    /// refused either way. Reported as a warning finding.
+    #[serde(default)]
+    pub allow_loopback_subscribers: bool,
 }
 
 impl Default for WebhookConfig {
@@ -153,6 +163,7 @@ impl Default for WebhookConfig {
             inbound_secret: None,
             delivery_timeout_secs: default_delivery_timeout_secs(),
             max_retry_attempts: default_max_retry_attempts(),
+            allow_loopback_subscribers: false,
         }
     }
 }

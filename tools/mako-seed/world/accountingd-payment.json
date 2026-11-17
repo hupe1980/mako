@@ -1,0 +1,9 @@
+[
+  {
+    "iban": "DE02120300000000202051",
+    "amount_eur": "132.48",
+    "date": "2026-11-16",
+    "reference": "Rechnung RE-0001 Marktlokation 51238696012",
+    "bank_transaction_id": "MUSTERSTADT-PAY-51238696012"
+  }
+]

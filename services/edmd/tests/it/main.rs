@@ -4,11 +4,10 @@
 
 mod cedar_policy;
 mod demo_config;
-mod demo_payloads;
-mod dev_config;
 mod kafka_ingest;
 mod mcp_round_trips;
 mod meterstore_integration;
 mod router_builds;
 mod schema_code_guard;
+mod seed_payloads;
 mod sharing_participation;

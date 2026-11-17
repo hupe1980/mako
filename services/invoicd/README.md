@@ -8,7 +8,7 @@ through `makod`. It handles PIDs 31001–31009 and 31011; 31010
 
 | | |
 |---|---|
-| **Port** | 8280 (`dev/ports.toml`) |
+| **Port** | 8280 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `invoic_receipts`, `leistungsnachweise`, `invoic_dlq` |
 | **MCP** | 9 tools, 4 prompts at `/mcp` |
 | **Emits** | `de.invoic.receipt.settled`, `de.invoic.receipt.disputed`, `de.invoic.payment.overdue` to the ERP webhook |
@@ -18,8 +18,8 @@ through `makod`. It handles PIDs 31001–31009 and 31011; 31010
 ## Run
 
 ```bash
-just dev invoicd       # dev/config/invoicd.toml against the dev PostgreSQL
-INVOICD_CONFIG=dev/config/invoicd.toml cargo run -p invoicd -- --check-config
+just dev    # the whole estate, invoicd on deploy/demo/invoicd.toml, seeded
+INVOICD_CONFIG=deploy/demo/invoicd.toml cargo run -p invoicd -- --check-config
 ```
 
 `just test-invoicd-db` runs the PostgreSQL suite (needs Docker).

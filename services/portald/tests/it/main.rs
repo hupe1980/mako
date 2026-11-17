@@ -3,5 +3,5 @@
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
 mod authorization_guard;
-mod dev_config;
+mod demo_config;
 mod upstream_failure;

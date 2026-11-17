@@ -16,6 +16,26 @@ describe("the runtime configuration", () => {
     expect(laufzeitAus({ handbuch: "javascript:alert(1)" })).toEqual(STANDARD);
   });
 
+  it("offers the demo personas only where the file names them", () => {
+    expect(laufzeitAus({}).demo).toBeNull();
+    expect(laufzeitAus({ demo: { personas: [] } }).demo).toBeNull();
+    const demo = laufzeitAus({
+      demo: {
+        personas: [
+          { id: "nb", name: "Sachbearbeitung Netz" },
+          { id: "Bad Id", name: "x" },
+          { id: "admin", name: "Administration" },
+        ],
+        standard: "admin",
+      },
+    }).demo;
+    expect(demo?.personas.map((p) => p.id)).toEqual(["nb", "admin"]);
+    expect(demo?.standard).toBe("admin");
+    expect(laufzeitAus({ demo: { personas: [{ id: "lf", name: "LF" }] } }).demo?.standard).toBe(
+      "lf",
+    );
+  });
+
   it("resolves a docs-site reference under that address, and nothing else", () => {
     expect(handbuchLink("@/docs/services/makod.md#policy-x", "https://d.example")).toBe(
       "https://d.example/docs/services/makod/#policy-x",

@@ -35,7 +35,7 @@ uuid        = { workspace = true }
 # Gated behind the `makod-client` feature so library users that don't call
 # makod don't pay the binary-size and compile-time cost of reqwest.
 reqwest     = { version = "0.13", default-features = false, features = ["json", "rustls", "query"], optional = true }
-tokio       = { version = "1", features = ["sync", "rt"] }
+tokio       = { version = "1", features = ["sync", "rt", "time", "macros"] }
 tracing     = { version = "0.1", default-features = false, features = ["log", "attributes"] }
 secrecy     = "0.10"
 rust_decimal = { workspace = true }

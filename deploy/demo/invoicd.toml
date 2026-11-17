@@ -1,0 +1,40 @@
+# invoicd.toml — the demo configuration: what `just demo` runs in Docker and
+# `just dev` runs on this machine (deploy/dev/up.sh moves every
+# `http://<service>:<port>` peer and the database host to loopback). One
+# Stadtwerk — Stadtwerke Musterstadt, NB, LF and MSB — whose world
+# tools/mako-seed fills. Authentication is the demo's and every secret is a
+# development literal. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `INVOICD_<KEY>`,
+# nested keys joined with `__`. `invoicd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+[http]
+addr = "0.0.0.0:8280"
+
+[database]
+url = "postgres://mako:mako@postgres:5432/invoicd"
+
+[identity]
+tenant = "9900357000004"
+
+[makod]
+url     = "http://makod:8080"
+api_key = "dev-makod-key"
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = "dev-marktd-key"
+
+# The demo sign-in: a token from `just token <persona>` or the Desk's persona
+# switcher is answered as that persona by Cedar; a request without one is the
+# dev principal. Reported as a warning by `--check-config`.
+[oidc]
+mode = "demo"
+
+# Where marktd delivers the process events invoicd checks INVOICs from — named
+# here, not left to the default, so `just dev` moves it to loopback with every
+# other peer.
+[subscription]
+webhook_url = "http://invoicd:8280/webhook"

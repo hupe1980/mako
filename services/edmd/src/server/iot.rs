@@ -408,8 +408,9 @@ pub(crate) async fn post_iot_reads(
     if !validated.is_empty()
         && let Err(e) = state.repo.store_reads(validated).await
     {
-        tracing::error!(malo_id = %malo_id, error = %e, "edmd: IoT batch insert failed");
-        return ApiError::internal(e).into_response();
+        tracing::warn!(malo_id = %malo_id, error = %e, "edmd: IoT batch not stored");
+        return crate::handler::ingest_refusal(e, format!("IoT batch for MaLo {malo_id}"))
+            .into_response();
     }
 
     // Recorded once the readings are stored, for the same reason every other

@@ -5,7 +5,7 @@ template = "home.html"
 
 [extra]
 translated_from = "templates/index.html"
-source_sha256 = "663626a92fe93597b399693b4ae4148d3b94fe4d491940ba6162e919c7b3b443"
+source_sha256 = "b85bfefb77986e48533e5437ac9fe1bf5e94ce74ec4abaf83f7c2f972afd5440"
 
 eyebrow = "Rust · MIT oder Apache-2.0 · BDEW EDI@Energy"
 hero_title = "Marktkommunikation für Strom und Gas,<br>von rohem EDIFACT bis zur Produktion — KI-first, in Rust."
@@ -188,9 +188,8 @@ text = "ein BDEW-Werktagskalender, von der APERAK-Uhr bis zum Freigabefenster ei
 # EDIFACT-Übertragungsdatei lesen und prüfen
 cargo add edi-energy
 
-# Die NB-Demo starten: makod, marktd, processd
-just build-demo
-cd demos/nb-stp && docker compose up -d && bash smoke.sh
+# Das ganze System starten, befüllt mit einem Stadtwerk, mit dem Desk
+just doctor && just dev
 
 # Aus Python steuern — Generatoren, Simulatoren, pytest-Plugin
 pip install makotest

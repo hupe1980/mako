@@ -17,6 +17,85 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
+# ── Start ─────────────────────────────────────────────────────────────────────
+#
+# `just dev` is the estate on this machine, `just demo` the released images in
+# Docker; both run Stadtwerke Musterstadt, which `just seed` fills through the
+# services' public APIs. The configurations are deploy/demo/<service>.toml, the
+# ports deploy/ports.toml.
+
+# PostgreSQL in Docker, the fourteen services built by cargo and run here —
+# their logs in this terminal, one colour each, and in target/dev/<service>.log
+# — the Desk under Vite against them, and the seeded Stadtwerk. Checks the
+# machine first. Ctrl-C stops the services; the data stays until `just
+# dev-down`.
+#
+# The estate on this machine, seeded, with the Desk
+dev *args:
+    deploy/dev/up.sh {{ args }}
+
+# Stop `just dev`'s PostgreSQL and forget its data
+dev-down:
+    docker compose -p mako-dev -f deploy/dev/compose.yaml down -v
+    rm -rf deploy/dev/.data
+
+# The Desk on its recorded answers (desk/fixtures) — no Rust, no Docker
+dev-ui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -d desk/node_modules ] || (cd desk && npm ci --no-audit --no-fund)
+    cd desk && npm run dev:fixtures
+
+# Each miss is named with the command that fixes it; then one line per daemon's
+# configuration, ready or blocked.
+#
+# Can this machine run `just dev`?
+doctor:
+    deploy/dev/doctor.sh
+    {{ just_executable() }} setup --tabelle
+
+# Fill the running estate with Stadtwerke Musterstadt (idempotent); `--verify`
+# then asserts the outcomes and that every Desk view has content
+seed *args:
+    cargo run -q -p mako-seed -- seed {{ args }}
+
+# The released images of every service and the Desk in Docker, a seed
+# container, one port: http://localhost:8000. `just demo --build` builds the
+# images from this tree instead of pulling them. No Rust needed.
+#
+# The demo: the released images, seeded, behind the Desk
+demo *args:
+    deploy/demo/up.sh {{ args }}
+
+# Stop the demo and forget its data
+demo-down:
+    docker compose -p mako-demo down -v
+
+# Prints a token for a persona of the demo sign-in — nb, lf, admin or agent —
+# for `curl -H "Authorization: Bearer $TOKEN" …`. Accepted only by a service
+# whose `[oidc]` says `mode = "demo"`:
+#
+#     TOKEN=$(just token lf)
+#
+# A demo token for a persona
+token persona="admin":
+    @python3 -c 'import json,sys; p={x["id"]:x for x in json.load(open("deploy/demo/personas.json"))["personas"]}; sys.exit("unknown persona {!r} — one of: {}".format(sys.argv[1], ", ".join(p))) if sys.argv[1] not in p else print(p[sys.argv[1]]["token"])' {{ persona }}
+
+# Subscribes to marktd's fan-out and prints each delivery verified; Ctrl-C
+# removes the subscription. Under `just demo` it reaches marktd through the
+# Desk's edge and marktd reaches it as host.docker.internal; under `just dev`
+# marktd is on :8180 and reaches it by this machine's host name.
+#
+# Every CloudEvent of the running estate, as it arrives
+listen *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    extra=()
+    if docker compose -p mako-demo ps -q marktd 2>/dev/null | grep -q .; then
+        extra=(--marktd "http://localhost:${MAKO_PORT:-8000}/svc/marktd" --host host.docker.internal)
+    fi
+    cargo run -q -p mako-seed -- listen ${extra[@]+"${extra[@]}"} {{ args }}
+
 # ── Core gates ────────────────────────────────────────────────────────────────
 
 # Minimum gate before every commit: type-check all targets
@@ -47,25 +126,24 @@ test:
 test-doc:
     cargo test --workspace --all-features --doc
 
-# A demo payload is shipped API surface — run by whoever evaluates the platform
-# and copied into tickets as "this is what a request looks like" — so each one
-# is deserialised into the real request type. These are ordinary `#[test]`s, so
-# `just test` covers them; the recipe runs them alone, in seconds, while a demo
-# is being edited.
+# A demo configuration is shipped surface: it is what an operator copies. Each
+# service's `demo_config` suite loads deploy/demo/<service>.toml through its own
+# config type and refuses a key the type does not declare (`figment` would drop
+# it in silence). The services are read from the directory, so a new config is
+# covered as soon as it exists.
 #
-# Every request body demos/ posts is one the service accepts
-test-demo-payloads:
-    for c in marktd vertragd productd billingd accountingd einsd; do {{ just_executable() }} suite "$c" demo_payloads; done
-
-# A demo *config* is shipped surface for the same reason a demo payload is: it
-# is what an operator copies. `figment` merges the TOML with the service's
-# environment variables, so a key the config struct does not declare is dropped
-# in silence — a setting that appears configured and does nothing. Asserts no
-# unknown key; a missing one is fine, since the demo stacks supply the database
-# URL and the secrets through the environment.
+# Every deploy/demo/<service>.toml loads and names no unknown key
 test-demo-configs:
-    for c in marktd vertragd productd billingd accountingd einsd edmd outputd processd; do \
-        {{ just_executable() }} suite "$c" demo_config; done
+    for f in deploy/demo/*.toml; do {{ just_executable() }} suite "$(basename "$f" .toml)" demo_config; done
+
+# A seeded request body is shipped API surface — run by whoever evaluates the
+# platform and copied into tickets as "this is what a request looks like" — so
+# each one under tools/mako-seed/world/ is deserialised into the real request
+# type. Ordinary `#[test]`s, so `just test` covers them; this runs them alone.
+#
+# Every request body the seeder posts is one the service accepts
+test-seed-payloads:
+    for c in marktd vertragd productd billingd accountingd einsd edmd makod outputd; do {{ just_executable() }} suite "$c" seed_payloads; done
 
 # Run tests for a specific crate (e.g. `just test-crate mako-engine`)
 test-crate crate:
@@ -323,12 +401,14 @@ check-publishable:
     echo "check-publishable: $(echo "$crates" | wc -w | tr -d ' ') crates build with default features"
 
 # Every crate under crates/ is published; a consumer finds a breaking change
-# when their build fails unless this does first. The baseline is the newest
-# `v*` tag before `HEAD`, built from git, so no registry download is needed; a
-# change the current version number does not admit (a minor bump, under 0.x)
-# fails. It runs in the release workflow before anything is published, not in
-# `ci`: between releases the API may break freely, and the bump that admits a
-# break is made when the release is cut.
+# when their build fails unless this does first. The baseline is each crate's
+# newest version on crates.io — what consumers actually resolve — never a git
+# tag: a tag whose release stopped before publishing would otherwise become
+# the baseline and let the next patch carry the break onto crates.io. A change
+# the current version number does not admit (a minor bump, under 0.x) fails.
+# It runs in the release workflow before anything is published, not in `ci`:
+# between releases the API may break freely, and the bump that admits a break
+# is made when the release is cut.
 # The crate set is the release workflow's publish list, as for
 # check-publishable. Needs cargo-semver-checks; name crates to check a subset.
 #
@@ -336,7 +416,6 @@ check-publishable:
 semver *crates:
     #!/usr/bin/env bash
     set -euo pipefail
-    base="$(git describe --tags --abbrev=0 --match 'v*' HEAD^)"
     crates="{{ crates }}"
     if [ -z "$crates" ]; then
         crates=$(grep -oE 'cargo publish -p [a-z0-9-]+' .github/workflows/release.yml \
@@ -344,8 +423,8 @@ semver *crates:
     fi
     args=()
     for c in $crates; do args+=(-p "$c"); done
-    echo "semver: ${#args[@]} flags against $base"
-    cargo semver-checks check-release --baseline-rev "$base" "${args[@]}"
+    echo "semver: ${#args[@]} flags against the versions published on crates.io"
+    cargo semver-checks check-release "${args[@]}"
 
 # A report, not a gate: a pin behind the registry is often a decision, and
 # `just ci` must not need the network. Pass `--recorded <file>` to read a saved
@@ -605,141 +684,16 @@ build-makotest:
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-# Only deps needed for the Lieferbeginn smoke test; no iceberg/LanceDB.
-# Expected cold build: ~8 min (debug) / ~12 min (release).
-# Optional services (invoicd, netzbilanzd): build with --target <name>-runtime.
-
-# Build the nb-stp demo images (makod, marktd, processd)
-build-demo profile="dev":
-    docker build --target runtime             --build-arg PROFILE={{ profile }} -t makod:dev     .
-    docker build --target marktd-runtime      --build-arg PROFILE={{ profile }} -t marktd:dev    .
-    docker build --target processd-runtime    --build-arg PROFILE={{ profile }} -t processd:dev  .
-
-# `demos/eeg-billing` needs none of makod/processd: the EEG settlement path is
-# marktd (Marktpartner) → edmd (Zählwerte) → einsd (Vergütung), with no MaKo
-# message on it, so the images the Lieferbeginn demo builds are the wrong three.
-# Expected cold build: ~8 min (debug) / ~12 min (release).
-
-# Build the eeg-billing demo images (marktd, edmd, einsd)
-build-demo-eeg profile="dev":
-    docker build --target marktd-runtime      --build-arg PROFILE={{ profile }} -t marktd:dev    .
-    docker build --target edmd-runtime        --build-arg PROFILE={{ profile }} -t edmd:dev      .
-    docker build --target einsd-runtime       --build-arg PROFILE={{ profile }} -t einsd:dev     .
-
-# `demos/o2c` runs the retail money path — productd → vertragd → billingd →
-# outputd → accountingd. All five come out of the full `builder` stage, so the
-# first build is the slow one and the rest are a copy.
-# Expected cold build: ~20-45 min; a warm BuildKit cache, a few minutes.
-
-# Build the order-to-cash demo images (productd, vertragd, billingd, outputd, accountingd)
-build-demo-o2c profile="dev":
-    docker build --target productd-runtime    --build-arg PROFILE={{ profile }} -t productd:dev    .
-    docker build --target vertragd-runtime    --build-arg PROFILE={{ profile }} -t vertragd:dev    .
-    docker build --target billingd-runtime    --build-arg PROFILE={{ profile }} -t billingd:dev    .
-    docker build --target outputd-runtime     --build-arg PROFILE={{ profile }} -t outputd:dev     .
-    docker build --target accountingd-runtime --build-arg PROFILE={{ profile }} -t accountingd:dev .
-
 # Build xtask (needed after changing xtask commands)
 build-xtask:
     cargo build -p xtask
 
-# ── Local development ─────────────────────────────────────────────────────────
-#
-# PostgreSQL runs in Docker; the services run as cargo processes, each with its
-# config from dev/config/<service>.toml.
-#
-#   just dev marktd               # starts PostgreSQL if needed, then marktd
-#   just dev processd             # a second service, in a second terminal
-#   just infra-down               # stop PostgreSQL
-
-# Start infrastructure (postgres only) and wait until it accepts connections
-infra-up:
-    docker compose -f dev/docker-compose.yml up -d --wait
-    @echo "Postgres ready on :5432 — connection strings in dev/docker-compose.yml"
-
-# Stop infrastructure and remove containers (volumes are preserved)
-infra-down:
-    docker compose -f dev/docker-compose.yml down
-
-# Stop infrastructure and delete all volumes and dev/.data (full reset)
-infra-reset:
-    docker compose -f dev/docker-compose.yml down -v
-    rm -rf dev/.data
-
-# Restarts on change with watchexec or bacon when one is installed, else runs
-# once with plain `cargo run`.
-#
-# Run one service against the dev stack with dev/config/<service>.toml (just dev marktd)
-dev service:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cfg="dev/config/{{ service }}.toml"
-    if [ ! -f "$cfg" ]; then
-        echo "no $cfg — one of: $(ls dev/config | sed 's/\.toml$//' | tr '\n' ' ')" >&2
-        exit 1
-    fi
-    # makod keeps its event store in memory in dev; every other service has a
-    # database in the compose stack.
-    if [ "{{ service }}" != makod ]; then
-        docker compose -f dev/docker-compose.yml up -d --wait >/dev/null
-    fi
-    . dev/env.sh {{ service }}
-    if command -v watchexec >/dev/null; then
-        exec watchexec --restart --exts rs,toml -- cargo run -p {{ service }}
-    elif command -v bacon >/dev/null; then
-        exec bacon run -- -p {{ service }}
-    else
-        exec cargo run -p {{ service }}
-    fi
-
-# Run a single service once against the dev stack (no watch).
-# Example: just run marktd
-run service:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    . dev/env.sh {{ service }}
-    exec cargo run -p {{ service }}
-
-# The services are read from the directory, so a new config is covered as soon
-# as it exists.
-#
-# Every dev/config/<service>.toml loads through its service's config type
-test-dev-configs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    for f in dev/config/*.toml; do
-        {{ just_executable() }} suite "$(basename "$f" .toml)" dev_config
-    done
-
-# What `just dev` promises a fresh clone. Needs Docker; with no argument it
-# boots every service under dev/config/.
-#
-# Boot services with their dev configs and wait for /health/ready (just smoke-dev marktd)
-smoke-dev *services:
-    dev/smoke.sh {{ services }}
-
-# Tail logs for an infra container (postgres).
-# Example: just infra-logs postgres
-infra-logs container="postgres":
-    docker compose -f dev/docker-compose.yml logs -f {{ container }}
-
 # ── The Desk (desk/) ──────────────────────────────────────────────────────────
 #
 # The operator UI: a React app in desk/ that reads the services' MCP tools
-# through its Vite server, which proxies /svc/<name> to the port dev/ports.toml
-# assigns and attaches a service's `dev=` key from its dev config.
-
-# The inner loop: makod on its dev config, the Desk with hot reload, the browser on :5173
-desk:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    [ -d desk/node_modules ] || (cd desk && npm ci --no-audit --no-fund)
-    . dev/env.sh makod
-    cargo build -q -p makod
-    cargo run -q -p makod &
-    makod=$!
-    trap 'kill $makod 2>/dev/null || true' EXIT
-    cd desk && npx vite --open
+# through its Vite server, which proxies /svc/<name> to the port
+# deploy/ports.toml assigns. `just dev` runs it against the estate, `just
+# dev-ui` against its recorded answers.
 
 # Every service with an mcp.snapshot.json rewrites it from its tool router; then
 # the Desk's types are regenerated from the snapshots.
@@ -1082,11 +1036,12 @@ check-translations:
 check-config-findings:
     cargo xtask check-config-findings
 
-# The deployment checklist: every dev/config daemon's `--check-config --json`,
-# folded across daemons — identities, certificates, Bilanzkreise, access,
-# reachability, format coverage. Exits non-zero while anything is red.
-# `just setup --url http://makod:8080 --token-env MAKOD_TOKEN` asks a running
-# makod's /admin/einrichtung/deployment instead; `--tabelle` prints one line per
+# The deployment checklist: every demo daemon's `--check-config --json`
+# (deploy/demo/<service>.toml), folded across daemons — identities,
+# certificates, Bilanzkreise, access, reachability, format coverage. Exits
+# non-zero while anything is red. `just setup --url http://makod:8080
+# --token-env MAKOD_TOKEN` asks a running makod's
+# /admin/einrichtung/deployment instead; `--tabelle` prints one line per
 # daemon; `--vorschlag antworten.toml [--schreiben dir]` prints the
 # configuration the setup interview's answers propose, as the Desk shows it.
 #
@@ -1097,22 +1052,16 @@ setup *args:
     case " {{ args }} " in
         *" --url "*) exec cargo xtask setup {{ args }} ;;
     esac
-    services=$(ls dev/config | sed 's/\.toml$//')
+    services=$(ls deploy/demo/*.toml | xargs -n1 basename | sed 's/\.toml$//')
     cargo build --quiet $(for s in $services; do printf -- '-p %s ' "$s"; done)
     out="$(mktemp -d)"
     trap 'rm -rf "$out"' EXIT
     target="${CARGO_TARGET_DIR:-target}"
     for s in $services; do
-        ( . dev/env.sh "$s"; "$target/debug/$s" --check-config --json >"$out/$s.json" 2>"$out/$s.err" ) || true
+        var="$(echo "$s" | tr 'a-z-' 'A-Z_')_CONFIG"
+        ( export "$var=$PWD/deploy/demo/$s.toml"; "$target/debug/$s" --check-config --json >"$out/$s.json" 2>"$out/$s.err" ) || true
     done
     cargo xtask setup --berichte "$out" {{ args }}
-
-# One line per dev/config daemon: ready or blocked, and how many findings
-# block or warn. Exits non-zero while anything is red.
-#
-# Every daemon's configuration state at a glance
-doctor:
-    {{ just_executable() }} setup --tabelle
 
 # From an empty makod to a green check and a passing Probelauf for the
 # fixture interview „Lieferant Strom und Gas“, each step timed; fails over 30

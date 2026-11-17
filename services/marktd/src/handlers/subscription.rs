@@ -91,6 +91,17 @@ pub struct SubscriptionResponse {
 ///
 /// Returns a human-readable reason when the URL must not be stored.
 pub fn validate_webhook_url(raw: &str) -> Result<(), String> {
+    validate_webhook_url_with(raw, false)
+}
+
+/// [`validate_webhook_url`], with a loopback host admitted when
+/// `allow_loopback` says so (`[webhook] allow_loopback_subscribers`). A
+/// private, link-local or otherwise non-routable host is refused either way.
+///
+/// # Errors
+///
+/// Returns a human-readable reason when the URL must not be stored.
+pub fn validate_webhook_url_with(raw: &str, allow_loopback: bool) -> Result<(), String> {
     let url = reqwest::Url::parse(raw).map_err(|e| format!("not a valid URL: {e}"))?;
 
     match url.scheme() {
@@ -103,6 +114,9 @@ pub fn validate_webhook_url(raw: &str) -> Result<(), String> {
     };
 
     if host.eq_ignore_ascii_case("localhost") {
+        if allow_loopback {
+            return Ok(());
+        }
         return Err("loopback host is not an acceptable webhook endpoint".to_owned());
     }
 
@@ -110,6 +124,7 @@ pub fn validate_webhook_url(raw: &str) -> Result<(), String> {
     // parses as an address and is left to delivery-time resolution.
     let bare = host.trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = bare.parse::<IpAddr>()
+        && !(allow_loopback && ip.is_loopback())
         && !is_globally_routable(ip)
     {
         return Err(format!(
@@ -172,7 +187,9 @@ pub async fn put_subscription(
         return ApiError::forbidden("manage-subscription denied").into_response();
     }
 
-    if let Err(reason) = validate_webhook_url(&req.webhook_url) {
+    if let Err(reason) =
+        validate_webhook_url_with(&req.webhook_url, state.allow_loopback_subscribers)
+    {
         return mako_markt::error::MdmError::Unprocessable {
             reason: format!("webhook_url: {reason}"),
         }
@@ -304,7 +321,9 @@ pub async fn test_subscription(
 
     // A stored endpoint is re-checked before this deliberate, synchronous probe:
     // the rule may have tightened since the row was written.
-    if let Err(reason) = validate_webhook_url(&sub.webhook_url) {
+    if let Err(reason) =
+        validate_webhook_url_with(&sub.webhook_url, state.allow_loopback_subscribers)
+    {
         return mako_markt::error::MdmError::Unprocessable {
             reason: format!("webhook_url: {reason}"),
         }
@@ -383,7 +402,28 @@ fn sub_to_response(s: Subscription) -> SubscriptionResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_webhook_url;
+    use super::{validate_webhook_url, validate_webhook_url_with};
+
+    /// `just dev` admits a loopback subscriber, and nothing else that the
+    /// default refuses: a private or link-local host stays refused.
+    #[test]
+    fn the_loopback_allowance_admits_loopback_and_nothing_else() {
+        for url in [
+            "http://127.0.0.1:8580/webhook",
+            "http://localhost:8380/webhook",
+            "http://[::1]/hook",
+        ] {
+            assert!(validate_webhook_url_with(url, true).is_ok(), "{url}");
+            assert!(validate_webhook_url_with(url, false).is_err(), "{url}");
+        }
+        for url in [
+            "http://10.0.0.5/hook",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::ffff:192.168.1.10]/hook",
+        ] {
+            assert!(validate_webhook_url_with(url, true).is_err(), "{url}");
+        }
+    }
 
     #[test]
     fn a_public_https_endpoint_is_accepted() {

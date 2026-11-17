@@ -405,8 +405,8 @@ async fn main() -> anyhow::Result<()> { mako_service::run::<Productd>().await }
 ```
 
 Every config takes its listen address as `[http] addr` (`HttpConfig`, with
-the daemon's default from `HttpConfig::on_port`), and `dev/ports.toml` is the
-one table of dev ports the dev configs are checked against.
+the daemon's default from `HttpConfig::on_port`), and `deploy/ports.toml` is the
+one port table the configurations under `deploy/demo/` are checked against.
 
 `ServiceConfig::database()` returning `None` marks a stateless daemon: no pool,
 no migrations, readiness is `Daemon::ready` alone, and `ServiceContext::pool()`

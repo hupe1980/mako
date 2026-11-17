@@ -16,8 +16,8 @@ disagree.
 just setup
 ```
 
-builds every daemon under `dev/config/`, runs each with `--check-config --json`
-against its dev config, and folds the reports into one checklist. It exits
+builds every daemon with a configuration under `deploy/demo/`, runs each with
+`--check-config --json` against it, and folds the reports into one checklist. It exits
 non-zero while anything is red or a daemon could not be asked.
 
 Against a running deployment, ask makod, which folds the reports of the daemons
@@ -43,8 +43,9 @@ unreachable daemon is neither ready nor failing. Two daemons naming different
 MP-IDs for one Rolle and Sparte is a finding of its own, which no single daemon
 can make.
 
-`just doctor` prints the same reports as one line per daemon — ready or
-blocked, and how many findings block or warn.
+`just setup --tabelle` prints the same reports as one line per daemon — ready
+or blocked, and how many findings block or warn. `just doctor` prints it after
+checking the machine for `just dev`.
 
 ## The proposal
 
@@ -179,6 +180,5 @@ Each entry is asked for `GET /admin/einrichtung` with that key as a bearer
 token, so the key needs `read-config` at that daemon.
 
 The Desk's **Einrichtung** view shows the same checklist, read through makod's
-MCP tool `einrichtung_checkliste`, and asks again every 15 seconds. The dev
-`makod.toml` names every dev daemon, so `just desk` shows the daemons not
-started as unreachable.
+MCP tool `einrichtung_checkliste`, and asks again every 15 seconds. `deploy/demo/makod.toml` names every daemon of the estate, so a daemon not
+running shows as unreachable.

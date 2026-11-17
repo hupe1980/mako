@@ -2,7 +2,7 @@
 //!
 //! The AS4 port is the only door a counterparty knocks on directly, and every
 //! control on it fails in the same quiet way: the code exists, reads as though
-//! it runs, and does not. `asx-rs` 0.17 owns the cryptography, mutual TLS and
+//! it runs, and does not. `asx-rs` 0.19 owns the cryptography, mutual TLS and
 //! the certificate rules — `Profile::bdew()` cannot be relaxed — so what remains
 //! on mako's side is the call sites that make the library's checks apply to the
 //! deployment that boots, and the settlement order the inbox depends on.
@@ -16,10 +16,8 @@
 //!    other than its certificate's address or a missing decrypter is refused —
 //!    at boot and under `--check`, not on the first delivery.
 //! 2. `transport/as4_clients.rs` calls `build()` on the configured builder.
-//! 3. `crates/mako-as4/src/identity.rs` registers the CRL signer and compares
-//!    the three key pairs by public key — the two checks `build()` does not do
-//!    for mako (it does not require a CRL signer, and it compares
-//!    certificates) — loads the TLS key pair as the client identity, and caps
+//! 3. `crates/mako-as4/src/identity.rs` registers the CRL signer — `build()`
+//!    does not require one — loads the TLS key pair as the client identity, and caps
 //!    the profile at `MAX_MESSAGE_BYTES`, which also bounds the inbound gzip
 //!    expansion; `transport/as4_sender.rs` sets the `eb:PartProperties` of
 //!    Regelungen zum Übertragungsweg für AS4 2.6 Kap. 6 on every outbound
@@ -83,13 +81,6 @@ const REQUIRED: &[Required] = &[
         needle: ".crl_signer(crl_signer)",
         reason: "the SM-PKI CCRL-S(Root) signs the Root-CA CRL; without it registered no \
                  certificate below the root passes the revocation check",
-    },
-    Required {
-        file: "crates/mako-as4/src/identity.rs",
-        needle: "same_public_key(a, b)",
-        reason: "BDEW AS4-Profil 1.2 §2.3.4.4 requires different key pairs for signing, \
-                 encryption and TLS; asx-rs compares certificates, so two certificates of one \
-                 key pair pass it",
     },
     Required {
         file: "crates/mako-as4/src/identity.rs",
@@ -366,7 +357,7 @@ mod tests {
         );
         w(
             "crates/mako-as4/src/identity.rs",
-            "if same_public_key(a, b) {}\n.crl_signer(crl_signer);\n\
+            ".crl_signer(crl_signer);\n\
              .tls_identity(identity.tls.clone());\n\
              .max_message_bytes(crate::constants::MAX_MESSAGE_BYTES)\n",
         );

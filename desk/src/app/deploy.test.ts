@@ -23,7 +23,7 @@ describe("the Desk image", () => {
 
   // Every service the Desk reads or writes — each one `src/data/gen` holds a
   // type file for, and the assistant — is a gateway route. One without is a
-  // view that works under `just desk` and answers 404 behind the gateway.
+  // view that works under `just dev` and answers 404 behind the gateway.
   it("routes every service the Desk reaches through the gateway", () => {
     const gateway = read("deploy/gateway.yaml");
     const services = [
@@ -36,5 +36,33 @@ describe("the Desk image", () => {
   // A deep link is the app: /freigaben must reach index.html, not a 404.
   it("answers every non-file path with the app", () => {
     expect(read("deploy/nginx.conf")).toContain("try_files $uri /index.html;");
+  });
+});
+
+describe("the demo edge (deploy/demo/desk/nginx.conf)", () => {
+  const demo = () => read("../deploy/demo/desk/nginx.conf");
+
+  // `just demo` serves the same bundle, so the same nonce must reach React
+  // Aria's <style>, under the same CSP.
+  it("fills the CSP nonce it admits", () => {
+    const placeholder = /<meta property="csp-nonce" nonce="([^"]+)" content="\1"/.exec(
+      read("index.html"),
+    )?.[1];
+    expect(demo()).toContain(`sub_filter "${placeholder}" $request_id;`);
+    expect(demo()).toMatch(/style-src 'self' 'nonce-\$request_id'/);
+    expect(demo()).not.toMatch(/unsafe-inline/);
+  });
+
+  // Every service the production gateway routes is a door of the demo edge,
+  // and each one but makod carries the persona's token.
+  it("routes every service the gateway routes, with the persona's token", () => {
+    const gateway = read("deploy/gateway.yaml");
+    const services = [...gateway.matchAll(/path: \^\/svc\/([a-z]+)\//g)].map((m) => m[1]);
+    expect(services.length).toBeGreaterThan(5);
+    for (const s of services) {
+      const block = new RegExp(`location /svc/${s}/ \\{[^}]*\\}`).exec(demo())?.[0];
+      expect(block, s).toBeTruthy();
+      expect(block).toContain(s === "makod" ? "Bearer dev-makod-key" : "$mako_authorization");
+    }
   });
 });

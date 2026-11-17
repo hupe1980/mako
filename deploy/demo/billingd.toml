@@ -1,0 +1,55 @@
+# billingd.toml — the demo configuration: what `just demo` runs in Docker and
+# `just dev` runs on this machine (deploy/dev/up.sh moves every
+# `http://<service>:<port>` peer and the database host to loopback). One
+# Stadtwerk — Stadtwerke Musterstadt, NB, LF and MSB — whose world
+# tools/mako-seed fills. Authentication is the demo's and every secret is a
+# development literal. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `BILLINGD_<KEY>`,
+# nested keys joined with `__`. `billingd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+tenant = "9900357000004"
+
+productd_url    = "http://productd:9080"
+marktd_url      = "http://marktd:8180"
+edmd_url        = "http://edmd:8380"
+vertragd_url    = "http://vertragd:9780"
+outputd_url     = "http://outputd:9880"
+accountingd_url = "http://accountingd:9380"
+erp_webhook_url = "http://accountingd:9380/webhook"
+
+seller_name   = "Stadtwerke Musterstadt GmbH"
+seller_vat_id = "DE123456789"
+
+[http]
+addr = "0.0.0.0:9280"
+
+[database]
+url = "postgres://mako:mako@postgres:5432/billingd"
+
+[billing_runs]
+enabled = false
+
+[seller]
+street       = "Am Markt 1"
+post_code    = "12345"
+city         = "Musterstadt"
+country      = "DE"
+contact_name = "Kundenservice"
+phone        = "+49 30 123456"
+email        = "rechnung@stadtwerke-musterstadt.example"
+
+# § 27 Abs. 38 Nr. 2 UStG — the Rechnungsaussteller's Gesamtumsatz (§ 19 Abs. 2
+# UStG) per tax identity and year; a demo figure under the 800 000 EUR line.
+[[e_rechnung.gesamtumsatz]]
+ust_id = "DE123456789"
+jahr   = 2026
+eur    = "500000"
+
+# The demo sign-in: a token from `just token <persona>` or the Desk's persona
+# switcher is answered as that persona by Cedar; a request without one is the
+# dev principal. Reported as a warning by `--check-config`.
+[oidc]
+mode = "demo"

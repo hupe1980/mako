@@ -62,6 +62,13 @@ pub trait ServiceConfig: DeserializeOwned + Send + Sync + 'static {
     /// The socket address to bind, e.g. `"0.0.0.0:8580"` — owned so a service may
     /// format it from a port field.
     fn bind_addr(&self) -> String;
+    /// The `[oidc]` block, when the daemon has one: the runner adds its
+    /// findings ([`crate::oidc::OidcConfig::befunde`]) to every readiness report,
+    /// so the demo sign-in is reported wherever it is on.
+    #[cfg(feature = "oidc")]
+    fn oidc(&self) -> Option<&crate::oidc::OidcConfig> {
+        None
+    }
 }
 
 /// Resolved infrastructure handed to [`Daemon::build`]. `http` and the (optional)
@@ -441,12 +448,16 @@ async fn serve_all(
 /// `--print-config` and boot all read, from this one function.
 #[must_use]
 pub fn einrichtung<D: Daemon>(cfg: &D::Config) -> crate::einrichtung::Einrichtung {
-    crate::einrichtung::Einrichtung::neu(
-        D::NAME,
-        D::validate(cfg),
-        D::policy(cfg),
-        D::parteien(cfg),
-    )
+    #[cfg_attr(
+        not(feature = "oidc"),
+        expect(unused_mut, reason = "only the `[oidc]` findings extend the list")
+    )]
+    let mut befunde = D::validate(cfg);
+    #[cfg(feature = "oidc")]
+    if let Some(oidc) = cfg.oidc() {
+        befunde.extend(oidc.befunde("oidc"));
+    }
+    crate::einrichtung::Einrichtung::neu(D::NAME, befunde, D::policy(cfg), D::parteien(cfg))
 }
 
 /// [`einrichtung`], refused when a finding blocks and with every warning

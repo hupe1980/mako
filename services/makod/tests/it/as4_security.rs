@@ -1,4 +1,4 @@
-//! The AS4 boundary on `asx-rs` 0.17: makod's clients against a BDEW partner
+//! The AS4 boundary on `asx-rs` 0.19: makod's clients against a BDEW partner
 //! client over an in-process loopback or a socket-bound TLS MSH, with test
 //! SM-PKI material.
 //!
@@ -21,7 +21,7 @@
 //! | `an_unrecorded_refusal_is_retryable` | dead-letter write fails → `EBMS:0202`, the retry is reprocessed |
 //! | `an_accepted_interchange_settles_after_its_dead_letters` | dead letters before `accept` |
 //! | `an_unconfigured_sender_is_refused_under_nur_konfigurierte` | `[policy.as4] unbekannte_absender` default |
-//! | `an_unconfigured_sender_is_served_under_bdew_ou_zulassen` | §2.3.2 option |
+//! | `an_unconfigured_sender_is_served_under_bdew_ou_zulassen` | Kap. 2.3.2 option |
 //! | `a_tampered_request_is_refused_ebms_0101` | signature integrity |
 //! | `an_interchange_to_another_own_mp_id_passes_the_recipient_guard` | UNB DE0010: every own MP-ID of a combined-role instance |
 //! | `an_unparseable_interchange_is_dead_lettered` | no `UNB`, no guard skipped silently: the file is recorded and refused |
@@ -1121,6 +1121,46 @@ async fn a_rotated_identity_serves_without_a_restart() {
         200,
         "the replaced encryption key still decrypts inside the overlap"
     );
+}
+
+/// A new certificate over the current encryption key is a renewal, which the
+/// SM-PKI forbids: the rotation keeps the replaced certificate beside it,
+/// `build()` refuses the pair, and the running clients stay.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_renewal_over_the_current_key_is_refused_and_the_clients_stay() {
+    use asx::testkit::pki::{IssueOptions, Nid};
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let clients = pki.makod(&loopback, UnbekannteAbsender::NurKonfigurierte);
+    let mut renewed = pki.own.clone();
+    renewed.encryption = pki.ca.issue_with_options(
+        "enc renewed",
+        KeyAlg::EcBrainpoolP256r1,
+        IssueOptions {
+            subject: vec![(Nid::ORGANIZATIONALUNITNAME, OWN.to_owned())],
+            uri_sans: vec![OWN_URL.to_owned()],
+            key_pem: Some(pki.own.encryption.key_pem.clone()),
+            ..IssueOptions::default()
+        },
+    );
+    assert_ne!(
+        renewed.encryption.certificate(),
+        pki.own.encryption.certificate(),
+        "a second certificate"
+    );
+    let err = clients
+        .rotate(
+            pki.setup(
+                &renewed,
+                UnbekannteAbsender::NurKonfigurierte,
+                Default::default(),
+            ),
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect_err("a renewal does not build");
+    let err = format!("{err:#}");
+    assert!(err.contains("certify one key"), "{err}");
+    assert_eq!(clients.generation(), 0, "the running clients stay");
 }
 
 // ── Part properties and limits ────────────────────────────────────────────────

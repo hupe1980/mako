@@ -1,0 +1,28 @@
+{
+  "data": {
+    "_typ": "PREISBLATTMESSUNG",
+    "bezeichnung": "Messentgelte Stadtwerke Musterstadt 2026/27",
+    "gueltigkeit": {
+      "_typ": "ZEITRAUM",
+      "startdatum": "2026-10-01",
+      "enddatum": "2027-09-30"
+    },
+    "preispositionen": [
+      {
+        "_typ": "PREISPOSITION",
+        "berechnungsmethode": "STUFEN",
+        "leistungstyp": "MESSSTELLENBETRIEB",
+        "leistungsbezeichnung": "Messstellenbetrieb konventionelle Messeinrichtung",
+        "preiseinheit": "EUR",
+        "zeitbasis": "JAHR",
+        "preisstaffeln": [
+          {
+            "_typ": "PREISSTAFFEL",
+            "preis": "20",
+            "staffelgrenzeVon": 0
+          }
+        ]
+      }
+    ]
+  }
+}

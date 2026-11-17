@@ -3,20 +3,20 @@
 //! `e2e_ahb_conformance.rs` validates BDEW's **example files**; it never
 //! renders one. `e2e_outbox_render_contract.rs` renders and re-parses, which
 //! proves the bytes are EDIFACT and not JSON — it does not ask whether the
-//! Anwendungsfall is complete. Between the two, the 55002 Bestätigung —
-//! `demos/nb-stp`'s headline output, the message the whole NB STP path exists
-//! to produce — went out with four AHB errors:
+//! Anwendungsfall is complete. Neither catches a 55002 Bestätigung — the answer
+//! to the seeded 55001 (`tools/mako-seed`), the message the whole NB STP path
+//! exists to produce — that renders and re-parses cleanly with any of these
+//! AHB errors:
 //!
-//! - no `SG4 STS+7` Transaktionsgrund, and when one was supplied the answer
-//!   echoed the Anmeldung's `ZW4`, which 55002 does not admit (`ZW6`/`ZW7`/
-//!   `ZAP`);
-//! - no `SG6 RFF+TN`, so nothing tied the answer to the Vorgang it answers;
-//! - no `SG6 RFF+Z60`, so the LFN was not told which Produktpaket the NB will
+//! - no `SG4 STS+7` Transaktionsgrund, or one echoing the Anmeldung's `ZW4`,
+//!   which 55002 does not admit (`ZW6`/`ZW7`/`ZAP`);
+//! - no `SG6 RFF+TN`, so nothing ties the answer to the Vorgang it answers;
+//! - no `SG6 RFF+Z60`, so the LFN is not told which Produktpaket the NB will
 //!   implement;
 //! - behind `ZW7`, no `SG5 LOC+Z17` and no `SG8 SEQ+Z98`/`SEQ+ZF3` blocks, so
-//!   the LFN learned neither the Messlokation nor its Messstellenbetreiber.
+//!   the LFN learns neither the Messlokation nor its Messstellenbetreiber.
 //!
-//! Each of those renders and re-parses cleanly. Only the AHB says otherwise.
+//! Only the AHB says otherwise, so this renders each answer and validates it.
 
 use edi_energy::EdiEnergyMessage as _;
 use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId};

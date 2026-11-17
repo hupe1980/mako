@@ -211,8 +211,8 @@ mako_service::policy_choice! {
     /// Whether the AS4 inbox serves a sender that is not a configured partner.
     ///
     /// BDEW AS4-Profil 1.2 accepts any sender whose SM-PKI certificate carries
-    /// the claimed MP-ID (§2.3.2) and lets a receiver reject certificates by
-    /// that MP-ID as a whitelist (§2.3.7). Which of the two a deployment runs
+    /// the claimed MP-ID (Kap. 2.3.2) and lets a receiver reject certificates by
+    /// that MP-ID as a whitelist (Kap. 2.3.7). Which of the two a deployment runs
     /// is the operator's choice.
     pub enum UnbekannteAbsender {
         key: "as4.unbekannte_absender",

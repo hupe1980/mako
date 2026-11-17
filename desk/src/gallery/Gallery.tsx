@@ -616,7 +616,7 @@ function Specimens() {
             Keine Fähigkeit kann eine Marktnachricht senden.
           </Notice>
           <Notice tone="failure" title="Marktkommunikation ist nicht erreichbar">
-            <code className="font-mono">just desk</code> startet makod mit dem Desk.
+            <code className="font-mono">just dev</code> startet die Dienste mit dem Desk.
           </Notice>
           <Panel>
             <EmptyState title="Alles erledigt.">

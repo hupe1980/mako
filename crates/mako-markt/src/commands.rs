@@ -120,7 +120,7 @@ pub const GELI_LIEFERBEGINN_ABLEHNEN: &str = "geli.lieferbeginn.ablehnen";
 /// LF: initiate a gas Lieferende Abmeldung (UTILMD 44004).
 pub const GELI_LIEFERENDE_ANMELDEN: &str = "geli.lieferende.anmelden";
 /// LFG: send the Kündigung to the Altlieferant — UTILMD G 44016, answered
-/// 44017 / 44018 (`E_3001`). BK7-24-01-009 § 3.1; the Strom twin is
+/// 44017 / 44018 (`E_3001`). BK7-24-01-009 Kap. 3.1; the Strom twin is
 /// [`GPKE_KUENDIGUNG_ANMELDEN`].
 pub const GELI_KUENDIGUNG_ANMELDEN: &str = "geli.kuendigung.anmelden";
 /// GNB: confirm an inbound gas Abmeldung (inbound 44004 → UTILMD 44005).

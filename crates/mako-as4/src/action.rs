@@ -1,7 +1,7 @@
 //! The EDIFACT message types BDEW market communication carries over AS4.
 //!
 //! Under BDEW AS4-Profil 1.2 the ebMS3 `eb:Action` is a fixed value the
-//! profile sets (§2.3.1.2.2), so the message type travels in the EDIFACT
+//! profile sets (Kap. 2.3.1.2.2), so the message type travels in the EDIFACT
 //! payload and in its file name, not in the AS4 header. [`BdewAction`] names
 //! the type and selects the AS4 [`Service`] the message is sent under.
 

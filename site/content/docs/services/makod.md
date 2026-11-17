@@ -52,11 +52,12 @@ The [service index](@/docs/services/_index.md) lists every daemon.
 ### Development
 
 ```bash
-just dev makod     # cargo run with dev/config/makod.toml
+just dev           # the estate; makod on deploy/demo/makod.toml
 ```
 
-`dev/config/makod.toml` runs an in-memory event store, the permit-all Cedar
-baseline and one synthetic NB/LF/MSB identity. Its load-bearing keys:
+`deploy/demo/makod.toml` runs an in-memory event store, the permit-all Cedar
+baseline and the Stadtwerk's two synthetic identities — NB, LF and MSB in Strom
+on a BDEW-Codenummer and in Gas on a DVGW-Codenummer. Its load-bearing keys:
 
 ```toml
 [authz]
@@ -66,16 +67,20 @@ permit_all = true              # dev only: every authenticated caller is admin
 allow_volatile = true          # in-memory; data is lost on exit
 
 [http]
-addr      = "127.0.0.1:8080"
-auth_keys = ["dev=dev-makod-key"]
+addr      = "0.0.0.0:8080"
+auth_keys = ["dev=dev-makod-key", "agentd=dev-mcp-key"]
 
 [deployment]
-rollen = ["nb-strom", "lf-strom", "msb-strom"]
+rollen = ["nb-strom", "lf-strom", "msb-strom", "nb-gas", "lf-gas", "msb-gas"]
 
 [[party]]
 mp_id   = "9900357000004"
 roles   = ["NB", "LF", "MSB"]
 primary = true
+
+[[party]]
+mp_id = "9800357000004"          # one MP-ID per Sparte and role
+roles = ["GNB", "LFG", "GMSB"]
 
 [as4]
 allow_no_signing = true        # no [party.as4]: log outbound EDIFACT
@@ -465,7 +470,7 @@ API keys and OIDC can be active at the same time.
 
 ### `[as4]` — AS4/ebMS3 inbound and outbound
 
-`asx-rs` 0.17's `Profile::bdew()` fixes every security and wire setting of BDEW
+`asx-rs` 0.19's `Profile::bdew()` fixes every security and wire setting of BDEW
 AS4-Profil 1.2: ECDSA on brainpoolP256r1 with an `X509PKIPathv1` token,
 ECDH-ES/ConcatKDF/AES-128-GCM with an `X509SKI` reference, sign then encrypt,
 gzip, the fixed Action, roles and `AgreementRef`, an empty `ConversationId`, CRL
@@ -549,15 +554,15 @@ operator. Set it back once the cutover is complete.
 | No `trust_anchor_pem_file`, `crl_signer_pem_file` or `message_id_domain` | Nothing verifies, nothing below the root passes the CRL check, no message id can be formed |
 | A `[party.as4]` without `tls_cert_pem_file` / `tls_key_pem_file` | Client authentication is required (BDEW AS4-Profil 1.2 Kap. 2.2.6.1); the TLS certificate is part of the Zertifikatstripel (RzÜ AS4 2.6 Kap. 1.3) |
 | `As4::builder(..).build()` refuses (a signer not chaining to the root, a certificate of either triple without the MP-ID in its OU or without exactly one URI subject alternative name, a partner `endpoint` other than its certificate's address or on an IP address, a TLS key that is not EC, an expired certificate, …) | The `asx-rs` refusal names the setting and the rule; the finding cites RzÜ AS4 2.6 Kap. 1.3, 2, 3, 5.2 |
-| Two of a party's signing, encryption and TLS certificates certify one key pair | §2.3.4.4; compared by public key, not by certificate |
-| A partner endpoint on `http://`, or an endpoint without an encryption certificate | §2.2.6.2.2 encrypts every message for its recipient |
+| Two of a party's signing, encryption and TLS certificates certify one key pair | Kap. 2.3.4.4; compared by key value, not by certificate |
+| A partner endpoint on `http://`, or an endpoint without an encryption certificate | Kap. 2.2.6.2.2 encrypts every message for its recipient |
 | `[[as4.partner]] quirks`, `as4.lenient_receipts` or `MAKOD_AS4_LENIENT_RECEIPTS` set | Every receipt is verified with its NonRepudiationInformation; a transmission without an NRR has failed (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 7.3, S. 8) |
 
 **Sending.** A message for a partner goes out through the client of the
 interchange's sender (UNB DE0004) under Service
 `https://www.bdew.de/as4/communication/services/MP` — every EDIFACT
 Übertragungsdatei of the Marktkommunikation is a Marktprozess (BDEW AS4-Profil
-1.2 §2.3.1.2.1). The `eb:MessageId` is `<outbox id>@<message_id_domain>`, and
+1.2 Kap. 2.3.1.2.1). The `eb:MessageId` is `<outbox id>@<message_id_domain>`, and
 the `eb:Timestamp` is the outbox entry's first attempt, which the outbox worker
 records durably before the first send. Every retry resends the same id and
 timestamp, so its digests are the first attempt's and a receiver that already
@@ -587,7 +592,7 @@ up to 7 days old; the retry window is 72 hours).
   see [Mutual TLS](@/docs/reference/as4-bdew.md#mutual-tls).
 
 **Connectivity pings** (the ebMS3 test service, BDEW AS4-Profil 1.2 Kap. 2.3.6) are
-receipted by `asx-rs` and never delivered. A transmission-path switch (§2.3.7)
+receipted by `asx-rs` and never delivered. A transmission-path switch (Kap. 2.3.7)
 is receipted and logged; the `confirmSwitch` answer is the operator's.
 
 **Outbound wire format.** A complete Übertragungsdatei `UNB … UNZ`, one per AS4
@@ -2097,7 +2102,7 @@ Informationsmeldung inside a Strom range.
 | Ausprägung | `UCI` DE 0083 | Sparte | When |
 |---|---|---|---|
 | Empfangsbestätigung | `7` | **Gas only** | Every inbound Gas Übertragungsdatei and every Gas APERAK (Kap. 2.3.1) |
-| Syntaxfehlermeldung in der Übertragungsdatei | `4` + DE 0085 | **Both** | The fault cannot be placed on a message; the file „wird nicht weiterbearbeitet" (§2.3.2 / §2.4.2) |
+| Syntaxfehlermeldung in der Übertragungsdatei | `4` + DE 0085 | **Both** | The fault cannot be placed on a message; the file „wird nicht weiterbearbeitet" (Kap. 2.3.2 / Kap. 2.4.2) |
 | Syntaxfehlermeldung in der Nachricht | `4`, no DE 0085 | **Both** | One `SG1 UCM` per broken message, with `SG2 UCS` / `UCD` naming segment and element — or `UCM` DE 0085 + DE 0013 for a `UNH`/`UNT` fault (Kap. 3; CONTRL MIG 2.0b) |
 
 One CONTRL answers one Übertragungsdatei and „entweder … bestätigt oder die
@@ -2109,7 +2114,7 @@ is acknowledged, never whether a broken one is reported.
 | What arrived | Window | Fundstelle |
 |---|---|---|
 | A Strom UTILMD or ORDERS | **15 minutes**; 6 hours when it arrived on a Saturday | Kap. 2.4.1 |
-| A GABi-Gas ALOCAT | **45 minutes**, either Ausprägung | §2.3.1 |
+| A GABi-Gas ALOCAT | **45 minutes**, either Ausprägung | Kap. 2.3.1 |
 | Anything else, either Sparte | **6 hours** | Kap. 2.3.1, Kap. 2.4.1 |
 
 Saturday is a Berlin Saturday (`mako_fristen::contrl_due_at`). A CONTRL falling
@@ -2308,7 +2313,7 @@ durable for the next start.
 | **OutboxErpWorker** | continuous (with `--erp-webhook-url`) | POSTs CloudEvents to the ERP webhook |
 | **DeadlineScheduler** | `--deadline-poll-interval-secs` (30 s) | Dispatches due deadlines |
 | **MabisZpRegister projection** | `--projection-checkpoint-interval` | Folds the MaBiS-ZP lifecycle into the set of activated Zählpunkte |
-| **retention-purge-worker** | daily | Evicts AS4 dedup entries after 8 days (`asx-rs` 0.17 requires at least 7) and spent `Idempotency-Key` records |
+| **retention-purge-worker** | daily | Evicts AS4 dedup entries after 8 days (`asx-rs` 0.19 requires at least 7) and spent `Idempotency-Key` records |
 | JWKS refresh | `oidc.jwks_refresh_secs` | With OIDC enabled |
 
 ### Deadline dispatch
@@ -2455,7 +2460,7 @@ trusted — a load balancer must enforce its own per-client limits.
 
 ```bash
 # Per [[party]] MP-ID: three BrainpoolP256r1 key pairs (BDEW AS4-Profil 1.2
-# §2.3.4.4), each certificate request with the MP-ID as the subject OU
+# Kap. 2.3.4.4), each certificate request with the MP-ID as the subject OU
 # (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2). Production
 # certificates are EMT.MAK certificates issued by an SM-PKI CA.
 for use in signing encryption tls; do

@@ -1,0 +1,18 @@
+{
+  "category": "GAS",
+  "name": "Musterstadt Gas Zuhause",
+  "sparte": "GAS",
+  "register_count": "Eintarif",
+  "kundentyp": "Haushalt",
+  "valid_from": "2026-01-01",
+  "product_status": "PUBLISHED",
+  "data": {
+    "_typ": "TARIFPREISBLATT",
+    "bezeichnung": "Musterstadt Gas Zuhause 2026",
+    "zeitlicheGueltigkeit": { "startdatum": "2026-01-01" },
+    "tarifpreise": [
+      { "preistyp": "GRUNDPREIS",            "preisstaffeln": [{ "preis": "30" }] },
+      { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "11" }] }
+    ]
+  }
+}

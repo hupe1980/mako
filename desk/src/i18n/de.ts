@@ -36,6 +36,7 @@ export const de = {
     sprache: "Sprache",
     tastaturkuerzel: "Tastaturkürzel",
     abmelden: "Abmelden",
+    persona: "Arbeiten als",
   },
   liste: {
     zurueck: "Zurück zur Liste",

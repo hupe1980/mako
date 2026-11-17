@@ -51,7 +51,7 @@ async fn serve(app: axum::Router) -> String {
 /// database behind it.
 async fn processd(received: Arc<Mutex<Vec<Value>>>) -> String {
     let mut cfg: toml::Value =
-        toml::from_str(include_str!("../../../../demos/nb-stp/processd.toml"))
+        toml::from_str(include_str!("../../../../deploy/demo/processd.toml"))
             .expect("the demo configuration parses");
     cfg["marktd"]["url"] = toml::Value::String(marktd().await);
     cfg["makod"]["url"] = toml::Value::String(makod(received).await);

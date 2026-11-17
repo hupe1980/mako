@@ -287,7 +287,7 @@ pub fn pruefe_kuendigung_gas(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEn
         gas_code!(list, ebd, "A03", 0, termin);
     }
 
-    // GeLi Gas 3.0 § 3.1: „In der Kündigung kann ein beliebiges **in der
+    // GeLi Gas 3.0 Kap. 3.1: „In der Kündigung kann ein beliebiges **in der
     // Zukunft liegendes** (auch untermonatliches) Kündigungsdatum angegeben
     // werden." A date that is not is outside the process, and `E_3001` publishes
     // no code for it — the Strom `A01`/`A10` „Termin liegt vor dem
@@ -310,7 +310,7 @@ pub fn pruefe_kuendigung_gas(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEn
                 0,
                 format!(
                     "Gas-Kündigung für MaLo {}: der Kündigungstermin {t} liegt vor dem \
-                     Nachrichteneingang. GeLi Gas 3.0 § 3.1 lässt nur ein in der Zukunft \
+                     Nachrichteneingang. GeLi Gas 3.0 Kap. 3.1 lässt nur ein in der Zukunft \
                      liegendes Kündigungsdatum zu, und E_3001 veröffentlicht dafür keinen \
                      Code — zu beantworten mit E14 und Erläuterung.",
                     anfrage.malo_id

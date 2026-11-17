@@ -383,7 +383,7 @@ impl As4Clients {
                 setup.trust_anchor.clone(),
                 setup.crl_signer.clone(),
                 &setup.partners,
-            )?;
+            );
             let client = configure(builder).build().map_err(|e| {
                 anyhow::anyhow!(
                     "the AS4 identity of [[party]] {} does not build: {e}",
@@ -448,10 +448,14 @@ impl As4Clients {
                 let cert = asx::Decrypter::certificate(kp);
                 let valid =
                     crate::einrichtung::gueltig_bis(cert.der()).is_some_and(|bis| bis > now);
-                let known = mako_as4::keys::same_public_key(cert, &current)
-                    || identity.retired_decrypters.iter().any(|r| {
-                        mako_as4::keys::same_public_key(asx::Decrypter::certificate(r), cert)
-                    });
+                // The same certificate loaded twice is one decrypter. A second
+                // certificate over the current key is a renewal, which the
+                // SM-PKI forbids: it is kept, and `build()` refuses the pair.
+                let known = *cert == current
+                    || identity
+                        .retired_decrypters
+                        .iter()
+                        .any(|r| asx::Decrypter::certificate(r) == cert);
                 if valid && !known {
                     identity.retired_decrypters.push(kp.clone());
                 }

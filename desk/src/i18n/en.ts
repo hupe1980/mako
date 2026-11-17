@@ -31,6 +31,7 @@ export const en: Katalog = {
     sprache: "Language",
     tastaturkuerzel: "Keyboard shortcuts",
     abmelden: "Sign out",
+    persona: "Work as",
   },
   liste: {
     zurueck: "Back to the list",

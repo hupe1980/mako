@@ -8,7 +8,7 @@ on its verdict. It holds no state, so replicas scale freely.
 
 | | |
 |---|---|
-| **Port** | 9480 (`dev/ports.toml`) |
+| **Port** | 9480 (`deploy/ports.toml`) |
 | **Database** | none |
 | **MCP** | none — a tool carries no customer token, so it could not pass the `vertragd` ownership check |
 | **Emits** | none |
@@ -18,8 +18,8 @@ on its verdict. It holds no state, so replicas scale freely.
 ## Run
 
 ```bash
-just dev portald    # dev/config/portald.toml
-PORTALD_CONFIG=dev/config/portald.toml cargo run -p portald -- --check-config
+just dev    # the whole estate, portald on deploy/demo/portald.toml, seeded
+PORTALD_CONFIG=deploy/demo/portald.toml cargo run -p portald -- --check-config
 ```
 
 ## API

@@ -10,7 +10,7 @@ for audit. Specialists are advisory: they file worklist rows and proposals;
 
 | | |
 |---|---|
-| **Port** | 9580 (`dev/ports.toml`) |
+| **Port** | 9580 (`deploy/ports.toml`) |
 | **Database** | the journal — `redb` (single instance) or PostgreSQL (`[journal]`) |
 | **MCP** | client only: mako's MCP servers publish 54 step-by-step prompts across 11 servers |
 | **Specialists** | 30 manifests in [`agents/`](agents/) — 28 `tool-calling`, 2 model-free coded skills |
@@ -23,8 +23,8 @@ for audit. Specialists are advisory: they file worklist rows and proposals;
 ## Run
 
 ```bash
-just dev agentd    # dev/config/agentd.toml; an OpenAI-compatible model on 127.0.0.1:11434
-AGENTD_CONFIG=dev/config/agentd.toml cargo run -p agentd -- --check-config
+just dev    # the whole estate, agentd on deploy/demo/agentd.toml, seeded
+AGENTD_CONFIG=deploy/demo/agentd.toml cargo run -p agentd -- --check-config
 ```
 
 ## API

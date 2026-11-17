@@ -214,7 +214,8 @@ pub fn run(workspace_root: &Path) -> bool {
     for dir in [
         "services",
         "crates",
-        "demos",
+        "tools",
+        "deploy",
         "xtask",
         "makotest",
         "site/content",

@@ -507,8 +507,9 @@ pub async fn run_substitute_values(
     );
 
     if let Err(e) = repo.store_reads(validated).await {
-        tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute store failed");
-        return ApiError::internal(e).into_response();
+        tracing::warn!(malo_id = %malo_id, error = %e, "edmd: substitute not stored");
+        return crate::handler::ingest_refusal(e, format!("substitute for MaLo {malo_id}"))
+            .into_response();
     }
 
     // The per-interval method/reason audit row. `original_kwh` is the rejected

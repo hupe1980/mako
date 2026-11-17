@@ -50,9 +50,11 @@ graph TB
 
 ## Quick start
 
-`just dev marktd` starts PostgreSQL and runs `marktd` with
-`dev/config/marktd.toml`. The NB STP demo (`demos/nb-stp/docker-compose.yml`)
-runs the five services the Lieferbeginn path needs.
+`just dev` starts PostgreSQL and runs `marktd` with `deploy/demo/marktd.toml`,
+first of the estate, since every other service subscribes to its fan-out;
+`just demo` runs the same configuration in Docker (`compose.yaml`). Under `just
+dev` every subscriber listens on loopback, so marktd runs with `[webhook]
+allow_loopback_subscribers = true` there; any other deployment leaves it off.
 
 A minimal container:
 

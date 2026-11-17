@@ -5,14 +5,13 @@
 mod authorization_guard;
 mod db_scenarios;
 mod demo_config;
-mod demo_payloads;
-mod dev_config;
 mod eeg_payout;
 mod integration_tests;
 mod mcp_round_trips;
 mod receivables;
 mod request_bodies;
 mod router_builds;
+mod seed_payloads;
 mod sharing_booking;
 mod startup_posture;
 mod unit_tests;

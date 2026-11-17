@@ -1,0 +1,40 @@
+[package]
+name        = "mako-seed"
+description = "Fills a running mako estate with one Stadtwerk through the services' public APIs, verifies it, and listens to its events"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "mako-seed"
+path = "src/main.rs"
+
+[dependencies]
+# The MaLo-ID check digit and the MP-ID procedures, from the validators the
+# services run, so a seeded identifier is one the estate accepts.
+rubo4e       = { workspace = true }
+# A Berlin business date for the dates the seed writes relative to today.
+mako-fristen = { workspace = true }
+# `listen` verifies each delivery with the platform's own Standard Webhooks
+# check, never a copy of it.
+mako-service = { workspace = true }
+anyhow       = { workspace = true }
+axum         = { version = "0.8" }
+reqwest      = { workspace = true }
+serde_json   = { workspace = true }
+time         = { workspace = true }
+tokio        = { version = "1", features = ["full"] }
+uuid         = { workspace = true }
+
+[dev-dependencies]
+# The world's inbound EDIFACT is judged against its profile here as makod's
+# `ahb_verdict` judges it at the door, so a seeded message that makod would
+# reject fails a test instead of the live seed.
+edi-energy = { workspace = true, features = ["invoic"] }
+
+[lints]
+workspace = true

@@ -216,13 +216,16 @@ jobs:
           tool: cargo-nextest@0.9.146
       - run: cargo nextest run -p makod --all-targets
 
-  # What CONTRIBUTING.md promises: every service starts from its
-  # dev/config/<service>.toml against dev/docker-compose.yml and reaches
-  # /health/ready. Then makod boots once per `[deployment] rollen` declaration
-  # and passes `--check`, which runs the startup assertions (adapter coverage,
-  # dispatch completeness) only a start can.
+  # What CONTRIBUTING.md promises: `just dev` brings the whole estate up from
+  # deploy/demo/<service>.toml against its PostgreSQL in Docker, the seeder
+  # fills Stadtwerke Musterstadt through the public APIs, and `--verify`
+  # asserts the outcomes — the Anmeldung's Antwortcode, the EEG Vergütung and
+  # the invoice to the cent, the payment closing its Offener Posten — and that
+  # every Desk source has content. Then makod boots once per `[deployment]
+  # rollen` declaration and passes `--check`, which runs the startup
+  # assertions (adapter coverage, dispatch completeness) only a start can.
   dev-smoke:
-    name: Every service starts; makod starts in every role
+    name: The seeded estate starts and verifies; makod starts in every role
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -238,7 +241,10 @@ jobs:
       - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
         with:
           tool: just@1.58.0
-      - run: just smoke-dev
+      - run: just dev --ci
+      - name: The services' logs
+        if: failure()
+        run: tail -n 60 target/dev/*.log
       - run: just smoke-roles
 
   doc:

@@ -1,12 +1,12 @@
 +++
 title = "BDEW AS4 Guide"
-description = "Configure makod for BDEW AS4-Profil 1.2 on asx-rs 0.17: one identity per MP-ID, the SM-PKI trust anchor, partners, the sender policy, and testing."
+description = "Configure makod for BDEW AS4-Profil 1.2 on asx-rs 0.19: one identity per MP-ID, the SM-PKI trust anchor, partners, the sender policy, and testing."
 weight = 17
 +++
 AS4 has been the mandatory BDEW MaKo transport since **1 April 2024** (Strom, BK6-22-024)
 and **1 April 2025** (Gas, BK7-22-023). This guide covers operating `makod` on it.
 
-`makod` speaks AS4 through [`asx-rs`](https://crates.io/crates/asx-rs) 0.17 and its
+`makod` speaks AS4 through [`asx-rs`](https://crates.io/crates/asx-rs) 0.19 and its
 `Profile::bdew()` preset, which fixes every security and wire setting of BDEW
 AS4-Profil 1.2. Nothing in a `makod` configuration can relax it; what an operator
 configures is who the parties are and which PKI they belong to.
@@ -17,22 +17,22 @@ configures is who the parties are and which PKI they belong to.
 
 | Aspect | Value | BDEW AS4-Profil 1.2 |
 |---|---|---|
-| Signing | ECDSA-SHA256 on BrainpoolP256r1, `BinarySecurityToken` `X509PKIPathv1` | §2.2.6.2.1, §2.3.4.3 |
-| Signature scope | `eb:Messaging` (`wsu:Id="as4-messaging"`), the Body and every attachment | §2.2.6.2.1 |
-| Encryption | ECDH-ES + ConcatKDF + AES-128-GCM, key reference `X509SKI` — **mandatory** | §2.2.6.2.2, §2.3.4.3 |
-| Order | gzip, then sign, then encrypt | §2.2.6.2.2 |
-| Payload | SOAP-with-Attachments, empty SOAP Body, `application/octet-stream` part | §2.2.3.2 |
-| Compression | gzip, always | §2.2.3.3 |
-| Service | one of `https://www.bdew.de/as4/communication/services/{MP,FP,RD,KW,SO}` | §2.3.1.2.1 |
-| Action | `http://docs.oasis-open.org/ebxml-msg/as4/200902/action` (fixed) | §2.3.1.2.2 |
-| Roles | `…/200704/initiator` / `…/200704/responder` (fixed) | §2.3.1.2.3 |
-| `ConversationId` | empty | §2.3.1.2.4 |
-| `AgreementRef` | `https://www.bdew.de/as4/communication/agreement`, no `pmode`/`type` | §2.3.2 |
-| Sender | a signer whose SM-PKI certificate carries the `eb:From` MP-ID in its OU and exactly one URI subject alternative name, else `EBMS:0101` | §2.3.2, §2.3.4.4; Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2 |
-| Transport | mutual TLS under BSI TR-03116-3 (TLS 1.2, TLS 1.3 from OpenSSL 3.2; ECDHE-ECDSA, Brainpool groups first), the SM-PKI root as the only TLS root, the server chain CRL-checked before a request is written, SNI for every host name | §2.2.6.1; Regelungen zum Übertragungsweg für AS4 2.6 Kap. 3 |
+| Signing | ECDSA-SHA256 on BrainpoolP256r1, `BinarySecurityToken` `X509PKIPathv1` | Kap. 2.2.6.2.1, Kap. 2.3.4.3 |
+| Signature scope | `eb:Messaging` (`wsu:Id="as4-messaging"`), the Body and every attachment | Kap. 2.2.6.2.1 |
+| Encryption | ECDH-ES + ConcatKDF + AES-128-GCM, key reference `X509SKI` — **mandatory** | Kap. 2.2.6.2.2, Kap. 2.3.4.3 |
+| Order | gzip, then sign, then encrypt | Kap. 2.2.6.2.2 |
+| Payload | SOAP-with-Attachments, empty SOAP Body, `application/octet-stream` part | Kap. 2.2.3.2 |
+| Compression | gzip, always | Kap. 2.2.3.3 |
+| Service | one of `https://www.bdew.de/as4/communication/services/{MP,FP,RD,KW,SO}` | Kap. 2.3.1.2.1 |
+| Action | `http://docs.oasis-open.org/ebxml-msg/as4/200902/action` (fixed) | Kap. 2.3.1.2.2 |
+| Roles | `…/200704/initiator` / `…/200704/responder` (fixed) | Kap. 2.3.1.2.3 |
+| `ConversationId` | empty | Kap. 2.3.1.2.4 |
+| `AgreementRef` | `https://www.bdew.de/as4/communication/agreement`, no `pmode`/`type` | Kap. 2.3.2 |
+| Sender | a signer whose SM-PKI certificate carries the `eb:From` MP-ID in its OU and exactly one URI subject alternative name, else `EBMS:0101` | Kap. 2.3.2, Kap. 2.3.4.4; Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2 |
+| Transport | mutual TLS under BSI TR-03116-3 (TLS 1.2, TLS 1.3 from OpenSSL 3.2; ECDHE-ECDSA, Brainpool groups first), the SM-PKI root as the only TLS root, the server chain CRL-checked before a request is written, SNI for every host name | Kap. 2.2.6.1; Regelungen zum Übertragungsweg für AS4 2.6 Kap. 3 |
 | Revocation | CRL at every certificate's distribution point; a CA without a current CRL for 3 days is distrusted | Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.4 |
-| Test service | receipted, never delivered | §2.3.6 |
-| Path switch | `requestSwitch` / `confirmSwitch` accepted | §2.3.7 |
+| Test service | receipted, never delivered | Kap. 2.3.6 |
+| Path switch | `requestSwitch` / `confirmSwitch` accepted | Kap. 2.3.7 |
 
 ConcatKDF uses the SP 800-56A raw-concatenation form, which is what BSI
 TR-03116-3 §9.2 requires. On receive, the `eb:Messaging` block the parser
@@ -167,8 +167,8 @@ preflight, so `--check` reports what the boot would refuse:
 | A signer that does not chain to the root, an expired certificate, a missing decrypter, a TLS key that is not EC | The `asx-rs` `Config` refusal names the setting and the section |
 | A `[party.as4]` without `tls_cert_pem_file` / `tls_key_pem_file` | BDEW AS4-Profil 1.2 Kap. 2.2.6.1 (S. 10); Regelungen zum Übertragungsweg für AS4 2.6 Kap. 1.3 (S. 3) |
 | A `[party.as4]` signing, encryption or TLS certificate, or a partner signing or encryption certificate, whose subject OU is not that party's MP-ID, or that names no URI subject alternative name or several | Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2 (S. 6) |
-| Two of a party's three certificates certifying one key pair | §2.3.4.4 — compared by public key |
-| A partner endpoint on `http://` or without an encryption certificate | §2.2.6.2.2 |
+| Two of a party's three certificates certifying one key pair, or a partner whose signing certificate certifies its encryption key | Kap. 2.3.4.4 — compared by key value, so a re-issued certificate over the same key is the same key pair |
+| A partner endpoint on `http://` or without an encryption certificate | Kap. 2.2.6.2.2 |
 | A partner endpoint other than its encryption certificate's address | Kap. 2 (S. 4) |
 | A partner address on an IP address | SNI carries a host name (Kap. 3, S. 5) |
 | `as4.zertifikat_warnfenster_tage` below 14 | Ten Werktage are never fewer than 14 days; a shorter window reports an own certificate after its successor was due (Kap. 5.3, S. 6) |
@@ -209,7 +209,7 @@ encryption_cert_pem_file = "/etc/makod/partners/9800000000002.enc.pem"
 | `de0004_ausnahme` | MP-IDs this partner may name in `UNB` DE0004; see [The interchange envelope](#the-interchange-envelope) |
 
 The party type in `eb:PartyId/@type` follows the agency — `…iso6523:0088` (GLN),
-`…unregistered:BDEW`, `…unregistered:DVGW`, `…unregistered:BAHN` (§2.3.1.1) — the
+`…unregistered:BDEW`, `…unregistered:DVGW`, `…unregistered:BAHN` (Kap. 2.3.1.1) — the
 same agency the EDIFACT layer writes into `NAD` DE3055, so the two vocabularies
 cannot disagree for one MP-ID. A message for an MP-ID that is not a partner with
 an encryption certificate is dead-lettered as `PartnerUnknown`.
@@ -305,7 +305,7 @@ sequenceDiagram
 
 An unsigned message is answered `EBMS:0103`, a signature that does not verify
 `EBMS:0101`, a decryption failure `EBMS:0102`. Accepted dedup keys are kept for
-8 days: `asx-rs` 0.17 accepts an `eb:Timestamp` up to 7 days old and requires
+8 days: `asx-rs` 0.19 accepts an `eb:Timestamp` up to 7 days old and requires
 the store to remember accepted keys at least that long.
 
 One limit, `mako_as4::constants::MAX_MESSAGE_BYTES` (64 MiB), bounds both the
@@ -393,7 +393,7 @@ a real MSH on 127.0.0.1 that requires a client certificate, reached by
 
 ```toml
 [dev-dependencies]
-asx-rs = { version = "0.17", features = ["test-util"] }
+asx-rs = { version = "0.19", features = ["test-util"] }
 ```
 
 ```rust
@@ -466,7 +466,7 @@ Material that does not build is logged and the running clients stay.
 
 | Rule | Kap., S. | In makod |
 |---|---|---|
-| Signing, encryption and TLS certificate form one Zertifikatstripel | 1.3, S. 3 | Three key pairs per `[party.as4]`, distinct by public key; no party without its TLS pair |
+| Signing, encryption and TLS certificate form one Zertifikatstripel | 1.3, S. 3 | Three key pairs per `[party.as4]`, distinct by key value (`asx-rs` `build()`); no party without its TLS pair |
 | The AS4 address is taken from the certificate's URI alternative name | 2, S. 4 | Omitted, `endpoint` is taken from it; set, it must equal it |
 | Exchange and enter communication data within 3 Werktage, keep a path 3 years, announce a change 10 Werktage ahead | 2, S. 4 | The operator's |
 | A partner's expired or revoked certificate is replaced from the CA | 2.2, S. 5 | The monitor reports partner certificates too; the replacement is the operator's |
@@ -518,7 +518,7 @@ openssl req -in signing.csr.pem -noout -subject
 is `BdewAction::Custom` with its UNH DE0065 name. Under BDEW AS4-Profil 1.2 the
 type travels in the payload and its file name — the AS4 Action is the profile's
 fixed value — and every type is sent under the Marktprozesse service
-(`BdewAction::service`, §2.3.1.2.1).
+(`BdewAction::service`, Kap. 2.3.1.2.1).
 
 | Variant | EDIFACT type | Used in |
 |---|---|---|
@@ -606,7 +606,7 @@ Static `--maloid-partner GLN=URL` entries always take priority.
 | `an_unrecorded_refusal_is_retryable` | A failed dead-letter write answers `EBMS:0202` and the retry is reprocessed |
 | `an_accepted_interchange_settles_after_its_dead_letters` | Dead letters before `accept` |
 | `an_unconfigured_sender_is_refused_under_nur_konfigurierte` | The default sender policy |
-| `an_unconfigured_sender_is_served_under_bdew_ou_zulassen` | §2.3.2 |
+| `an_unconfigured_sender_is_served_under_bdew_ou_zulassen` | Kap. 2.3.2 |
 | `a_tampered_request_is_refused_ebms_0101` | Signature integrity, no claim taken |
 | `the_part_properties_travel_with_the_message` | Kap. 6 `eb:PartProperties` on the outbound payload |
 | `an_expansion_beyond_the_message_limit_is_refused_ebms_0303` | gzip expands to at most `MAX_MESSAGE_BYTES` per message |

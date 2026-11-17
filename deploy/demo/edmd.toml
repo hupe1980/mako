@@ -1,0 +1,54 @@
+# edmd.toml — the demo configuration: what `just demo` runs in Docker and
+# `just dev` runs on this machine (deploy/dev/up.sh moves every
+# `http://<service>:<port>` peer and the database host to loopback). One
+# Stadtwerk — Stadtwerke Musterstadt, NB, LF and MSB — whose world
+# tools/mako-seed fills. Authentication is the demo's and every secret is a
+# development literal. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `EDMD_<KEY>`,
+# nested keys joined with `__`. `edmd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+[http]
+addr = "0.0.0.0:8380"
+
+[database]
+# `sslmode=disable`: the demo PostgreSQL speaks plaintext. meterstore
+# reads this URL for its Iceberg catalog and connects with `verify-full` when
+# the URL names no mode — the production default, against a server whose
+# certificate the client can verify.
+url = "postgres://mako:mako@postgres:5432/edmd?sslmode=disable"
+
+[identity]
+tenant = "9900357000004"
+# Operator of readings edmd produces itself (Zählerstände, Ablesungen, Typ-2).
+own_mp_id = "9900000000003"
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = "dev-marktd-key"
+
+[subscription]
+webhook_url   = "http://edmd:8380/webhook"
+subscriber_id = "edmd-demo"
+
+# edmd registers its subscription with marktd under this secret, so each
+# delivery of marktd's fan-out is signed and verified.
+[webhook]
+inbound_secret = "dev-edmd-webhook-secret"
+
+# A filesystem warehouse for the cold tier. An enabled [archive] needs one that
+# outlives a restart — archival moves settled intervals out of PostgreSQL — and
+# edmd refuses to start on an in-memory one. `just demo` keeps it in a volume;
+# `just dev` points EDMD_ARCHIVE__STORAGE_URI at deploy/dev/.data/ in the
+# checkout, which `just dev-down` empties with the database.
+[archive]
+enabled     = true
+storage_uri = "file:///var/lib/edmd/warehouse"
+
+# The demo sign-in: a token from `just token <persona>` or the Desk's persona
+# switcher is answered as that persona by Cedar; a request without one is the
+# dev principal. Reported as a warning by `--check-config`.
+[oidc]
+mode = "demo"

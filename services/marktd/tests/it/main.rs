@@ -4,8 +4,6 @@
 
 mod authorization_guard;
 mod demo_config;
-mod demo_payloads;
-mod dev_config;
 mod esa_integration;
 mod fanout_durable_integration;
 mod konfigurationsprodukte_body;
@@ -20,6 +18,7 @@ mod referenzreihen_integration;
 mod registries_integration;
 mod router_builds;
 mod schema_enum_guard;
+mod seed_payloads;
 mod temporal_constraints_integration;
 mod tenant_isolation_integration;
 mod utilmd_stammdaten_integration;

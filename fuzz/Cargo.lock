@@ -119,9 +119,9 @@ dependencies = [
 
 [[package]]
 name = "asx-rs"
-version = "0.17.0"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7fb97fac854396bb1db4f3576c2d88160ca9905fbd36cca4e99d49af1186c8c"
+checksum = "7e2865a05432c53eab47a019c6f4d0cc4d8eb1e452ac00349c6d8f9f9c86b72b"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -526,7 +526,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "edi-energy"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "edifact",
  "rubo4e",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "billing",
  "grid-billing",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "billing",
  "rust_decimal",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -1061,11 +1061,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.35.0"
+version = "0.36.0"
 
 [[package]]
 name = "mako-fristen"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "time",
  "time-tz",

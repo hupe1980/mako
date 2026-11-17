@@ -16,7 +16,7 @@ use testcontainers::{ContainerAsync, ImageExt as _, runners::AsyncRunner as _};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
-/// The dev configuration's tenant.
+/// The demo configuration's tenant.
 const TENANT: &str = "9900357000004";
 /// The plant operator's account — a valid German IBAN.
 const CREDITOR_IBAN: &str = "DE02120300000000202051";
@@ -38,8 +38,8 @@ async fn app(auto_payout: bool) -> Option<(axum::Router, sqlx::PgPool, Container
     )]
     let pool = sqlx::PgPool::connect(&url).await.expect("connect");
     let mut cfg: toml::Value =
-        toml::from_str(include_str!("../../../../dev/config/accountingd.toml"))
-            .expect("the dev configuration parses");
+        toml::from_str(include_str!("../../../../deploy/demo/accountingd.toml"))
+            .expect("the demo configuration parses");
     cfg["database"]["url"] = toml::Value::String(url);
     if let Some(db) = cfg["database"].as_table_mut() {
         db.remove("migration_url");

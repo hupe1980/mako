@@ -208,8 +208,8 @@ graph TB
 `EDMD_<KEY>` overrides a key, nested keys joined with `__`
 (`EDMD_DATABASE__URL`); `EDMD_<KEY>_FILE` reads a value from a file; a value
 `"env:VAR"` in the file reads it from `VAR`. Logging: `EDMD_LOG_LEVEL`,
-`EDMD_LOG_FORMAT`, `RUST_LOG`. `just dev edmd` runs it against
-`dev/config/edmd.toml`.
+`EDMD_LOG_FORMAT`, `RUST_LOG`. `just dev` runs it, with the rest of the
+estate, against `deploy/demo/edmd.toml`.
 
 ```toml
 [http]
@@ -238,7 +238,7 @@ erp_webhook_url    = "https://erp.example/events"  # outbound CloudEvent target
 erp_webhook_secret = "env:EDMD_ERP_WEBHOOK_SECRET" # signs them
 
 [subscription]
-webhook_url   = "http://edmd:8380/webhook"  # set → self-registers with marktd at startup
+webhook_url   = "http://edmd:8380/webhook"  # set → registers with marktd, retrying until it accepts
 subscriber_id = "edmd"                       # default
 
 [oidc]
@@ -372,12 +372,15 @@ with a `validation` block (`201` when clean). Every response carries
 ### What a failed ingest answers
 
 `marktd` treats `2xx` as delivered and redelivers on `5xx`, so the status says
-whether a retry can work (`EdmError::is_retryable`):
+whether a retry can work. Every door that writes readings — MSCONS, direct
+push, bulk import, corrections, IoT, substitute values, Zählerstandsgang —
+answers the same way:
 
 | Condition | Status |
 |---|---|
 | Transient store failure (lost connection, lock not available) | **500** — redelivery is the point |
-| The store refused the write (overlapping spans in one version, a value restated under an existing version, a second network operator on one reading, a non-canonical OBIS code) | **422** — names the constraint; redelivery would loop |
+| A fault of edmd's own (a configuration or schema it disagrees with) | **500** — the sender did nothing wrong |
+| The store refused the write (overlapping spans in one version, a value restated under an existing version, a second network operator on one reading, a sender MP-ID that is not a Marktpartner-ID, a non-canonical OBIS code, a Zählerstand without its Messlokation) | **422**, code `reading_refused`, the rule as `constraint` — redelivery would loop |
 | Nothing stored, nothing wrong | 204 |
 
 An MSCONS interval whose quantity will not parse is dropped and counted, never

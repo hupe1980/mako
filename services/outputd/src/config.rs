@@ -261,6 +261,9 @@ impl mako_service::ServiceConfig for OutputdConfig {
     fn bind_addr(&self) -> String {
         self.http.addr.clone()
     }
+    fn oidc(&self) -> Option<&mako_service::oidc::OidcConfig> {
+        self.oidc.as_ref()
+    }
 }
 
 fn default_http() -> mako_service::config::HttpConfig {

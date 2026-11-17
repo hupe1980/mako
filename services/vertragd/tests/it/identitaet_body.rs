@@ -11,7 +11,7 @@
 use uuid::Uuid;
 
 fn demo_config() -> vertragd::config::VertragdConfig {
-    toml::from_str(include_str!("../../../../demos/o2c/vertragd.toml"))
+    toml::from_str(include_str!("../../../../deploy/demo/vertragd.toml"))
         .expect("the demo configuration parses")
 }
 

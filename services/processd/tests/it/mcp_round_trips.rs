@@ -11,13 +11,16 @@ type Served = processd::Processd;
 #[tokio::test]
 async fn the_mcp_server_passes_the_round_trips() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../dev/config")
+        .join("../../deploy/demo")
         .join(format!("{}.toml", Served::NAME));
-    let cfg = mako_service::load_config_file::<<Served as mako_service::Daemon>::Config>(
+    let mut cfg = mako_service::load_config_file::<<Served as mako_service::Daemon>::Config>(
         Served::NAME,
         &path,
     )
-    .expect("the dev configuration loads");
+    .expect("the demo configuration loads");
+    // The demo configuration registers with marktd at startup; no marktd runs
+    // here, and the MCP surface does not depend on the subscription.
+    cfg.subscription.webhook_url = None;
     let app = mako_service::build_for_test::<Served>(cfg)
         .await
         .expect("the router builds");

@@ -3,7 +3,7 @@
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
 mod authorization_guard;
-mod dev_config;
+mod demo_config;
 mod documented_examples;
 mod invoice_drafts_pg;
 mod mabis;

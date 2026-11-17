@@ -893,20 +893,32 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
     // No PID filter is sent: `marktd` narrows on `roles`, `event_types` and
     // `sparten` only. invoicd receives every `process.initiated` fan-out and
     // decides each through `crate::routing::disposition_for` on arrival.
-    marktd
-        .put_subscription(
-            &cfg.subscription.subscriber_id,
-            &mako_markt::marktd_client::SubscriptionRequest {
-                webhook_url: &cfg.subscription.webhook_url,
-                webhook_secret: inbound_secret.as_ref().map(|s| {
-                    use secrecy::ExposeSecret as _;
-                    s.expose_secret()
-                }),
-                event_types: &[mako_events::mako::PROCESS_INITIATED],
-                active: true,
-            },
-        )
-        .await;
+    {
+        // In the background: marktd may come up after invoicd, and invoicd
+        // receives no invoice until the subscription stands.
+        let marktd = marktd.clone();
+        let subscriber_id = cfg.subscription.subscriber_id.clone();
+        let webhook_url = cfg.subscription.webhook_url.clone();
+        let inbound_secret = inbound_secret.clone();
+        let shutdown = ctx.shutdown.clone();
+        tokio::spawn(async move {
+            marktd
+                .subscribe_until_registered(
+                    &subscriber_id,
+                    &mako_markt::marktd_client::SubscriptionRequest {
+                        webhook_url: &webhook_url,
+                        webhook_secret: inbound_secret.as_ref().map(|s| {
+                            use secrecy::ExposeSecret as _;
+                            s.expose_secret()
+                        }),
+                        event_types: &[mako_events::mako::PROCESS_INITIATED],
+                        active: true,
+                    },
+                    shutdown.cancelled_owned(),
+                )
+                .await;
+        });
+    }
 
     let expected_tenant = mako_service::oidc::ExpectedTenant(state.tenant.clone());
     Ok(router(state)

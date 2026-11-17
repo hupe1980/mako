@@ -91,7 +91,7 @@ graph LR
 | 31005 | Mindermenge — the NB's Forderung | NB → LF | `mmm` | GPKE (BK6-24-174) Teil 1 Kap. 8.4 · GaBi Gas 2.1 (BK7-24-01-008) |
 | 31006 | Mehrmenge — the NB's selbst ausgestellte Rechnung, the LF's Guthaben, stated positive | NB → LF | `mmm` | INVOIC AHB 1.0b Kap. 3 · BDEW-AWH Mehr-/Mindermengen V2.1 Kap. 6.5.2 |
 | 31009 | MSB-Rechnung (Messstellenbetrieb) | **MSB → NB / LF / ESA** | `msb` | §30 MsbG |
-| 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse) | GNB → LFG | `gas_awh` | GeLi Gas 3.0 (BK7-24-01-009) §5.4 |
+| 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse) | GNB → LFG | `gas_awh` | GeLi Gas 3.0 (BK7-24-01-009) Kap. 5.4 |
 
 Every document is an INVOIC; the [PID](@/docs/architecture/domain-model.md#prufidentifikator-pid)
 names which kind. Two properties cost money when missed:
@@ -1299,7 +1299,7 @@ PostgreSQL.
 | GPKE (BK6-24-174) Teil 1 Kap. 8.4 | Mehr-/Mindermengensaldo Strom and its sign convention |
 | GaBi Gas 2.1 (BK7-24-01-008) | Mehr-/Mindermengensaldo Gas, on the 06:00 Gastag |
 | §30 MsbG | MSB-Rechnung and its Preisobergrenze |
-| GeLi Gas 3.0 (BK7-24-01-009) §5.4 | AWH Sperrprozesse, billed per action |
+| GeLi Gas 3.0 (BK7-24-01-009) Kap. 5.4 | AWH Sperrprozesse, billed per action |
 | §42b EnWG | GGV: each tenant Marktlokation billed for its own metered Netzentgelt |
 | §§13, 13a EnWG · BK6-20-061 §4.2 · BK6-23-241 | Redispatch Kostenblatt, angemessene Vergütung, BilAReM Ausfallarbeit |
 | BK6-24-174 Anlage 3 (MaBiS) Kap. 3.8.2, 3.8.3, 3.10, 9.8.1 | Summenzeitreihe versioning, BIKO-assigned Datenstatus, the Tabelle 2 windows, the correction after a negative Prüfmitteilung |

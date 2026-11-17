@@ -202,9 +202,9 @@ pub fn runtime_role(db: &DatabaseConfig) -> anyhow::Result<Option<String>> {
 /// addr = "0.0.0.0:8580"
 /// ```
 ///
-/// One shape for every service, so `dev/ports.toml` and the dev configs can be
-/// checked against each other, and an operator reading one service's config
-/// knows where every other one listens. A daemon embeds it as
+/// One shape for every service, so `deploy/ports.toml` and the demo
+/// configurations can be checked against each other, and an operator reading
+/// one service's config knows where every other one listens. A daemon embeds it as
 /// `#[serde(default = "…")] http: HttpConfig` with its default port from
 /// [`HttpConfig::on_port`].
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]

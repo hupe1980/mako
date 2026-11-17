@@ -1,0 +1,18 @@
+{
+  "category": "STROM",
+  "name": "Musterstadt Strom Zuhause",
+  "sparte": "STROM",
+  "register_count": "Eintarif",
+  "kundentyp": "Haushalt",
+  "valid_from": "2026-01-01",
+  "product_status": "PUBLISHED",
+  "data": {
+    "_typ": "TARIFPREISBLATT",
+    "bezeichnung": "Musterstadt Strom Zuhause 2026",
+    "zeitlicheGueltigkeit": { "startdatum": "2026-01-01" },
+    "tarifpreise": [
+      { "preistyp": "GRUNDPREIS",            "preisstaffeln": [{ "preis": "20" }] },
+      { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "32" }] }
+    ]
+  }
+}

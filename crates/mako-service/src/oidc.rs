@@ -57,6 +57,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cedar::CedarPrincipal;
 
+pub mod demo;
+
 // ── Allowed algorithms ────────────────────────────────────────────────────────
 
 const ALLOWED_ALGORITHMS: &[Algorithm] = &[
@@ -161,6 +163,19 @@ pub enum OidcError {
          carries must not depend on which occurrence a reader picks"
     )]
     RepeatedAuthorization,
+
+    /// A production issuer's JWKS carries the demo key (`oidc::demo`), whose
+    /// private half is public: every token it signs would be accepted.
+    #[error(
+        "the JWKS at {url} carries the mako demo key (kid {kid:?}) — its private half is \
+         public, so `just token` could sign in as anyone; remove it from the issuer"
+    )]
+    DemoKey {
+        /// The `jwks_uri` asked.
+        url: String,
+        /// The offending key's `kid`.
+        kid: String,
+    },
 
     /// The token's `mako_tenant` is not the tenant this deployment serves.
     #[error(
@@ -287,6 +302,9 @@ struct Inner {
     disabled: bool,
     /// Tenant key for synthetic claims (only used when `disabled = true`).
     disabled_tenant: String,
+    /// `[oidc] mode = "demo"`: tokens signed by the demo key are verified,
+    /// and a request without one is admitted with the synthetic claims.
+    demo: bool,
 }
 
 #[derive(Deserialize)]
@@ -310,8 +328,47 @@ impl OidcVerifier {
                 cache: RwLock::new(JwkSet { keys: vec![] }),
                 disabled: true,
                 disabled_tenant: tenant_id,
+                demo: false,
             }),
             service_keys: Arc::new(Vec::new()),
+        }
+    }
+
+    /// The demo verifier (`[oidc] mode = "demo"`): a token signed by the demo
+    /// key ([`demo`]) is verified like any JWT and answered as its persona; a
+    /// request without a bearer token, or with an opaque one (a peer service's
+    /// key), is admitted with the synthetic claims of [`Self::disabled`].
+    ///
+    /// **Demo only** — the demo key's private half is public.
+    pub fn demo(tenant_id: impl Into<String>) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                issuer: demo::ISSUER.to_owned(),
+                audience: demo::AUDIENCE.to_owned(),
+                jwks_uri: String::new(),
+                cache: RwLock::new(demo::jwks()),
+                disabled: false,
+                disabled_tenant: tenant_id.into(),
+                demo: true,
+            }),
+            service_keys: Arc::new(Vec::new()),
+        }
+    }
+
+    /// Returns `true` when this verifier was created with [`OidcVerifier::demo`].
+    #[must_use]
+    pub fn is_demo(&self) -> bool {
+        self.inner.demo
+    }
+
+    /// Refuse a JWKS that carries the demo key: its private half is public.
+    fn refuse_demo_key(jwks: &JwkSet, url: &str) -> Result<(), OidcError> {
+        match jwks.keys.iter().find(|k| demo::is_demo_key(k)) {
+            Some(k) => Err(OidcError::DemoKey {
+                url: url.to_owned(),
+                kid: k.common.key_id.clone().unwrap_or_default(),
+            }),
+            None => Ok(()),
         }
     }
 
@@ -418,6 +475,7 @@ impl OidcVerifier {
         }
 
         let jwks = Self::fetch_jwks_from(http, &disc.jwks_uri).await?;
+        Self::refuse_demo_key(&jwks, &disc.jwks_uri)?;
 
         Ok(Self {
             inner: Arc::new(Inner {
@@ -427,6 +485,7 @@ impl OidcVerifier {
                 cache: RwLock::new(jwks),
                 disabled: false,
                 disabled_tenant: String::new(),
+                demo: false,
             }),
             service_keys: Arc::new(Vec::new()),
         })
@@ -449,6 +508,7 @@ impl OidcVerifier {
                 cache: RwLock::new(jwks),
                 disabled: false,
                 disabled_tenant: String::new(),
+                demo: false,
             }),
             service_keys: Arc::new(Vec::new()),
         }
@@ -505,6 +565,8 @@ impl OidcVerifier {
     /// Refresh the JWKS cache.
     pub async fn refresh(&self, http: &Client) -> Result<(), OidcError> {
         let jwks = Self::fetch_jwks_from(http, &self.inner.jwks_uri).await?;
+        // A rotation that adds the demo key keeps the old cache.
+        Self::refuse_demo_key(&jwks, &self.inner.jwks_uri)?;
         *self
             .inner
             .cache
@@ -677,6 +739,16 @@ where
             .map_err(|_| AuthError(OidcError::RepeatedAuthorization))?
             .and_then(|v| v.strip_prefix("Bearer "));
 
+        // Demo: a request without a persona token — the seeder, a peer
+        // service's opaque key — is the synthetic principal, as with auth off.
+        if verifier.is_demo() && !bearer.is_some_and(OidcVerifier::looks_like_jwt) {
+            return Ok(Claims(
+                bearer
+                    .and_then(|t| verifier.service_claims(t))
+                    .unwrap_or_else(|| verifier.disabled_claims()),
+            ));
+        }
+
         let token = bearer.ok_or(AuthError(OidcError::MissingKid))?;
 
         // Opaque (non-JWT) Bearer → service-to-service key. A service principal
@@ -734,12 +806,22 @@ where
 /// audience = "api://mako-myservice"
 ///
 /// # Dev mode: omit the [oidc] section entirely.
+///
+/// # The demo sign-in (deploy/demo/<service>.toml): tokens from `just token`.
+/// [oidc]
+/// mode = "demo"
 /// ```
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct OidcConfig {
-    /// OIDC issuer URL (without trailing slash).
+    /// `production` (the default) verifies tokens of `issuer`; `demo` trusts
+    /// the public demo key ([`demo`]) instead and needs neither.
+    #[serde(default)]
+    pub mode: OidcMode,
+    /// OIDC issuer URL (without trailing slash). Required in production.
+    #[serde(default)]
     pub issuer: String,
-    /// JWT `aud` claim expected value.
+    /// JWT `aud` claim expected value. Required in production.
+    #[serde(default)]
     pub audience: String,
     /// JWKS background refresh interval in seconds.  Default: 300 (5 min).
     #[serde(default = "OidcConfig::default_jwks_refresh_secs")]
@@ -751,6 +833,19 @@ pub struct OidcConfig {
     /// einsd/billingd/vertragd/portald, none of which mint real OIDC tokens.
     #[serde(default)]
     pub service_keys: Vec<ServiceKeyConfig>,
+}
+
+/// Which tokens an `[oidc]` block trusts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OidcMode {
+    /// Tokens of the configured `issuer`, its JWKS fetched by discovery.
+    #[default]
+    Production,
+    /// Tokens signed by the public demo key ([`demo`]) — `just token`, the
+    /// Desk's persona switcher. A request without one is admitted as the
+    /// synthetic dev principal. Never in production.
+    Demo,
 }
 
 /// One `[[oidc.service_keys]]` entry — a shared key → service principal.
@@ -771,6 +866,59 @@ pub struct ServiceKeyConfig {
 impl OidcConfig {
     fn default_jwks_refresh_secs() -> u64 {
         300
+    }
+
+    /// What this block means for the deployment's readiness, at TOML path
+    /// `pfad` (normally `oidc`): demo mode is a warning that says so, and a
+    /// production block without its issuer, its audience, or naming the demo
+    /// issuer is blocking.
+    #[must_use]
+    pub fn befunde(&self, pfad: &str) -> Vec<crate::befund::Befund> {
+        use crate::befund::{Befund, Bereich};
+        let mut out = Vec::new();
+        match self.mode {
+            OidcMode::Demo => out.push(
+                Befund::warnung(
+                    format!("{pfad}.mode"),
+                    "the demo sign-in: tokens signed by mako's public demo key (`just token`, \
+                     the Desk's persona switcher) are accepted, and a request without a token \
+                     is admitted as the dev principal — a demonstration, never a deployment",
+                )
+                .bereich(Bereich::Zugriff),
+            ),
+            OidcMode::Production => {
+                if self.issuer.trim().is_empty() {
+                    out.push(
+                        Befund::blockiert(
+                            format!("{pfad}.issuer"),
+                            "no issuer: production verifies tokens of a named OIDC issuer \
+                             (`mode = \"demo\"` is the demo sign-in)",
+                        )
+                        .bereich(Bereich::Zugriff),
+                    );
+                } else if self.issuer == demo::ISSUER {
+                    out.push(
+                        Befund::blockiert(
+                            format!("{pfad}.issuer"),
+                            "the demo issuer outside demo mode: its key is public, so it may \
+                             only be trusted with `mode = \"demo\"`",
+                        )
+                        .bereich(Bereich::Zugriff),
+                    );
+                }
+                if self.audience.trim().is_empty() {
+                    out.push(
+                        Befund::blockiert(
+                            format!("{pfad}.audience"),
+                            "no audience: a token for another service of the same issuer \
+                             would be accepted",
+                        )
+                        .bereich(Bereich::Zugriff),
+                    );
+                }
+            }
+        }
+        out
     }
 
     /// Build an [`OidcVerifier`] from this config.
@@ -804,7 +952,29 @@ impl OidcConfig {
         shutdown: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<OidcVerifier> {
         use anyhow::Context as _;
+        if let Some(c) = cfg.filter(|c| c.mode == OidcMode::Demo) {
+            anyhow::ensure!(
+                c.service_keys.is_empty(),
+                "[oidc] mode = \"demo\" takes no service_keys: every opaque key is admitted"
+            );
+            tracing::warn!(
+                "OIDC demo mode — tokens signed by mako's public demo key are accepted and \
+                 requests without a token are admitted as dev-admin. A demonstration, never \
+                 a deployment."
+            );
+            return Ok(OidcVerifier::demo(tenant_id));
+        }
         if let Some(c) = cfg {
+            anyhow::ensure!(
+                !c.issuer.trim().is_empty() && !c.audience.trim().is_empty(),
+                "[oidc] needs issuer and audience (or mode = \"demo\" for the demo sign-in)"
+            );
+            anyhow::ensure!(
+                c.issuer != demo::ISSUER,
+                "[oidc] issuer {:?} is the demo issuer, whose key is public: trust it only with \
+                 mode = \"demo\"",
+                demo::ISSUER
+            );
             let v = OidcVerifier::new(&c.issuer, &c.audience, http)
                 .await
                 .context("OIDC discovery")?;

@@ -40,11 +40,15 @@ pub fn supported_revisions() -> Cow<'static, [ProtocolVersion]> {
     Cow::Borrowed(REVISIONS)
 }
 
-/// The Streamable HTTP service for one MCP server, served without sessions.
+/// The Streamable HTTP service for one MCP server, served without sessions
+/// and reachable under any `Host`.
 ///
-/// `config` carries what differs per server (allowed hosts, keep-alive); the
-/// session mode is overridden here, so no caller can turn sessions back on for
-/// `2025-11-25`. Give it no shutdown token: without sessions a request ends
+/// `config` carries what differs per server (keep-alive); the session mode and
+/// the Host allowlist are overridden here, so no caller can turn either back
+/// on. rmcp's default allowlist admits only loopback names — a guard against
+/// DNS rebinding of an unauthenticated server on a developer's machine. A mako
+/// service authenticates every MCP request and is addressed by name (Compose,
+/// Kubernetes, a load balancer), where that allowlist refuses every caller. Give it no shutdown token: without sessions a request ends
 /// with its answer and the server's graceful shutdown drains the ones in
 /// flight, while rmcp's token would cut them off with an empty 500.
 pub fn service<S>(
@@ -57,7 +61,9 @@ where
     StreamableHttpService::new(
         factory,
         Arc::new(NeverSessionManager::default()),
-        config.with_legacy_session_mode(false),
+        config
+            .with_legacy_session_mode(false)
+            .disable_allowed_hosts(),
     )
 }
 
@@ -449,6 +455,30 @@ mod tests {
                 StreamableHttpServerConfig::default(),
             ),
         )
+    }
+
+    /// A request addressed to the service by name is not refused for its
+    /// `Host`: rmcp's default allowlist admits only loopback names, and a
+    /// service in Compose or Kubernetes is reached as `vertragd:8480`.
+    #[tokio::test]
+    async fn a_service_addressed_by_name_is_not_refused_for_its_host() {
+        use tower::ServiceExt as _;
+        for host in ["vertragd:8480", "mako.example.org"] {
+            let res = app()
+                .oneshot(
+                    axum::http::Request::post("/mcp")
+                        .header("host", host)
+                        .header("content-type", "application/json")
+                        .header("accept", "application/json, text/event-stream")
+                        .body(axum::body::Body::from(
+                            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(res.status(), axum::http::StatusCode::FORBIDDEN, "{host}");
+        }
     }
 
     /// Whether [`round_trips`] refuses `app`.

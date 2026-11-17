@@ -28,9 +28,10 @@ and fails when one moves. Alongside it:
 
 - **`validation_snapshot.rs::every_fixture_parses_and_is_judged`** — no fixture
   may fail to parse or to validate.
-- **`demo_fixtures.rs`** — the fixtures under `demos/` are outside this corpus
-  and are validated there instead.
-- **`party_agency_code.rs`** — every party field, here and under `demos/`,
+- **`seed_fixtures.rs`** — the messages the seeder posts
+  (`tools/mako-seed/world/`) are outside this corpus and are validated there
+  instead.
+- **`party_agency_code.rs`** — every party field, here and in the seeder's world,
   names the office its MP-ID range implies on both code lists: `99…` is
   `500`/`293` (BDEW), `98…` is `502`/`332` (DVGW), a GLN is `14`/`9`
   (`UNB` DE 0007 / `NAD` DE 3055). A Gas fixture carries `98…` ids throughout.

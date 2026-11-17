@@ -4,12 +4,11 @@
 
 mod authorization;
 mod demo_config;
-mod demo_payloads;
-mod dev_config;
 mod einvoice_render;
 mod mcp_round_trips;
 mod print_config;
 mod records_integration;
 mod router_builds;
 mod schema_code_guard;
+mod seed_payloads;
 mod vpp_vat;

@@ -170,7 +170,7 @@ pub enum SettlementRequest {
 impl SettlementRequest {
     /// The Sparte this settlement is for.
     ///
-    /// AWH exists only in the Gas Sperrprozess (BK7-24-01-009 §5.4), so the
+    /// AWH exists only in the Gas Sperrprozess (BK7-24-01-009 Kap. 5.4), so the
     /// variant fixes it rather than asking.
     #[must_use]
     pub const fn sparte(&self) -> Sparte {

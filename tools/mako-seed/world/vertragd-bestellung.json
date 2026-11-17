@@ -1,0 +1,48 @@
+{
+  "bestellreferenz": "MUSTERSTADT-WEB-0001",
+  "angebot_ref": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "kunde": {
+    "kundentyp": "B2C",
+    "geschaeftspartner": {
+      "_typ": "GESCHAEFTSPARTNER",
+      "vorname": "Clara",
+      "nachname": "Sommer",
+      "adresse": {
+        "strasse": "Lindenallee",
+        "hausnummer": "17",
+        "postleitzahl": "12345",
+        "ort": "Musterstadt",
+        "landescode": "DE"
+      }
+    },
+    "email": "clara.sommer@example.org",
+    "malo_id": "51238696012"
+  },
+  "verbraucher": true,
+  "gewuenschter_lieferbeginn": "2027-01-01",
+  "anmeldung": { "lieferbeginn_anlass": "WECHSEL", "enfg_grundlage": "ZG1" },
+  "kuendigungsfrist_monate": 1,
+  "angezeigte_informationen": {
+    "wesentliche_eigenschaften": "Strom für den Haushalt, aus Musterstadt",
+    "gesamtpreis": "laut Angebot",
+    "personalisierter_preis": false,
+    "zusaetzliche_kosten": "keine",
+    "gesamtpreis_pro_abrechnungszeitraum": "laut Angebot",
+    "laufzeit_kuendigung": "unbefristet, Kündigungsfrist 1 Monat",
+    "mindestdauer": "keine",
+    "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+  },
+  "button_beschriftung": "zahlungspflichtig bestellen",
+  "dokumente": [],
+  "belehrung_angezeigt": true,
+  "wertersatz_info_angezeigt": true,
+  "lieferung_in_widerrufsfrist_verlangt": {
+    "verlangt": true,
+    "text_sha256": "0606060606060606060606060606060606060606060606060606060606060606"
+  },
+  "bestellt_am": "2026-11-16T10:02:11+01:00",
+  "kanal": "WEBSITE"
+}

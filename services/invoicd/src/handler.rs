@@ -1193,13 +1193,15 @@ async fn run_report(
             })?;
         // Discount lines are validated against the AufAbschlag entries carried
         // on the sheet (PRICAT 27001–27003), so the MSB cannot add undocumented
-        // ones. The list is an extension field on `PreisblattMessung`.
+        // ones. BO4E's `PreisblattMessung` has no field for the list, so it
+        // rides the sheet as the extension `aufAbschlaege`, the key marktd
+        // stores it under.
         let contracted: Vec<String> = sheet
             .as_ref()
             .and_then(|pm| {
                 use rubo4e::json::Bo4eExtensionData as _;
                 pm.extension_data()
-                    .get("auf_abschlaege")?
+                    .get("aufAbschlaege")?
                     .as_array()
                     .map(|arr| {
                         arr.iter()

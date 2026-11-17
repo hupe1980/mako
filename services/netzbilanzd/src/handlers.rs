@@ -869,7 +869,7 @@ fn makod_command(pid: u32, _sparte: &str) -> ApiResult<&'static str> {
         // ausgestellt) are both the NB's MMM-Rechnung to the LF.
         (31005 | 31006, ()) => Ok(mako_markt::commands::INVOIC_MMM_STELLEN),
         (31009, ()) => Ok(mako_markt::commands::WIM_MSB_RECHNUNG_STELLEN),
-        // BK7-24-01-009 §5.4 — the GNB bills the LFG for abrechnungswürdige
+        // BK7-24-01-009 Kap. 5.4 — the GNB bills the LFG for abrechnungswürdige
         // Handlungen performed during the Sperrprozess.
         (31011, ()) => Ok(mako_markt::commands::INVOIC_SONSTIGE_LEISTUNG_STELLEN),
         (other, ()) => Err(ApiError::Internal(anyhow::anyhow!(

@@ -44,34 +44,35 @@ person decides; every answer, amount and Frist carries its source.
 
 ## Quick start
 
-From a fresh clone (Rust via `rustup`, [`just`](https://github.com/casey/just),
-Docker for PostgreSQL), run one service:
+One command to the whole estate, seeded — Rust via `rustup`,
+[`just`](https://github.com/casey/just), Docker for PostgreSQL, Node for the
+Desk:
 
 ```bash
 git clone https://github.com/hupe1980/mako.git && cd mako
-just dev marktd                    # PostgreSQL from dev/docker-compose.yml, then marktd
-curl -s localhost:8180/health/ready
+just doctor        # what this machine still needs, each miss with its fix
+just dev           # PostgreSQL in Docker, every service on this machine, the Desk on :5173
 ```
 
-Every service has a `dev/config/<service>.toml`; `makod` needs no database.
-`<service> --check-config` names every missing, unknown or invalid key at once.
+`just dev` builds every service with cargo, runs each on its
+`deploy/demo/<service>.toml` with its logs in one terminal, and seeds
+**Stadtwerke Musterstadt** through the public APIs: an inbound UTILMD 55001
+answered with the 55002, an affiliate's Anmeldung waiting for a Freigabe, an
+EEG plant settled to the cent, a household invoice issued, booked and paid,
+the Stadtwerk's Gas grid and a Gas customer, and a Gas NN-Rechnung disputed
+for a price its Netzbetreiber's Preisblatt does not publish.
+`just seed --verify` asserts those outcomes. Ctrl-C keeps the data, `just
+dev-down` forgets it.
 
-Or run a whole stack — each demo is a `docker compose` file plus a `smoke.sh`
-that asserts every step:
+| Command | What it does |
+|---|---|
+| `just demo` | The released images of every service and the Desk in Docker, seeded — no Rust; <http://localhost:8000> |
+| `just token lf` | A persona's token (`nb`, `lf`, `admin`, `agent`) for `curl`, judged by the same Cedar policies |
+| `just listen` | Every CloudEvent of the running estate, signature verified, as it arrives |
+| `just dev-ui` | The Desk on its recorded answers — Node only |
 
-| Demo | Services | What it shows |
-|---|---|---|
-| [`nb-stp`](demos/nb-stp/) | `makod` · `marktd` · `processd` | A UTILMD 55001 Anmeldung decided by `E_0622` and answered with 55002 inside the Frist |
-| [`eeg-billing`](demos/eeg-billing/) | `marktd` · `edmd` · `einsd` | A month of quarter-hour feed-in settled into a § 21 EEG 2023 Vergütung and a Gutschrift |
-| [`o2c`](demos/o2c/) | `productd` · `vertragd` · `billingd` · `outputd` · `accountingd` | A tariff prices a contract; the invoice becomes a document and an Offener Posten; a payment closes it |
-
-```bash
-just build-demo && cd demos/nb-stp && docker compose up -d && bash smoke.sh
-```
-
-`just build-demo-eeg` and `just build-demo-o2c` build the other two (20–45
-minutes cold). The [Getting Started guide](https://hupe1980.github.io/mako/docs/guide/getting-started/)
-walks the first demo.
+The [Getting Started guide](https://hupe1980.github.io/mako/docs/guide/getting-started/)
+walks it.
 
 ## Architecture
 
@@ -247,7 +248,7 @@ generated from the BDEW PDFs — fix the reader in `xtask/src/bdew/` and run
 
 | Section | What's inside |
 |---|---|
-| [Guide](https://hupe1980.github.io/mako/docs/guide/) | Run the demos, set up a deployment, use the Desk |
+| [Guide](https://hupe1980.github.io/mako/docs/guide/) | Start the estate, set up a deployment, use the Desk |
 | [Architecture](https://hupe1980.github.io/mako/docs/architecture/) | Engine, domain model, deadlines, ERP integration |
 | [Reference](https://hupe1980.github.io/mako/docs/reference/) | Parsing, validation, builders, process catalogue, AS4, operator policy, `makotest` |
 | [Services](https://hupe1980.github.io/mako/docs/services/) | One operator guide per daemon |

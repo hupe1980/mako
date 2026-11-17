@@ -204,6 +204,9 @@ impl mako_service::service::ServiceConfig for AgentdConfig {
     fn bind_addr(&self) -> String {
         self.http.addr.clone()
     }
+    fn oidc(&self) -> Option<&mako_service::oidc::OidcConfig> {
+        self.oidc.as_ref()
+    }
 }
 
 // ── Quellen ────────────────────────────────────────────────────────────────

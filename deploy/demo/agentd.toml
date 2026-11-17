@@ -1,0 +1,57 @@
+# agentd.toml — the demo configuration: what `just demo` runs in Docker and
+# `just dev` runs on this machine (deploy/dev/up.sh moves every
+# `http://<service>:<port>` peer and the database host to loopback). One
+# Stadtwerk — Stadtwerke Musterstadt, NB, LF and MSB — whose world
+# tools/mako-seed fills. Authentication is the demo's and every secret is a
+# development literal. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `AGENTD_<KEY>`,
+# nested keys joined with `__`. `agentd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+tenant = "9900357000004"
+
+mcp_api_key = "dev-mcp-key"
+
+[http]
+addr = "0.0.0.0:9580"
+
+# One specialist, so the plane has an agent to admit. Its manifest names the
+# provider `anthropic`; here that name is backed by an OpenAI-compatible server
+# on localhost (the Ollama default), which nothing calls until an event wakes
+# the agent. A hosted provider takes its key as `api_key = "env:…"`.
+[bundled_agents]
+enable = ["deadline-alert-agent"]
+
+[providers.anthropic]
+backend  = "chat-completions"
+api_base = "http://127.0.0.1:11434/v1"
+
+# An agentplane upgrade that changes a durable format needs a fresh database
+# (`just dev-down`); startup refuses a journal the running build cannot verify.
+[journal]
+backend = "postgres"
+url     = "postgres://mako:mako@postgres:5432/agentd"
+
+# Every MCP server a bundled specialist's manifest grants. agentd handshakes
+# each one at startup, so it starts only once those services are running —
+# `just dev` and `just demo` start it last.
+[mcp_servers]
+makod       = "http://makod:8080/mcp"
+marktd      = "http://marktd:8180/mcp"
+invoicd     = "http://invoicd:8280/mcp"
+edmd        = "http://edmd:8380/mcp"
+processd    = "http://processd:8580/mcp"
+netzbilanzd = "http://netzbilanzd:8680/mcp"
+productd    = "http://productd:9080/mcp"
+einsd       = "http://einsd:9180/mcp"
+billingd    = "http://billingd:9280/mcp"
+accountingd = "http://accountingd:9380/mcp"
+vertragd    = "http://vertragd:9780/mcp"
+
+# The demo sign-in: a token from `just token <persona>` or the Desk's persona
+# switcher is answered as that persona by Cedar; a request without one is the
+# dev principal. Reported as a warning by `--check-config`.
+[oidc]
+mode = "demo"

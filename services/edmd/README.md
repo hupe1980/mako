@@ -10,7 +10,7 @@ recent window in PostgreSQL, settled history in Apache Iceberg V2.
 
 | | |
 |---|---|
-| **Port** | 8380 (`dev/ports.toml`) |
+| **Port** | 8380 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `migrations/0001_schema.sql` plus the meterstore tables created at startup; Iceberg catalog for the cold tier |
 | **MCP** | 16 tools, 5 prompts at `/mcp` |
 | **Emits** | `de.messwert.reading.*`, `de.messwert.esa.typ2.delivery.*`, `de.messwert.cls.*`, `de.messwert.smgw.cert.expiry-warning` |
@@ -20,8 +20,8 @@ recent window in PostgreSQL, settled history in Apache Iceberg V2.
 ## Run
 
 ```bash
-just dev edmd    # dev/config/edmd.toml against the dev PostgreSQL
-EDMD_CONFIG=dev/config/edmd.toml cargo run -p edmd -- --check-config
+just dev    # the whole estate, edmd on deploy/demo/edmd.toml, seeded
+EDMD_CONFIG=deploy/demo/edmd.toml cargo run -p edmd -- --check-config
 ```
 
 ## API

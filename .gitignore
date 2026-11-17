@@ -77,8 +77,8 @@ node_modules/
 # maturin leaves the debug-symbol bundle beside the built extension.
 *.dSYM/
 
-# Local dev state written by `just dev` (edmd's Iceberg warehouse); `just infra-reset` deletes it.
-dev/.data/
+# Local state written by `just dev` (edmd's Iceberg warehouse); `just dev-down` deletes it.
+deploy/dev/.data/
 
 # The Desk (desk/): dependencies and build output
 desk/node_modules/

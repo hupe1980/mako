@@ -3,7 +3,7 @@
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
 mod cedar_actions;
-mod dev_config;
+mod demo_config;
 mod dtm_qualifiers;
 mod mcp_round_trips;
 mod receipts_pg;

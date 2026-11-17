@@ -1,0 +1,28 @@
+# outputd.toml — the demo configuration: what `just demo` runs in Docker and
+# `just dev` runs on this machine (deploy/dev/up.sh moves every
+# `http://<service>:<port>` peer and the database host to loopback). One
+# Stadtwerk — Stadtwerke Musterstadt, NB, LF and MSB — whose world
+# tools/mako-seed fills. Authentication is the demo's and every secret is a
+# development literal. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `OUTPUTD_<KEY>`,
+# nested keys joined with `__`. `outputd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+tenant = "9900357000004"
+
+[http]
+addr = "0.0.0.0:9880"
+
+[database]
+url = "postgres://mako:mako@postgres:5432/outputd"
+
+[delivery]
+enabled = true
+
+# The demo sign-in: a token from `just token <persona>` or the Desk's persona
+# switcher is answered as that persona by Cedar; a request without one is the
+# dev principal. Reported as a warning by `--check-config`.
+[oidc]
+mode = "demo"

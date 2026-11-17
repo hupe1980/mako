@@ -717,6 +717,9 @@ impl mako_service::ServiceConfig for BillingdConfig {
     fn bind_addr(&self) -> String {
         self.http.addr.clone()
     }
+    fn oidc(&self) -> Option<&mako_service::oidc::OidcConfig> {
+        self.oidc.as_ref()
+    }
 }
 
 /// `[gebuehrenbescheid]` — the Rechtsbehelfsbelehrung and the Fälligkeit a

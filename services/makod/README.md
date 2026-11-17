@@ -10,7 +10,7 @@ ones run is decided by `[deployment] rollen`.
 
 | | |
 |---|---|
-| **Port** | 8080 REST (`dev/ports.toml`); 4080 AS4 inbound and 8090 API-Webdienste when enabled |
+| **Port** | 8080 REST (`deploy/ports.toml`); 4080 AS4 inbound and 8090 API-Webdienste when enabled |
 | **Database** | none — SlateDB on local disk or S3/GCS/Azure (`[storage]`) |
 | **MCP** | 17 tools, 6 prompts at `/mcp` |
 | **Emits** | `de.mako.*` to `[erp] webhook_url` — `process.*`, `aperak.*`, `antwortfrist.abgelaufen`, `edifact.outbound` |
@@ -20,10 +20,10 @@ ones run is decided by `[deployment] rollen`.
 ## Run
 
 ```bash
-just dev makod    # dev/config/makod.toml: in-memory store, permit-all, no AS4 keys
-cargo run -p makod -- --config dev/config/makod.toml --check-config   # every finding, --json for the /admin/einrichtung body
-cargo run -p makod -- --config dev/config/makod.toml --check          # every startup validation, then exit
-cargo run -p makod -- --config dev/config/makod.toml migrate          # pending state migrations, then exit
+just dev    # the whole estate, makod on deploy/demo/makod.toml, seeded
+cargo run -p makod -- --config deploy/demo/makod.toml --check-config   # every finding, --json for the /admin/einrichtung body
+cargo run -p makod -- --config deploy/demo/makod.toml --check          # every startup validation, then exit
+cargo run -p makod -- --config deploy/demo/makod.toml migrate          # pending state migrations, then exit
 ```
 
 `makod` runs its own `main` rather than the `mako-service` runner. It refuses

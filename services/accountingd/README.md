@@ -9,7 +9,7 @@ ledger, committed with the business change that causes it; it prices nothing.
 
 | | |
 |---|---|
-| **Port** | 9380 (`dev/ports.toml`) |
+| **Port** | 9380 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — satellites in `public`, the journal in schema `ledger` |
 | **MCP** | 18 tools, 1 prompt at `/mcp` |
 | **Emits** | `de.accounting.*` (`payment.imported`, `mahnung.issued`, `sperrauftrag`, `sepa.collection-rejected`, …) to the ERP webhook |
@@ -19,8 +19,8 @@ ledger, committed with the business change that causes it; it prices nothing.
 ## Run
 
 ```bash
-just dev accountingd   # dev/config/accountingd.toml against the dev PostgreSQL
-ACCOUNTINGD_CONFIG=dev/config/accountingd.toml cargo run -p accountingd -- --check-config
+just dev    # the whole estate, accountingd on deploy/demo/accountingd.toml, seeded
+ACCOUNTINGD_CONFIG=deploy/demo/accountingd.toml cargo run -p accountingd -- --check-config
 ```
 
 `just test-accountingd-db` runs the PostgreSQL scenario suite.

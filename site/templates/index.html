@@ -34,8 +34,8 @@
     <p class="hero-run">
       <code>cargo add edi-energy</code>
       <span>for the format layer, or</span>
-      <code>just dev makod</code>
-      <span>for the daemon.</span>
+      <code>just dev</code>
+      <span>for the whole estate, seeded.</span>
     </p>
   </div>
 </section>
@@ -305,9 +305,8 @@ graph TB
       <pre><code># Parse &amp; validate an EDIFACT interchange
 cargo add edi-energy
 
-# Run the NB demo: makod, marktd, processd
-just build-demo
-cd demos/nb-stp &amp;&amp; docker compose up -d &amp;&amp; bash smoke.sh
+# Run the whole estate, seeded with one Stadtwerk, with the Desk
+just doctor &amp;&amp; just dev
 
 # Drive it from Python — generators, simulators, pytest plugin
 pip install makotest</code></pre>

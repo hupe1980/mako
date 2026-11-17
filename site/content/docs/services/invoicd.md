@@ -486,7 +486,7 @@ api_key = "env:INVOICD_MARKTD_API_KEY"   # required
 inbound_secret = "env:INVOICD_INBOUND_SECRET"  # required unless allow_insecure_no_auth
 
 [subscription]
-# Self-registers with marktd on startup. The event type and PID filter are
+# Registers with marktd at startup, retrying until marktd accepts. The event type and PID filter are
 # fixed: de.mako.process.initiated for the PIDs in the routing table.
 webhook_url   = "http://invoicd:8280/webhook"  # public URL marktd POSTs to
 subscriber_id = "invoicd"                        # default

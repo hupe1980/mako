@@ -1,0 +1,34 @@
+# productd.toml — the demo configuration: what `just demo` runs in Docker and
+# `just dev` runs on this machine (deploy/dev/up.sh moves every
+# `http://<service>:<port>` peer and the database host to loopback). One
+# Stadtwerk — Stadtwerke Musterstadt, NB, LF and MSB — whose world
+# tools/mako-seed fills. Authentication is the demo's and every secret is a
+# development literal. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `PRODUCTD_<KEY>`,
+# nested keys joined with `__`. `productd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+tenant   = "9900357000004"
+lf_mp_id = "9900357000004"
+
+# A Gas quotation for a year § 10 BEHG fixes no price for is priced under
+# billingd's `[policy] behg_regime`, read from its GET /api/v1/policy.
+billingd_url = "http://billingd:9280"
+
+# An Endkunden-Angebot reads the Netzbetreiber's Preisblätter and a MaLo's NB
+# from marktd.
+marktd_url = "http://marktd:8180"
+
+[http]
+addr = "0.0.0.0:9080"
+
+[database]
+url = "postgres://mako:mako@postgres:5432/productd"
+
+# The demo sign-in: a token from `just token <persona>` or the Desk's persona
+# switcher is answered as that persona by Cedar; a request without one is the
+# dev principal. Reported as a warning by `--check-config`.
+[oidc]
+mode = "demo"

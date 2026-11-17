@@ -648,7 +648,7 @@ fn e3001_vertragsbindung_states_the_next_possible_date() {
 }
 
 /// `E_3001` publishes no code for a Kündigungstermin in the past — the Strom
-/// `A01`/`A10` has no Gas counterpart — and GeLi Gas 3.0 § 3.1 admits only „ein
+/// `A01`/`A10` has no Gas counterpart — and GeLi Gas 3.0 Kap. 3.1 admits only „ein
 /// beliebiges in der Zukunft liegendes … Kündigungsdatum". Falling through would
 /// confirm it with `E15`.
 #[test]

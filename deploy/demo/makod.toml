@@ -1,0 +1,112 @@
+# makod.toml — the demo configuration: what `just demo` runs in Docker and
+# `just dev` runs on this machine (deploy/dev/up.sh moves every
+# `http://<service>:<port>` peer and the database host to loopback). One
+# Stadtwerk — Stadtwerke Musterstadt, NB, LF and MSB in Strom and Gas — whose world
+# tools/mako-seed fills. Authentication is the demo's and every secret is a
+# development literal. DO NOT use in production.
+#
+# Every key has a flag and a `MAKOD_*` variable; `makod --help` lists them. The
+# event store is in memory: a restart forgets every process, and the seeder
+# (`just seed`) starts the Stadtwerk's inbound Anmeldungen again.
+
+[authz]
+permit_all = true
+
+[logging]
+level  = "info"
+format = "pretty"
+
+[storage]
+allow_volatile = true
+
+[http]
+addr = "0.0.0.0:8080"
+# The HTTP port submits commands, so makod refuses to open it without a key.
+# The other demo configs and the seeder call makod with `dev-makod-key`;
+# agentd's MCP client presents `dev-mcp-key`.
+auth_keys = ["dev=dev-makod-key", "agentd=dev-mcp-key"]
+
+# The roles this instance plays; each needs exactly one [[party]] MP-ID. The
+# Stadtwerk acts in Gas under its DVGW-Codenummer: a Marktteilnehmer holds one
+# MP-ID per Sparte and role (BDEW-AWH Identifikatoren V1.2 Kap. 2.1, S. 4), so
+# the Gas roles are their own [[party]].
+[deployment]
+rollen = ["nb-strom", "lf-strom", "msb-strom", "nb-gas", "lf-gas", "msb-gas"]
+
+[[party]]
+mp_id   = "9900357000004"
+roles   = ["NB", "LF", "MSB"]
+primary = true
+
+[[party]]
+mp_id = "9800357000004"
+roles = ["GNB", "LFG", "GMSB"]
+
+# Process lifecycle CloudEvents go to marktd, which fans them out — processd
+# answers an Anmeldung from them. Signed with marktd's
+# `[webhook] inbound_secret`.
+[erp]
+webhook_url    = "http://marktd:8180/api/v1/events"
+webhook_secret = "dev-webhook-secret"
+
+# The MaLo-Ident cache follows marktd's durable fan-out.
+[marktd]
+url         = "http://marktd:8180"
+api_key     = "dev-marktd-key"
+webhook_url = "http://makod:8080/webhooks/marktd"
+
+# No AS4 key material in the demo ([party.as4] unset): outbound EDIFACT is not
+# delivered, and the AS4 listener does not start.
+[as4]
+allow_no_signing = true
+
+# The deployment's other daemons, asked by the Einrichtung checklist
+# (`GET /admin/einrichtung/deployment`, the Desk's Einrichtung view). One that
+# is not running is shown unreachable — unknown, not failing.
+[[einrichtung.dienst]]
+name = "marktd"
+url  = "http://marktd:8180"
+
+[[einrichtung.dienst]]
+name = "invoicd"
+url  = "http://invoicd:8280"
+
+[[einrichtung.dienst]]
+name = "edmd"
+url  = "http://edmd:8380"
+
+[[einrichtung.dienst]]
+name = "processd"
+url  = "http://processd:8580"
+
+[[einrichtung.dienst]]
+name = "netzbilanzd"
+url  = "http://netzbilanzd:8680"
+
+[[einrichtung.dienst]]
+name = "productd"
+url  = "http://productd:9080"
+
+[[einrichtung.dienst]]
+name = "einsd"
+url  = "http://einsd:9180"
+
+[[einrichtung.dienst]]
+name = "billingd"
+url  = "http://billingd:9280"
+
+[[einrichtung.dienst]]
+name = "accountingd"
+url  = "http://accountingd:9380"
+
+[[einrichtung.dienst]]
+name = "agentd"
+url  = "http://agentd:9580"
+
+[[einrichtung.dienst]]
+name = "vertragd"
+url  = "http://vertragd:9780"
+
+[[einrichtung.dienst]]
+name = "outputd"
+url  = "http://outputd:9880"

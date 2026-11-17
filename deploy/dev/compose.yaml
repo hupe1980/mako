@@ -1,0 +1,28 @@
+# `just dev`'s PostgreSQL — the one container it runs. The fourteen services
+# are cargo builds on this machine (deploy/dev/up.sh), each with its database
+# here, created by deploy/postgres/init.sql on an empty volume.
+#
+# Its own project name (mako-dev) and volume, so it never touches `just demo`'s
+# data; `just dev-down` removes the volume. Bound to loopback.
+
+name: mako-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+    environment:
+      POSTGRES_USER: mako
+      POSTGRES_PASSWORD: mako
+    ports:
+      - "127.0.0.1:${MAKO_DEV_PG_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mako"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

@@ -24,15 +24,15 @@ async fn the_mcp_server_passes_the_round_trips() {
     let pool = sqlx::PgPool::connect(&url).await.expect("connect");
 
     let mut cfg: toml::Value =
-        toml::from_str(include_str!("../../../../dev/config/accountingd.toml"))
-            .expect("the dev configuration parses");
+        toml::from_str(include_str!("../../../../deploy/demo/accountingd.toml"))
+            .expect("the demo configuration parses");
     cfg["database"]["url"] = toml::Value::String(url);
     if let Some(db) = cfg["database"].as_table_mut() {
         db.remove("migration_url");
     }
     let cfg = cfg
         .try_into()
-        .expect("the dev configuration is an accountingd one");
+        .expect("the demo configuration is an accountingd one");
     let app = mako_service::build_for_test_on::<accountingd::Accountingd>(cfg, pool)
         .await
         .expect("the router builds");

@@ -54,11 +54,13 @@ registers is in [makod — Deployment roles](@/docs/services/makod.md#deployment
 
 Three steps, none of which sends a message to a market partner:
 
-1. **Run a demo.** Each demo is a `docker compose` stack and a `smoke.sh` that
-   asserts the outcome — the Antwortcode, the amount, the receivable to the
-   cent. `nb-stp` answers a UTILMD 55001 Anmeldung with 55002;
-   `eeg-billing` settles a month of feed-in; `o2c` takes a tariff to a paid
-   invoice. [Getting started](@/docs/guide/getting-started.md) walks the first.
+1. **Run the demo.** `just demo` starts every service and the Desk in Docker
+   with one Stadtwerk seeded — an Anmeldung answered with 55002, one waiting
+   for a Freigabe, a Klärfall, an EEG plant settled to the cent, a household
+   invoiced, issued and paid — and `mako-seed --verify` asserts each outcome:
+   the Antwortcode, the amount, the receivable to the cent. Sign in as any
+   persona and see Cedar answer each one differently.
+   [Getting started](@/docs/guide/getting-started.md) walks it.
 2. **Check your configuration.** `just setup` runs every daemon's
    `--check-config` and folds the findings into one checklist — identities,
    certificates, Bilanzkreise, access, reachability, format coverage — each

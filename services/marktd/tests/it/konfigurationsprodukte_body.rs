@@ -15,7 +15,7 @@ use tower::ServiceExt as _;
 use crate::router_builds::load;
 
 const SR: &str = "C1234567890";
-/// The dev configuration's tenant — the one the router writes under.
+/// The demo configuration's tenant — the one the router writes under.
 const TENANT: &str = "9900357000004";
 const URI: &str = "/api/v1/steuerbare-ressourcen/C1234567890/konfigurationsprodukte";
 
@@ -34,7 +34,7 @@ async fn put(app: axum::Router, body: &serde_json::Value) -> (u16, serde_json::V
 }
 
 async fn lazy_app() -> axum::Router {
-    mako_service::build_for_test::<Marktd>(load("../../dev/config/marktd.toml"))
+    mako_service::build_for_test::<Marktd>(load("../../deploy/demo/marktd.toml"))
         .await
         .expect("the router builds")
 }
@@ -110,7 +110,7 @@ async fn a_valid_body_replaces_the_list() {
     let port = pg.get_host_port_ipv4(5432).await.expect("port");
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     let pool = sqlx::PgPool::connect(&url).await.expect("connect");
-    let mut cfg = load("../../dev/config/marktd.toml");
+    let mut cfg = load("../../deploy/demo/marktd.toml");
     cfg.database.url = url;
     let app = mako_service::build_for_test_on::<Marktd>(cfg, pool.clone())
         .await

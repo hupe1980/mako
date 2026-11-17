@@ -1018,11 +1018,12 @@ mod tests {
         keys.tls_cert_pem_file = Some(f.path("sig.cert.pem"));
         keys.tls_key_pem_file = Some(f.path("sig.key.pem"));
         let err = as4_rejection(&f.as4(), &parties);
-        assert!(err.contains("same key pair"), "{err}");
+        assert!(err.contains("does not build"), "{err}");
+        assert!(err.contains("Kap. 2.3.4.4"), "{err}");
     }
 
     /// A partner endpoint without an encryption certificate could deliver
-    /// nothing (§2.2.6.2.2), and a plaintext endpoint is refused.
+    /// nothing (Kap. 2.2.6.2.2), and a plaintext endpoint is refused.
     #[test]
     fn an_undeliverable_partner_is_rejected() {
         let f = As4Files::new();

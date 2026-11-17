@@ -7,7 +7,8 @@ tools — the surface agents are granted — and writes through their REST route
 ## Run it
 
 ```bash
-just desk          # makod on its dev config + the Desk with hot reload, browser on :5173
+just dev           # the seeded estate + the Desk with hot reload on :5173, persona switch in the account menu
+just dev-ui        # the Desk on desk/fixtures — no services, no Docker
 just desk-gen      # refresh services/*/mcp.snapshot.json and regenerate src/data/gen
 just desk-check    # generated types current, tsc, biome, vitest — part of `just ci`
 just desk-vergleich  # Einrichtung screenshots against desk/vergleich/; --bless after a deliberate change

@@ -27,7 +27,7 @@ import { Verlauf } from "./Verlauf";
 type Processes = ToolOutput<"makod", "get_process">;
 
 /** The recipe that starts the services beside the Desk in development. */
-const DEV_BEFEHL = "just desk";
+const DEV_BEFEHL = "just dev";
 
 function Copy({ value, label }: { value: string; label: string }) {
   const t = useT();

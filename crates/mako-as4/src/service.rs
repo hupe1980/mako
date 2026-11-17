@@ -4,8 +4,8 @@
 ///
 /// „Im BDEW AS4-Profil ist das AS4-Protokoll vom Geschäftsprozess entkoppelt.
 /// Daher ERFORDERT dieses Profil einen vordefinierten Wert für den Service beim
-/// Austausch von Nutzdaten". The test service (§2.3.6) and the path-switch
-/// service (§2.3.7) are the profile's own and set by `asx-rs`.
+/// Austausch von Nutzdaten". The test service (Kap. 2.3.6) and the path-switch
+/// service (Kap. 2.3.7) are the profile's own and set by `asx-rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Service {
     /// Marktprozesse — every EDIFACT Übertragungsdatei of the Marktkommunikation.
@@ -21,7 +21,7 @@ pub enum Service {
 }
 
 impl Service {
-    /// Every service, in the order §2.3.1.2.1 lists them.
+    /// Every service, in the order Kap. 2.3.1.2.1 lists them.
     pub const ALL: [Self; 5] = [
         Self::Marktprozesse,
         Self::Fahrplan,
@@ -53,7 +53,7 @@ impl Service {
 mod tests {
     use super::*;
 
-    /// The values are quoted from §2.3.1.2.1; a receiving MSH routes on them,
+    /// The values are quoted from Kap. 2.3.1.2.1; a receiving MSH routes on them,
     /// so a typo is a delivery failure the sender cannot see.
     #[test]
     fn the_service_uris_are_the_profiles() {

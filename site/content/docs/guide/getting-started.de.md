@@ -1,478 +1,189 @@
 +++
 title = "Loslegen"
-description = "Starte die NB-Dunkelverarbeitungs-Demo von mako in etwa fünf Minuten: Schick eine UTILMD-Anmeldung 55001 und erhalte die Bestätigung 55002 zurück."
+description = "Ein Befehl bis zu einem laufenden, befüllten mako: `just dev` baut und startet jeden Dienst mit dem Desk und befüllt ein Stadtwerk; `just demo` startet die veröffentlichten Images ohne Rust."
 weight = 2
 
 [extra]
 translated_from = "content/docs/guide/getting-started.md"
-source_sha256 = "7af26af3930a744071824df356d44b3183046f704caf870f5896ccc6f678c0c7"
+source_sha256 = "e4589a7d0e3889aab235eaf0450ed4de620a9d8b0be9e720330a31a1bc1eb907"
+
 +++
-Fang mit der Konfigurationsprüfung an — sie braucht weder eine Datenbank noch
-einen laufenden Dienst:
+Zwei Befehle starten mako. Beide fahren dieselbe Welt hoch — die **Stadtwerke
+Musterstadt**, Netzbetreiber, Lieferant und Messstellenbetreiber in Strom und
+Gas in einem Mandanten — und beide befüllen sie über die öffentlichen APIs der Dienste, damit
+der Desk mit Arbeit aufgeht.
 
-```bash
-just setup
-```
-
-Der Befehl führt `--check-config` jedes Daemons gegen seine Dev-Konfiguration
-aus und gibt eine Checkliste aus — Identitäten, Zertifikate, Bilanzkreise,
-Zugriff, Erreichbarkeit, Formatabdeckung —, jeden Befund mit dem Pfad der
-Einstellung und seiner Quelle. Solange etwas rot ist, endet er mit einem
-Exit-Code ungleich null. [Einrichtung](@/docs/guide/einrichtung.de.md) erklärt
-die Checkliste, wie du ein laufendes Deployment abfragst und wie
-die Einrichtungsbefragung die Konfiguration vorschlägt, die sie grün macht.
-`just doctor` gibt eine Zeile pro Daemon aus; `just erstlauf` führt ein erstes
-Deployment von leer bis zu einem bestandenen Probelauf durch und misst jeden
-Schritt.
-
-Danach startet diese Anleitung den NB-STP-Demo-Stack lokal: UTILMD 55001 →
-automatische NB-Entscheidung → UTILMD 55002.
-
-## Was du startest
-
-| Dienst | Port | Aufgabe |
+| | Braucht | Was läuft |
 |---|---|---|
-| `postgres` | `5432` | PostgreSQL — eine Datenbank pro Dienst |
-| `webhook` | `8000` | Demo-Empfänger für ERP-Events (Python, im Speicher) |
-| `marktd` | `8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, VersorgungsStatus, dauerhafter Fan-out, Replay über `event_log` |
-| `processd` | `8580` | NB-STP-Autoresponder — `mako-pruefung` (`E_0622`/`G_0011`), LF-Antworten auf 55007/55010 innerhalb ihrer Frist je PID |
-| `makod` | `8080` | EDIFACT-Prozess-Engine — GPKE/WiM/GeLi Gas, im Speicher |
+| `just dev` | Docker, Rust (`rustup`), Node für den Desk | PostgreSQL in Docker; jeder Dienst von cargo gebaut und auf deinem Rechner gestartet; der Desk unter Vite |
+| `just demo` | Docker | Die veröffentlichten Images aller Dienste und des Desks, ein veröffentlichter Port |
 
-```mermaid
-sequenceDiagram
-    participant LF as LF 4012345000023
-    participant makod as makod :8080
-    participant marktd as marktd :8180
-    participant processd as processd :8580
-    participant webhook as webhook :8000
-
-    LF->>makod: POST /edifact<br/>UTILMD 55001
-    makod-->>webhook: APERAK BGM+312<br/>(45-min deadline, auto)
-    makod->>marktd: de.mako.process.initiated<br/>HMAC POST /api/v1/events (demo override)
-    marktd->>processd: de.mako.process.initiated<br/>HMAC POST /webhook
-    marktd-->>webhook: de.mako.process.initiated<br/>(ERP subscription)
-    processd->>marktd: GET /api/v1/versorgung/{malo_id}
-    processd->>marktd: GET /api/v1/malos/{malo_id}/grid
-    processd->>marktd: GET /api/v1/partners/{lf_mp_id}
-    Note over processd: `mako-pruefung`: E_0622 → Accept (A51)
-    processd->>makod: gpke.lieferbeginn.bestaetigen
-    makod-->>webhook: UTILMD 55002 Bestätigung
-```
-
----
-
-## Voraussetzungen
-
-| Werkzeug | Version | Installation |
-|---|---|---|
-| Docker | 24+ mit Compose v2 | https://docs.docker.com/get-docker/ |
-| `curl` | beliebig | Paketmanager des Betriebssystems |
-| `jq` | beliebig | Paketmanager des Betriebssystems |
-
----
-
-## Schritt 1 — Klonen und bauen
+## Prüf deinen Rechner
 
 ```bash
 git clone https://github.com/hupe1980/mako.git
 cd mako
-
-just build-demo
+just doctor
 ```
 
-`just build-demo` sind die drei Builds, die die Compose-Datei braucht, so
-getaggt, wie sie sie erwartet:
+`just doctor` prüft, was `just dev` braucht, und nennt jede Lücke mit dem
+Befehl, der sie schließt: Docker läuft mit Compose v2, die Toolchain, die
+`rust-toolchain.toml` festlegt, `curl`, `perl` und `python3`, Node für den Desk
+(optional), freie Ports aus `deploy/ports.toml` plus `5432` und `5173` und der
+Plattenplatz — `target/` wächst auf rund 100 GB, darunter warnt er. Danach gibt
+er eine Zeile pro Daemon-Konfiguration aus, bereit oder blockiert
+([Einrichtung](@/docs/guide/einrichtung.de.md) erklärt die Befunde).
+
+## `just dev` — das ganze System auf deinem Rechner
 
 ```bash
-docker build --target runtime          -t makod:dev     .
-docker build --target marktd-runtime   -t marktd:dev    .
-docker build --target processd-runtime -t processd:dev  .
+just dev
 ```
 
-`docker buildx bake` ist der Push-Pfad der CI und erzeugt die `:dev`-Tags
-nicht. Die Stage `processd-runtime` baut mit `--features integrated` (die
-NB- und LF-Module). Alle drei kommen aus einer Builder-Stage ohne
-Iceberg/DataFusion, ein kalter Build dauert also ein paar Minuten.
+1. PostgreSQL startet in Docker (`deploy/dev/compose.yaml`), eine Datenbank pro
+   Dienst, angelegt von `deploy/postgres/init.sql`.
+2. Jeder Dienst und der Seeder werden mit cargo gebaut. Der erste Build dauert
+   15–30 Minuten, spätere Sekunden.
+3. Jeder Dienst läuft mit seiner Konfiguration `deploy/demo/<dienst>.toml`,
+   umgeschrieben nach `target/dev/`, damit er seine Nachbarn und seine Datenbank
+   unter `127.0.0.1` findet. Jede Logzeile trägt den farbigen Namen des
+   Dienstes, und jedes Log landet zusätzlich in `target/dev/<dienst>.log`.
+   `marktd` startet zuerst, `agentd` zuletzt, weil er sich beim Start mit dem
+   MCP-Endpunkt jedes anderen Dienstes verbindet.
+4. Der Seeder befüllt die Stadtwerke Musterstadt (siehe unten).
+5. Der Desk startet unter Vite auf <http://localhost:5173> gegen die laufenden
+   Dienste.
 
----
+Am Ende stehen die URLs, der Token-Befehl und die benötigte Zeit. **Strg-C**
+hält die Dienste an und behält die Daten; das nächste `just dev` baut
+inkrementell und befüllt nichts doppelt. `just dev-down` löscht die Datenbank.
 
-## Schritt 2 — Demo-Stack starten
-
-```bash
-cd demos/nb-stp
-docker compose up -d
-docker compose ps   # wait until all containers are running
-```
-
-Erwartet:
-
-```
-NAME                 IMAGE              STATUS         PORTS
-nb-stp-postgres-1    postgres:17-alpine Up (healthy)   5432/tcp
-nb-stp-webhook-1     python:3.12-alpine Up             0.0.0.0:8000->8000/tcp
-nb-stp-marktd-1      marktd:dev         Up             0.0.0.0:8180->8180/tcp
-nb-stp-processd-1    processd:dev       Up             0.0.0.0:8580->8580/tcp
-nb-stp-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
-```
-
-`processd` meldet beim Start sein Fan-out-Abonnement bei `marktd` an, und beide
-führen beim ersten Start ihre Migrationen aus (`init-db.sh` legt die
-Datenbanken an).
-
----
-
-## Schritt 3 — Health prüfen
-
-```bash
-curl -s http://localhost:8080/health | jq .
-# → {"status":"ok","instance_id":"..."}
-
-curl -s http://localhost:8180/health | jq .
-# → {"status":"ok"}
-
-curl -s http://localhost:8580/health/ready
-# → 200 OK
-```
-
----
-
-## Schritt 4 — Stammdaten anlegen
-
-`mako-pruefung` in `processd` braucht drei Einträge in `marktd`, um zu einer
-`Accept`-Entscheidung zu kommen. Jeder Pfad unten ist relativ zu
-`demos/nb-stp`, dem Verzeichnis, in das du in
-[Schritt 2](#schritt-2-demo-stack-starten) gewechselt bist.
-
-### 4a — Preisblatt
-
-```bash
-curl -s -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
-  -H "Content-Type: application/json" \
-  --data-binary @fixtures/preisblatt-nb.json \
-  -w "\nHTTP %{http_code}\n"
-# → HTTP 204
-```
-
-### 4b — MaLo + Netzdatensatz der MaLo
-
-```bash
-MALO_ID=51238696012
-
-# MaLo (NB=9900357000004, no active LF)
-curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID" \
-  -H "Content-Type: application/json" \
-  --data-binary "$(jq --arg m "$MALO_ID" '.data.marktlokationsId=$m' fixtures/malo-nb.json)" \
-  -w "\nHTTP %{http_code}\n"
-# → HTTP 201
-
-# MaLo grid record — without it the Anmeldung escalates instead of being answered
-curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID/grid" \
-  -H "Content-Type: application/json" \
-  -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXG","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}' \
-  -w "\nHTTP %{http_code}\n"
-# → HTTP 204
-```
-
-Ohne den Netzdatensatz wird die Anmeldung eskaliert, statt beantwortet zu
-werden.
-
-### 4c — LF als Marktpartner (E_0622 Prüfschritt 60)
-
-```bash
-# Register in marktd partner directory
-curl -s -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
-  -H "Content-Type: application/json" \
-  -d '{"display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":["https://as4.example.com/as4/receive"]}' \
-  -w "\nHTTP %{http_code}\n"
-# → HTTP 200
-
-# Register in makod for EDIFACT routing
-curl -s -X PUT http://localhost:8080/admin/partners/4012345000023 \
-  -H "Authorization: Bearer demo-secret-change-me" \
-  -H "Content-Type: application/json" \
-  --data-binary @fixtures/partner-lf.json | jq '.'
-```
-
-Der erste Aufruf trägt den LF ins Partnerverzeichnis von `marktd` ein, der
-zweite in `makod` für das EDIFACT-Routing.
-
-> **Zwei Verzeichnisse, zwei Formen.** `marktd` hält den BO4E-`Geschaeftspartner`
-> des Partners und seine AS4-Endpunkte (`makoadresse`); `makod` hält den
-> PARTIN-Datensatz (`channels`, `roles`, `contacts`). Beide lehnen ein Feld ab,
-> das sie nicht kennen — ein Body an das falsche Verzeichnis ist also ein `422`,
-> der das Feld nennt.
-
-### 4d — Die Zuordnungsermächtigung des BKV (E_0622 Prüfschritt 60)
-
-Der NB bestätigt eine Anmeldung nur in einen Bilanzkreis, für den ein BKV den
-LF ermächtigt hat — „je ZRT, BG, BK und LF" (BK6-24-174 Anlage 3 Kap. 10.2.1).
-Der BKV tut das mit einer UTILMD 55071; `marktd` speichert sie, und `processd`
-liest sie. Die Fixture ermächtigt den Bilanzkreis `11XBK-STD------Y` der 55001
-im Bilanzierungsgebiet des Netzdatensatzes ab dem 01.08.2026.
-
-```bash
-curl -s -X PUT http://localhost:8080/admin/partners/9900000000019 \
-  -H "Authorization: Bearer demo-secret-change-me" \
-  -H "Content-Type: application/json" \
-  --data-binary @fixtures/partner-bkv.json | jq '.'
-
-curl -s -X POST http://localhost:8080/edifact \
-  -H "Authorization: Bearer demo-secret-change-me" \
-  -H "Content-Type: text/plain; charset=utf-8" \
-  --data-binary @fixtures/utilmd-55071.edi | jq '.messages[0].status'
-# → "routed"
-
-curl -s http://localhost:8180/api/v1/zuordnungsermaechtigungen/4012345000023 | jq .
-```
-
-Ohne sie wird die 55001 unten in Prüfschritt 60 mit `A05` abgelehnt.
-
----
-
-## Schritt 5 — Eine UTILMD 55001 einreichen
-
-```bash
-curl -s -X POST http://localhost:8080/edifact \
-  -H "Authorization: Bearer demo-secret-change-me" \
-  -H "Content-Type: text/plain; charset=utf-8" \
-  --data-binary @fixtures/utilmd-55001.edi | jq .
-```
-
-Erwartete Antwort:
-
-```json
-{
-  "accepted": 1,
-  "rejected": 0,
-  "messages": [{
-    "message_type": "UTILMD",
-    "pid": 55001,
-    "workflow": "gpke-supplier-change",
-    "status": "routed",
-    "process_id": "...",
-    "malo_id": "51238696012"
-  }]
-}
-```
-
----
-
-## Schritt 6 — Automatische NB-Entscheidung
-
-`processd` erhält das Event `de.mako.process.initiated` über den Fan-out von
-`marktd` und durchläuft den Entscheidungsbaum E_0622 (`mako-pruefung`) gegen
-die Stammdaten aus Schritt 4.
-
-```bash
-# Check the decision log
-curl -s http://localhost:8580/api/v1/decisions | jq '.[] | {
-  malo_id, decision, antwortcode, decided_at
-}'
-# → {"malo_id":"51238696012","decision":"Accept","antwortcode":"A51","decided_at":"..."}
-```
-
-Mit `[nb] auto_accept = true` (gesetzt in der `processd.toml` der Demo) schickt
-`Accept` automatisch `gpke.lieferbeginn.bestaetigen` an `makod`, und `makod`
-stellt die ausgehende **UTILMD 55002** (Bestätigung Anmeldung verb. MaLo) in die
-Outbox:
-
-```bash
-curl -s http://localhost:8000/events | jq '[.[] |
-  select(.body.makomessagetype=="UTILMD")
-  | {edifact: .body.data.edifact}
-]'
-```
-
----
-
-## Schritt 7 — Den automatischen Smoke-Test ausführen
-
-`smoke.sh` führt alles oben Beschriebene aus und prüft jeden Schritt:
-
-```bash
-bash smoke.sh
-```
-
-`MARKTD_URL` und `WEBHOOK_URL` stehen standardmäßig auf dem, was
-`docker-compose.yml` veröffentlicht. Setz eine der beiden auf den leeren String,
-um `makod` allein zu testen.
-
-Die Ausgabe endet mit:
-
-```
-✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55002 already arrived
-✓ POST /api/v1/commands → HTTP 409 (duplicate bestaetigen correctly rejected — AntwortGesendet guard confirmed)
-✓ UTILMD 55002 was already verified in step 6c (auto-responder path)
-All smoke tests passed.
-  Wechselprozess auto-responder: ENABLED
-  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55002
-```
-
-Das `HTTP 409` ist die **Zustandsprüfung des Workflows**, keine Idempotenz:
-`processd` hat den Workflow bereits nach `AntwortGesendet` überführt, ein
-zweites `bestaetigen` ist also ein Befehl außer der Reihe und wird als
-`invalid_state` abgelehnt.
-
----
-
-## Schritt 8 — Die APIs erkunden
-
-| Schnittstelle | URL |
+| Option | Wirkung |
 |---|---|
-| OpenAPI-Dokument von makod | http://localhost:8080/api/v1/openapi.json |
-| MCP-Server von makod | http://localhost:8080/mcp |
-| OpenAPI-Dokument von marktd | http://localhost:8180/api/v1/openapi.json |
-| DLQ-Verwaltung von marktd | http://localhost:8180/admin/fanout/dlq |
-| Metriken von marktd | http://localhost:8180/metrics |
-| Entscheidungen von processd | http://localhost:8580/api/v1/decisions |
-| Freigabe-Warteschlange von processd | http://localhost:8580/api/v1/queue |
-| Event-Log des ERP-Webhooks | http://localhost:8000/events |
+| `just dev --no-desk` | ohne den Desk |
+| `just dev --no-seed` | ein leeres System |
+| `just dev --ci` | ohne Oberfläche: starten, befüllen, prüfen, beenden — das, was der CI-Job ausführt |
 
----
+Wird ein Dienst nicht bereit, bricht der Lauf mit den letzten Zeilen seines Logs
+ab. Hast du einen Dienst geändert, reichen Strg-C und `just dev`.
 
-## Anhalten und aufräumen
+### Das befüllte Stadtwerk
 
-```bash
-docker compose down      # keep database volumes
-docker compose down -v   # destroy all volumes (full reset)
-```
+`tools/mako-seed` schreibt die Welt über dieselben REST-Routen und dieselbe
+EDIFACT-Tür, die eine Integration benutzt, geprüft von denselben Regeln und
+Cedar-Policies. Jeder Schritt hängt an einem fachlichen Schlüssel, darum kannst
+du `just seed` erneut ausführen, ohne dass sich etwas ändert.
 
-`docker compose down` behält die Datenbank-Volumes; `docker compose down -v`
-löscht alle Volumes und setzt alles vollständig zurück.
-
----
-
-## Die zweite Demo — EEG-Einspeiseabrechnung
-
-`demos/eeg-billing` zeigt die andere Hälfte der Plattform: gar kein EDIFACT,
-dafür der Abrechnungsweg, den ein NB einem Anlagenbetreiber schuldet. `einsd`
-hält das Anlagenregister und berechnet die Einspeisevergütung nach § 21 EEG
-2023; `edmd` hält die viertelstündliche Einspeisemenge, gegen die abgerechnet
-wird.
-
-| Dienst | Port | Aufgabe |
-|---|---|---|
-| `marktd` | `8180` | Market Data Hub — die MaLo, in die die Anlage einspeist |
-| `edmd` | `8380` | Energiedatenmanagement — Viertelstundenwerte, Abrechnungszeiträume |
-| `einsd` | `9180` | EEG/KWKG-Abrechnung — Anlagenregister, monatliche Vergütung |
+| Was | Wo du es siehst |
+|---|---|
+| Marktlokationen mit ihren Messlokationen, dem MSB und dem Netzdatensatz, dazu das Preisblatt des Netzbetreibers | `marktd` |
+| Eine UTILMD 55001 von Nordlicht Energie, entschieden mit `Accept` (`E_0622` → `A51`) und beantwortet mit der 55002 | `processd`, `makod` |
+| Eine 55001 von Musterstadt Energievertrieb, dem eigenen Vertrieb des Stadtwerks, zurückgehalten für einen Menschen (Gleichbehandlung nach § 20 Abs. 1 EnWG) | `processd` — die Freigaben im Desk |
+| Eine 55001 auf eine Marktlokation ohne Belieferungsdatensatz, als Klärfall eskaliert (`E_0622` Prüfschritt 50) | `processd` — „Heute“ im Desk |
+| Eine Aufdach-Anlage mit 9,8 kWp und ihre Einspeisung im Juni 2026, 2.880 kWh, abgerechnet mit 233,568 EUR nach § 21 EEG 2023 | `einsd`, `edmd` |
+| Der Haushaltsvertrag von Erika Mustermann, ihre Januarrechnung (111,33 netto, 132,48 brutto), das ausgestellte PDF, der Offene Posten und die Zahlung, die ihn ausgleicht | `vertragd`, `billingd`, `outputd`, `accountingd` |
+| Die Online-Bestellung von Clara Sommer: das eingefrorene Endkunden-Angebot, die Rechtsdokumente und der Vertrag mit seinem Bestellnachweis | `productd`, `vertragd` |
+| Zwölf weitere Haushalte mit Verträgen und den täglichen Messwerten des Vormonats; eine ihrer Rechnungen hält das Risiko-Gate zur Prüfung an | `vertragd`, `edmd`, `billingd` |
+| Das Stadtwerk im Gas unter seiner eigenen DVGW-Codenummer: sechs Gas-Marktlokationen mit Messlokation, MSB und Belieferungsdatensatz, dazu der Gasvertrag von Hannah Brandt | `marktd`, `productd`, `vertragd` |
+| Eine NN-Rechnung Gas (INVOIC 31002) von Gasnetz Nachbarstadt zu 1,42 ct/kWh, wo ihr Preisblatt 1,12 ct/kWh nennt, beanstandet | `invoicd` — die Rechnungsdispute im Desk |
+| Eine UTILMD mit einem Prüfidentifikator, den keine Anwendungsübersicht veröffentlicht, als Dead Letter | `makod` — die Dead Letters im Desk |
+| Ein KAV-Grenzpreis für 2024, synthetische Demodaten mit der Seed-Datei als Quelle — nie ein veröffentlichter Wert | `marktd` Referenzreihen |
 
 ```bash
-# from the repo root
-just build-demo-eeg   # marktd, edmd, einsd
-
-cd demos/eeg-billing
-docker compose up -d
-bash smoke.sh
+just seed --verify
 ```
 
-`edmd` und `einsd` kopieren aus der vollständigen `builder`-Stage, die jeden
-Dienst in einem `cargo build` kompiliert, Iceberg/DataFusion eingeschlossen:
-Plane kalt **20–45 Minuten** ein, mit warmem BuildKit-Cache ein paar Minuten.
+`--verify` prüft die Ergebnisse, nicht Statuscodes — die Entscheidung und ihren
+Antwortcode, die kWh und die Vergütung, jede Rechnungsposition auf den Cent, das
+Dokument, die ausgeglichene Forderung — und dass jede Ansicht des Desks, die der
+Seeder befüllt, Zeilen hat.
 
-Der Test legt den Anlagenbetreiber und eine Dachanlage mit 9,8 kWp an, schickt
-einen Monat Viertelstundenwerte unter OBIS `1-0:2.8.0`, rechnet den Monat mit
-233,568 € ab und prüft das CloudEvent `de.eeg.verguetung.berechnet`, das das
-ERP erhält. Der Betrag allein ist kein Rechtsdokument: Im Gutschriftverfahren
-(§ 14 Abs. 2 Satz 2 UStG) stellt der Netzbetreiber die Gutschrift aus, also
-rendert `einsd` sie als BO4E-`Rechnung`, deren Umsatzsteuer dem erklärten
-`ust_status` des Betreibers folgt — die Fixture ist ein Kleinunternehmer (§ 19
-UStG) und trägt deshalb 0 % USt.
+### Personas und Tokens
 
----
+Die Demo-Konfigurationen setzen `[oidc] mode = "demo"`: Ein Dienst nimmt Tokens
+an, die mit dem veröffentlichten Entwicklungsschlüssel signiert sind, und seine
+Konfigurationsprüfung meldet das als Warnung. Im Kontomenü des Desks wechselst
+du zwischen den Personas; auf der Kommandozeile gibt `just token` eine aus:
 
-## Die dritte Demo — Order-to-Cash
-
-`demos/o2c` zeigt den Geldweg im Vertrieb in den eigenen Büchern des
-Lieferanten — Tarif, Vertrag, Rechnung, Dokument, Forderung — ohne EDIFACT.
-
-| Dienst | Port | Aufgabe |
-|---|---|---|
-| `productd` | `9080` | Produkt- und Tarifkatalog — die einzige Preisquelle |
-| `vertragd` | `9780` | Kunden, Verträge, Kündigungsfristen |
-| `billingd` | `9280` | Abrechnungs-Engine für mehrere Produkte (EN 16931) |
-| `outputd` | `9880` | Dokumentablage und Versand |
-| `accountingd` | `9380` | Massenkontokorrent — das doppelte Hauptbuch |
-| `webhook` | `8001` | Empfänger der ERP-CloudEvents, damit dieser Stack neben `demos/nb-stp` läuft |
-
-`marktd`, `edmd` und `makod` fehlen: Der Smoke-Test nennt den Netzbetreiber und
-liefert den Zählerstand selbst, und ihre URLs zeigen auf Hostnamen, die nicht
-auflösen — eine fallengelassene Überschreibung schlägt also fehl, statt null zu
-berechnen.
+| Persona | Marktrollen im Token |
+|---|---|
+| `nb` — Sachbearbeitung Netz | `NB` |
+| `lf` — Sachbearbeitung Vertrieb | `LF` |
+| `admin` — Administration (Standard) | `NB`, `LF`, `MSB`, `ESA`, `ADMIN` |
+| `agent` — Agent | `NB`, `LF`, `MSB` |
 
 ```bash
-# from the repo root
-just build-demo-o2c
-
-cd demos/o2c
-docker compose up -d
-bash smoke.sh
+TOKEN=$(just token lf)
+curl -s http://127.0.0.1:9780/api/v1/vertraege -H "Authorization: Bearer $TOKEN"
 ```
 
-Der Test veröffentlicht ein Tarifpreisblatt, legt einen Kunden als **BO4E-
-`Geschaeftspartner`** und einen Versorgungsvertrag auf einer Marktlokation an,
-rechnet einen Monat gegen diesen Tarif ab, legt das Dokument in `outputd` für
-die acht Jahre nach § 147 AO ab, sieht zu, wie die Rechnung in `accountingd` als
-Offener Posten ankommt, und schließt ihn mit einem Zahlungsimport.
+Jede Anfrage entscheiden dieselben Cedar-Policies wie in Produktion. Eine
+Konfiguration ohne `mode = "demo"` verweigert den Start gegen einen Issuer, der
+den Entwicklungsschlüssel veröffentlicht. `makod` erreichst du mit seinem
+API-Schlüssel (`deploy/demo/makod.toml`, `[http] auth_keys`).
 
-§ 14 Abs. 4 Nr. 1 UStG macht den vollständigen Namen und die Anschrift des
-Leistungsempfängers zum Bestandteil der Rechnung, deshalb liest Schritt 3 den
-Empfänger aus **beiden** zurück — der BO4E-`Rechnung` und dem EN-16931-Modell.
-Ein flacher Body mit `vorname`/`strasse`/`plz` ist ein `422`, der das Feld
-nennt.
-
-`just test-demo-payloads` deserialisiert jeden Request-Body, den die Demos
-senden, in den echten Request-Typ, und `just test-demo-configs` lädt jede
-`*.toml`, mit der die Stacks starten — ohne Docker, in Sekunden.
-
-Der Smoke-Test rechnet den erwarteten Betrag selbst aus: 20 ct/Tag × 31 Tage,
-32 ct/kWh × 250 kWh, die Stromsteuer nach § 3 StromStG mit 2,05 ct/kWh und ein
-Netznutzungsentgelt von 8,00 ct/kWh aus der `grid`-Überschreibung, jede Zeile
-auf den Cent gerundet — 111,33 € netto, 132,48 € brutto bei 19 % USt.
-
----
-
-## Aus dem Quellcode — ein Dienst, keine Images
-
-Die Demos laufen auf gebauten Images. Wenn du an einem Dienst arbeitest, starte
-ihn stattdessen aus dem Checkout; dafür brauchst du Rust (von `rustup` aus
-`rust-toolchain.toml` installiert), [`just`](https://github.com/casey/just) und
-Docker für PostgreSQL:
+### Die Ereignisse mitlesen
 
 ```bash
-just dev marktd
-curl -s http://localhost:8180/health/ready
+just listen
 ```
 
-`just dev` startet PostgreSQL aus `dev/docker-compose.yml`, wenn es nicht läuft,
-und startet den Dienst mit `dev/config/marktd.toml`; jeder Dienst hat eine
-solche Datei, auf seinem Port aus dem [Dienste-Index](@/docs/services/_index.md).
-`makod` braucht keine Datenbank — sein Dev-Event-Store liegt im Speicher —, und
-`agentd` startet zuletzt, weil es sich beim Start mit dem MCP-Endpunkt jedes
-anderen Dienstes verbindet.
+abonniert das Fan-out von `marktd` — jedes CloudEvent des Systems läuft dort
+durch —, prüft die Standard-Webhooks-Signatur jeder Zustellung und gibt sie aus,
+sobald sie ankommt. Strg-C entfernt das Abonnement.
+
+### Jeder Dienst
+
+Jeder Dienst antwortet auf seinem Port aus `deploy/ports.toml` unter
+`http://127.0.0.1:<port>`: `/health/ready`, `/api/v1/openapi.json`, `/mcp`.
+
+| Dienst | Port | | Dienst | Port |
+|---|---|---|---|---|
+| `makod` | 8080 | | `productd` | 9080 |
+| `marktd` | 8180 | | `einsd` | 9180 |
+| `invoicd` | 8280 | | `billingd` | 9280 |
+| `edmd` | 8380 | | `accountingd` | 9380 |
+| `processd` | 8580 | | `portald` | 9480 |
+| `netzbilanzd` | 8680 | | `agentd` | 9580 |
+| `vertragd` | 9780 | | `outputd` | 9880 |
+
+PostgreSQL erreichst du unter `postgres://mako:mako@127.0.0.1:5432/<dienst>`.
 
 Ein Konfigurationsproblem wird auf einmal gemeldet — die gelesene Datei, das
 Präfix der Umgebungsvariablen (`MARKTD_`, verschachtelte Schlüssel mit `__`
-verbunden) und jeder fehlende, unbekannte oder ungültige Schlüssel. Zwei Flags
-helfen vor dem ersten Start:
+verbunden) und jeder fehlende, unbekannte oder ungültige Schlüssel:
 
 ```bash
-cargo run -p marktd -- --help          # usage and config conventions, reads no config
-cargo run -p marktd -- --print-config  # the merged file + environment, secrets redacted
-cargo run -p marktd -- --check-config  # every finding with its path; exit 1 on a blocking one
+cargo run -p marktd -- --help                                              # Aufruf, liest keine Konfiguration
+MARKTD_CONFIG=deploy/demo/marktd.toml cargo run -p marktd -- --check-config  # jeder Befund mit seinem Pfad
 ```
 
-`--help` zeigt Aufruf und Konfigurationskonventionen und liest keine
-Konfiguration; `--print-config` gibt Datei und Umgebung zusammengeführt aus,
-Geheimnisse geschwärzt; `--check-config` nennt jeden Befund mit seinem Pfad und
-endet bei einem blockierenden mit Exit-Code 1.
+## `just demo` — ohne Rust
 
-`just smoke-dev` startet jeden Dienst auf diese Weise und wartet auf
-`/health/ready`.
-[CONTRIBUTING.md](https://github.com/hupe1980/mako/blob/main/CONTRIBUTING.md)
-beschreibt das Bauen, das Testen eines einzelnen Crates und das Ausführen des
-Gates.
+```bash
+just demo
+```
 
----
+startet die veröffentlichten Images der Version, die dieser Checkout trägt
+(`ghcr.io/hupe1980/mako-<dienst>`): PostgreSQL, jeden Dienst, den Desk und einen
+Seed-Container, der dasselbe Stadtwerk befüllt und prüft. Ein Port ist
+veröffentlicht: Öffne <http://localhost:8000>. Der Rand des Desks leitet jedes
+`/svc/<dienst>/` an seinen Dienst weiter, mit dem Token der Persona, die du im
+Kontomenü gewählt hast; `just token <persona>` gibt dieselben Tokens für `curl`
+aus.
+
+`just demo --build` baut die Images aus diesem Checkout, statt sie zu laden —
+rechne kalt mit 20–45 Minuten. `just demo-down` hält die Demo an und löscht ihre
+Daten. `just listen` abonniert über den Rand der Demo, wenn sie läuft.
+
+## Nur der Desk
+
+```bash
+just dev-ui
+```
+
+startet den Desk auf seinen aufgezeichneten Antworten (`desk/fixtures`) — nur
+Node, kein Rust, kein Docker.
 
 ## Nächste Schritte
 
@@ -489,4 +200,4 @@ Gates.
 | Prozess-Lesemodell, Gleichbehandlung (§ 7a Abs. 5 EnWG) | [processd guide — process read model](@/docs/services/processd.md#process-read-model) |
 | Die Architektur des ganzen Systems | [Architecture](@/docs/architecture/_index.md) |
 | Prozesskatalog (GPKE, WiM, …) | [Processes](@/docs/reference/processes.md) |
-| Das SDK mako-service | [mako-service README](https://github.com/hupe1980/mako/tree/main/crates/mako-service) |
+| Bauen, Testen und das Gate | [CONTRIBUTING.md](https://github.com/hupe1980/mako/blob/main/CONTRIBUTING.md) |

@@ -9,7 +9,7 @@ Summenzeitreihen (MSCONS 13003) with the BIKO through `makod`.
 
 | | |
 |---|---|
-| **Port** | 8680 (`dev/ports.toml`) |
+| **Port** | 8680 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — invoice drafts and numbering, Kostenblätter, MaBiS submission runs |
 | **MCP** | 13 tools, 7 prompts at `/mcp` |
 | **Emits** | `de.netzbilanz.invoic.*`, `de.netzbilanz.kostenblatt.*`, `de.mabis.submission.failed`, `de.mabis.korrekturbedarf.opened` |
@@ -19,8 +19,8 @@ Summenzeitreihen (MSCONS 13003) with the BIKO through `makod`.
 ## Run
 
 ```bash
-just dev netzbilanzd    # dev/config/netzbilanzd.toml against the dev PostgreSQL
-NETZBILANZD_CONFIG=dev/config/netzbilanzd.toml cargo run -p netzbilanzd -- --check-config
+just dev    # the whole estate, netzbilanzd on deploy/demo/netzbilanzd.toml, seeded
+NETZBILANZD_CONFIG=deploy/demo/netzbilanzd.toml cargo run -p netzbilanzd -- --check-config
 ```
 
 ## API

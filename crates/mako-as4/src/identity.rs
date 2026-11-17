@@ -9,7 +9,6 @@
 //! connection with it, and BDEW AS4-Profil 1.2 Kap. 2.2.6.1 (S. 10) states
 //! „Client-Authentifizierung ist ERFORDERLICH."
 
-use crate::keys::same_public_key;
 use crate::partner_directory::PartnerDirectory;
 
 /// The key material of one local MP-ID.
@@ -35,24 +34,6 @@ pub struct LocalIdentity {
     pub tls: asx::KeyPair,
 }
 
-/// A local identity that cannot be used.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum IdentityError {
-    /// Two of the three key pairs certify the same public key.
-    #[error(
-        "AS4 identity {mp_id}: the {first} and {second} certificates certify the same key pair; \
-         BDEW AS4-Profil 1.2 Kap. 2.3.4.4 requires different key pairs for signing, encryption and TLS"
-    )]
-    SharedKeyPair {
-        /// The MP-ID.
-        mp_id: String,
-        /// One use.
-        first: &'static str,
-        /// The other use.
-        second: &'static str,
-    },
-}
-
 /// The `asx-rs` builder for `identity`: `Profile::bdew()` capped at
 /// [`MAX_MESSAGE_BYTES`](crate::constants::MAX_MESSAGE_BYTES), the SM-PKI root
 /// as the only trust anchor, the CCRL-S(Root) as CRL signer, the TLS key pair
@@ -63,39 +44,15 @@ pub enum IdentityError {
 /// `Profile::bdew()` it refuses a signing, decryption or TLS certificate
 /// without the MP-ID in its subject OU or without exactly one URI subject
 /// alternative name (Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.2,
-/// S. 6), a TLS key pair that is not EC, and the same rules for every
-/// partner.
-///
-/// # Errors
-///
-/// [`IdentityError::SharedKeyPair`] when two of the signing, encryption and
-/// TLS certificates certify one key — a case `build()` does not see, because it
-/// compares certificates.
+/// S. 6), a TLS key pair that is not EC, signing, encryption and TLS
+/// certificates that certify one key pair (BDEW AS4-Profil 1.2 Kap. 2.3.4.4,
+/// compared by key value), and the same rules for every partner.
 pub fn client_builder(
     identity: &LocalIdentity,
     trust_anchor: asx::Certificate,
     crl_signer: asx::Certificate,
     partners: &PartnerDirectory,
-) -> Result<asx::Builder<asx::as4::As4>, IdentityError> {
-    let certs = [
-        ("signing", asx::Decrypter::certificate(&identity.signer)),
-        (
-            "encryption",
-            asx::Decrypter::certificate(&identity.decrypter),
-        ),
-        ("TLS", asx::Decrypter::certificate(&identity.tls)),
-    ];
-    for (i, (first, a)) in certs.iter().enumerate() {
-        for (second, b) in &certs[i + 1..] {
-            if same_public_key(a, b) {
-                return Err(IdentityError::SharedKeyPair {
-                    mp_id: identity.mp_id.clone(),
-                    first,
-                    second,
-                });
-            }
-        }
-    }
+) -> asx::Builder<asx::as4::As4> {
     let mut local = asx::LocalParty::new(&identity.mp_id)
         .party_type(crate::constants::party_id_type_for_agency(&identity.agency))
         .signer(identity.signer.clone())
@@ -113,7 +70,7 @@ pub fn client_builder(
     for (_, partner) in partners.iter() {
         builder = builder.partner(partner.clone());
     }
-    Ok(builder)
+    builder
 }
 
 #[cfg(test)]
@@ -143,34 +100,59 @@ mod tests {
             crl.certificate(),
             &PartnerDirectory::default(),
         )
-        .expect("distinct key pairs")
         .build()
         .expect("a BDEW identity under its CA builds");
     }
 
-    /// One key pair for TLS and signing is refused here, before `build()`.
+    /// BDEW AS4-Profil 1.2 Kap. 2.3.4.4 separates key pairs, not certificates:
+    /// a TLS certificate issued over the signing key — another serial, a valid
+    /// TLS certificate in every other respect — does not build.
     #[test]
-    fn a_tls_key_pair_that_is_the_signing_key_pair_is_refused() {
+    fn a_tls_certificate_over_the_signing_key_does_not_build() {
+        use asx::testkit::pki::{Eku, IssueOptions, Nid};
         let ca = TestCa::sm_pki();
         let crl = ca.crl_signer("CCRL-S", KeyAlg::EcBrainpoolP256r1);
         let party = ca.bdew_party("9900357000004");
+        let url = party
+            .endpoint
+            .clone()
+            .expect("a BDEW party has an endpoint");
+        let host = url
+            .trim_start_matches("https://")
+            .split('/')
+            .next()
+            .expect("the endpoint has a host")
+            .to_owned();
         let mut id = identity(&party);
-        id.tls = party.signing.key_pair();
+        id.tls = ca
+            .issue_with_options(
+                "tls",
+                KeyAlg::EcBrainpoolP256r1,
+                IssueOptions {
+                    subject: vec![(Nid::ORGANIZATIONALUNITNAME, "9900357000004".to_owned())],
+                    uri_sans: vec![url],
+                    dns_sans: vec![host],
+                    eku: vec![Eku::ServerAuth, Eku::ClientAuth],
+                    key_pem: Some(party.signing.key_pem.clone()),
+                    ..IssueOptions::default()
+                },
+            )
+            .key_pair();
+        assert_ne!(
+            asx::Decrypter::certificate(&id.tls).der(),
+            asx::Decrypter::certificate(&id.signer).der(),
+            "two certificates, one key pair"
+        );
         let err = client_builder(
             &id,
             ca.anchor(),
             crl.certificate(),
             &PartnerDirectory::default(),
         )
+        .build()
         .unwrap_err();
-        assert_eq!(
-            err,
-            IdentityError::SharedKeyPair {
-                mp_id: "9900357000004".to_owned(),
-                first: "signing",
-                second: "TLS",
-            }
-        );
+        assert_eq!(err.kind(), asx::ErrorKind::Config, "{err}");
+        assert!(err.to_string().contains("Kap. 2.3.4.4"), "{err}");
     }
 
     /// `build()` holds Regelungen zum Übertragungsweg für AS4 2.6, Kap. 5.2
@@ -196,7 +178,6 @@ mod tests {
                 crl.certificate(),
                 &PartnerDirectory::default(),
             )
-            .unwrap()
             .build()
             .unwrap_err();
             assert_eq!(err.kind(), asx::ErrorKind::Config, "{swap}: {err}");
@@ -234,7 +215,6 @@ mod tests {
                 crl.certificate(),
                 &PartnerDirectory::default(),
             )
-            .unwrap()
             .build()
             .unwrap_err();
             assert_eq!(err.kind(), asx::ErrorKind::Config, "{uris:?}: {err}");
@@ -256,7 +236,6 @@ mod tests {
             crl.certificate(),
             &PartnerDirectory::default(),
         )
-        .unwrap()
         .build()
         .unwrap_err();
         assert_eq!(err.kind(), asx::ErrorKind::Config);

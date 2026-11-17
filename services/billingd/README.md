@@ -8,7 +8,7 @@ no grid topology, no EDIFACT and no customer master data.
 
 | | |
 |---|---|
-| **Port** | 9280 (`dev/ports.toml`) |
+| **Port** | 9280 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `billing_records`, `steuerzeilen`, `invoice_number_series`, `event_outbox` |
 | **MCP** | 13 tools, 6 prompts at `/mcp` |
 | **Emits** | `de.billing.rechnung.erstellt`, `de.billing.xrechnung.b2g.ready`, `de.billing.abrechnungsinformation.monatlich`, `de.vpp.settlement.berechnet` |
@@ -18,8 +18,8 @@ no grid topology, no EDIFACT and no customer master data.
 ## Run
 
 ```bash
-just dev billingd      # dev/config/billingd.toml against the dev PostgreSQL
-BILLINGD_CONFIG=dev/config/billingd.toml cargo run -p billingd -- --check-config
+just dev    # the whole estate, billingd on deploy/demo/billingd.toml, seeded
+BILLINGD_CONFIG=deploy/demo/billingd.toml cargo run -p billingd -- --check-config
 ```
 
 ## API

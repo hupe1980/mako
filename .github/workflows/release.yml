@@ -648,10 +648,9 @@ jobs:
 
   # ── Docker build + push ──────────────────────────────────────────────────────
   #
-  # 1. `docker-builder` compiles each Rust builder stage (`builder`,
-  #    `demo-builder`) on native hardware, one job per stage and platform, in
-  #    parallel with `publish` (it needs `preflight` only), and pushes it to
-  #    ghcr.io.
+  # 1. `docker-builder` compiles the Rust `builder` stage — every service and
+  #    the seeder — on native hardware, one job per platform, in parallel with
+  #    `publish` (it needs `preflight` only), and pushes it to ghcr.io.
   #
   # 2. `docker-bake` is one job per platform: it reads the builder images back
   #    as cache, so the runtime stages recompile no Rust, and builds every
@@ -673,10 +672,8 @@ jobs:
       fail-fast: false
       matrix:
         platform: [linux/amd64, linux/arm64]
-        # `makod`, `marktd` and `processd` copy their binaries from
-        # `demo-builder`, every other service from `builder`. The two are
-        # siblings on `chef`, so neither build populates the other's layers.
-        stage: [builder, demo-builder]
+        # Every runtime stage copies its binary from `builder`.
+        stage: [builder]
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
@@ -708,8 +705,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # The compiled stage is pushed as an image of this commit, and the bake
-      # takes its binaries from that image (Dockerfile `BUILDER_IMAGE` /
-      # `DEMO_BUILDER_IMAGE`) instead of compiling: nothing has to match a
+      # takes its binaries from that image (Dockerfile `BUILDER_IMAGE`)
+      # instead of compiling: nothing has to match a
       # cache across jobs. The registry cache only speeds this job's next run.
       - name: Build and push the ${{ matrix.stage }} stage
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -770,7 +767,7 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       # The binaries come from the images the docker-builder jobs pushed of
-      # this commit (`*.args.BUILDER_IMAGE` / `DEMO_BUILDER_IMAGE`), so the
+      # this commit (`*.args.BUILDER_IMAGE`), so the
       # compile stages are never built here. `source: .` builds from this
       # checkout rather than bake-action's default git-URL context.
       - name: Bake all service images (${{ matrix.platform }})
@@ -783,7 +780,6 @@ jobs:
           set: |
             *.platform=${{ matrix.platform }}
             *.args.BUILDER_IMAGE=ghcr.io/${{ github.repository_owner }}/mako-builder:${{ github.sha }}-${{ matrix.tag }}
-            *.args.DEMO_BUILDER_IMAGE=ghcr.io/${{ github.repository_owner }}/mako-demo-builder:${{ github.sha }}-${{ matrix.tag }}
             *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-builder:cache-${{ matrix.tag }}
             *.cache-to=
           # SLSA build provenance and an SBOM per image — Cyber Resilience Act
@@ -1002,7 +998,9 @@ jobs:
             if [ "${{ matrix.service }}" = desk ]; then
               docker cp "${ctr}:/usr/share/nginx/html" - > "bin/desk-linux-${arch}.tar"
             else
-              docker cp "${ctr}:/usr/local/bin/${{ matrix.service }}" "bin/${{ matrix.service }}-linux-${arch}"
+              # The seeder's image is `mako-seed`, its binary `mako-seed`.
+              exe="${{ matrix.service }}"; [ "$exe" = seed ] && exe=mako-seed
+              docker cp "${ctr}:/usr/local/bin/${exe}" "bin/${{ matrix.service }}-linux-${arch}"
             fi
             docker rm "$ctr" > /dev/null
           done
@@ -1113,6 +1111,9 @@ jobs:
           cargo cyclonedx --manifest-path services/processd/Cargo.toml -F integrated "${opts[@]}"
           mkdir -p sbom
           cp services/*/*_bin.cdx.json sbom/
+          # The seeder's image is `seed`, under the `<service>_bin` name the
+          # image attestation reads.
+          cp tools/mako-seed/mako-seed_bin.cdx.json sbom/seed_bin.cdx.json
 
       # The Desk ships as an image too and its npm tree is what it contains:
       # the production dependencies of desk/package-lock.json, under the

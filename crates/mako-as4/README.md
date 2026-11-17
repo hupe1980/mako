@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/mako-as4?label=mako-as4&color=f59e0b&logo=rust)](https://crates.io/crates/mako-as4)
 
 The BDEW AS4-Profil 1.2 for German Strom and Gas market communication, on
-[`asx-rs`](https://crates.io/crates/asx-rs) 0.17. `asx::Profile::bdew()` fixes
+[`asx-rs`](https://crates.io/crates/asx-rs) 0.19. `asx::Profile::bdew()` fixes
 every security and wire setting of the profile and its `build()` holds the
 certificate rules of the Regelungen zum Übertragungsweg für AS4 2.6; nothing
 here can relax either. This crate holds what a deployment decides: one identity
@@ -42,7 +42,7 @@ assert_eq!(props.document_date, "2026-10-01");
 A client per local MP-ID:
 
 ```rust,ignore
-let builder = mako_as4::client_builder(&identity, sm_pki_root, ccrl_s_root, &partners)?;
+let builder = mako_as4::client_builder(&identity, sm_pki_root, ccrl_s_root, &partners);
 let as4 = builder.build()?; // asx::ErrorKind::Config names the refused setting
 ```
 
@@ -50,8 +50,8 @@ let as4 = builder.build()?; // asx::ErrorKind::Config names the refused setting
 
 | Item | Rule | Source |
 |---|---|---|
-| `LocalIdentity`, `client_builder` | signing, encryption and an EC TLS key pair per MP-ID; refuses one key pair certified twice | AS4-Profil 1.2 Kap. 2.3.4.4; Kap. 2.2.6.1, S. 10 |
-| `build()` (asx-rs) | MP-ID in the subject OU, exactly one URI subject alternative name, on every certificate of both triples | RzÜ AS4 2.6 Kap. 5.2, S. 6 |
+| `LocalIdentity`, `client_builder` | signing, encryption and an EC TLS key pair per MP-ID | AS4-Profil 1.2 Kap. 2.2.6.1, S. 10 |
+| `build()` (asx-rs) | three distinct key pairs, compared by key value; MP-ID in the subject OU and exactly one URI subject alternative name on every certificate of both triples | AS4-Profil 1.2 Kap. 2.3.4.4; RzÜ AS4 2.6 Kap. 5.2, S. 6 |
 | `PartnerEntry` | endpoint optional — reached at the encryption certificate's address, never an IP address | RzÜ AS4 2.6 Kap. 2, S. 4; Kap. 3, S. 5 |
 | `PartProperties` | `BDEWDocumentType`, `BDEWApplicationReference`, `BDEWDocumentDate`, `BDEWDocumentNo` from `UNB`/`UNH` | RzÜ AS4 2.6 Kap. 6, S. 7 |
 | `BdewAction`, `Service` | 16 standard EDIFACT message types plus `Custom`; the five `eb:Service` URIs | AS4-Profil 1.2 Kap. 2.3.1.2.1, S. 14 |

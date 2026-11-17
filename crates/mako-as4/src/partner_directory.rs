@@ -67,7 +67,7 @@ pub enum PartnerDirectoryError {
     /// An endpoint without the encryption certificate every message needs.
     #[error(
         "AS4 partner {0} has an endpoint but no encryption certificate: BDEW AS4-Profil 1.2 \
-         §2.2.6.2.2 encrypts every message with the recipient's certificate"
+         Kap. 2.2.6.2.2 encrypts every message with the recipient's certificate"
     )]
     MissingEncryptionCert(String),
 }
@@ -199,9 +199,7 @@ mod tests {
                 tls: self.local.tls.key_pair(),
             };
             let crl = self.ca.crl_signer("CCRL-S", KeyAlg::EcBrainpoolP256r1);
-            crate::client_builder(&identity, self.ca.anchor(), crl.certificate(), dir)
-                .expect("distinct key pairs")
-                .build()
+            crate::client_builder(&identity, self.ca.anchor(), crl.certificate(), dir).build()
         }
 
         fn with_endpoint(&self, endpoint: Option<&str>) -> PartnerDirectory {
@@ -283,7 +281,7 @@ mod tests {
         assert!(dir.deliverable("9900000000002").is_none());
     }
 
-    /// §2.2.6.2.2 — every message is encrypted for its recipient, so an
+    /// Kap. 2.2.6.2.2 — every message is encrypted for its recipient, so an
     /// endpoint without the certificate can deliver nothing.
     #[test]
     fn an_endpoint_without_an_encryption_certificate_is_refused() {

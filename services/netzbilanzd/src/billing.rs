@@ -965,7 +965,7 @@ mod tests {
             .collect();
         assert!(
             refs.iter().any(|r| r.contains("GeLi Gas 3.0")),
-            "AWH must cite BK7-24-01-009 §5.4, got {refs:?}"
+            "AWH must cite BK7-24-01-009 Kap. 5.4, got {refs:?}"
         );
         assert!(
             !refs.iter().any(|r| r.contains("StromNEV")),

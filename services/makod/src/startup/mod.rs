@@ -959,7 +959,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
     // `Idempotency-Key` records behind `POST /api/v1/commands`.
     //
     // An accepted AS4 key is remembered for `as4_ingest::DEDUP_RETENTION`
-    // (8 days): asx-rs 0.17 accepts an `eb:Timestamp` up to 7 days old and
+    // (8 days): asx-rs 0.19 accepts an `eb:Timestamp` up to 7 days old and
     // requires the dedup store to remember accepted keys at least that long.
     // The API-Webdienste request keys share the store and the retention.
     const INBOX_DEDUP_RETENTION: time::Duration = crate::as4_ingest::DEDUP_RETENTION;

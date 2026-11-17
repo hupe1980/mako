@@ -29,32 +29,40 @@ A crate's integration tests are one binary, `tests/it/main.rs`, with one
 module per file under `tests/it/`. Add a test file there and name it in
 `main.rs`. Filter one module with `cargo test -p <crate> --test it <module>::`.
 
-## Run one service
+## Run the estate
 
 ```bash
-just dev marktd
+just doctor   # Docker, the toolchain, Node, free ports, disk — each miss with its fix
+just dev      # every service, the Desk and the seeded Stadtwerk
 ```
 
-That starts PostgreSQL from `dev/docker-compose.yml` if it is not running and
-starts the service with `dev/config/marktd.toml` (`makod` needs no database:
-its dev store is in memory). It restarts on change when `watchexec` or `bacon`
-is installed, and runs once with `cargo run` otherwise. Every service has a dev
-config; each one's `dev_config` test (`just test-dev-configs`) loads it through
-the service's own config type, so a renamed key fails the suite rather than the
-next clone.
+`just dev` starts PostgreSQL in Docker, builds every service with cargo and runs
+each with its `deploy/demo/<service>.toml`, rewritten into `target/dev/` so its
+peers are found on loopback; the logs share one terminal, one coloured prefix
+per service, and each is also in `target/dev/<service>.log`. The seeder
+(`tools/mako-seed`) then fills Stadtwerke Musterstadt through the public APIs,
+and the Desk runs under Vite on :5173. After an edit, Ctrl-C and `just dev`
+again: the build is incremental, the data stays and the seed is not applied
+twice. `just dev-down` forgets the data; `just dev --no-desk`, `--no-seed` and
+`--ci` (start, seed, verify, stop) narrow it.
+
+Every service's `demo_config` suite (`just test-demo-configs`) loads its
+`deploy/demo/<service>.toml` through the service's own config type and refuses a
+key the type does not declare, so a renamed key fails the suite rather than the
+next clone; `just test-seed-payloads` holds every body the seeder posts
+(`tools/mako-seed/world/`) to the request type it reaches.
 
 A config problem is reported all at once — the file read, the env prefix and
 every missing, unknown or invalid key:
 
 ```bash
 cargo run -p marktd -- --help          # usage, without reading any config
-cargo run -p marktd -- --print-config  # the merged config, secrets redacted
-cargo run -p marktd -- --check-config  # every finding with its path; exit 1 on a blocking one
+MARKTD_CONFIG=deploy/demo/marktd.toml cargo run -p marktd -- --print-config  # merged, secrets redacted
+MARKTD_CONFIG=deploy/demo/marktd.toml cargo run -p marktd -- --check-config  # every finding with its path; exit 1 on a blocking one
 ```
 
 Each key can be overridden by `<SERVICE>_<KEY>`, nested keys joined with `__`
-(`MARKTD_DATABASE__URL`); `just infra-down` stops PostgreSQL and
-`just infra-reset` also deletes its volume.
+(`MARKTD_DATABASE__URL`).
 
 ## The service shape
 
@@ -75,8 +83,9 @@ Every daemon but `makod` has one shape, and a guard holds each part:
   does not declare. `Lenient<T>` reads an externally specified schema without
   that refusal; `check-request-bodies` names every use, and every flattened
   or buffered shape the runtime check cannot see.
-- **One listen shape.** A config takes `[http] addr`; `dev/ports.toml` holds
-  every dev port, and the `dev_configs` tests hold every dev config to it.
+- **One listen shape.** A config takes `[http] addr`; `deploy/ports.toml` holds
+  every service's port, and the `demo_configs` tests hold every
+  `deploy/demo/<service>.toml` to it.
 
 ## Run the gate
 

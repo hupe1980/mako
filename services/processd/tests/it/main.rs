@@ -4,7 +4,6 @@
 
 mod authorization_guard;
 mod demo_config;
-mod dev_config;
 #[cfg(feature = "role-lf-gas")]
 mod eog_answer_contract;
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]

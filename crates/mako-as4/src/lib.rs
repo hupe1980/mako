@@ -1,5 +1,5 @@
 //! BDEW AS4-Profil 1.2 for German energy market communication, on
-//! [`asx-rs`](https://docs.rs/asx-rs) 0.17.
+//! [`asx-rs`](https://docs.rs/asx-rs) 0.19.
 //!
 //! `asx::Profile::bdew()` fixes every security and wire setting of the
 //! profile — ECDSA on brainpoolP256r1 with an `X509PKIPathv1` token, ECDH-ES
@@ -16,8 +16,7 @@
 //! deployment decides:
 //!
 //! - [`identity`] — one [`LocalIdentity`] per local MP-ID and the
-//!   [`client_builder`] for its `As4` client, refusing two uses of one key
-//!   pair, which `build()` does not compare
+//!   [`client_builder`] for its `As4` client
 //! - [`partner_directory`] — [`PartnerDirectory`], one `asx::Partner` per
 //!   counterparty MP-ID
 //! - [`part_properties`] — the `eb:PartProperties` of Kap. 6 (S. 7), read
@@ -50,7 +49,6 @@ pub mod action;
 pub mod constants;
 pub mod file_name;
 pub mod identity;
-pub mod keys;
 pub mod message_id;
 pub mod part_properties;
 pub mod partner_directory;
@@ -58,7 +56,7 @@ pub mod service;
 
 pub use action::{BdewAction, bdew_action_from_str};
 pub use file_name::uebertragungsdatei_name;
-pub use identity::{IdentityError, LocalIdentity, client_builder};
+pub use identity::{LocalIdentity, client_builder};
 pub use message_id::{InvalidMessageIdDomain, MessageIdDomain};
 pub use part_properties::{PartProperties, PartPropertiesError};
 pub use partner_directory::{PartnerDirectory, PartnerDirectoryError, PartnerEntry};

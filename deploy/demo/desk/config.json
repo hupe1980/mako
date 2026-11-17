@@ -1,0 +1,24 @@
+{
+  "handbuch": "https://hupe1980.github.io/mako",
+  "demo": {
+    "personas": [
+      {
+        "id": "nb",
+        "name": "Sachbearbeitung Netz"
+      },
+      {
+        "id": "lf",
+        "name": "Sachbearbeitung Vertrieb"
+      },
+      {
+        "id": "admin",
+        "name": "Administration"
+      },
+      {
+        "id": "agent",
+        "name": "Agent"
+      }
+    ],
+    "standard": "admin"
+  }
+}

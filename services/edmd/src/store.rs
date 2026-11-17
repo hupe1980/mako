@@ -1948,7 +1948,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         > = std::collections::BTreeMap::new();
         for r in readings {
             let melo = r.melo_id.clone().ok_or_else(|| {
-                EdmError::Internal(format!(
+                input_err(format!(
                     "a Zählerstand for MaLo {} names no Messlokation. The register belongs to \
                      the meter, and two meters under one Marktlokation carry the same OBIS code \
                      at the same instants — stored without it, the second silently overwrites \
@@ -1971,7 +1971,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         for ((melo, obis, _herkunft), rows) in groups {
             let first = rows[0];
             let obis: ObisCode = obis.parse().map_err(|_| {
-                EdmError::Internal(format!(
+                input_err(format!(
                     "a Zählerstandsgang must name the register it comes from; {:?} is not an \
                      OBIS code",
                     first.obis_code

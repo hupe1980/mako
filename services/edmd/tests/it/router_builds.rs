@@ -38,10 +38,12 @@ async fn database() -> Option<(toml::Value, sqlx::PgPool, ContainerAsync<Postgre
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres?sslmode=disable");
     let pool = sqlx::PgPool::connect(&url).await.expect("connect");
 
-    let mut cfg: toml::Value =
-        toml::from_str(include_str!("../../../../demos/eeg-billing/edmd.toml"))
-            .expect("the demo configuration parses");
+    let mut cfg: toml::Value = toml::from_str(include_str!("../../../../deploy/demo/edmd.toml"))
+        .expect("the demo configuration parses");
     cfg["database"]["url"] = toml::Value::String(url);
+    // The demo configuration's `[archive]` names a warehouse inside its
+    // container; this suite runs without a cold tier.
+    cfg.as_table_mut().expect("a TOML table").remove("archive");
     cfg["marktd"]["url"] = toml::Value::String(fake_marktd().await);
     // The deployment's own MSB, the operator of a Zählerstand an Ablesung files.
     cfg["identity"]

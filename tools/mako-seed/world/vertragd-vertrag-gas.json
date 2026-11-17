@@ -1,0 +1,26 @@
+{
+  "kundentyp": "B2C",
+  "vertragsart": "SONDERVERTRAG",
+  "vertragsbeginn": "2026-01-01",
+  "kuendigungsfrist_monate": 1,
+  "abrechnungszyklus": "MONATLICH",
+  "auto_renewal": true,
+  "renewal_monate": 0,
+  "zahlungsziel_tage": 14,
+  "erp_contract_id": "MUSTERSTADT-VG-42000002008",
+  "standort_bezeichnung": "Gartenweg 1, 12345 Musterstadt",
+  "komponenten": [
+    {
+      "sparte": "GAS",
+      "malo_id": "42000002008",
+      "nb_mp_id": "9800357000004",
+      "product_code": "MUSTERSTADT-GAS-ZUHAUSE",
+      "lieferbeginn": "2026-01-01",
+      "jahresverbrauch_kwh": "12000",
+      "lieferbeginn_anlass": "WECHSEL",
+      "netznutzungsvertrag": "LIEFERANT_NB",
+      "netznutzung_zahler": "LIEFERANT",
+      "gemeinderabatt_prozent": "0"
+    }
+  ]
+}

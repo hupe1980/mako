@@ -1,0 +1,24 @@
+{
+  "kundentyp": "B2C",
+  "vertragsart": "SONDERVERTRAG",
+  "vertragsbeginn": "2026-01-01",
+  "kuendigungsfrist_monate": 1,
+  "abrechnungszyklus": "MONATLICH",
+  "auto_renewal": true,
+  "renewal_monate": 0,
+  "zahlungsziel_tage": 14,
+  "erp_contract_id": "MUSTERSTADT-V-51238696012",
+  "standort_bezeichnung": "Musterstr. 1, 12345 Musterstadt",
+  "komponenten": [
+    {
+      "sparte": "STROM",
+      "malo_id": "51238696012",
+      "nb_mp_id": "9900357000004",
+      "product_code": "MUSTERSTADT-STROM-ZUHAUSE",
+      "lieferbeginn": "2026-01-01",
+      "jahresverbrauch_kwh": "3000",
+      "lieferbeginn_anlass": "WECHSEL",
+      "enfg_grundlage": "ZG1"
+    }
+  ]
+}

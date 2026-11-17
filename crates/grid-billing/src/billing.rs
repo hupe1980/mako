@@ -2386,7 +2386,7 @@ pub fn correct(
 /// abrechnungswürdige Handlungen (AWH) performed by the GNB/VNB during the
 /// Sperrung/Entsperrung Gas process.
 ///
-/// Governed by **BK7-24-01-009 §5.4** (GeLi Gas 3.0, Beschluss 12.09.2025).
+/// Governed by **BK7-24-01-009 Kap. 5.4** (GeLi Gas 3.0, Beschluss 12.09.2025).
 ///
 /// ## Positions
 ///
@@ -2397,7 +2397,7 @@ pub fn correct(
 /// ## Legal references
 ///
 /// Every position cites:
-/// - `BdewAhb { reference: "GeLi Gas 3.0 (BK7-24-01-009) §5.4" }` (governing ruling)
+/// - `BdewAhb { reference: "GeLi Gas 3.0 (BK7-24-01-009) Kap. 5.4" }` (governing ruling)
 /// - `GasNev { paragraph: "§15" }` (general GasNEV charge authorisation)
 ///
 /// ## Errors
@@ -2457,7 +2457,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
     let tariff_src = make_tariff_source(input.tariff_sheet_id.as_deref());
     let awh_legal_refs = vec![
         LegalReference::BdewAhb {
-            reference: "GeLi Gas 3.0 (BK7-24-01-009) §5.4",
+            reference: "GeLi Gas 3.0 (BK7-24-01-009) Kap. 5.4",
         },
         LegalReference::GasNev { paragraph: "§15" },
     ];
@@ -2505,7 +2505,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
 
     let result = SettlementResult {
         malo_id: input.malo_id.clone(),
-        // AWH Sperrprozesse are a Gas process (GeLi Gas 3.0 §5.4).
+        // AWH Sperrprozesse are a Gas process (GeLi Gas 3.0 Kap. 5.4).
         sparte: Sparte::Gas,
         regime,
         settlement_type: SettlementType::GasAwhSperrung,

@@ -17,11 +17,11 @@
 
 use uuid::Uuid;
 
-/// The tenant of `demos/o2c/vertragd.toml`.
-const TENANT: &str = "9912345000005";
+/// The tenant of `deploy/demo/vertragd.toml`.
+const TENANT: &str = "9900357000004";
 
 fn demo_config() -> vertragd::config::VertragdConfig {
-    toml::from_str(include_str!("../../../../demos/o2c/vertragd.toml"))
+    toml::from_str(include_str!("../../../../deploy/demo/vertragd.toml"))
         .expect("the demo configuration parses")
 }
 

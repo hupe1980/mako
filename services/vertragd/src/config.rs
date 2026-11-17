@@ -365,6 +365,9 @@ impl mako_service::ServiceConfig for VertragdConfig {
     fn bind_addr(&self) -> String {
         self.http.addr.clone()
     }
+    fn oidc(&self) -> Option<&mako_service::oidc::OidcConfig> {
+        self.oidc.as_ref()
+    }
 }
 
 /// The operator's own identity on a customer notice — § 126b BGB's declarant.

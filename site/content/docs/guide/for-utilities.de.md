@@ -5,7 +5,8 @@ weight = 1
 
 [extra]
 translated_from = "content/docs/guide/for-utilities.md"
-source_sha256 = "8697da7f29254299470617512572981e9d97e163bc1270c2b557d5ab324c0a9d"
+source_sha256 = "61f33a35606aa8b4b4ba9d51e22ae76b85bae924a4c25bb2a69c4cd7602519cf"
+
 +++
 Ein Stadtwerk spielt mehrere Marktrollen zugleich — Netzbetreiber, Lieferant,
 Messstellenbetreiber —, und jede davon schuldet ihren Marktpartnern regulierte
@@ -60,12 +61,15 @@ registriert, steht in [makod — Deployment roles](@/docs/services/makod.md#depl
 
 Drei Schritte, von denen keiner eine Nachricht an einen Marktpartner sendet:
 
-1. **Eine Demo starten.** Jede Demo ist ein `docker compose`-Stack mit einem
-   `smoke.sh`, das das Ergebnis prüft — den Antwortcode, den Betrag, die
-   Forderung auf den Cent. `nb-stp` beantwortet eine UTILMD-55001-Anmeldung mit
-   55002, `eeg-billing` rechnet einen Monat Einspeisung ab, `o2c` führt einen
-   Tarif bis zur bezahlten Rechnung. [Loslegen](@/docs/guide/getting-started.de.md)
-   geht die erste Schritt für Schritt durch.
+1. **Die Demo starten.** `just demo` startet jeden Dienst und den Desk in
+   Docker, mit einem eingespielten Stadtwerk — eine Anmeldung mit 55002
+   beantwortet, eine wartet auf eine Freigabe, ein Klärfall, eine EEG-Anlage
+   auf den Cent abgerechnet, ein Haushalt abgerechnet, die Rechnung zugestellt
+   und bezahlt —, und `mako-seed --verify` prüft jedes Ergebnis: den
+   Antwortcode, den Betrag, die Forderung auf den Cent. Melde dich als eine
+   beliebige Persona an und sieh, wie Cedar jeder anders antwortet.
+   [Loslegen](@/docs/guide/getting-started.de.md) geht sie Schritt für Schritt
+   durch.
 2. **Deine Konfiguration prüfen.** `just setup` führt `--check-config` jedes
    Daemons aus und fasst die Befunde zu einer Checkliste zusammen — Identitäten,
    Zertifikate, Bilanzkreise, Zugriff, Erreichbarkeit, Formatabdeckung —, jeden

@@ -1,0 +1,8 @@
+{
+  "lf_mp_id": "9900357000004",
+  "nb_mp_id": "9900357000004",
+  "period_from": "2026-01-01",
+  "period_to": "2026-01-31",
+  "meter": { "arbeitsmenge_kwh": "250" },
+  "grid": { "nne_arbeitspreis_ct_per_kwh": "8.00" }
+}

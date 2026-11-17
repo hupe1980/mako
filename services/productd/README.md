@@ -9,7 +9,7 @@ who is on it — that assignment lives in `vertragd`.
 
 | | |
 |---|---|
-| **Port** | 9080 (`dev/ports.toml`) |
+| **Port** | 9080 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL, `public` schema — `products`, `epex_prices`, `nehs_prices`, `angebote`, `endkunden_angebote` (append-only) |
 | **MCP** | 14 tools, 3 prompts at `/mcp` |
 | **Emits** | `de.tarif.product.updated`, `de.tarif.angebot.angenommen` through the transactional outbox |
@@ -22,8 +22,8 @@ kinds, and `BUNDLE` expands into its component products before billing sees it.
 ## Run
 
 ```bash
-just dev productd    # dev/config/productd.toml against the dev PostgreSQL
-PRODUCTD_CONFIG=dev/config/productd.toml cargo run -p productd -- --check-config
+just dev    # the whole estate, productd on deploy/demo/productd.toml, seeded
+PRODUCTD_CONFIG=deploy/demo/productd.toml cargo run -p productd -- --check-config
 just test-productd-db
 ```
 

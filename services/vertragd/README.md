@@ -9,7 +9,7 @@ speaks no EDIFACT: Anmeldung and Kündigung reach the market through `processd`.
 
 | | |
 |---|---|
-| **Port** | 9780 (`dev/ports.toml`) |
+| **Port** | 9780 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL, `public` schema (`migrations/0001_schema.sql`) |
 | **MCP** | 20 tools, 4 prompts at `/mcp` |
 | **Emits** | `de.vertrag.*` (contract lifecycle, Bestellung, Widerruf) through the transactional outbox |
@@ -19,8 +19,8 @@ speaks no EDIFACT: Anmeldung and Kündigung reach the market through `processd`.
 ## Run
 
 ```bash
-just dev vertragd    # dev/config/vertragd.toml against the dev PostgreSQL
-VERTRAGD_CONFIG=dev/config/vertragd.toml cargo run -p vertragd -- --check-config
+just dev    # the whole estate, vertragd on deploy/demo/vertragd.toml, seeded
+VERTRAGD_CONFIG=deploy/demo/vertragd.toml cargo run -p vertragd -- --check-config
 just test-vertragd-db
 ```
 

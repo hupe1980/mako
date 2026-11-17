@@ -131,8 +131,8 @@ must equal the deployment's own. The runner adds `/health/live`,
 `processd` refuses to start without `[oidc]` and without `[webhook]
 inbound_secret`, and with a `[sperr] erp_webhook_url` but no `erp_hmac_secret`;
 the refusal names each missing one. `allow_insecure_no_auth =
-true` accepts both, for local development (`just dev processd` reads
-`dev/config/processd.toml`).
+true` accepts both, for local development (`just dev` runs processd on
+`deploy/demo/processd.toml`).
 
 ---
 

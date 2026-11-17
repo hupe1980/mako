@@ -14,8 +14,8 @@
 //!
 //! ## What it checks
 //!
-//! Every fenced block in `site/content/`, `concepts/`, `specs/` and `demos/` that parses
-//! as JSON and carries a `_typ`, at any depth. Each such object is decoded into its BO4E
+//! Every fenced block in `site/content/`, `concepts/` and `specs/`, and every
+//! body the seeder posts (`tools/mako-seed/world/`), that parses as JSON and carries a `_typ`, at any depth. Each such object is decoded into its BO4E
 //! type and run through
 //! [`Bo4eExtensions::extension_paths`](rubo4e::json::Bo4eExtensions::extension_paths).
 //!
@@ -59,10 +59,10 @@ pub fn run(workspace_root: &Path) -> bool {
     let mut findings: Vec<String> = Vec::new();
     let mut checked = 0usize;
 
-    // `demos/` is in the scan for the same reason the other two are — more so:
-    // a demo payload is what gets copied into a ticket as "this is what a
-    // request looks like".
-    for dir in ["site/content", "concepts", "specs", "demos"] {
+    // The seeder's world is in the scan for the same reason the docs are —
+    // more so: a seeded body is what gets copied into a ticket as "this is
+    // what a request looks like".
+    for dir in ["site/content", "concepts", "specs", "tools/mako-seed/world"] {
         let root = workspace_root.join(dir);
         if !root.is_dir() {
             // A checkout without this directory is normal — say so, rather than
@@ -108,7 +108,7 @@ pub fn run(workspace_root: &Path) -> bool {
     if checked == 0 {
         eprintln!(
             "check-bo4e-examples: the scan found no documented BO4E object in \
-             site/content/, concepts/, specs/ or demos/ — the layout has probably changed"
+             site/content/, concepts/, specs/ or tools/mako-seed/world/ — the layout has probably changed"
         );
         return false;
     }
@@ -243,7 +243,7 @@ fn objects_with_typ(root: &serde_json::Value) -> Vec<serde_json::Value> {
                     // the shape a real request has — the endpoint fixes which
                     // BO it takes, so a caller repeating the discriminant adds
                     // a way to be wrong and no information — and it is exactly
-                    // the shape a demo payload carries. Without this arm the
+                    // the shape a seeded body carries. Without this arm the
                     // field names in `"geschaeftspartner": { … }` are checked
                     // by nothing, and a misspelled `nachnamen` ships.
                     let mut stamped = o.clone();
@@ -369,7 +369,7 @@ fn objects_with_misspelt_typ(root: &serde_json::Value) -> Vec<String> {
 }
 
 /// The contents of every ``` fenced block.
-/// Every JSON value a documentation or demo file carries.
+/// Every JSON value a documentation file or a seeded body carries.
 ///
 /// Markdown keeps its examples in fenced blocks, so those are extracted first
 /// and each parsed whole (HTTP-style blocks put headers in front of the body,
@@ -380,7 +380,7 @@ fn objects_with_misspelt_typ(root: &serde_json::Value) -> Vec<String> {
 ///
 /// A payload interpolating a shell variable as a **bare** value
 /// (`"jahr": ${YEAR}`) is not JSON and is skipped. Inside a string
-/// (`"malo_id": "${MALO_ID}"`) — which is every substitution these demos make —
+/// (`"malo_id": "${MALO_ID}"`) — which is every substitution a shell example makes —
 /// the document stays well-formed and is checked.
 fn json_values(path: &Path, src: &str) -> Vec<serde_json::Value> {
     if path.extension().is_some_and(|e| e == "md") {
@@ -433,12 +433,11 @@ fn fenced_blocks(src: &str) -> Vec<String> {
     out
 }
 
-/// Markdown, plus the shell scripts a demo's payloads actually live in.
+/// Markdown, the seeder's `.json` bodies, and shell scripts.
 ///
-/// A demo's request bodies are heredocs inside `smoke.sh`, not fenced blocks in
-/// its README — and those are the ones an integrator runs and copies. The
-/// fenced-block scanner reads a `.sh` file as one block, which is exactly right
-/// here: every `{ … }` in it that parses as JSON and carries a `_typ` gets
+/// A request body in a shell script is a heredoc, not a fenced block — and it
+/// is the one an integrator runs and copies. A `.sh` or `.json` file has no
+/// fences, so every `{ … }` in it that parses as JSON and carries a `_typ` gets
 /// checked, and a `${VAR}` inside a string leaves the JSON well-formed.
 fn collect_docs(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
