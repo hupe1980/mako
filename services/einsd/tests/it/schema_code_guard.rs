@@ -729,6 +729,9 @@ fn the_sect44b_quota_uses_the_statutory_hours() {
 // ── Documented routes exist ──────────────────────────────────────────────────
 
 const ROUTES: &str = include_str!("../../src/routes.rs");
+/// The shared reads mount their GETs through utoipa's `OpenApiRouter`; each
+/// route is the `path = "…"` of its `#[utoipa::path]`.
+const READS: &str = include_str!("../../src/reads.rs");
 const CONFIG: &str = include_str!("../../src/config.rs");
 const ENFG: &str = include_str!("../../src/enfg.rs");
 
@@ -814,8 +817,21 @@ fn every_documented_api_path_is_a_route_einsd_serves() {
         out
     }
 
-    let served: std::collections::BTreeSet<String> =
+    let mut served: std::collections::BTreeSet<String> =
         paths(ROUTES).into_iter().map(|p| normalise(&p)).collect();
+    // The shared reads are served only while routes.rs merges their router;
+    // without the merge their documented paths would be the 404s this guard
+    // exists to catch.
+    if ROUTES.contains("crate::reads::router()") {
+        served.extend(
+            READS
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("path = \""))
+                .filter_map(|l| l.split('"').next())
+                .filter(|p| p.starts_with("/api/v1/"))
+                .map(normalise),
+        );
+    }
     assert!(
         served.len() > 20,
         "parsed only {} routes from routes.rs — the parser broke, not the router",

@@ -134,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 biko_id: biko.clone(),
                 message_ref: MessageRef::new("MSCONS-BG-2026-01-V1"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     for env in &envs {
@@ -157,7 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 abweisungsgrund: None,
                 message_ref: MessageRef::new("IFTSTA-DS-V1"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
 
@@ -173,7 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 grund: Some("Summe weicht um 12 kWh von der eigenen Aggregation ab".into()),
                 message_ref: MessageRef::new("IFTSTA-PM-V1"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     for env in &pruef_envs {
@@ -250,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 biko_id: biko,
                 message_ref: MessageRef::new("MSCONS-BG-2026-01-V2"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     process
@@ -262,7 +262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 abweisungsgrund: None,
                 message_ref: MessageRef::new("IFTSTA-DS-V2a"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     println!("  → filed after the Erstaufschlag, so it arrives as „Prüfdaten\".");
@@ -276,7 +276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 grund: None,
                 message_ref: MessageRef::new("IFTSTA-PM-V2"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     process
@@ -288,7 +288,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 abweisungsgrund: None,
                 message_ref: MessageRef::new("IFTSTA-DS-V2b"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     println!("  → a positive Prüfmitteilung promotes it to „Abrechnungsdaten\".");
@@ -313,7 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             BillingCommand::CloseClearing {
                 lauf: Abrechnungslauf::Bka,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     let state = process.state().await?;
@@ -331,7 +331,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             BillingCommand::CloseClearing {
                 lauf: Abrechnungslauf::Kbka,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     let state = process.state().await?;
@@ -368,7 +368,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 biko_id: BikoId::new("10YDE-VE-------2"),
                 message_ref: MessageRef::new("MSCONS-BG-2026-01-V3"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .unwrap_err();

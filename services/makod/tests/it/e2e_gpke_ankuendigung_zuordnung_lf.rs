@@ -178,7 +178,7 @@ impl MockLfn {
         };
 
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("LFN: execute ReceiveAnkuendigung");
     }
@@ -205,7 +205,7 @@ impl MockLfn {
                         }
                     },
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("LFN: execute SendAntwort");
@@ -216,7 +216,7 @@ impl MockLfn {
         self.process
             .run(
                 AnkuendigungZuordnungLfCommand::ZuordnungBestaetigen,
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("LFN: execute ZuordnungBestaetigen");
@@ -330,7 +330,7 @@ async fn e2e_ankuendigung_zuordnung_lf_validation_failure_rejects() {
     };
 
     lfn.process
-        .run(cmd, RunOptions::new())
+        .run(cmd, RunOptions::system())
         .await
         .expect("execute validation failure");
 
@@ -370,7 +370,7 @@ async fn e2e_ankuendigung_zuordnung_lf_timeout_is_a_frist_breach() {
                 deadline_id: DeadlineId::new(),
                 label: ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL.into(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("execute TimeoutExpired");

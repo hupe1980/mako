@@ -10,6 +10,7 @@ import type { BusinessDate } from "../format/brands";
 import { eintrag, katalog } from "../i18n";
 import { problem, sentence } from "./problem";
 import { Abgelehnt, SchonErledigt } from "./rechnung";
+import { kopf, SOFORT, type Versand } from "./versand";
 import { type Handlung, verweigern } from "./verweigert";
 
 /** The rebooking was taken, and the ledger refused it again: it is parked anew. */
@@ -20,12 +21,12 @@ export class ErneutGeparkt extends Error {
 const BOOKINGS = "/svc/accountingd/api/v1/bookings";
 const BUCHEN: Handlung = { dienst: "accountingd", aktion: "buchen" };
 
-async function senden(url: string, body: object, keepalive: boolean): Promise<void> {
+async function senden(url: string, body: object, v: Versand): Promise<void> {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: kopf(v, true),
     body: JSON.stringify(body),
-    keepalive,
+    keepalive: v.keepalive,
   });
   if (res.ok) return;
   const p = await problem(res);
@@ -39,18 +40,14 @@ async function senden(url: string, body: object, keepalive: boolean): Promise<vo
 export function neuBuchen(
   key: string,
   buchungsdatum: BusinessDate,
-  keepalive = false,
+  v: Versand = SOFORT,
 ): Promise<void> {
-  return senden(`${BOOKINGS}/${encodeURIComponent(key)}/rebook`, { buchungsdatum }, keepalive);
+  return senden(`${BOOKINGS}/${encodeURIComponent(key)}/rebook`, { buchungsdatum }, v);
 }
 
 /** Drop a parked draft; `grund` is kept with it for the audit trail. */
-export function verwerfen(key: string, grund: string, keepalive = false): Promise<void> {
-  return senden(
-    `${BOOKINGS}/${encodeURIComponent(key)}/discard`,
-    { grund: grund.trim() },
-    keepalive,
-  );
+export function verwerfen(key: string, grund: string, v: Versand = SOFORT): Promise<void> {
+  return senden(`${BOOKINGS}/${encodeURIComponent(key)}/discard`, { grund: grund.trim() }, v);
 }
 
 /** A Buchungsart in words (the catalogue's `buchungsarten`); one the Desk does not know is shown as sent. */

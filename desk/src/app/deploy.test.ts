@@ -30,10 +30,103 @@ describe("the Desk image", () => {
       ...readdirSync(resolve(root, "src/data/gen")).map((f) => f.replace(/\.ts$/, "")),
       "agentd",
     ];
-    for (const s of services) expect(gateway).toContain(`path: ^/svc/${s}/(.*)$`);
+    for (const s of services) expect(gateway).toContain(`path: ^/svc/${s}/(`);
+  });
+
+  // The gateway forwards what the Desk calls — `/mcp` and the named write
+  // routes — and nothing else: a person's token behind the gateway reaches no
+  // service's `/admin`, `/metrics` or any route the Desk does not use. A path
+  // no service route matches falls to the Desk's own upstream, which answers
+  // with the app, never with the service.
+  const routes = () => {
+    const gateway = read("deploy/gateway.yaml");
+    return [...gateway.matchAll(/- id: ([a-z]+)\n\s+path: (\^\/svc\/[^\n]+)/g)].map((m) => ({
+      service: m[1] ?? "",
+      // oauth2-proxy runs Go's RE2; these patterns are its common subset.
+      pfad: new RegExp(m[2] ?? ""),
+    }));
+  };
+  const forwarded = (path: string) => routes().some((r) => r.pfad.test(path));
+
+  it("forwards the Desk's MCP reads and named write routes", () => {
+    for (const path of [
+      "/svc/makod/mcp",
+      "/svc/makod/api/v1/openapi.json",
+      "/svc/marktd/api/v1/openapi.json",
+      "/svc/marktd/api/v1/malos/51238696012",
+      "/svc/marktd/api/v1/malos/51238696012/lokationsbuendel",
+      "/svc/marktd/api/v1/versorgung/51238696012/history",
+      "/svc/edmd/api/v1/coverage/51238696012",
+      "/svc/edmd/api/v1/timeseries/51238696012",
+      "/svc/accountingd/api/v1/accounts/51238696012/balance",
+      "/svc/accountingd/api/v1/accounts/51238696012/ledger",
+      "/svc/accountingd/api/v1/dunning",
+      "/svc/accountingd/api/v1/offene-posten",
+      "/svc/accountingd/api/v1/payments/match",
+      "/svc/marktd/api/v1/lokationsbuendelstrukturen",
+      "/svc/edmd/api/v1/quality/51238696012",
+      "/svc/edmd/api/v1/corrections/51238696012",
+      "/svc/makod/api/v1/probe/gpke.lieferbeginn.anmelden",
+      "/svc/processd/mcp",
+      "/svc/processd/api/v1/queue/q-1/approve",
+      "/svc/processd/api/v1/queue/q-1/reject",
+      "/svc/processd/api/v1/counterparties/9800357000005/NB",
+      "/svc/vertragd/mcp",
+      "/svc/marktd/mcp",
+      "/svc/edmd/mcp",
+      "/svc/netzbilanzd/mcp",
+      "/svc/invoicd/mcp",
+      "/svc/invoicd/api/v1/receipts/r-1/resolve-dispute",
+      "/svc/invoicd/api/v1/receipts/r-1/dispatch-answer",
+      "/svc/invoicd/api/v1/receipts/r-1/feststellungen",
+      "/svc/invoicd/api/v1/leistungsnachweise",
+      "/svc/billingd/mcp",
+      "/svc/billingd/api/v1/billing/b-1/release",
+      "/svc/billingd/api/v1/billing/b-1/reviewed",
+      "/svc/accountingd/mcp",
+      "/svc/accountingd/api/v1/bookings/k-1/rebook",
+      "/svc/accountingd/api/v1/bookings/k-1/discard",
+      "/svc/agentd/api/v1/runs",
+      "/svc/agentd/api/v1/runs/r-1/antwort",
+      "/svc/agentd/api/v1/runs/r-1/schritte",
+      "/svc/agentd/api/v1/runs/r-1/stopp",
+      "/svc/agentd/api/v1/runs/r-1/bewertung",
+      "/svc/agentd/api/v1/vorschlaege",
+      "/svc/agentd/api/v1/agents/catalog",
+      "/svc/agentd/api/v1/hinweise",
+    ])
+      expect(forwarded(path), path).toBe(true);
+  });
+
+  it("forwards no admin or metrics path", () => {
+    const services = routes().map((r) => r.service);
+    expect(services.length).toBeGreaterThan(5);
+    for (const s of services)
+      for (const path of [
+        `/svc/${s}/admin/einrichtung`,
+        `/svc/${s}/metrics`,
+        `/svc/${s}/health/ready`,
+        `/svc/${s}/api/v1/policy`,
+        `/svc/${s}/mcp/../admin`,
+        `/svc/${s}/api/v1/queue/q-1/approve/../../../admin`,
+      ])
+        expect(forwarded(path), path).toBe(false);
   });
 
   // A deep link is the app: /freigaben must reach index.html, not a 404.
+  it("ships the session cookie SameSite=Strict, Secure and HttpOnly", () => {
+    const cfg = read("deploy/oauth2-proxy.cfg");
+    expect(cfg).toMatch(/^cookie_samesite\s*=\s*"strict"$/m);
+    expect(cfg).toMatch(/^cookie_secure\s*=\s*true$/m);
+    expect(cfg).toMatch(/^cookie_httponly\s*=\s*true$/m);
+    expect(read("deploy/gateway.yaml")).toContain("--config=oauth2-proxy.cfg");
+  });
+
+  it("cannot be framed, so no other site overlays a decision (clickjacking)", () => {
+    const nginx = read("deploy/nginx.conf");
+    expect(nginx).toMatch(/Content-Security-Policy "[^"]*frame-ancestors 'none'[^"]*" always;/);
+  });
+
   it("answers every non-file path with the app", () => {
     expect(read("deploy/nginx.conf")).toContain("try_files $uri /index.html;");
   });
@@ -64,5 +157,14 @@ describe("the demo edge (deploy/demo/desk/nginx.conf)", () => {
       expect(block, s).toBeTruthy();
       expect(block).toContain(s === "makod" ? "Bearer dev-makod-key" : "$mako_authorization");
     }
+  });
+
+  // The link on a letter opens through the one published port, and the public
+  // page never sees a persona token.
+  it("serves the public Nachrechnen page from portald without a token", () => {
+    const block = /location \/nachrechnen\/ \{[^}]*\}/.exec(demo())?.[0];
+    expect(block).toContain("portald:9480");
+    expect(block).toContain('proxy_set_header Authorization "";');
+    expect(block).not.toContain("$mako_authorization");
   });
 });

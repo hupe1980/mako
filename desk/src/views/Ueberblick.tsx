@@ -7,6 +7,7 @@ import { Tile, type TileState } from "../design/Tile";
 import {
   formatAnteil,
   formatBewertungen,
+  formatQuote,
   hilfreichText,
   MINDEST_URTEILE,
   vorschlagText,
@@ -60,6 +61,96 @@ function FristenTile() {
         breach: d.count > 0,
       }))}
     />
+  );
+}
+
+/** The PID each Rolle's „Ohne Eingriff" tile reports: the process it answers most. */
+const EINGRIFF_PID: Partial<Record<keyof typeof ROLLEN, number>> = {
+  netz: 55001,
+  lieferant: 55001,
+  messstelle: 55039,
+};
+
+/**
+ * How many of a PID's processes this month ended with no person touching
+ * them — processd's count, and its share only where processd states one (it
+ * gives none below 20 ended processes). The definition is processd's.
+ */
+function EingriffTile({ pid }: { pid: number }) {
+  const t = useT();
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "processd", "get_kpi_report", pid],
+    queryFn: () => call("processd", "get_kpi_report", { pid }),
+    refetchInterval: 300_000,
+  });
+  const e = q.data?.eingriff;
+  const state: TileState = e
+    ? {
+        kind: "wert",
+        ...(e.anteile ? { wert: formatQuote(e.anteile.ohne_eingriff) } : {}),
+        zeilen: [
+          t.ueberblick.vonBeendet(formatCount(e.ohne_eingriff), formatCount(e.beendet)),
+          e.definition,
+        ],
+      }
+    : q.isError
+      ? { kind: "failed", service: DIENST.processd }
+      : { kind: "loading" };
+  return (
+    <Tile
+      label={t.ueberblick.ohneEingriff(`${pid}`)}
+      source={DIENST.processd}
+      href="/heute"
+      state={state}
+    />
+  );
+}
+
+/**
+ * The § 40c EnWG billing deadlines, one tile per Lieferant billingd reports:
+ * the periods past their deadline unbilled, and what was owed, issued on time
+ * and issued late — billingd's counts, side by side, none added up here.
+ */
+function AbrechnungsfristenTiles() {
+  const t = useT();
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "billingd", "summarize_billing_deadlines"],
+    queryFn: () => call("billingd", "summarize_billing_deadlines", {}),
+    refetchInterval: 300_000,
+  });
+  if (q.isError || q.isPending)
+    return (
+      <Tile
+        label={t.ueberblick.abrechnungsfristen}
+        source={DIENST.billingd}
+        href="/heute"
+        state={q.isError ? { kind: "failed", service: DIENST.billingd } : { kind: "loading" }}
+      />
+    );
+  return (
+    <>
+      {(q.data.lieferanten ?? []).map((l) => (
+        <Tile
+          key={l.lf_mp_id}
+          label={t.ueberblick.abrechnungsfristenVon(l.lf_mp_id)}
+          source={DIENST.billingd}
+          href="/heute"
+          state={{
+            kind: "wert",
+            wert: formatCount(l.overdue),
+            zeilen: [
+              t.ueberblick.fristenStand(
+                formatCount(l.owed),
+                formatCount(l.issued_on_time),
+                formatCount(l.issued_late),
+              ),
+            ],
+          }}
+        />
+      ))}
+    </>
   );
 }
 
@@ -232,6 +323,7 @@ export function UeberblickView() {
     >
       <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
         <FristenTile />
+        {EINGRIFF_PID[rolle] && <EingriffTile pid={EINGRIFF_PID[rolle]} />}
         {rolle === "netz" && <DeadLettersTile />}
         {rolle === "lieferant" && (
           <>
@@ -239,6 +331,7 @@ export function UeberblickView() {
             <PruefpostenTile />
             <DisputeTile />
             <GeparktTile />
+            <AbrechnungsfristenTiles />
           </>
         )}
         {rolle === "messstelle" && <AbleseauftraegeTile />}

@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Button } from "react-aria-components";
+import type { Versand } from "../data/versand";
 import { Kbd } from "../design/Kbd";
 import { useT } from "../i18n";
 import { type Hold, HoldQueue } from "./holdQueue";
@@ -43,19 +44,15 @@ export function HoldProvider({ children, queue }: { children: ReactNode; queue?:
 }
 
 /**
- * Hold a decision: `send(keepalive)` runs when the hold ends, `undo`
+ * Hold a decision: `send(versand)` runs when the hold ends, `undo`
  * restores the screen when the person takes it back. One decision per `key`.
  */
 export function useHold() {
   const q = useContext(Queue);
   if (!q) throw new Error("useHold outside HoldProvider");
   return useCallback(
-    (
-      key: string,
-      label: string,
-      send: (keepalive: boolean) => Promise<unknown>,
-      undo: () => void,
-    ) => q.hold(key, label, send, undo),
+    (key: string, label: string, send: (v: Versand) => Promise<unknown>, undo: () => void) =>
+      q.hold(key, label, send, undo),
     [q],
   );
 }

@@ -199,7 +199,7 @@ async fn settled_then_second_spawns<W>(
     );
     for cmd in settle {
         process
-            .run(cmd, mako_engine::process::RunOptions::new())
+            .run(cmd, mako_engine::process::RunOptions::system())
             .await
             .expect("the process settles");
     }

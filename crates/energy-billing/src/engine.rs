@@ -155,6 +155,8 @@ impl BillingEngine {
             positions.extend(new);
         }
 
+        annotate_quantity_source(&mut positions, quantities);
+
         // ── §13b reverse charge (before the MwSt pass) ────────────────────────
         // Steuerschuldnerschaft des Leistungsempfängers (§13b Abs. 2 Nr. 5 lit. b
         // UStG): when the customer is a Stromwiederverkäufer the whole supply is
@@ -476,5 +478,42 @@ fn negate_positions(positions: &mut [crate::position::BillingPosition]) {
     for p in positions.iter_mut() {
         p.net_eur = -p.net_eur;
         p.unit_price_eur = -p.unit_price_eur;
+    }
+}
+
+/// Stamp every metered line's trace with how its quantity was obtained and
+/// whether it is an estimate, so a recomputation (`recompute`) can show the
+/// customer which lines rest on a reading and which do not.
+///
+/// A line is metered when it bills kWh or m³ of the commodity; `kWh_Hs` and
+/// `m³` come from the gas meter, `kWh` from the electricity meter where there
+/// is one and from the gas meter otherwise.
+fn annotate_quantity_source(positions: &mut [BillingPosition], quantities: &Quantities) {
+    use crate::position::PositionCategory;
+    let strom = quantities
+        .electricity
+        .as_ref()
+        .map(|m| (m.ablesungsart, m.is_estimated));
+    let gas = quantities
+        .gas
+        .as_ref()
+        .map(|m| (m.ablesungsart, m.is_estimated));
+    for p in positions.iter_mut() {
+        if matches!(
+            p.category,
+            PositionCategory::Tax | PositionCategory::Abschlag | PositionCategory::Info
+        ) || p.quantity.is_zero()
+        {
+            continue;
+        }
+        let source = match p.unit.as_str() {
+            "m³" | "kWh_Hs" => gas,
+            "kWh" => strom.or(gas),
+            _ => None,
+        };
+        if let Some((art, estimated)) = source {
+            p.trace.quantity_source = art.label().map(ToOwned::to_owned);
+            p.trace.estimated = estimated || art.is_estimate();
+        }
     }
 }

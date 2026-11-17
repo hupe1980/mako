@@ -1,0 +1,1117 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "einsd — EEG/KWKG feed-in settlement",
+    "description": "The documented reads of `einsd`: plants, Förderende, MaStR status and settlement receipts. Each is also an MCP tool answering the same type.",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.37.0"
+  },
+  "paths": {
+    "/api/v1/anlagen/foerderung-auslaufend": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "operationId": "list_expiring",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "description": "Look-ahead window in days (default 180).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active plants whose Förderung ends within the horizon",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuslaufendeAnlagen"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A negative horizon"
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused"
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/ohne-mastr": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "operationId": "list_plants_without_mastr",
+        "responses": {
+          "200": {
+            "description": "Active plants not registered in the MaStR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnlagenOhneMastr"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused"
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/unabgerechnet/{year}/{month}": {
+      "get": {
+        "tags": [
+          "settlements"
+        ],
+        "operationId": "list_unsettled_plants",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active plants with no receipt for the month",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnabgerechneteAnlagen"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A month outside 1–12"
+          },
+          "403": {
+            "description": "Cedar `read-settlement` refused"
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "operationId": "get_plant",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnlageRow"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused"
+          },
+          "404": {
+            "description": "`anlage_not_found`"
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/settlements": {
+      "get": {
+        "tags": [
+          "settlements"
+        ],
+        "operationId": "list_settlements",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "description": "Abrechnungsjahr, e.g. `2026`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "description": "Abrechnungsmonat, 1–12. A month without a year narrows every year to\nthat month, which is what a year-on-year comparison asks for.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many receipts (default 24, at most 200).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plant's receipts, the newest month first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Abrechnungen"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A month outside 1–12, or an unknown parameter"
+          },
+          "403": {
+            "description": "Cedar `read-settlement` refused"
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/erklaerung": {
+      "get": {
+        "tags": [
+          "settlements"
+        ],
+        "operationId": "explain_settlement",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The newest receipt for the month with its positions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AbrechnungsErklaerung"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A month outside 1–12"
+          },
+          "403": {
+            "description": "Cedar `read-settlement` refused"
+          },
+          "404": {
+            "description": "`settlement_not_found`"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Abrechnungen": {
+        "type": "object",
+        "description": "`list_settlements`' answer: a plant's receipts, the newest month first.",
+        "required": [
+          "tr_id",
+          "count",
+          "saturated",
+          "settlements"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "At least `limit` receipts matched: older ones were not listed."
+          },
+          "settlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettlementReceipt"
+            }
+          },
+          "tr_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AbrechnungsErklaerung": {
+        "type": "object",
+        "description": "`explain_settlement`'s answer: the newest receipt for the month and its\npositions as stored.",
+        "required": [
+          "tr_id",
+          "billing_year",
+          "billing_month",
+          "settlement_model",
+          "status",
+          "verlaengerungsanspruch_qh",
+          "settled_at",
+          "positions",
+          "interpretation"
+        ],
+        "properties": {
+          "billing_days_fraction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "billing_month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "billing_year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "einspeisemenge_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "interpretation": {
+            "type": "string"
+          },
+          "pflichtzahlung_eur": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "A separate § 52 EEG 2023 Pflichtzahlung owed to the Netzbetreiber."
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Abrechnungsposition"
+            }
+          },
+          "settled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "settlement_eur": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "The sum of the positions' `eur`."
+          },
+          "settlement_model": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The receipt's status code (see `list_settlements`)."
+          },
+          "tr_id": {
+            "type": "string"
+          },
+          "verlaengerungsanspruch_qh": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Abrechnungsposition": {
+        "type": "object",
+        "description": "One position of a stored settlement receipt.",
+        "required": [
+          "description",
+          "legal_basis",
+          "kwh",
+          "rate_ct_kwh",
+          "eur"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "eur": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "kwh": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "legal_basis": {
+            "type": "string",
+            "description": "The provision the position rests on."
+          },
+          "rate_ct_kwh": {
+            "type": "string",
+            "format": "decimal"
+          }
+        }
+      },
+      "AnlageOhneMastr": {
+        "type": "object",
+        "description": "One active plant not registered in the MaStR.",
+        "required": [
+          "tr_id",
+          "malo_id",
+          "erzeugungsart",
+          "leistung_kwp",
+          "eeg_gesetz",
+          "regime"
+        ],
+        "properties": {
+          "eeg_gesetz": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "erzeugungsart": {
+            "type": "string"
+          },
+          "leistung_kwp": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "monthly_penalty_eur": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "§ 52 Abs. 2 EEG 2023: 10 €/kW per month; `None` for a plant under the\npre-2023 regime, which owes no Pflichtzahlung."
+          },
+          "regime": {
+            "type": "string",
+            "description": "The rule the plant falls under, as text."
+          },
+          "tr_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AnlageRow": {
+        "type": "object",
+        "description": "Stored plant record returned by GET endpoints.",
+        "required": [
+          "tr_id",
+          "tenant",
+          "malo_id",
+          "eeg_gesetz",
+          "inbetriebnahme",
+          "leistung_kwp",
+          "erzeugungsart",
+          "verguetungssatz_ct",
+          "verguetungsform",
+          "settlement_model",
+          "direktvermarktung",
+          "ist_repowering",
+          "kwk_bmwk_feststellung",
+          "status",
+          "mastr_registriert",
+          "einspeiser_id",
+          "sect9_fernsteuerbarkeit",
+          "sect9_begrenzung_60",
+          "is_biogas_sect51b",
+          "ist_innovationsausschreibung",
+          "ist_buergerenergie",
+          "speicher_option",
+          "negative_price_qh_gesamt",
+          "biogas_quota_kwh_ytd",
+          "ist_pilotwindanlage",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "ausschreibungs_zuschlag_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "biogas_quota_kwh_ytd": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "biogas_quota_ytd_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "biomasse_getreide_mais_anteil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "biomasse_guelle_anteil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "biomasse_hauptbrennstoff": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capacity_blocks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "A JSON array of `eeg_billing::CapacityBlock` objects; their fields are that crate's and are\nnot described here."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "direktverm_aw_ct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "direktverm_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "direktvermarktung": {
+            "type": "boolean"
+          },
+          "eeg_gesetz": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "einspeiser_id": {
+            "type": "string",
+            "description": "The operator behind the plant (`einspeiser.einspeiser_id`)."
+          },
+          "erzeugungsart": {
+            "type": "string"
+          },
+          "fernsteuerbarkeit_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "flex_leistung_kw": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "flex_praemie_ct_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "foerderendedatum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The EEG Förderende, or `NULL` for a plant that has none.\n\n§ 25 Abs. 1 EEG 2023 dates the EEG claim in years. § 8 KWKG does not: it\nmeasures the Zuschlag in Vollbenutzungsstunden (Abs. 1–3) and caps each\ncalendar year separately (Abs. 4), and both are counters against\ngeneration. A KWK plant therefore has no calendar Förderende and this is\n`NULL` for it — `kwk_max_kwh` is what ends its Zuschlag."
+          },
+          "foerderung_alert_sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the 180-day Förderende alert was emitted; NULL until it is."
+          },
+          "gebotstermin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The Gebotstermin of the Zuschlag (§ 100 Abs. 37 EEG 2023)."
+          },
+          "imesys_rollout_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "inbetriebnahme": {
+            "type": "string",
+            "format": "date"
+          },
+          "inbetriebnahme_typ": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_biogas_sect51b": {
+            "type": "boolean"
+          },
+          "ist_buergerenergie": {
+            "type": "boolean",
+            "description": "§22b EEG 2023 — Bürgerenergiegesellschaft (§3 Nr. 15)."
+          },
+          "ist_innovationsausschreibung": {
+            "type": "boolean",
+            "description": "§39n EEG 2023 — Innovationsausschreibung."
+          },
+          "ist_pilotwindanlage": {
+            "type": "boolean"
+          },
+          "ist_repowering": {
+            "type": "boolean"
+          },
+          "kwk_anlagenart": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kwk_bimschg_genehmigung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "§ 6 Abs. 1 Satz 1 Nr. 1 lit. c aa KWKG — BImSchG-Genehmigung erteilt am."
+          },
+          "kwk_bmwk_feststellung": {
+            "type": "boolean",
+            "description": "§ 7 Abs. 1 Satz 2 KWKG — whether the BMWK Feststellung is published."
+          },
+          "kwk_foerderdauer_h": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "kwk_kostenanteil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "kwk_kwh_jahr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "kwk_kwh_jahr_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "kwk_strom_kwh_gesamt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "kwk_verbindliche_bestellung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "§ 6 Abs. 1 Satz 1 Nr. 1 lit. c bb KWKG — verbindliche Bestellung am."
+          },
+          "kwk_verwendung": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_veraeusserungsform_switch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "leistung_kwp": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "mastr_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "mastr_nummer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mastr_registriert": {
+            "type": "boolean"
+          },
+          "mastr_violation_start": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "melo_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mieter_zuschlag_ct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "negative_price_qh_gesamt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_tr_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repowering_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "sect51_optin_erklaert_am": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "sect9_begrenzung_60": {
+            "type": "boolean",
+            "description": "§ 9 Abs. 2 Satz 1 Nr. 2 lit. b / Nr. 3 — 60 % Wirkleistungsbegrenzung."
+          },
+          "sect9_fernsteuerbarkeit": {
+            "type": "boolean",
+            "description": "§ 9 Abs. 2 Satz 1 Nr. 1 / Nr. 2 lit. a — ferngesteuerte Reduzierung."
+          },
+          "settlement_model": {
+            "type": "string"
+          },
+          "settlement_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "speicher_option": {
+            "type": "string",
+            "description": "§ 19 Abs. 3b / 3c EEG 2023 — `KEINE` | `ABGRENZUNG` | `PAUSCHAL`. Anlage 1\nNr. 2 Satz 3 moves a plant claiming either option onto the\nJahresmarktwert whatever its vintage."
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant": {
+            "type": "string"
+          },
+          "tr_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ursprungs_inbetriebnahme": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "veraeusserungsform_notification_sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "verguetungsform": {
+            "type": "string"
+          },
+          "verguetungssatz_ct": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "wechselrichterleistung_va": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "Wechselrichterleistung in VA, for the Abs. 2 Satz 4 Steckersolar carve-out."
+          },
+          "wind_guetefaktor_reevaluations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "A JSON array of `eeg_billing::wind::GuetefaktorReeval` objects; their fields are that crate's and are\nnot described here."
+          },
+          "wind_guetegrad": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "wind_korrekturfaktor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "zuschlag_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date of the BNetzA award notification."
+          },
+          "zuschlag_erloeschen_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "zuschlagswert_ct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "§22 EEG 2023 — the awarded anzulegender Wert (ct/kWh)."
+          }
+        }
+      },
+      "AnlagenOhneMastr": {
+        "type": "object",
+        "description": "`list_plants_without_mastr`' answer, the largest plant first.",
+        "required": [
+          "count",
+          "total_monthly_penalty_eur",
+          "plants",
+          "regulatory_note"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "plants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnlageOhneMastr"
+            }
+          },
+          "regulatory_note": {
+            "type": "string"
+          },
+          "total_monthly_penalty_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "The sum of `monthly_penalty_eur` over the plants that owe one."
+          }
+        }
+      },
+      "AuslaufendeAnlagen": {
+        "type": "object",
+        "description": "`list_expiring`'s answer: active plants whose Förderung ends within\n`horizon_days`, the earliest Förderende first.",
+        "required": [
+          "horizon_days",
+          "count",
+          "plants"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "horizon_days": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "plants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnlageRow"
+            }
+          }
+        }
+      },
+      "SettlementReceipt": {
+        "type": "object",
+        "description": "One settlement receipt as the history lists it: an original and the\ncorrection that superseded it are two rows for one month, told apart by\n`is_correction` / `correction_of` — without them the history reads as a\ndouble payment.",
+        "required": [
+          "id",
+          "tr_id",
+          "billing_year",
+          "billing_month",
+          "settlement_model",
+          "status",
+          "settled_at",
+          "is_correction"
+        ],
+        "properties": {
+          "billing_month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "billing_year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "correction_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "correction_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "einspeisemenge_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a settlement that paid nothing did not — the developer text beside\n`status`."
+          },
+          "faelligkeitsdatum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "§ 26 Abs. 1 EEG 2023: the payment's due date."
+          },
+          "gutschrift_nummer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_correction": {
+            "type": "boolean"
+          },
+          "settled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "settlement_eur": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "settlement_model": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`calculated`, `price_missing`, `no_data`, `error`, `foerderung_beendet`,\n`jahreskontingent_erschoepft`, `sanctioned`, `kein_anspruch`, `unknown`\nor `gehalten` — a stable code, worded by the reader's catalogue."
+          },
+          "tr_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UnabgerechneteAnlagen": {
+        "type": "object",
+        "description": "`list_unsettled_plants`' answer: active plants with no receipt for the month.",
+        "required": [
+          "billing_year",
+          "billing_month",
+          "unsettled_count",
+          "plants"
+        ],
+        "properties": {
+          "billing_month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "billing_year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "plants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnlageRow"
+            }
+          },
+          "unsettled_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "anlagen",
+      "description": "EEG/KWKG plants"
+    },
+    {
+      "name": "settlements",
+      "description": "Monthly settlement receipts"
+    }
+  ]
+}

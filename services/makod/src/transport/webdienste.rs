@@ -648,13 +648,17 @@ async fn spawn_device_change(
     let label = device_change_window_label(&command);
     // Events, the Frist and the `tx_id` key in one write: the ERP's
     // `wim.geraetewechsel.*` answer finds the process only by `tx_id`.
-    crate::commands_api::spawn_process::<WimDeviceChangeWorkflow>(
-        &std::sync::Arc::new(store),
-        tenant_id,
-        workflow_id,
-        command,
-        &[(label, due_at)],
-        &[tx_id],
+    // An inbound order from the counterparty: the system acts.
+    crate::commands_api::als(
+        mako_engine::envelope::Akteur::System,
+        crate::commands_api::spawn_process::<WimDeviceChangeWorkflow>(
+            &std::sync::Arc::new(store),
+            tenant_id,
+            workflow_id,
+            command,
+            &[(label, due_at)],
+            &[tx_id],
+        ),
     )
     .await
 }
@@ -689,16 +693,20 @@ async fn spawn_steuerungsauftrag(
     // Events, the Frist and the `tx_id` key in one write:
     // `wim.steuerungsauftrag.bestaetigen` / `.ablehnen` find the process only
     // by `tx_id`.
-    crate::commands_api::spawn_process::<WimSteuerungsauftragWorkflow>(
-        &std::sync::Arc::new(store),
-        tenant_id,
-        workflow_id,
-        command,
-        &[(
-            mako_wim::steuerungsauftrag::STEUERUNGSAUFTRAG_DEADLINE_LABEL,
-            due_at,
-        )],
-        &[tx_id],
+    // An inbound order from the counterparty: the system acts.
+    crate::commands_api::als(
+        mako_engine::envelope::Akteur::System,
+        crate::commands_api::spawn_process::<WimSteuerungsauftragWorkflow>(
+            &std::sync::Arc::new(store),
+            tenant_id,
+            workflow_id,
+            command,
+            &[(
+                mako_wim::steuerungsauftrag::STEUERUNGSAUFTRAG_DEADLINE_LABEL,
+                due_at,
+            )],
+            &[tx_id],
+        ),
     )
     .await
 }

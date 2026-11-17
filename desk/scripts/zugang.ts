@@ -208,6 +208,21 @@ async function durchgang(browser: Browser, base: string, theme: "light" | "dark"
     await context.close();
   }
 
+  // The Prozess page: the record, its decision bar reached with Tab and opened
+  // with ↵, and the Stand slider moved with the arrow keys.
+  {
+    const { context, page } = await neu("beantwortet");
+    await page.goto(`${base}prozess?key=51238696012`);
+    await page.getByRole("list", { name: "Nachweise" }).waitFor();
+    await pruefen(page, zustand("Prozess"), "main");
+    const entscheiden = page.getByRole("button", { name: "Entscheiden" });
+    await tabZu(page, entscheiden, zustand("Prozess, Entscheiden"));
+    await page.keyboard.press("Enter");
+    await page.getByRole("radiogroup").first().waitFor();
+    await pruefen(page, zustand("Prozess, Entscheidung offen"), "main");
+    await context.close();
+  }
+
   // Fristen, the list–detail–inspector layout: Tab into the list, ↵ opens the
   // row into the detail, esc returns to it — then the same in English.
   {

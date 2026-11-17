@@ -23,9 +23,11 @@ own_mp_id = "9900357000004"
 # Freigabe waiting in the Desk.
 verbundene_lieferanten = ["9912345000005"]
 
+# processd's own key: makod grants it `ActOnBehalf`, so an approved answer is
+# attributed to the person who approved it.
 [makod]
 url     = "http://makod:8080"
-api_key = "dev-makod-key"
+api_key = "dev-processd-key"
 
 [marktd]
 url     = "http://marktd:8180"

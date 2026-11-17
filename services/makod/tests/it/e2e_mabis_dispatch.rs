@@ -459,7 +459,7 @@ async fn a_deaktivierung_takes_the_series_of_its_activation() {
                 validation_passed: true,
                 validation_errors: vec![],
             },
-            RunOptions::new().correlations(&[korrelation]),
+            RunOptions::system().correlations(&[korrelation]),
         )
         .await
         .expect("the activation is recorded");

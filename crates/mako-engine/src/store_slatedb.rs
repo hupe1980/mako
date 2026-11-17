@@ -3022,6 +3022,7 @@ mod tests {
             payload: serde_json::json!({ "n": seq_hint }),
             verlauf: None,
             antwort: None,
+            akteur: crate::envelope::Akteur::System,
         }
     }
 
@@ -3047,6 +3048,7 @@ mod tests {
             workflow_name: "".into(),
             format_version: None,
             trace_context: crate::trace_ctx::current().map(Into::into),
+            akteur: crate::envelope::Eingriffsklasse::System,
         }
     }
 

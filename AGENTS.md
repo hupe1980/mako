@@ -373,7 +373,7 @@ reads clap flags with its TOML file as an overlay — none of which `run()` host
 | 37008–37014 | `mako-geli-gas` (PARTIN Gas Kommunikationsdaten) | PARTIN AHB 1.0f |
 | 17115–17117 (Sperrung Strom, ORDERS) | `mako-gpke` | BK6-24-174 Anlage 1b Kap. 3.5 |
 | 17115–17117 (Sperrung Gas, ORDERS) | `mako-geli-gas` | BK7-24-01-009 |
-| 44039–44044, 44051–44053, 44168/44169, 44183 | `mako-wim` `wim-device-change` (same workflow as Strom 55039/55042/55051/55168) | AWH WiM Gas 2.0 |
+| 44039–44044, 44051–44053, 44168–44170, 44183 | `mako-wim` `wim-device-change` (same workflow as Strom 55039/55042/55051/55168) | AWH WiM Gas 2.0 |
 | 31001–31002, 31005–31006 | `mako-gpke` (MMM-Rechnung / MMM-selbst ausgest. Rechnung Strom, NB → LF) | BK6-24-174 |
 | 31007–31008 | `mako-gabi-gas` (Aggreg. MMM-Rechnung Gas / selbst ausgest., NB → MGV; Gas-only; MGV is a Gas-domain role) | BK7-24-01-008 |
 | 13013 | `mako-gabi-gas` `gabi-gas-mmma` (Allokationsliste Gas, MMMA, Gas-only) | BK7-24-01-008 |

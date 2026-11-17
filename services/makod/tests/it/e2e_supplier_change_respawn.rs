@@ -132,14 +132,14 @@ async fn a_second_anmeldung_after_an_answered_one_spawns_and_is_answered() {
     let first = spawned(ingest(&dispatcher, wf, 55_001, LF_MP, NB_MP).await);
     process::<GpkeSupplierChangeWorkflow>(&store, tenant, first)
         .await
-        .run(ablehnung(), RunOptions::new())
+        .run(ablehnung(), RunOptions::system())
         .await
         .expect("the NB answers the first Anmeldung");
 
     let second = spawned(ingest(&dispatcher, wf, 55_001, LF_MP, NB_MP).await);
     assert_ne!(first, second);
     let p = process::<GpkeSupplierChangeWorkflow>(&store, tenant, second).await;
-    p.run(ablehnung(), RunOptions::new())
+    p.run(ablehnung(), RunOptions::system())
         .await
         .expect("the second Anmeldung is answered");
     assert!(matches!(
@@ -189,7 +189,7 @@ async fn a_later_abmeldung_is_told_apart_from_the_answered_anmeldung() {
     let anmeldung = spawned(ingest(&dispatcher, wf, 55_001, LF_MP, NB_MP).await);
     process::<GpkeSupplierChangeWorkflow>(&store, tenant, anmeldung)
         .await
-        .run(ablehnung(), RunOptions::new())
+        .run(ablehnung(), RunOptions::system())
         .await
         .expect("answered");
     let abmeldung = spawned(ingest(&dispatcher, wf, 55_004, LF_MP, NB_MP).await);
@@ -209,14 +209,14 @@ async fn a_second_ankuendigung_after_an_answered_one_spawns_and_is_answered() {
     let first = spawned(ingest(&dispatcher, wf, 55_007, NB_MP, LF_MP).await);
     process::<GpkeLfAbmeldungWorkflow>(&store, tenant, first)
         .await
-        .run(antwort(), RunOptions::new())
+        .run(antwort(), RunOptions::system())
         .await
         .expect("the LF answers the first Ankündigung");
 
     let second = spawned(ingest(&dispatcher, wf, 55_007, NB_MP, LF_MP).await);
     assert_ne!(first, second);
     let p = process::<GpkeLfAbmeldungWorkflow>(&store, tenant, second).await;
-    p.run(antwort(), RunOptions::new())
+    p.run(antwort(), RunOptions::system())
         .await
         .expect("the second Ankündigung is answered");
     assert!(matches!(

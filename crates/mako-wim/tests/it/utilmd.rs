@@ -173,7 +173,7 @@ async fn end_to_end_geraetewechsel_pipeline() {
     );
 
     let envelopes = process
-        .run(command, RunOptions::new())
+        .run(command, RunOptions::system())
         .await
         .expect("execute must succeed for a valid PID-55042 command");
 
@@ -349,7 +349,7 @@ async fn wrong_pid_returns_workflow_error() {
                 validation_errors: vec![],
                 received_at: time::OffsetDateTime::now_utc(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 

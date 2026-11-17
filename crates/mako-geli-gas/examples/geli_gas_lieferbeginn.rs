@@ -233,7 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fallgruppe: None,
                 gasqualitaet: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
 
@@ -313,7 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 obligations: vec![],
                 stammdaten: mako_engine::payload::Stammdaten::default(),
             },
-            RunOptions::new().context(aperak_ctx),
+            RunOptions::system().context(aperak_ctx),
         )
         .await?;
 
@@ -356,7 +356,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[5/6] Activating gas supply relationship...");
 
     let activate_envs = process
-        .run(GasSupplierChangeCommand::Activate, RunOptions::new())
+        .run(GasSupplierChangeCommand::Activate, RunOptions::system())
         .await?;
     for env in &activate_envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
@@ -440,7 +440,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fallgruppe: None,
                 gasqualitaet: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .unwrap_err();

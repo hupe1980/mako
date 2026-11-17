@@ -21,7 +21,7 @@
 //!     WorkflowId::new("my-workflow", "FV2024-10-01"),
 //! );
 //!
-//! let envelopes = process.run(my_command, RunOptions::new()).await?;
+//! let envelopes = process.run(my_command, RunOptions::system()).await?;
 //! let current   = process.state().await?;
 //! ```
 //!
@@ -39,7 +39,7 @@
 use std::marker::PhantomData;
 
 use crate::{
-    envelope::EventEnvelope,
+    envelope::{Akteur, EventEnvelope},
     error::EngineError,
     event_store::AtomicAppend,
     event_store::EventStore,
@@ -190,7 +190,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     /// ```rust,ignore
     /// let process = ctx.resume::<GpkeSupplierChangeWorkflow>(identity);
     /// let cmd_ctx = process.context_for_inbound(&utilmd_interchange_ref);
-    /// process.run(command, RunOptions::new().context(cmd_ctx)).await?;
+    /// process.run(command, RunOptions::system().context(cmd_ctx)).await?;
     /// ```
     ///
     /// [`CorrelationId`]: crate::ids::CorrelationId
@@ -377,7 +377,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     ///
     /// ```rust,ignore
     /// // After every successful command:
-    /// process.run(command, RunOptions::new()).await?;
+    /// process.run(command, RunOptions::system()).await?;
     /// process.take_snapshot(&snap_store, 100).await?;
     ///
     /// // On the read path — O(k) instead of O(n):
@@ -439,11 +439,11 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     /// depend on the retry count.
     ///
     /// ```rust,ignore
-    /// let ran = process.run(command, RunOptions::new()).await?;
+    /// let ran = process.run(command, RunOptions::system()).await?;
     ///
     /// // A spawn: the process's Frist and business key in the same write.
     /// process
-    ///     .run(command, RunOptions::new().deadlines(&frist).correlations(&keys))
+    ///     .run(command, RunOptions::system().deadlines(&frist).correlations(&keys))
     ///     .await?;
     /// ```
     ///
@@ -497,7 +497,8 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     /// a decision taken on the stale state would act on it anyway.
     ///
     /// Returns `Ok(Some(_))` when the hook acted and `Ok(None)` when the label
-    /// is not the workflow's or the window was already closed.
+    /// is not the workflow's or the window was already closed. The events are
+    /// stamped [`Akteur::System`] whatever actor `opts` names.
     ///
     /// # Errors
     ///
@@ -517,6 +518,11 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
         if !W::DEADLINE_LABELS.contains(&deadline.label()) {
             return Ok(None);
         }
+        // A fired deadline is the system's act, whoever registered it.
+        let opts = RunOptions {
+            akteur: Akteur::System,
+            ..opts
+        };
         self.decide_and_run(
             &mut |state: &W::State| W::on_deadline(deadline, state),
             opts,
@@ -556,6 +562,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
                     correlations: opts.correlations,
                     received_at: opts.received_at,
                     acknowledgement: opts.acknowledgement,
+                    akteur: &opts.akteur,
                 },
             )
             .await
@@ -663,7 +670,7 @@ where
 /// than a different method.
 ///
 /// ```rust,ignore
-/// RunOptions::new()                              // 3 attempts, fresh context
+/// RunOptions::system()                           // 3 attempts, fresh context, Akteur::System
 ///     .context(ctx)                              // propagate an inbound correlation
 ///     .deadlines(&spawn_frist)                   // caller-computed Fristen
 ///     .correlations(&business_keys)              // index the process in the same write
@@ -680,16 +687,20 @@ pub struct RunOptions<'a, Snap = NoSnapshot> {
     received_at: Option<time::OffsetDateTime>,
     acknowledgement: Option<&'a crate::outbox::PendingOutbox>,
     snapshot: Option<(&'a Snap, u64)>,
+    akteur: Akteur,
 }
 
-/// The attempts [`RunOptions::new`] allows a command before a version
+/// The attempts [`RunOptions::by`] allows a command before a version
 /// conflict is returned.
 pub const DEFAULT_ATTEMPTS: u32 = 3;
 
 impl RunOptions<'_, NoSnapshot> {
-    /// [`DEFAULT_ATTEMPTS`] attempts, a fresh [`CommandContext`], no extra
-    /// deadlines or correlation entries, no snapshot.
-    pub fn new() -> Self {
+    /// Run on behalf of `akteur`: [`DEFAULT_ATTEMPTS`] attempts, a fresh
+    /// [`CommandContext`], no extra deadlines or correlation entries, no
+    /// snapshot.
+    ///
+    /// There is no actor-less constructor: every event names who caused it.
+    pub fn by(akteur: Akteur) -> Self {
         Self {
             context: None,
             attempts: DEFAULT_ATTEMPTS,
@@ -699,13 +710,14 @@ impl RunOptions<'_, NoSnapshot> {
             received_at: None,
             acknowledgement: None,
             snapshot: None,
+            akteur,
         }
     }
-}
 
-impl Default for RunOptions<'_, NoSnapshot> {
-    fn default() -> Self {
-        Self::new()
+    /// [`by`](Self::by) [`Akteur::System`] — an inbound message, a fired
+    /// deadline or a module's own follow-up.
+    pub fn system() -> Self {
+        Self::by(Akteur::System)
     }
 }
 
@@ -798,6 +810,7 @@ impl<'a, Snap> RunOptions<'a, Snap> {
             received_at: self.received_at,
             acknowledgement: self.acknowledgement,
             snapshot: Some((store, interval)),
+            akteur: self.akteur,
         }
     }
 }
@@ -956,10 +969,10 @@ mod tests {
     async fn run_then_state_round_trip() {
         let p = make_process();
 
-        p.run(CounterCommand::Increment { by: 3 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 3 }, RunOptions::system())
             .await
             .unwrap();
-        p.run(CounterCommand::Increment { by: 7 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 7 }, RunOptions::system())
             .await
             .unwrap();
 
@@ -972,11 +985,11 @@ mod tests {
         let p = make_process();
 
         assert_eq!(p.event_count().await.unwrap(), 0);
-        p.run(CounterCommand::Increment { by: 1 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 1 }, RunOptions::system())
             .await
             .unwrap();
         assert_eq!(p.event_count().await.unwrap(), 1);
-        p.run(CounterCommand::Reset, RunOptions::new())
+        p.run(CounterCommand::Reset, RunOptions::system())
             .await
             .unwrap();
         assert_eq!(p.event_count().await.unwrap(), 2);
@@ -993,7 +1006,7 @@ mod tests {
             WorkflowId::new("counter", "FV2024-10-01"),
         );
 
-        p1.run(CounterCommand::Increment { by: 5 }, RunOptions::new())
+        p1.run(CounterCommand::Increment { by: 5 }, RunOptions::system())
             .await
             .unwrap();
 
@@ -1026,7 +1039,7 @@ mod tests {
 
         // Dispatch 4 commands; the interval is 4.
         for i in 1u32..=4 {
-            p.run(CounterCommand::Increment { by: i }, RunOptions::new())
+            p.run(CounterCommand::Increment { by: i }, RunOptions::system())
                 .await
                 .unwrap();
         }
@@ -1035,7 +1048,7 @@ mod tests {
         assert!(took, "snapshot must be taken at event_count = 4");
 
         // Dispatch one more command after the snapshot.
-        p.run(CounterCommand::Increment { by: 10 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 10 }, RunOptions::system())
             .await
             .unwrap();
 
@@ -1047,7 +1060,7 @@ mod tests {
     #[tokio::test]
     async fn state_with_snapshot_falls_back_to_full_replay() {
         let p = make_process();
-        p.run(CounterCommand::Increment { by: 42 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 42 }, RunOptions::system())
             .await
             .unwrap();
 
@@ -1061,13 +1074,13 @@ mod tests {
         let snap_store = InMemorySnapshotStore::new();
         let p = make_process();
 
-        p.run(CounterCommand::Increment { by: 1 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 1 }, RunOptions::system())
             .await
             .unwrap();
-        p.run(CounterCommand::Increment { by: 1 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 1 }, RunOptions::system())
             .await
             .unwrap();
-        p.run(CounterCommand::Increment { by: 1 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 1 }, RunOptions::system())
             .await
             .unwrap();
 
@@ -1094,10 +1107,10 @@ mod tests {
         let p = make_process();
 
         // Dispatch some events so there is something to replay.
-        p.run(CounterCommand::Increment { by: 5 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 5 }, RunOptions::system())
             .await
             .unwrap();
-        p.run(CounterCommand::Increment { by: 3 }, RunOptions::new())
+        p.run(CounterCommand::Increment { by: 3 }, RunOptions::system())
             .await
             .unwrap();
 
@@ -1195,7 +1208,7 @@ mod tests {
         let ran = p
             .run(
                 FullCommand::Spawn,
-                RunOptions::new()
+                RunOptions::system()
                     .deadlines(std::slice::from_ref(&frist))
                     .correlations(std::slice::from_ref(&key)),
             )
@@ -1241,7 +1254,7 @@ mod tests {
             let ran = p
                 .run(
                     command.clone(),
-                    RunOptions::new()
+                    RunOptions::system()
                         .received_at(received)
                         .delivery_windows(std::slice::from_ref(&window)),
                 )
@@ -1277,7 +1290,7 @@ mod tests {
                 WorkflowId::new("full", "FV2025-10-01"),
             );
             let ran = p
-                .run(command.clone(), RunOptions::new().acknowledgement(&ack))
+                .run(command.clone(), RunOptions::system().acknowledgement(&ack))
                 .await
                 .unwrap();
             let sent: Vec<_> = ran
@@ -1300,7 +1313,7 @@ mod tests {
             WorkflowId::new("full", "FV2025-10-01"),
         );
         let err = p
-            .run(FullCommand::Bare, RunOptions::new())
+            .run(FullCommand::Bare, RunOptions::system())
             .await
             .expect_err("an unrecorded effect is refused");
         assert!(
@@ -1318,7 +1331,7 @@ mod tests {
         let envs = p
             .run(
                 CounterCommand::Increment { by: 99 },
-                RunOptions::new().attempts(0),
+                RunOptions::system().attempts(0),
             )
             .await
             .unwrap();
@@ -1334,7 +1347,7 @@ mod tests {
         let first = p
             .run(
                 CounterCommand::Increment { by: 1 },
-                RunOptions::new().snapshot(&snap_store, 2),
+                RunOptions::system().snapshot(&snap_store, 2),
             )
             .await
             .unwrap();
@@ -1342,7 +1355,7 @@ mod tests {
         let second = p
             .run(
                 CounterCommand::Increment { by: 1 },
-                RunOptions::new().snapshot(&snap_store, 2),
+                RunOptions::system().snapshot(&snap_store, 2),
             )
             .await
             .unwrap();
@@ -1366,7 +1379,7 @@ mod tests {
         let envs = p
             .run(
                 CounterCommand::Increment { by: 1 },
-                RunOptions::new().context(ctx),
+                RunOptions::system().context(ctx),
             )
             .await
             .unwrap();
@@ -1490,6 +1503,7 @@ mod tests {
             payload: v1_payload,
             verlauf: None,
             antwort: None,
+            akteur: crate::envelope::Akteur::System,
         };
         store
             .append(AppendBatch::new(
@@ -1514,7 +1528,7 @@ mod tests {
                 count: 3,
                 label: "hello".into(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .unwrap();
@@ -1612,12 +1626,12 @@ mod tests {
         async fn an_owned_label_reaches_the_hook_until_its_window_closes() {
             let p = window_process().await;
             let acted = p
-                .run_timeout(&fired(&p, "window"), RunOptions::new().attempts(3))
+                .run_timeout(&fired(&p, "window"), RunOptions::system().attempts(3))
                 .await
                 .unwrap();
             assert!(acted.is_some_and(|e| e.len() == 1));
             let again = p
-                .run_timeout(&fired(&p, "window"), RunOptions::new().attempts(3))
+                .run_timeout(&fired(&p, "window"), RunOptions::system().attempts(3))
                 .await
                 .unwrap();
             assert!(again.is_none(), "the window closed on the first firing");
@@ -1630,7 +1644,7 @@ mod tests {
             let p = window_process().await;
             for label in [mako_fristen::APERAK_STROM_WINDOW_LABEL, "stray"] {
                 let acted = p
-                    .run_timeout(&fired(&p, label), RunOptions::new().attempts(1))
+                    .run_timeout(&fired(&p, label), RunOptions::system().attempts(1))
                     .await
                     .unwrap();
                 assert!(acted.is_none(), "{label} must not reach on_deadline");
@@ -1644,7 +1658,7 @@ mod tests {
         async fn an_unowned_label_cannot_be_registered() {
             let p = window_process().await;
             let err = p
-                .run(WindowCommand::Arm { label: "stray" }, RunOptions::new())
+                .run(WindowCommand::Arm { label: "stray" }, RunOptions::system())
                 .await
                 .expect_err("a stray label must be refused");
             assert!(
@@ -1657,11 +1671,11 @@ mod tests {
                 WindowCommand::Arm {
                     label: mako_fristen::APERAK_STROM_WINDOW_LABEL,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("a delivery window is owned by the outbox, not refused");
-            p.run(WindowCommand::Arm { label: "window" }, RunOptions::new())
+            p.run(WindowCommand::Arm { label: "window" }, RunOptions::system())
                 .await
                 .expect("an owned label registers");
         }

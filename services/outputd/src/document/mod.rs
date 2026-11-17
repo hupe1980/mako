@@ -46,6 +46,7 @@ pub mod gate;
 pub mod gebuehrenbescheid;
 pub mod mahnung;
 pub mod preisanpassung;
+pub mod qr;
 pub mod render;
 pub mod vertragsbestaetigung;
 pub mod vertragszusammenfassung;

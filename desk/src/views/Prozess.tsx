@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { Button as AriaButton, Form } from "react-aria-components";
+import { Form } from "react-aria-components";
 import { keyKind } from "../app/CommandPalette";
 import { nichtErreichbar } from "../app/dienste";
 import { prozessTitel } from "../app/prozesse";
@@ -10,9 +10,7 @@ import type { ProcessView } from "../data/gen/makod";
 import { call, ServiceUnavailable, type ToolOutput, ToolRefusal } from "../data/mcp";
 import { Button } from "../design/Button";
 import { FristUhr } from "../design/FristUhr";
-import { Icon } from "../design/Icon";
 import { Kbd } from "../design/Kbd";
-import { Angabe, AngabenListe } from "../design/ListDetail";
 import { Page } from "../design/Page";
 import { EmptyState, Notice, Panel } from "../design/Panel";
 import { Refusal } from "../design/Refusal";
@@ -21,43 +19,12 @@ import { epochMs } from "../format/date";
 import { useT } from "../i18n";
 import { Fragen } from "./Fragen";
 import { Hinweise } from "./Hinweise";
-import { MarktpartnerAntwort } from "./MarktpartnerAntwort";
-import { Verlauf } from "./Verlauf";
+import { ProzessAkte } from "./ProzessAkte";
 
 type Processes = ToolOutput<"makod", "get_process">;
 
 /** The recipe that starts the services beside the Desk in development. */
 const DEV_BEFEHL = "just dev";
-
-function Copy({ value, label }: { value: string; label: string }) {
-  const t = useT();
-  const [done, setDone] = useState(false);
-  return (
-    <AriaButton
-      aria-label={t.prozessAnsicht.kopieren(label)}
-      onPress={() => {
-        navigator.clipboard?.writeText(value).then(() => {
-          setDone(true);
-          setTimeout(() => setDone(false), 1500);
-        });
-      }}
-      className="focus-ring inline-flex size-6 items-center justify-center rounded-[6px] text-text-2 data-[hovered]:bg-fill data-[hovered]:text-text"
-    >
-      <Icon name={done ? "check" : "copy"} size={14} />
-    </AriaButton>
-  );
-}
-
-function Fact({ term, value, copy }: { term: string; value: string; copy?: boolean }) {
-  return (
-    <Angabe name={term}>
-      <span className="inline-flex min-w-0 items-center gap-1">
-        <span className="truncate">{value}</span>
-        {copy && <Copy value={value} label={term} />}
-      </span>
-    </Angabe>
-  );
-}
 
 /** The earliest pending Frist of a process, or none. */
 function firstDue(p: ProcessView): number {
@@ -65,61 +32,60 @@ function firstDue(p: ProcessView): number {
   return due.length ? Math.min(...due) : Number.POSITIVE_INFINITY;
 }
 
-function ProcessCard({ process }: { process: ProcessView }) {
+/** Several processes under one key: one link each, the earliest Frist first. */
+function Auswahl({
+  businessKey,
+  ordered,
+  selected,
+}: {
+  businessKey: string;
+  ordered: ProcessView[];
+  selected: string;
+}) {
   const t = useT();
-  const k = t.prozessAnsicht;
-  const next = process.deadlines
-    .flatMap((d) => (d.due_at ? [d.due_at] : []))
-    .sort((a, b) => epochMs(a) - epochMs(b))[0];
+  const n = ordered.length;
   return (
-    <Panel>
-      <div className="flex items-start gap-3 px-6 pt-5 pb-4">
-        <div className="min-w-0 flex-1">
-          <h2 className="m-0 truncate text-title2 font-semibold">
-            {prozessTitel(process.workflow_name)}
-          </h2>
-          <details className="group mt-1">
-            <summary className="focus-ring inline-flex cursor-default list-none items-center gap-1 rounded-[6px] text-caption text-text-2 data-[hovered]:text-text [&::-webkit-details-marker]:hidden">
-              <Icon
-                name="chevron"
-                size={12}
-                className="transition-transform group-open:rotate-90"
-              />
-              {k.technisch}
-            </summary>
-            <div className="mt-3">
-              <AngabenListe>
-                <Fact term={k.workflow} value={process.workflow_name} />
-                <Fact term={k.prozessId} value={process.process_id} copy />
-                <Fact term={k.stream} value={process.stream_id} copy />
-              </AngabenListe>
-            </div>
-          </details>
-        </div>
-        {next && <FristUhr due={next} />}
-      </div>
-      <MarktpartnerAntwort processId={process.process_id} />
-      <Verlauf processId={process.process_id} deadlines={process.deadlines} />
-    </Panel>
+    <nav aria-label={t.prozessAnsicht.unter(n, `${n}`, businessKey)}>
+      <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
+        {ordered.map((p) => {
+          const next = p.deadlines
+            .flatMap((d) => (d.due_at ? [d.due_at] : []))
+            .sort((a, b) => epochMs(a) - epochMs(b))[0];
+          const current = p.process_id === selected;
+          return (
+            <li key={p.stream_id}>
+              <Link
+                to="/prozess"
+                search={{ key: businessKey, p: p.process_id }}
+                {...(current ? { "aria-current": "page" as const } : {})}
+                className={`focus-ring inline-flex h-8 items-center gap-2 rounded-full border px-3 text-body no-underline ${
+                  current
+                    ? "border-accent bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] text-text"
+                    : "border-separator text-text hover:bg-fill"
+                }`}
+              >
+                <span>{prozessTitel(p.workflow_name)}</span>
+                {next && <FristUhr due={next} />}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
   );
 }
 
-function Result({ view }: { view: Processes }) {
-  const t = useT();
+function Result({ view, selected }: { view: Processes; selected: string | undefined }) {
   const ordered = [...view.processes].sort((a, b) => firstDue(a) - firstDue(b));
-  const n = ordered.length;
+  const process = ordered.find((p) => p.process_id === selected) ?? ordered[0];
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-baseline gap-3 px-1">
-        <span className="text-title2 font-semibold">{view.business_key}</span>
-        <Copy value={view.business_key} label={t.prozessAnsicht.schluessel} />
-        <span className="text-body text-text-2">{keyKind(view.business_key)}</span>
-        <span className="flex-1" />
-        <span className="text-body text-text-2">{t.prozessAnsicht.anzahl(n, `${n}`)}</span>
-      </div>
-      {ordered.map((p) => (
-        <ProcessCard key={p.stream_id} process={p} />
-      ))}
+      {ordered.length > 1 && process && (
+        <Auswahl businessKey={view.business_key} ordered={ordered} selected={process.process_id} />
+      )}
+      {process && (
+        <ProzessAkte key={process.process_id} businessKey={view.business_key} process={process} />
+      )}
       {/* The assistant follows the work, never above it. */}
       <Hinweise nurFuer={[view.business_key]} />
       {keyKind(view.business_key) === "MaLo-ID" && <Fragen anker={{ malo: view.business_key }} />}
@@ -192,7 +158,7 @@ function Failure({
 export function ProzessView() {
   const t = useT();
   const k = t.prozessAnsicht;
-  const { key } = useSearch({ from: "/prozess" });
+  const { key, p } = useSearch({ from: "/prozess" });
   const navigate = useNavigate({ from: "/prozess" });
   const { rolle } = useRolle();
   const [draft, setDraft] = useState(key ?? "");
@@ -204,6 +170,15 @@ export function ProzessView() {
     queryFn: () => call("makod", "get_process", { business_key: key ?? "" }),
     enabled: Boolean(key),
   });
+
+  // A resolved key is a record: the process brings its own title and crumbs.
+  if (key && query.data && query.data.processes.length > 0) {
+    return (
+      <Page width="work">
+        <Result view={query.data} selected={p} />
+      </Page>
+    );
+  }
 
   return (
     <Page width="reading" title={k.titel} subtitle={k.untertitel}>
@@ -242,7 +217,9 @@ export function ProzessView() {
           }}
         />
       )}
-      {key && query.data && <Result view={query.data} />}
+      {key && query.data && query.data.processes.length === 0 && (
+        <EmptyState title={k.keiner(key)} />
+      )}
     </Page>
   );
 }

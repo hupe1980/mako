@@ -94,6 +94,19 @@ namespace MaKo {
     }
   };
 
+  // Name the actor of a command (`Mako-Akteur` header): a service dispatching
+  // on a person's behalf. Granted by name only — the permit-all baseline
+  // excludes it.
+  action ActOnBehalf appliesTo {
+    principal: [Principal],
+    resource:  [Command],
+    context: {
+      tenant:     String,
+      marktrolle: String,
+      pid:        Long,
+    }
+  };
+
   action IngestEdifact appliesTo {
     principal: [Principal],
     resource:  [EdifactIngest],

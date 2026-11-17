@@ -65,7 +65,7 @@ fn receive_cmd(pid: u32, validation_passed: bool) -> ClearinglisteCommand {
 async fn pid_55069_validation_passed() {
     let p = make_process();
 
-    p.run(receive_cmd(55069, true), RunOptions::new())
+    p.run(receive_cmd(55069, true), RunOptions::system())
         .await
         .expect("ReceiveClearingliste PID 55069 must succeed");
 
@@ -88,7 +88,7 @@ async fn pid_55069_validation_passed() {
 async fn pid_55069_validation_failed() {
     let p = make_process();
 
-    p.run(receive_cmd(55069, false), RunOptions::new())
+    p.run(receive_cmd(55069, false), RunOptions::system())
         .await
         .expect("ReceiveClearingliste PID 55069 must succeed even when validation fails");
 
@@ -113,7 +113,7 @@ async fn pid_55069_validation_failed() {
 async fn pid_55070_validation_passed() {
     let p = make_process();
 
-    p.run(receive_cmd(55070, true), RunOptions::new())
+    p.run(receive_cmd(55070, true), RunOptions::system())
         .await
         .expect("ReceiveClearingliste PID 55070 must succeed");
 
@@ -134,7 +134,7 @@ async fn pid_55070_validation_passed() {
 async fn pid_55070_validation_failed() {
     let p = make_process();
 
-    p.run(receive_cmd(55070, false), RunOptions::new())
+    p.run(receive_cmd(55070, false), RunOptions::system())
         .await
         .expect("ReceiveClearingliste PID 55070 must succeed even when validation fails");
 
@@ -152,7 +152,7 @@ async fn pid_55070_validation_failed() {
 async fn pid_55067_validation_passed() {
     let p = make_process();
 
-    p.run(receive_cmd(55067, true), RunOptions::new())
+    p.run(receive_cmd(55067, true), RunOptions::system())
         .await
         .expect("ReceiveClearingliste PID 55067 must succeed");
 
@@ -173,7 +173,7 @@ async fn pid_55067_validation_passed() {
 async fn pid_55067_validation_failed() {
     let p = make_process();
 
-    p.run(receive_cmd(55067, false), RunOptions::new())
+    p.run(receive_cmd(55067, false), RunOptions::system())
         .await
         .expect("ReceiveClearingliste PID 55067 must succeed even when validation fails");
 
@@ -203,7 +203,7 @@ async fn unknown_pid_rejected() {
                 validation_passed: true,
                 validation_errors: vec![],
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 
@@ -221,11 +221,11 @@ async fn unknown_pid_rejected() {
 async fn double_receive_rejected() {
     let p = make_process();
 
-    p.run(receive_cmd(55069, true), RunOptions::new())
+    p.run(receive_cmd(55069, true), RunOptions::system())
         .await
         .expect("first receive must succeed");
 
-    let result = p.run(receive_cmd(55069, true), RunOptions::new()).await;
+    let result = p.run(receive_cmd(55069, true), RunOptions::system()).await;
 
     assert!(
         result.is_err(),
@@ -290,7 +290,7 @@ async fn different_billing_periods_are_independent_streams() {
             validation_passed: true,
             validation_errors: vec![],
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("stream 1 receive must succeed");
@@ -308,7 +308,7 @@ async fn different_billing_periods_are_independent_streams() {
             validation_passed: true,
             validation_errors: vec![],
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("stream 2 receive must succeed");

@@ -1230,7 +1230,7 @@ pub(super) fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
         55_039..=55_041 | 44_039..=44_041 => dtm::ENDE_ZUM,
         55_051..=55_053 | 44_051..=44_053 | 44_183 => dtm::ENDE_ZUM,
         55_042..=55_044 | 44_042..=44_044 => dtm::LEISTUNGSBEGINN_GEPLANT,
-        55_168..=55_170 | 44_168 | 44_169 => dtm::LEISTUNGSBEGINN_GEPLANT,
+        55_168..=55_170 | 44_168..=44_170 => dtm::LEISTUNGSBEGINN_GEPLANT,
         // Two families inside the 556xx block are GPKE **Teil 2**, not Teil 4,
         // and both mark `SG4 DTM+92` „Datum Vertragsbeginn" Muss: Neuanlage
         // (55600–55605) and Ankündigung Zuordnung LF (55607/55608). Their AHB

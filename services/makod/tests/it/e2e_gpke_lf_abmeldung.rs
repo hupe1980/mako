@@ -169,7 +169,7 @@ impl MockLf {
         };
 
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("LF: execute ReceiveAnkuendigung");
     }
@@ -192,7 +192,7 @@ impl MockLf {
                         }
                     },
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("LF: execute SendAntwort");
@@ -201,7 +201,7 @@ impl MockLf {
     /// ERP action: confirm that the supply relationship has ended.
     async fn beenden_bestaetigen(&self) {
         self.process
-            .run(LfAbmeldungCommand::BeendenBestaetigen, RunOptions::new())
+            .run(LfAbmeldungCommand::BeendenBestaetigen, RunOptions::system())
             .await
             .expect("LF: execute BeendenBestaetigen");
     }
@@ -307,7 +307,7 @@ async fn e2e_lf_abmeldung_validation_failure_rejects() {
     };
 
     lf.process
-        .run(cmd, RunOptions::new())
+        .run(cmd, RunOptions::system())
         .await
         .expect("execute validation failure");
 

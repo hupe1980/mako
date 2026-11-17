@@ -1,0 +1,13 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Überblick" [level=1]
+  - paragraph: Netz — jede Zahl so, wie ihr Dienst sie meldet; ein Klick öffnet die Liste.
+  - link "Fristen überschritten 0 Prozessüberwachung":
+    - /url: /fristen
+  - link "Ohne Eingriff · PID 55001 lädt Prozessüberwachung":
+    - /url: /heute
+  - link "Dead Letters — Marktkommunikation ist nicht erreichbar":
+    - /url: /dead-letters
+  - link "Assistent Nicht aktiviert Assistent":
+    - /url: /assistent

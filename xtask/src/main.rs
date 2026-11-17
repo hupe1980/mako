@@ -107,7 +107,11 @@ Commands:
   check-rounding         Refuse banker's rounding — money rounds kaufmännisch (DIN 1333)
   check-pid-coverage     Compare the shipped AHB profiles against the published
                         Prüfidentifikator inventory (no source documents needed)
-  import-pid-overview    Extract that inventory from the BDEW Anwendungsübersicht .xlsx
+  import-pid-overview    Extract that inventory from the binding Anwendungsübersicht PDF
+                        (--oracle <.xlsx>: report where the informational workbook differs)
+  lead-time              Days from each release's publikationsdatum to the first commit of its
+                        profile and on to valid_from, for profiles added after the cut
+                        (--cut <rev>; default: the commit that added this command)
   check-action-pins      Every `uses:` pinned to a commit SHA with its tag in a comment, every
                         Dockerfile `FROM` to a digest, every workflow defaulting to `contents: read`,
                         every pip install hash-pinned and every npm install an `npm ci`
@@ -236,6 +240,7 @@ mod erstlauf;
 mod evidence_pack;
 mod import_profiles;
 mod index_sources;
+mod lead_time;
 mod pid_overview;
 mod policy_inventory;
 mod profile_diff;
@@ -297,6 +302,13 @@ fn main() {
         Some("check-rounding") => check_rounding(),
         Some("check-pid-coverage") => check_pid_coverage(),
         Some("import-pid-overview") => import_pid_overview(),
+        Some("lead-time") => {
+            let (root, _) = workspace_info();
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            if !lead_time::run(std::path::Path::new(&root), &args) {
+                std::process::exit(1);
+            }
+        }
         Some("dep-age") => {
             let (root, _) = workspace_info();
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -672,13 +684,26 @@ fn check_pid_coverage() {
 
 fn import_pid_overview() {
     let (workspace_root, _) = workspace_info();
-    let Some(xlsx) = std::env::args().nth(2) else {
-        eprintln!("usage: cargo xtask import-pid-overview <Anwendungsuebersicht.xlsx>");
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let oracle = args
+        .iter()
+        .position(|a| a == "--oracle")
+        .and_then(|i| args.get(i + 1));
+    let Some(pdf) = args
+        .iter()
+        .enumerate()
+        .find(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--oracle"))
+        .map(|(_, a)| a)
+    else {
+        eprintln!(
+            "usage: cargo xtask import-pid-overview <Anwendungsuebersicht.pdf> [--oracle <same Stand .xlsx>]"
+        );
         std::process::exit(2);
     };
     if let Err(e) = pid_overview::import(
         std::path::Path::new(&workspace_root),
-        std::path::Path::new(&xlsx),
+        std::path::Path::new(pdf),
+        oracle.map(std::path::Path::new),
     ) {
         eprintln!("import-pid-overview: {e}");
         std::process::exit(1);

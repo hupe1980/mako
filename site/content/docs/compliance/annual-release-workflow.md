@@ -43,6 +43,14 @@ against its manifest without the network.
 > A corrected document keeps its version number, so only the manifest's content
 > hash can tell you a local copy is stale. Such a file is reported as *changed
 > since it was mirrored*.
+>
+> BDEW issues a correction in two ways, and the report names both. Under the
+> **same catalogue id** with a new `fileId` or `correctionDate`, the entry is
+> *reissued upstream*, and `--download` fetches it over the file it corrects.
+> Under a **new catalogue id** with an unchanged title — the Redispatch
+> Änderungshistorie is republished this way — it is *in force upstream but not
+> mirrored*: a file the manifest already gives to another id never stands in for
+> it, and the new edition lands beside the old one.
 
 ---
 
@@ -149,8 +157,21 @@ A Prüfidentifikator carried by the predecessor and absent from the new profile
 fails `validate-profiles`. Confirm the retirement in the AHB's Änderungshistorie
 and record it in `RETIRED_PIDS` (`xtask/src/validate_profiles.rs`) with the
 Änd-ID; without that entry it is an import regression. Update
-`pid-overview.json` when BDEW publishes a new Anwendungsübersicht
-(`cargo xtask import-pid-overview <xlsx>`).
+`pid-overview.json` when BDEW publishes a new Anwendungsübersicht, from its
+PDF — the Disclaimer on its S. 1 makes the PDF the binding edition and the
+.xlsx informational:
+
+```bash
+cargo xtask import-pid-overview regulatories/bdew-mako/<Anwendungsübersicht>.pdf \
+    --oracle <.xlsx of the same Stand>
+```
+
+The import reads Tabelle 1 „Prüfidentifikator zu Prozessschritt" by column
+position, names the PDF by title and SHA-256 in `source_document`, and with
+`--oracle` reports every Prüfidentifikator, Sparte or Zuordnung the workbook
+states differently; it never takes a value from it. Then run
+`cargo xtask check-pid-coverage` and reconcile `COVERED_FLOOR` and
+`SHIPPED_NOT_PUBLISHED` with what the new edition adds or removes.
 
 ---
 
@@ -352,3 +373,20 @@ calendar date, because a Formatversion takes effect at German midnight.
 | `fv20271001` | e.g. `2.5b` | MSCONS |
 
 The wire release code is `UNH` DE 0057 and must match `release` in `mig.json`.
+
+---
+
+## The lead time
+
+```bash
+cargo xtask lead-time
+```
+
+Per profile, the days from the release's `publikationsdatum` to the first
+commit that names its key in `sources.json` (found with
+`git log -S'"<type>/fv<date>"' --reverse`), and from that commit to
+`valid_from`. A profile committed after it was already binding reads negative.
+Only profiles added after the cut count — the commit that added the command, or
+`--cut <rev>` — because the repository's history opens after most existing
+profiles were binding, and their figure would be the repository's age. A
+shallow clone is refused: it has no first commit to find.

@@ -403,6 +403,10 @@ pub struct Answer {
     /// A decision the assistant proposes for a held Freigabe — prefilled in
     /// the Desk's form, never sent by agentd or by the Desk on its own.
     pub vorschlag: Option<Vorschlag>,
+    /// The gate's verdict on `vorschlag` ([`super::pruefung`]); `None` where
+    /// there is no proposal, or the answer was read by its run rather than by
+    /// the entry it proposes for.
+    pub pruefvermerk: Option<super::pruefung::Pruefvermerk>,
     /// The setup interview's answers a sentence was read into, each
     /// identifier kept only where the sentence contains it
     /// ([`super::einrichtung::belegte_angaben`]) — for the person to confirm,
@@ -460,6 +464,7 @@ impl Answer {
             disclosure: super::MACHINE_GENERATED.trim_end(),
             saetze,
             vorschlag: None,
+            pruefvermerk: None,
             angaben: None,
             schritte: Vec::new(),
             hilfreich: None,
@@ -529,8 +534,47 @@ pub enum Urteil {
         begruendung: Option<String>,
     },
     /// What became of the run's proposal: `sent` as proposed, `edited` before
-    /// sending, or `dismissed`.
+    /// sending, or `dismissed`. For a Freigabe proposal this is only the
+    /// client's report: the recorded fate is read off processd's decided entry
+    /// ([`schicksal`]), and the report is kept as the verdict's rationale.
     Vorschlag(VorschlagSchicksal),
+}
+
+/// The fate of a Freigabe proposal, read off processd's decided entry
+/// (`get_queue_entry`): `aktion` is what the run proposed, `geprueft_sha256`
+/// the body its Prüfvermerk was taken for (`rehearse_decision`'s
+/// `body_sha256`), and the entry's `status` and `gesendet_sha256` what went
+/// out. Sent exactly when the decision took the proposed action and dispatched
+/// that body; edited when it took the action with another body; dismissed when
+/// it took the other action or the entry expired undecided.
+///
+/// # Errors
+///
+/// The entry is still pending, or carries a status no decision has.
+pub fn schicksal(
+    aktion: &str,
+    geprueft_sha256: Option<&str>,
+    eintrag: &Value,
+) -> Result<VorschlagSchicksal, String> {
+    let entschieden = match eintrag["status"].as_str() {
+        Some("Approved") => "freigeben",
+        Some("Rejected") => "ablehnen",
+        Some("Expired") => return Ok(VorschlagSchicksal::Dismissed),
+        Some("Pending") => return Err("the Freigabe is not decided yet".to_owned()),
+        other => {
+            return Err(format!(
+                "processd answered the Freigabe with status {other:?}"
+            ));
+        }
+    };
+    if entschieden != aktion {
+        return Ok(VorschlagSchicksal::Dismissed);
+    }
+    let gesendet = eintrag["gesendet_sha256"].as_str();
+    Ok(match (geprueft_sha256, gesendet) {
+        (Some(geprueft), Some(gesendet)) if geprueft == gesendet => VorschlagSchicksal::Sent,
+        _ => VorschlagSchicksal::Edited,
+    })
 }
 
 /// What became of a proposed decision.
@@ -543,7 +587,9 @@ pub enum VorschlagSchicksal {
 }
 
 impl VorschlagSchicksal {
-    const fn label(self) -> &'static str {
+    /// The metric label it is recorded under.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Sent => "sent",
             Self::Edited => "edited",
@@ -834,6 +880,8 @@ pub struct Plane {
     tenant: TenantId,
     keyring: Option<Arc<dyn KeyRing>>,
     memory: Arc<dyn MemoryStore>,
+    /// processd and makod, which a proposal is rehearsed against.
+    pruefer: super::pruefung::Pruefer,
 }
 
 impl std::fmt::Debug for Plane {
@@ -903,6 +951,7 @@ impl Plane {
         }
         // A stop needs no guard here: agentplane asks before every live
         // dispatch, so a stopped run makes no further model turn or tool call.
+        let pruefer = super::pruefung::Pruefer::aus(&cfg.tool_servers);
         for (name, client) in cfg.tool_servers {
             builder = builder.tool_server(name, client);
         }
@@ -975,6 +1024,7 @@ impl Plane {
             tenant,
             keyring,
             memory,
+            pruefer,
         })
     }
 
@@ -1326,17 +1376,24 @@ impl Plane {
 
         let id = agentplane::core::RunId::parse(run)
             .map_err(|_| BewertungError::NichtBewertbar(format!("{run} is not a run id")))?;
-        let by =
-            Operator::authenticated(by).map_err(|e| BewertungError::Ungueltig(e.to_string()))?;
         let (metric, score, begruendung) = match urteil {
             Urteil::Hilfreich {
                 hilfreich,
                 begruendung,
             } => (HILFREICH, Score::Pass(hilfreich), begruendung),
-            Urteil::Vorschlag(schicksal) => {
-                (VORSCHLAG, Score::Label(schicksal.label().to_owned()), None)
-            }
+            // A Freigabe proposal's fate is processd's to tell; the
+            // client's report is kept as feedback beside it.
+            Urteil::Vorschlag(gemeldet) => match self.schicksal_der_freigabe(id, by).await? {
+                Some(schicksal) => (
+                    VORSCHLAG,
+                    Score::Label(schicksal.label().to_owned()),
+                    Some(format!("reported by the client: {}", gemeldet.label())),
+                ),
+                None => (VORSCHLAG, Score::Label(gemeldet.label().to_owned()), None),
+            },
         };
+        let by =
+            Operator::authenticated(by).map_err(|e| BewertungError::Ungueltig(e.to_string()))?;
         let verdict = Assessment::new(
             id,
             metric,
@@ -1353,6 +1410,72 @@ impl Plane {
             }
             Err(e) => Err(BewertungError::Journal(e.to_string())),
         }
+    }
+
+    /// The fate of `run`'s proposal when the run proposed for a processd
+    /// Freigabe: read off processd's decided entry ([`schicksal`]), never off
+    /// what a client reports. `None` for a run that proposes for no Freigabe —
+    /// a Disput or a Buchung has no processd entry to read.
+    ///
+    /// # Errors
+    ///
+    /// The journal failing, processd not configured or not answering, or the
+    /// entry not decided yet — each a refusal, never a fallback to the
+    /// client's report.
+    async fn schicksal_der_freigabe(
+        &self,
+        run: agentplane::core::RunId,
+        reader: &str,
+    ) -> Result<Option<VorschlagSchicksal>, BewertungError> {
+        let records = self
+            .runtime
+            .journal()
+            .read(run, 0)
+            .await
+            .map_err(|e| BewertungError::Journal(e.to_string()))?;
+        let Some(eintrag) = records.iter().find_map(|r| {
+            r.admitted_input().and_then(|i| {
+                i.peek()[super::vorschlag::Art::Freigabe.key()]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+        }) else {
+            return Ok(None);
+        };
+        let aktion = self
+            .answer(&run.to_string(), reader)
+            .await
+            .map_err(BewertungError::Journal)?
+            .and_then(|a| a.vorschlag)
+            .map(|v| v.aktion)
+            .ok_or_else(|| {
+                BewertungError::NichtBewertbar(format!("run {run} proposed no decision"))
+            })?;
+        let geprueft = self
+            .pruefvermerk_gespeichert(run)
+            .await
+            .map_err(BewertungError::Journal)?
+            .and_then(|v| v.body_sha256);
+        let processd = self.pruefer.processd.as_ref().ok_or_else(|| {
+            BewertungError::NichtBewertbar(
+                "processd is not configured, so the Freigabe's outcome cannot be read".to_owned(),
+            )
+        })?;
+        let decided = processd
+            .call(
+                &agentplane::tools::ToolId::new("processd", "get_queue_entry"),
+                &serde_json::json!({ "id": eintrag }),
+                None,
+            )
+            .await
+            .map_err(|e| {
+                BewertungError::NichtBewertbar(format!(
+                    "processd did not answer for Freigabe {eintrag}: {e}"
+                ))
+            })?;
+        schicksal(&aktion, geprueft.as_deref(), &decided)
+            .map(Some)
+            .map_err(BewertungError::NichtBewertbar)
     }
 
     /// What `name`'s runs admitted in the [`BILANZ_TAGE`] days before `bis`
@@ -1514,8 +1637,105 @@ impl Plane {
                 .vorschlag
                 .take()
                 .filter(|v| super::vorschlag::Art::von_aktion(&v.aktion) == Some(art));
+            if let Some(v) = a.vorschlag.as_ref() {
+                a.pruefvermerk = Some(self.pruefvermerk_sichern(*run, art, entry, v).await?);
+            }
         }
         Ok(answer)
+    }
+
+    /// The Prüfvermerk of `entry`'s proposal: the one stored on its run, or —
+    /// when none is — the gate's verdict, stored now. Stored once per run, so
+    /// every reader sees the verdict the first one did. A tick calls this for
+    /// every open entry, so no proposal reaches the Desk unchecked.
+    ///
+    /// # Errors
+    ///
+    /// The journal failing.
+    pub async fn pruefvermerk_sichern(
+        &self,
+        run: agentplane::core::RunId,
+        art: super::vorschlag::Art,
+        entry: &str,
+        vorschlag: &Vorschlag,
+    ) -> Result<super::pruefung::Pruefvermerk, String> {
+        use super::pruefung::{METRIK, PRUEFER};
+        use agentplane::core::{Assessment, Operator, Score};
+
+        if let Some(stored) = self.pruefvermerk_gespeichert(run).await? {
+            return Ok(stored);
+        }
+        let vermerk = super::pruefung::pruefen(
+            &self.pruefer,
+            art,
+            entry,
+            &vorschlag.aktion,
+            vorschlag.antwortcode.as_deref(),
+        )
+        .await;
+        let by = Operator::connected(PRUEFER).map_err(|e| e.to_string())?;
+        // The rationale holds the stages; a service sentence long enough to
+        // overflow it is cut, never the verdict.
+        let mut rationale = serde_json::to_string(&vermerk).map_err(|e| e.to_string())?;
+        if rationale.len() > Assessment::MAX_RATIONALE {
+            let mut kurz = vermerk.clone();
+            for s in &mut kurz.stufen {
+                s.text = s.text.take().map(|t| t.chars().take(400).collect());
+            }
+            rationale = serde_json::to_string(&kurz).map_err(|e| e.to_string())?;
+        }
+        let verdict = Assessment::new(
+            run,
+            METRIK,
+            Score::Label(vermerk.urteil.label().to_owned()),
+            by,
+            time::OffsetDateTime::now_utc(),
+            Some(rationale),
+        )
+        .map_err(|e| e.to_string())?;
+        if let Err(e) = self.runtime.assess(verdict).await {
+            // Not stored is not passed: the reader still gets the verdict, and
+            // the next tick stores it.
+            tracing::warn!(%run, error = %e, "agentd: the Prüfvermerk was not stored");
+        }
+        Ok(vermerk)
+    }
+
+    /// The Prüfvermerk stored on `run`, if one is.
+    async fn pruefvermerk_gespeichert(
+        &self,
+        run: agentplane::core::RunId,
+    ) -> Result<Option<super::pruefung::Pruefvermerk>, String> {
+        use super::pruefung::{METRIK, PRUEFER, PruefUrteil, Pruefvermerk};
+        let verdicts = self
+            .runtime
+            .assessments(run)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(verdicts
+            .current()
+            .into_iter()
+            .filter(|a| a.name() == METRIK && a.by().actor() == PRUEFER)
+            .find_map(|a| {
+                let agentplane::core::Score::Label(label) = a.value() else {
+                    return None;
+                };
+                let urteil = PruefUrteil::from_label(label)?;
+                // A rationale sealed to a key ring this plane does not hold
+                // still leaves the verdict.
+                Some(
+                    a.rationale()
+                        .and_then(|r| serde_json::from_str::<Pruefvermerk>(r).ok())
+                        .filter(|v| v.urteil == urteil)
+                        .unwrap_or(Pruefvermerk {
+                            urteil,
+                            stufen: Vec::new(),
+                            grund: None,
+                            body_sha256: None,
+                            geprueft_um: String::new(),
+                        }),
+                )
+            }))
     }
 
     /// What to tell the emitter about a whole fan-out.
@@ -1940,6 +2160,37 @@ impl Plane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fate is the decision processd recorded, against the body
+    /// the proposal was checked for.
+    #[test]
+    fn a_proposals_fate_is_read_off_the_decided_entry() {
+        let entry = |status: &str, sha: Option<&str>| serde_json::json!({ "status": status, "gesendet_sha256": sha });
+        let s = |aktion, geprueft, e: &Value| schicksal(aktion, geprueft, e);
+        assert_eq!(
+            s("ablehnen", Some("h"), &entry("Rejected", Some("h"))),
+            Ok(VorschlagSchicksal::Sent)
+        );
+        assert_eq!(
+            s("ablehnen", Some("h"), &entry("Rejected", Some("other"))),
+            Ok(VorschlagSchicksal::Edited)
+        );
+        assert_eq!(
+            s("ablehnen", None, &entry("Rejected", Some("h"))),
+            Ok(VorschlagSchicksal::Edited),
+            "a body nobody checked is not the proposal sent"
+        );
+        assert_eq!(
+            s("freigeben", Some("h"), &entry("Rejected", Some("h"))),
+            Ok(VorschlagSchicksal::Dismissed),
+            "the other action is the proposal dismissed"
+        );
+        assert_eq!(
+            s("freigeben", Some("h"), &entry("Expired", None)),
+            Ok(VorschlagSchicksal::Dismissed)
+        );
+        assert!(s("freigeben", Some("h"), &entry("Pending", None)).is_err());
+    }
 
     fn refused(name: &str, retryable: bool) -> Accepted {
         Accepted {

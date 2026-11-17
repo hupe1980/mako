@@ -247,6 +247,21 @@ impl From<crate::pg::InsertError> for BillingError {
                     "period_to": period_to.to_string(),
                 }),
             ),
+            E::PeriodOverlaps {
+                malo_id,
+                product_code,
+                period_from,
+                period_to,
+            } => Self::conflict_with(
+                "PERIOD_OVERLAPS",
+                message,
+                serde_json::json!({
+                    "malo_id": malo_id,
+                    "product_code": product_code,
+                    "period_from": period_from.to_string(),
+                    "period_to": period_to.to_string(),
+                }),
+            ),
             E::DuplicateRechnungsnummer(nr) => Self::conflict_with(
                 "RECHNUNGSNUMMER_IN_USE",
                 message,

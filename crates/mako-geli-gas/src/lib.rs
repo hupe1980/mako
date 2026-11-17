@@ -106,7 +106,7 @@
 //!     fallgruppe: None,
 //! };
 //!
-//! process.run(cmd, RunOptions::new()).await?;
+//! process.run(cmd, RunOptions::system()).await?;
 //! ```
 
 #![deny(unsafe_code)]

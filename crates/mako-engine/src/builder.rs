@@ -55,7 +55,7 @@
 //!
 //! // Spawn a fresh process:
 //! let p = ctx.spawn::<SupplierChangeWorkflow>(tenant_id, workflow_id);
-//! p.run(ReceiveUtilmd { .. }, RunOptions::new()).await?;
+//! p.run(ReceiveUtilmd { .. }, RunOptions::system()).await?;
 //!
 //! // Resume an existing process from a persisted identity:
 //! let identity = ctx.registry.lookup(&conv_id.to_string()).await?.unwrap();
@@ -413,7 +413,7 @@ where
     ///
     /// ```rust,ignore
     /// let p = ctx.spawn::<SupplierChangeWorkflow>(tenant_id, workflow_id);
-    /// p.run(ReceiveUtilmd { .. }, RunOptions::new()).await?;
+    /// p.run(ReceiveUtilmd { .. }, RunOptions::system()).await?;
     /// ```
     #[must_use]
     pub fn spawn<W: Workflow>(
@@ -432,7 +432,7 @@ where
     ///     .await?
     ///     .ok_or(EngineError::Registry("unknown conversation".into()))?;
     /// let p = ctx.resume::<SupplierChangeWorkflow>(identity);
-    /// p.run(HandleAperak { .. }, RunOptions::new()).await?;
+    /// p.run(HandleAperak { .. }, RunOptions::system()).await?;
     /// ```
     #[must_use]
     pub fn resume<W: Workflow>(&self, identity: ProcessIdentity) -> Process<W, Arc<ES>> {
@@ -2392,7 +2392,7 @@ mod tests {
         let ctx = EngineBuilder::new().with_event_store(store).build();
 
         let p = ctx.spawn::<PingWorkflow>(TenantId::new(), WorkflowId::new("ping", "FV2024-10-01"));
-        p.run(PingCommand, RunOptions::new()).await.unwrap();
+        p.run(PingCommand, RunOptions::system()).await.unwrap();
 
         let identity = p.identity();
         let resumed = ctx.resume::<PingWorkflow>(identity);

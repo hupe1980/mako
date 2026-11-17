@@ -7,7 +7,7 @@
 //! | `get_vorauszahlung` | The BO4E `Vorauszahlung` (Abschlag) of a customer MaLo — what `GET /api/v1/accounts/{malo_id}/vorauszahlung` serves |
 //! | `list_ledger` | Ledger movements (debit/credit) for a MaLo, with the opening balance the window starts from |
 //! | `list_dunning` | Active dunning cases |
-//! | `list_overdue` | All accounts with overdue invoices |
+//! | `list_overdue` | Accounts with an open balance, largest first |
 //! | `list_sepa_collections` | SEPA collections and their lifecycle (SUBMITTED → SETTLED/REJECTED/RETURNED/REVERSED) |
 //! | `list_eeg_payouts` | The EEG payout orders the Netzbetreiber ran, by plant and billing month |
 //! | `suggest_payment_match` | AI payment reconciliation: match CAMT.054 to open Rechnungen |
@@ -84,7 +84,11 @@ pub struct ParkedParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MaloParams {
+    /// 11-digit MaLo-ID.
     pub malo_id: String,
+    /// The LF MP-ID the account is held under. Defaults to the tenant, as on
+    /// the REST route.
+    pub lf_mp_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -97,9 +101,18 @@ pub struct VorauszahlungParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct DunningParams {
+    /// Maximum cases (default 100, at most 1000), newest Mahnung first.
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct LedgerParams {
+    /// 11-digit MaLo-ID.
     pub malo_id: String,
+    /// The LF MP-ID the account is held under. Defaults to the tenant.
     pub lf_mp_id: Option<String>,
+    /// Maximum movements, newest first (default 100, at most 1000).
     pub limit: Option<i64>,
 }
 
@@ -170,28 +183,10 @@ pub struct EegPayoutParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OverdueParams {
+    /// Minimum open balance in EUR, a decimal string (e.g. `"1.99"`); default 0.01.
+    pub min_balance_eur: Option<String>,
     /// Maximum rows (default 100, capped at 1000), largest balance first.
     pub limit: Option<i64>,
-}
-
-/// Parameters for payment reconciliation.
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct SuggestPaymentMatchParams {
-    /// Payment amount in 1/100 EUR cents (e.g. 12500 = 125.00 EUR).
-    pub amount_ct: i64,
-    /// Payment reference / Verwendungszweck from the bank statement.
-    pub reference: String,
-    /// Counterparty IBAN, when the bank reported one — the strongest evidence
-    /// of who paid, and the rung that resolves without any guessing.
-    pub iban: Option<String>,
-    /// `EndToEndId`, when the bank echoed one back.
-    pub end_to_end_id: Option<String>,
-    /// Value date of the payment (YYYY-MM-DD).
-    pub value_date: Option<String>,
-    /// Fuzzy tolerance for the fallback rung: how many percent the open balance
-    /// may deviate from the payment (default 2 %). Ignored when the reference
-    /// identifies the account outright.
-    pub tolerance_pct: Option<f64>,
 }
 
 #[derive(Debug, schemars::JsonSchema, serde::Deserialize)]
@@ -208,6 +203,16 @@ pub struct ManualBuchungParams {
     /// Human-readable description for the Kontoauszug.
     pub description: Option<String>,
 }
+
+// ── Typed answers ─────────────────────────────────────────────────────────────
+//
+// The reads shared with the REST surface return `crate::reads`' types; a tool
+// declares the same type its REST twin documents.
+
+pub use crate::reads::{
+    Kontoauszug, Kontobewegung, Kontostand, Mahnfaelle, Mahnfall, PaymentMatchParams, Saldostatus,
+    UeberfaelligeKonten, UeberfaelligesKonto, Zahlungszuordnung, Zuordnungskandidat,
+};
 
 #[derive(Clone)]
 pub struct AccountingdMcpHandler {
@@ -246,35 +251,22 @@ impl AccountingdMcpHandler {
 
     #[tool(
         description = "Get the current open-items balance (in 1/100 EUR cents) for a customer MaLo. Negative = credit; positive = amount owed.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<Kontostand>()
     )]
     async fn get_balance(
         &self,
         Parameters(p): Parameters<MaloParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::fetch_account;
-        match fetch_account(
-            &self.state.pool,
-            &p.malo_id,
-            &self.state.tenant,
-            &self.state.tenant,
+        mako_service::mcp::answer(
+            crate::reads::balance(
+                &self.state.pool,
+                &self.state.tenant,
+                &p.malo_id,
+                p.lf_mp_id.as_deref(),
+            )
+            .await,
         )
-        .await
-        {
-            Ok(Some(a)) => ContentBlock::json(serde_json::json!({
-                "malo_id": p.malo_id,
-                "balance_ct": a.balance_ct,
-                "balance_eur": crate::handlers::format_ct_as_eur(a.balance_ct),
-                "abschlag_ct": a.abschlag_ct,
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(None) => Err(McpError::invalid_params(
-                format!("account for {} not found", p.malo_id),
-                None,
-            )),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
     }
 
     #[tool(
@@ -311,63 +303,38 @@ impl AccountingdMcpHandler {
 
     #[tool(
         description = "List ledger movements (RECHNUNG, ZAHLUNG, GUTSCHRIFT, ABSCHLAG, etc.) for a MaLo, newest first, with the `opening_ct` the window starts from — `opening_ct` plus the movements is the newest line's `running_ct`, so a page truncated by `limit` still adds up.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<Kontoauszug>()
     )]
     async fn list_ledger(
         &self,
         Parameters(p): Parameters<LedgerParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{fetch_account, list_ledger};
-        let acct = match fetch_account(
-            &self.state.pool,
-            &p.malo_id,
-            &self.state.tenant,
-            &self.state.tenant,
+        mako_service::mcp::answer(
+            crate::reads::ledger(
+                &self.state.pool,
+                &self.state.ledger,
+                &self.state.tenant,
+                &p.malo_id,
+                p.lf_mp_id.as_deref(),
+                p.limit,
+            )
+            .await,
         )
-        .await
-        {
-            Ok(Some(a)) => a,
-            Ok(None) => {
-                return Err(McpError::invalid_params(
-                    format!("account for {} not found", p.malo_id),
-                    None,
-                ));
-            }
-            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
-        };
-        match list_ledger(
-            &self.state.ledger,
-            &self.state.pool,
-            &self.state.tenant,
-            &acct.lf_mp_id,
-            &acct.malo_id,
-            &doubleentry::BalanceQuery::all(),
-            p.limit.unwrap_or(50),
-        )
-        .await
-        {
-            Ok(window) => ContentBlock::json(serde_json::to_value(window).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
     }
 
     #[tool(
-        description = "List active dunning cases (Mahnstufe 1-3). Returns cases with amount_due_ct, due_date, and stufe.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "List open dunning cases (Mahnstufe 1-3), newest Mahnung first, `limit` of them (default 100, at most 1000): each with its account_id, stufe, amount_due_ct, issued_at and due_date. `saturated` says more may be open than were listed.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<Mahnfaelle>()
     )]
     async fn list_dunning(
         &self,
-        Parameters(_): Parameters<NoParams>,
+        Parameters(p): Parameters<DunningParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_open_dunning;
-        match list_open_dunning(&self.state.pool, &self.state.tenant, 100).await {
-            Ok(cases) => ContentBlock::json(serde_json::to_value(cases).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        mako_service::mcp::answer(
+            crate::reads::dunning(&self.state.pool, &self.state.tenant, p.limit).await,
+        )
     }
 
     #[tool(
@@ -449,30 +416,23 @@ submitted). Read-only; held to the NB role like GET /api/v1/eeg/payouts.",
     }
 
     #[tool(
-        description = "List all accounts with overdue invoices. Returns accounts with balance_ct > 0 and the oldest unpaid entry date. An EEG plant account is never listed: what a plant operator owes back is an EEG Rückforderung (GET /api/v1/eeg/rueckforderungen), not dunned.",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<UeberfaelligeKonten>(),
+        description = "List the accounts with an open balance (balance_ct > 0), largest first. An EEG plant account is never listed: what a plant operator owes back is an EEG Rückforderung (GET /api/v1/eeg/rueckforderungen), not dunned.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_overdue(
         &self,
         Parameters(p): Parameters<OverdueParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_overdue_accounts;
-        match list_overdue_accounts(
-            &self.state.pool,
-            &self.state.tenant,
-            1_i64,
-            p.limit.unwrap_or(100).clamp(1, 1000),
+        mako_service::mcp::answer(
+            crate::reads::overdue(
+                &self.state.pool,
+                &self.state.tenant,
+                p.min_balance_eur.as_deref(),
+                p.limit,
+            )
+            .await,
         )
-        .await
-        {
-            Ok(accounts) => ContentBlock::json(serde_json::json!({
-                "count": accounts.len(),
-                "accounts": accounts,
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
     }
     #[tool(
         description = "Update the monthly advance payment (Abschlag) for a customer MaLo in ct. \
@@ -911,170 +871,22 @@ balance is to the payment (confidence HIGH/MEDIUM/LOW). \
 Pass `iban` when the bank reported the counterparty account — that is the strongest evidence of all. \
 For each candidate: account_id, malo_id, open_balance_ct, matched_by, similarity_score. \
 Confirm with post_manual_booking or by importing the bank file.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<Zahlungszuordnung>()
     )]
     async fn suggest_payment_match(
         &self,
-        Parameters(p): Parameters<SuggestPaymentMatchParams>,
+        Parameters(p): Parameters<PaymentMatchParams>,
     ) -> Result<CallToolResult, McpError> {
-        use sqlx::Row;
-
-        // ── The exact rung ───────────────────────────────────────────────────
-        //
-        // If the reference names a customer, there is nothing to rank: the
-        // payer said who they are. Resolving that first is what keeps the score
-        // honest — a tool that falls through to fuzzy amount matching reports
-        // amount proximity under a reference-matching label.
-        let iban_hash = p
-            .iban
-            .as_deref()
-            .map(|iban| crate::ledger::iban_hash(self.state.iban_key.as_ref(), iban));
-        // An `Err` here is a database fault, not "the reference names nobody".
-        // Falling through to the fuzzy rung would answer with amount proximity
-        // under a reference-matching label — exactly the dishonesty this rung
-        // exists to prevent.
-        let exact = crate::pg::resolve_account_for_payment(
-            &self.state.pool,
-            &self.state.tenant,
-            crate::pg::PaymentClues {
-                iban_hash: iban_hash.as_deref(),
-                end_to_end_id: p.end_to_end_id.as_deref(),
-                remittance: Some(&p.reference),
-            },
-        )
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        if let Some(hit) = exact {
-            // `residual_ct` is the answer the caller acts on, so a balance that
-            // could not be read is an error, not a zero.
-            let balance_ct: i64 = sqlx::query_scalar(
-                "SELECT balance_ct FROM accounts WHERE account_id = $1 AND tenant = $2",
+        mako_service::mcp::answer(
+            crate::reads::payment_match(
+                &self.state.pool,
+                &self.state.tenant,
+                self.state.iban_key.as_ref(),
+                p,
             )
-            .bind(hit.account_id)
-            .bind(&self.state.tenant)
-            .fetch_optional(&self.state.pool)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .unwrap_or(0);
-            return ContentBlock::json(serde_json::json!({
-                "payment_amount_ct":  p.amount_ct,
-                "payment_amount_eur": crate::sepa::ct_to_eur_str(p.amount_ct),
-                "payment_reference":  p.reference,
-                "candidates_count":   1,
-                "candidates": [{
-                    "account_id":       hit.account_id,
-                    "malo_id":          hit.malo_id,
-                    "lf_mp_id":         hit.lf_mp_id,
-                    "open_balance_ct":  balance_ct,
-                    "open_balance_eur": crate::sepa::ct_to_eur_str(balance_ct),
-                    "matched_by":       hit.matched_by,
-                    "confidence":       "EXACT",
-                    "residual_ct":      balance_ct - p.amount_ct,
-                }],
-                "note": "The payment identifies its own account — no amount guessing was involved. \
-                         `residual_ct` is what stays open after booking it (0 = settles the balance exactly).",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None));
-        }
-
-        // ── The fuzzy rung ───────────────────────────────────────────────────
-        //
-        // Nothing in the payment says who sent it, so all that is left is "who
-        // owes roughly this much". Ranked, never auto-booked.
-        let tol_pct = p.tolerance_pct.unwrap_or(2.0);
-        let tol_factor = 1.0 + tol_pct / 100.0;
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_precision_loss,
-            reason = "the value is bounded well inside the target type; a count or ratio reported as a float, never a money amount"
-        )]
-        let lo = (p.amount_ct as f64 / tol_factor) as i64;
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_precision_loss,
-            reason = "the value is bounded well inside the target type; a count or ratio reported as a float, never a money amount"
-        )]
-        let hi = (p.amount_ct as f64 * tol_factor) as i64;
-
-        // Candidate matching is on the balance cache (the authoritative balance
-        // is the doubleentry ledger; this cache is refreshed from it on every
-        // post), so a set-based scan stays cheap.
-        let rows = sqlx::query(
-            r"SELECT a.account_id, a.malo_id, a.lf_mp_id, a.balance_ct
-              FROM accounts a
-              WHERE a.tenant = $1
-                AND a.balance_ct BETWEEN $2 AND $3
-              ORDER BY ABS(a.balance_ct - $4) ASC
-              LIMIT 10",
+            .await,
         )
-        .bind(&self.state.tenant)
-        .bind(lo)
-        .bind(hi)
-        .bind(p.amount_ct)
-        .fetch_all(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let candidates: Vec<serde_json::Value> = rows
-            .iter()
-            .map(|r| {
-                let account_id: uuid::Uuid = r.try_get("account_id").unwrap_or_default();
-                let malo_id: String = r.try_get("malo_id").unwrap_or_default();
-                let lf_mp_id: String = r.try_get("lf_mp_id").unwrap_or_default();
-                let balance_ct: i64 = r.try_get("balance_ct").unwrap_or_default();
-
-                // Amount proximity is the only signal here — the reference
-                // already failed to identify anyone. Scoring it as if it were
-                // two independent signals overstated the confidence.
-                #[expect(
-                    clippy::cast_precision_loss,
-                    reason = "a count or ratio reported as a float, never a money amount"
-                )]
-                let closeness = if p.amount_ct == 0 {
-                    0.0_f64
-                } else {
-                    1.0 - (balance_ct - p.amount_ct).unsigned_abs() as f64
-                        / p.amount_ct.unsigned_abs() as f64
-                };
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    reason = "clamped to 0..=100 before the cast"
-                )]
-                let score = (closeness.clamp(0.0, 1.0) * 100.0).round() as u32;
-                // No fuzzy match is ever HIGH: an amount that happens to line up
-                // is not evidence of who paid. The exact rung above is the only
-                // one safe to auto-book.
-                let confidence = if score >= 99 { "MEDIUM" } else { "LOW" };
-
-                serde_json::json!({
-                    "account_id":       account_id,
-                    "malo_id":          malo_id,
-                    "lf_mp_id":         lf_mp_id,
-                    "open_balance_ct":  balance_ct,
-                    "open_balance_eur": crate::sepa::ct_to_eur_str(balance_ct),
-                    "matched_by":       "amount_proximity",
-                    "similarity_score": score,
-                    "confidence":       confidence,
-                    "residual_ct":      balance_ct - p.amount_ct,
-                })
-            })
-            .collect();
-
-        ContentBlock::json(serde_json::json!({
-            "payment_amount_ct":  p.amount_ct,
-            "payment_amount_eur": crate::sepa::ct_to_eur_str(p.amount_ct),
-            "payment_reference":  p.reference,
-            "tolerance_pct":      tol_pct,
-            "candidates_count":   candidates.len(),
-            "candidates":         candidates,
-            "note": "Nothing in the reference identified the payer, so these are ranked by amount \
-                     proximity alone — a coincidence, not evidence. Review before booking; ask the \
-                     customer to quote their Mandatsreferenz or MaLo-ID to make the next one exact.",
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     #[tool(
@@ -1417,6 +1229,173 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
         if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
             panic!("{e}");
+        }
+    }
+
+    /// The REST twin of each shared read, as its path stands in the document.
+    fn rest_twin(tool: &str) -> &'static str {
+        match tool {
+            "get_balance" => "/api/v1/accounts/{malo_id}/balance",
+            "list_ledger" => "/api/v1/accounts/{malo_id}/ledger",
+            "list_dunning" => "/api/v1/dunning",
+            "list_overdue" => "/api/v1/offene-posten",
+            "suggest_payment_match" => "/api/v1/payments/match",
+            _ => panic!("{tool} has no REST twin"),
+        }
+    }
+
+    /// Assert `answer` satisfies the output schema `tool` declares, and that
+    /// schema is the shape its REST twin documents.
+    fn holds_to_schema<T: serde::Serialize>(tool: &str, answer: &T) {
+        let tools = AccountingdMcpHandler::tool_router().list_all();
+        mako_service::mcp::conformance::assert_structured_output(
+            &tools,
+            tool,
+            &serde_json::to_value(answer).expect("serializes"),
+        );
+        mako_service::mcp::conformance::assert_rest_twin(
+            &tools,
+            tool,
+            &crate::openapi::document(),
+            rest_twin(tool),
+        );
+    }
+
+    /// A shared read's tool is held to the Cedar action its REST twin checks:
+    /// the handler's `cedar.check` names the same action `tool_action` maps
+    /// the tool to.
+    #[test]
+    fn each_shared_read_is_authorized_as_its_rest_twin() {
+        const HANDLERS: &str = include_str!("handlers.rs");
+        for (tool, handler) in [
+            ("get_balance", "get_balance"),
+            ("list_ledger", "get_ledger"),
+            ("list_dunning", "get_dunning"),
+            ("list_overdue", "get_offene_posten"),
+            ("suggest_payment_match", "match_payment"),
+        ] {
+            let start = HANDLERS
+                .find(&format!("\npub async fn {handler}("))
+                .unwrap_or_else(|| panic!("{handler} is in handlers.rs"));
+            let rest = &HANDLERS[start + 1..];
+            let body = &rest[..rest.find("\npub async fn ").unwrap_or(rest.len())];
+            let action = tool_action(tool).unwrap_or_else(|| panic!("{tool} is mapped"));
+            assert!(
+                body.contains(&format!(".check(&claims.principal(), \"{action}\"")),
+                "{tool} is authorized as {action:?}, which {handler} does not check"
+            );
+        }
+    }
+
+    #[test]
+    fn get_balance_answers_its_declared_schema() {
+        holds_to_schema(
+            "get_balance",
+            &Kontostand {
+                malo_id: "51238696012".into(),
+                lf_mp_id: "9900357000004".into(),
+                status: Saldostatus::Credit,
+                balance_ct: -1250,
+                balance_eur: crate::handlers::format_ct_as_eur(-1250),
+                abschlag_ct: 8900,
+            },
+        );
+    }
+
+    #[test]
+    fn list_ledger_answers_its_declared_schema() {
+        let window = crate::pg::LedgerWindow {
+            opening_ct: 8900,
+            lines: vec![crate::pg::LedgerLine {
+                entry_id: uuid::Uuid::nil(),
+                entry_type: Some("ZAHLUNG".into()),
+                beleg: None,
+                side: "C",
+                amount_ct: 8900,
+                signed_ct: -8900,
+                running_ct: 0,
+                booking_date: time::macros::date!(2026 - 11 - 02),
+            }],
+        };
+        let auszug = Kontoauszug::new("51238696012".into(), "9900357000004".into(), window);
+        assert_eq!(auszug.lines[0].booking_date, "2026-11-02");
+        holds_to_schema("list_ledger", &auszug);
+    }
+
+    #[test]
+    fn list_dunning_answers_its_declared_schema() {
+        let fall = Mahnfall::from(crate::pg::DunningCaseRow {
+            id: uuid::Uuid::nil(),
+            account_id: uuid::Uuid::nil(),
+            tenant: "9900357000004".into(),
+            stufe: 2,
+            amount_due_ct: 17_800,
+            issued_at: time::macros::datetime!(2026-11-02 08:00 UTC),
+            due_date: time::macros::date!(2026 - 11 - 16),
+            resolved_at: None,
+            sperrauftrag_ce_id: None,
+        });
+        assert_eq!(fall.issued_at, "2026-11-02T08:00:00Z");
+        holds_to_schema(
+            "list_dunning",
+            &Mahnfaelle {
+                faelle: vec![fall],
+                count: 1,
+                saturated: false,
+            },
+        );
+    }
+
+    #[test]
+    fn list_overdue_answers_its_declared_schema() {
+        holds_to_schema(
+            "list_overdue",
+            &UeberfaelligeKonten {
+                accounts: vec![UeberfaelligesKonto {
+                    account_id: uuid::Uuid::nil().to_string(),
+                    malo_id: "51238696012".into(),
+                    lf_mp_id: "9900357000004".into(),
+                    kunden_nr: Some("K-1001".into()),
+                    balance_ct: 17_800,
+                    balance_eur: "178.00".into(),
+                    abschlag_ct: 8900,
+                    updated_at: "2026-11-02T08:00:00Z".into(),
+                }],
+                count: 1,
+                saturated: false,
+            },
+        );
+    }
+
+    #[test]
+    fn suggest_payment_match_answers_its_declared_schema() {
+        let kandidat = |matched_by: &str, score: Option<u32>| Zuordnungskandidat {
+            account_id: uuid::Uuid::nil().to_string(),
+            malo_id: "51238696012".into(),
+            lf_mp_id: "9900357000004".into(),
+            open_balance_ct: 12_500,
+            open_balance_eur: "125.00".into(),
+            matched_by: matched_by.into(),
+            confidence: if score.is_some() { "LOW" } else { "EXACT" }.into(),
+            similarity_score: score,
+            residual_ct: 0,
+        };
+        for (tolerance_pct, k) in [
+            (None, kandidat("iban", None)),
+            (Some(2.0), kandidat("amount_proximity", Some(98))),
+        ] {
+            holds_to_schema(
+                "suggest_payment_match",
+                &Zahlungszuordnung {
+                    payment_amount_ct: 12_500,
+                    payment_amount_eur: "125.00".into(),
+                    payment_reference: "Abschlag November".into(),
+                    tolerance_pct,
+                    candidates_count: 1,
+                    candidates: vec![k],
+                    note: "…".into(),
+                },
+            );
         }
     }
 }

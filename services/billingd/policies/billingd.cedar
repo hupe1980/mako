@@ -8,6 +8,7 @@
 // Actions:
 //   "read-billing"       — GET  /api/v1/billing[/{id}], /review-queue, and the
 //                          rendered documents (/xrechnung, /ubl, /pdf)
+//   "read-billing-by-token" — POST /api/v1/billing/nachrechnen — portald alone
 //   "preview-billing"    — POST /api/v1/billing/{malo_id}/preview (no side effects)
 //   "run-billing"        — POST /api/v1/billing/{malo_id}/calculate, /tarifwechsel,
 //                          /sammelrechnung/{rv_id}, /ggv/{ggv_id} — issues invoices
@@ -45,6 +46,21 @@ permit(
     resource
 ) when {
     context.principal_tenant == context.resource_tenant
+};
+
+// ── An invoice by its verify token: portald alone ─────────────────────────────
+// The token printed on the invoice is the customer's credential for the public
+// page. Only portald's service principal (`[[oidc.service_keys]] name =
+// "portald"`) relays it; an operator reads an invoice by its id under
+// `read-billing` and has no use for a lookup by token. The demo configures the
+// same service key, so no synthetic principal is admitted here.
+permit(
+    principal,
+    action == Action::"read-billing-by-token",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    principal == User::"portald"
 };
 
 // ── Issuing, correcting and releasing documents ───────────────────────────────

@@ -862,6 +862,7 @@ mod tests {
             payload: serde_json::json!({"test": true}),
             verlauf: None,
             antwort: None,
+            akteur: crate::envelope::Akteur::System,
         }
     }
 

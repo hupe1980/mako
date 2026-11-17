@@ -1538,11 +1538,9 @@ pub const WIM_GAS: &[AntwortObligation] = &[
         trigger_pid: 44_168,
         name: "Verpflichtungsanfrage an den gMSB (Gas)",
         answered_by: "gMSB",
-        // **44170 does not exist.** PID-Übersicht 4.0 publishes 44168 and 44169
-        // and no Ablehnungs-PID; the 44170 of PID 3.3 was withdrawn with
-        // FV2026-10-01. `E_2006` still publishes `G_0071`, so an Ablehnung has
-        // a code and no carrier — `mako-wim` escalates instead of inventing one.
-        antwort_pids: (44_169, 44_169),
+        // 44170 „Ablehnung Verpflichtungsanfrage": PID-Übersicht 4.0
+        // Lesefassung Stand 12.08.2026, Tabelle 1 Lfd. Nr. 39260 (S. 76).
+        antwort_pids: (44_169, 44_170),
         ebd: Some("E_2006"),
         frist: FristShape::EndOfWerktag(1),
         family: Family::WimGas,
@@ -2223,6 +2221,19 @@ mod tests {
                 "answer PID {answer} must not start a window"
             );
         }
+    }
+
+    /// The Gas Verpflichtungsanfrage has a Bestätigung and an Ablehnung, like
+    /// Strom's 55168 → 55169 / 55170: 44170 is Tabelle 1 Lfd. Nr. 39260 of the
+    /// PID-Übersicht 4.0 Lesefassung Stand 12.08.2026 (S. 76).
+    #[test]
+    fn the_gas_verpflichtungsanfrage_answers_on_44169_and_44170() {
+        let gas = antwort_obligation(44_168).expect("published");
+        assert_eq!(gas.antwort_pids, (44_169, 44_170));
+        assert_eq!(
+            gas.frist,
+            antwort_obligation(55_168).expect("published").frist
+        );
     }
 
     /// The four MaBiS-ZP lifecycle windows are one Werktag, and each answer

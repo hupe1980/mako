@@ -94,7 +94,9 @@ fn wire(msg: &mako_engine::outbox::OutboxMessage) -> String {
 /// write, and the wire: empty findings when it passes.
 async fn door(command: &str, body: &serde_json::Value) -> (Vec<String>, String, String) {
     let state = lf_state().await;
-    if let Err(e) = dispatch_command(&state, command, body).await {
+    if let Err(e) =
+        dispatch_command(&state, mako_engine::envelope::Akteur::System, command, body).await
+    {
         return (
             vec![format!("{command} refused: {e:?}")],
             String::new(),
@@ -171,6 +173,7 @@ async fn the_outbox_entry_carries_its_process_format_version() {
     let state = lf_state().await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "gpke.lieferbeginn.anmelden",
         &anmeldung(Some("E03")),
     )
@@ -211,7 +214,13 @@ async fn a_55001_names_its_kunde() {
                 body.as_object_mut().expect("an object").remove(key);
             }
         }
-        let refused = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &body).await;
+        let refused = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.lieferbeginn.anmelden",
+            &body,
+        )
+        .await;
         assert!(
             matches!(&refused, Err(DispatchError::InvalidPayload(m)) if m.contains(named)),
             "{key}: {refused:?}"
@@ -226,7 +235,13 @@ async fn a_55001_names_its_kunde() {
 #[tokio::test]
 async fn a_55001_needs_a_grund_its_column_admits() {
     let state = lf_state().await;
-    let refused = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &anmeldung(None)).await;
+    let refused = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.anmelden",
+        &anmeldung(None),
+    )
+    .await;
     assert!(
         matches!(&refused, Err(DispatchError::InvalidPayload(m))
             if m.contains("SG4 STS+7") && m.contains("transaktionsgrund")),
@@ -240,7 +255,13 @@ async fn a_55001_needs_a_grund_its_column_admits() {
         anmeldung(Some("")),
         foreign_ergaenzung,
     ] {
-        let refused = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &body).await;
+        let refused = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.lieferbeginn.anmelden",
+            &body,
+        )
+        .await;
         assert!(
             matches!(&refused, Err(DispatchError::InvalidPayload(m)) if m.contains("STS+7")),
             "{body}: {refused:?}"
@@ -295,7 +316,13 @@ async fn a_55004_needs_a_grund_its_column_admits() {
             "transaktionsgrund_ergaenzung": "ZW0"
         }),
     ] {
-        let refused = dispatch_command(&state, "gpke.lieferende.anmelden", &body).await;
+        let refused = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.lieferende.anmelden",
+            &body,
+        )
+        .await;
         assert!(
             matches!(&refused, Err(DispatchError::InvalidPayload(_))),
             "{body}: {refused:?}"
@@ -333,6 +360,7 @@ async fn a_55016_goes_to_the_altlieferant_and_passes_its_profile() {
     let state = lf_state().await;
     let refused = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "gpke.kuendigung.anmelden",
         &serde_json::json!({ "malo_id": MALO_ID, "kuendigung_datum": "2026-12-31" }),
     )
@@ -394,7 +422,7 @@ async fn every_lfn_an_lfa_door_sends_to_the_altlieferant() {
         state.configured_marktrollen = vec!["LF".to_owned(), "LFG".to_owned()];
         state.sender_party_id = (*sender).to_owned();
         let body: serde_json::Value = serde_json::from_str(body).expect("body");
-        dispatch_command(&state, name, &body)
+        dispatch_command(&state, mako_engine::envelope::Akteur::System, name, &body)
             .await
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let sent = utilmd(&state).await;

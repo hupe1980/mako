@@ -331,6 +331,11 @@ pub struct ErpEvent {
     /// `makoworkflow` CloudEvents extension attribute by `WebhookErpAdapter`.
     /// `marktd` maps this to `marktrole` for role-scoped ERP subscriber fan-out.
     pub workflow_name: Box<str>,
+
+    /// The class of the actor whose event caused this notification, carried
+    /// through from `OutboxMessage::akteur` and emitted as the `makoakteur`
+    /// CloudEvents extension. Never the principal.
+    pub akteur: crate::envelope::Eingriffsklasse,
 }
 
 // ── ErpAdapter trait ──────────────────────────────────────────────────────────

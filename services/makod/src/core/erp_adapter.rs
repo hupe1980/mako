@@ -59,7 +59,7 @@ use tracing::{info, warn};
 ///
 /// Produced by `WebhookErpAdapter` from an [`ErpEvent`].  All mako-specific
 /// metadata is carried as extension attributes (`makoconvid`, `makocausationid`,
-/// `makopid`, `makofailreason`, `makoerc`).  Extension attribute names must be
+/// `makopid`, `makofailreason`, `makoerc`, `makoakteur`).  Extension attribute names must be
 /// lowercase alphanumeric only (CloudEvents spec §3.3).
 #[derive(Serialize)]
 struct CloudEventEnvelope<'a> {
@@ -92,6 +92,10 @@ struct CloudEventEnvelope<'a> {
     /// Absent when no ERC code is available (e.g. timeout-initiated rejections).
     #[serde(skip_serializing_if = "Option::is_none")]
     makoerc: Option<&'a str>,
+    /// The class of the actor whose event caused this notification
+    /// (`system`, `person`, `freigabe`, `freigabe-geaendert`) — never the
+    /// principal.
+    makoakteur: &'static str,
     /// CloudEvents distributed-tracing extension: W3C `traceparent`.
     #[serde(skip_serializing_if = "Option::is_none")]
     traceparent: Option<&'a str>,
@@ -123,6 +127,7 @@ impl<'a> CloudEventEnvelope<'a> {
             makofailreason: fail_reason,
             makoworkflow: event.workflow_name.as_ref(),
             makoerc: erc_code,
+            makoakteur: event.akteur.as_str(),
             traceparent: event.trace_context.as_deref(),
             data: &event.payload,
         }
@@ -155,6 +160,7 @@ impl<'a> CloudEventEnvelope<'a> {
 ///   "makoconvid": "<conversation_id>",
 ///   "makocausationid": "<causation_id>",
 ///   "makopid": 55001,
+///   "makoakteur": "system",
 ///   "data": { "_typ": "MARKTLOKATION", ... }
 /// }
 /// ```
@@ -525,58 +531,13 @@ where
                 }
                 handled_any = true;
 
-                // Map message type to semantic ERP event type.  Skip messages
-                // with unrecognised types rather than misclassifying them as
-                // process failures — they may belong to a different delivery
-                // channel.
-                let Some(raw_event_type) = map_message_type_to_erp_event(&msg.message_type) else {
+                let Some(event) = erp_event(&msg) else {
                     tracing::debug!(
                         message_id  = %msg.message_id,
                         message_type = %msg.message_type,
                         "OutboxErpWorker: unrecognised message type; skipping",
                     );
                     continue;
-                };
-
-                // For APERAK rejections, promote the structured ERC code from
-                // `payload["error_code"]` into the typed `AperakRejected.erc_code`
-                // field so the CloudEvents `makoerc` extension is populated; for a
-                // failed process, `payload["reason"]` into `ProcessFailed.reason`.
-                let event_type = match raw_event_type {
-                    mako_engine::erp::ErpEventType::AperakRejected { .. } => {
-                        let erc_code = msg
-                            .payload
-                            .get("error_code")
-                            .and_then(|v| v.as_str())
-                            .map(mako_engine::erc::ErcCode::new);
-                        mako_engine::erp::ErpEventType::AperakRejected { erc_code }
-                    }
-                    mako_engine::erp::ErpEventType::ProcessFailed { .. } => {
-                        mako_engine::erp::ErpEventType::ProcessFailed {
-                            reason: msg
-                                .payload
-                                .get("reason")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .into(),
-                        }
-                    }
-                    other => other,
-                };
-
-                let event = ErpEvent {
-                    idempotency_key: msg.message_id.to_string(),
-                    event_type,
-                    process_id: msg.process_id,
-                    tenant_id: msg.tenant_id,
-                    conversation_id: msg.conversation_id,
-                    causation_id: msg.causation_event_id,
-                    pid: extract_pid(&msg.payload),
-                    payload_schema: msg.payload_schema.as_deref().map(str::to_owned),
-                    payload: msg.payload.clone(),
-                    occurred_at: occurred_at(&msg),
-                    workflow_name: msg.workflow_name.clone(),
-                    trace_context: msg.trace_context.clone(),
                 };
 
                 // Terminal-outcome counter. The ERP outbox is the one place
@@ -710,6 +671,64 @@ where
             }
         }
     }
+}
+
+/// The ERP notification an outbox message announces; `None` for a message
+/// type that is no ERP notification.
+pub(crate) fn erp_event(msg: &mako_engine::outbox::OutboxMessage) -> Option<ErpEvent> {
+    // Map message type to semantic ERP event type.  Skip messages
+    // with unrecognised types rather than misclassifying them as
+    // process failures — they may belong to a different delivery
+    // channel.
+    let raw_event_type = map_message_type_to_erp_event(&msg.message_type)?;
+
+    // For APERAK rejections, promote the structured ERC code from
+    // `payload["error_code"]` into the typed `AperakRejected.erc_code`
+    // field so the CloudEvents `makoerc` extension is populated; for a
+    // failed process, `payload["reason"]` into `ProcessFailed.reason`.
+    let event_type = match raw_event_type {
+        mako_engine::erp::ErpEventType::AperakRejected { .. } => {
+            let erc_code = msg
+                .payload
+                .get("error_code")
+                .and_then(|v| v.as_str())
+                .map(mako_engine::erc::ErcCode::new);
+            mako_engine::erp::ErpEventType::AperakRejected { erc_code }
+        }
+        mako_engine::erp::ErpEventType::ProcessFailed { .. } => {
+            mako_engine::erp::ErpEventType::ProcessFailed {
+                reason: msg
+                    .payload
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .into(),
+            }
+        }
+        other => other,
+    };
+
+    Some(ErpEvent {
+        idempotency_key: msg.message_id.to_string(),
+        event_type,
+        process_id: msg.process_id,
+        tenant_id: msg.tenant_id,
+        conversation_id: msg.conversation_id,
+        causation_id: msg.causation_event_id,
+        pid: extract_pid(&msg.payload),
+        payload_schema: msg.payload_schema.as_deref().map(str::to_owned),
+        payload: msg.payload.clone(),
+        occurred_at: occurred_at(msg),
+        workflow_name: msg.workflow_name.clone(),
+        trace_context: msg.trace_context.clone(),
+        akteur: msg.akteur,
+    })
+}
+
+/// The CloudEvent JSON `WebhookErpAdapter` posts for `event`.
+#[cfg(test)]
+pub(crate) fn cloud_event_json(event: &ErpEvent) -> serde_json::Value {
+    serde_json::to_value(CloudEventEnvelope::from_erp_event(event)).expect("serialisable")
 }
 
 /// Map an ERP event to the terminal [`ProcessOutcome`] it represents.

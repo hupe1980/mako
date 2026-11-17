@@ -633,8 +633,14 @@ fn prove_invoice(source: &str, pdf_standard: Option<&str>) -> Result<Proven> {
     let request = RenderRequest {
         template: source.to_owned(),
         // `DocumentView::of` is the production projection, so the gate exercises
-        // it rather than a hand-written stand-in that could drift from it.
-        data: Some(serde_json::to_string(&DocumentView::of(&model))?),
+        // it rather than a hand-written stand-in that could drift from it. The
+        // specimen carries a Nachrechnen link, so a template that prints one
+        // is proven on the link and its QR code as production sends them.
+        data: Some(serde_json::to_string(
+            &DocumentView::of(&model)
+                .with_nachrechnen(SPECIMEN_NACHRECHNEN_URL)
+                .map_err(anyhow::Error::msg)?,
+        )?),
         attachment: Some(facturx::attachment(profile, xml.clone())?),
         standard: Some(pdf_standard.unwrap_or(DEFAULT_PDF_STANDARD).to_owned()),
         date: SPECIMEN_DATE,
@@ -829,6 +835,10 @@ fn the_page_is_an_invoice(pdf: &[u8], model: &en16931::Invoice) -> Result<()> {
 
 /// The date the specimen bears. Fixed, so the gate is deterministic.
 pub const SPECIMEN_DATE: time::Date = time::macros::date!(2026 - 03 - 01);
+
+/// The Nachrechnen link of the gate specimen — a reserved `.example` host.
+pub const SPECIMEN_NACHRECHNEN_URL: &str =
+    "https://kundenportal.example.de/nachrechnen/Spezimen0000000000000A";
 
 /// The invoice a template is proven against.
 ///
@@ -1140,6 +1150,46 @@ mod tests {
             proven.warnings,
         );
         assert!(proven.pages >= 1 && proven.pages <= MAX_SPECIMEN_PAGES);
+    }
+
+    /// The reference letter prints the Nachrechnen link as text beside its QR
+    /// code when billingd sends one, and renders without either when not.
+    #[test]
+    fn the_reference_invoice_prints_the_nachrechnen_link_and_its_qr_code() {
+        const LINK: &str = "https://kundenportal.example.de/nachrechnen/AbCdEfGhIjKlMnOpQrStUv";
+        let model = specimen_invoice();
+        let xml = facturx::cii_payload(&model).expect("cii");
+        let render_with = |view: DocumentView| {
+            render(&RenderRequest {
+                template: REFERENCE_INVOICE_TEMPLATE.to_owned(),
+                data: Some(serde_json::to_string(&view).expect("json")),
+                attachment: Some(
+                    facturx::attachment(facturx::profile_of(&model), xml.clone())
+                        .expect("attachment"),
+                ),
+                standard: Some(DEFAULT_PDF_STANDARD.to_owned()),
+                date: SPECIMEN_DATE,
+                ident: "nachrechnen-test".to_owned(),
+            })
+            .expect("renders")
+        };
+        let with = render_with(
+            DocumentView::of(&model)
+                .with_nachrechnen(LINK)
+                .expect("a link"),
+        );
+        assert!(with.warnings.is_empty(), "{:?}", with.warnings);
+        let doc = lopdf::Document::load_mem(&with.pdf).expect("pdf");
+        let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+        let text = page_text(&doc.extract_text(&pages).expect("text")).replace(' ', "");
+        assert!(text.contains("AbCdEfGhIjKlMnOpQrStUv"), "{text}");
+        assert!(text.contains("nachrechnen"), "{text}");
+
+        let without = render_with(DocumentView::of(&model));
+        let doc = lopdf::Document::load_mem(&without.pdf).expect("pdf");
+        let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+        let text = page_text(&doc.extract_text(&pages).expect("text"));
+        assert!(!text.contains("nachrechnen"), "{text}");
     }
 
     /// A template that cannot render an invoice is not published.

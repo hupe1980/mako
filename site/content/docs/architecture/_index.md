@@ -187,7 +187,7 @@ graph TD
     subgraph daemons ["Production daemons"]
         netzbilanzd["netzbilanzd :8680<br/>NB billing"]
         einsd["einsd :9180<br/>EEG settlement"]
-        billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>13 MCP tools"]
+        billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>16 MCP tools"]
         outputd["outputd :9880<br/>customer documents<br/>Typst templates · ZUGFeRD carrier"]
         invoicd["invoicd :8280<br/>INVOIC plausibility"]
     end
@@ -271,7 +271,7 @@ All **14** daemons share one operational model:
 
 Ports, market roles and per-daemon design live in the
 [Services section](@/docs/services/_index.md). `makod` is the protocol gateway
-the rest sits behind: EDIFACT ↔ BO4E, 77 workflows over 498 Prüfidentifikatoren,
+the rest sits behind: EDIFACT ↔ BO4E, 77 workflows over 499 Prüfidentifikatoren,
 AS4 ingest and the deadline scheduler.
 
 | Daemon | Port | Role in the mesh |

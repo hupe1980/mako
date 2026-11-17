@@ -12,6 +12,7 @@ a refusal, never a substitute.
 | **Port** | 9180 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `einspeiser`, `eeg_anlagen`, `settlement_receipts`, `marktwert_preise`, `enfg_ledger`, … |
 | **MCP** | 20 tools, 6 prompts at `/mcp` |
+| **Typed reads** | six shared with their REST `GET`s, pinned in `mcp.snapshot.json` and `openapi.json` |
 | **Emits** | `de.eeg.verguetung.berechnet`, `de.eeg.marktpraemie.berechnet`, `de.eeg.veraeusserungsform.gewechselt`, `de.eeg.anlage.*` |
 | **Consumes** | none |
 | **Depends on** | `edmd` (feed-in), `accountingd` and `marktd` (EnFG ledger) |
@@ -37,6 +38,8 @@ EINSD_CONFIG=deploy/demo/einsd.toml cargo run -p einsd -- --check-config
 | `/api/v1/marktwert/…` · `/api/v1/epex-monthly/…` | market-value series |
 | `/api/v1/enfg/ledger/{year}/{month}` · `/enfg/mitteilung/{year}/{month}` | EnFG Belastungsausgleich |
 | `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` | the form in force, for `processd` |
+| `GET /api/v1/anlagen/ohne-mastr` · `/anlagen/unabgerechnet/{year}/{month}` · `/settlements/{year}/{month}/erklaerung` | the reads the Anlage page needs, each also an MCP tool answering the same type |
+| `GET /api/v1/openapi.json` | the OpenAPI 3.1 document of the typed reads, committed as `openapi.json` |
 
 The full list with each Cedar action is the guide's
 [Endpoints](https://hupe1980.github.io/mako/docs/services/einsd/#endpoints).

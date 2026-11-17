@@ -10,6 +10,9 @@
 # Run it with: oauth2-proxy --alpha-config=gateway.yaml --config=oauth2-proxy.cfg
 # (provider, client id/secret, cookie secret and redirect URL live in the
 # legacy config or the environment, as oauth2-proxy expects).
+#
+# The session cookie settings (SameSite=Strict, Secure, HttpOnly) are in
+# oauth2-proxy.cfg beside this file: the alpha config has no cookie section.
 injectRequestHeaders:
   - name: Authorization
     values:
@@ -21,45 +24,54 @@ upstreamConfig:
     - id: desk
       path: /
       uri: http://desk:8080
-    # One entry per service the Desk reads; the prefix is stripped.
+    # One entry per service the Desk reaches, the prefix stripped. Each path
+    # names what the Desk calls — `/mcp` and its write routes — and nothing
+    # else, so a person's token reaches no `/admin`, `/metrics` or `/health`.
+    # A path no entry matches falls to the Desk's upstream above, which
+    # answers with the app. A route the Desk starts calling is added here
+    # (`src/app/deploy.test.ts` holds both lists).
     - id: makod
-      path: ^/svc/makod/(.*)$
+      path: ^/svc/makod/(mcp|api/v1/openapi\.json|api/v1/probe/[^/]+)$
       rewriteTarget: /$1
       uri: http://makod:8080
     - id: processd
-      path: ^/svc/processd/(.*)$
+      path: ^/svc/processd/(mcp|api/v1/openapi\.json|api/v1/queue/[^/]+/(?:approve|reject)|api/v1/counterparties/[^/]+/[^/]+)$
       rewriteTarget: /$1
       uri: http://processd:8580
     - id: vertragd
-      path: ^/svc/vertragd/(.*)$
+      path: ^/svc/vertragd/(mcp|api/v1/openapi\.json)$
       rewriteTarget: /$1
       uri: http://vertragd:9780
     - id: marktd
-      path: ^/svc/marktd/(.*)$
+      path: ^/svc/marktd/(mcp|api/v1/openapi\.json|api/v1/malos/[^/]+|api/v1/malos/[^/]+/lokationsbuendel|api/v1/versorgung/[^/]+/history|api/v1/lokationsbuendelstrukturen)$
       rewriteTarget: /$1
       uri: http://marktd:8180
     - id: invoicd
-      path: ^/svc/invoicd/(.*)$
+      path: ^/svc/invoicd/(mcp|api/v1/openapi\.json|api/v1/receipts/[^/]+/(?:resolve-dispute|dispatch-answer|feststellungen)|api/v1/leistungsnachweise)$
       rewriteTarget: /$1
       uri: http://invoicd:8280
     - id: edmd
-      path: ^/svc/edmd/(.*)$
+      path: ^/svc/edmd/(mcp|api/v1/openapi\.json|api/v1/(?:coverage|timeseries|quality|corrections)/[^/]+)$
       rewriteTarget: /$1
       uri: http://edmd:8380
     - id: netzbilanzd
-      path: ^/svc/netzbilanzd/(.*)$
+      path: ^/svc/netzbilanzd/(mcp|api/v1/openapi\.json)$
       rewriteTarget: /$1
       uri: http://netzbilanzd:8680
     - id: billingd
-      path: ^/svc/billingd/(.*)$
+      path: ^/svc/billingd/(mcp|api/v1/openapi\.json|api/v1/billing/[^/]+/(?:release|reviewed))$
       rewriteTarget: /$1
       uri: http://billingd:9280
     - id: accountingd
-      path: ^/svc/accountingd/(.*)$
+      path: ^/svc/accountingd/(mcp|api/v1/openapi\.json|api/v1/bookings/[^/]+/(?:rebook|discard)|api/v1/accounts/[^/]+/(?:balance|ledger)|api/v1/dunning|api/v1/offene-posten|api/v1/payments/match)$
       rewriteTarget: /$1
       uri: http://accountingd:9380
+    - id: einsd
+      path: ^/svc/einsd/(mcp|api/v1/openapi\.json)$
+      rewriteTarget: /$1
+      uri: http://einsd:9180
     - id: agentd
-      path: ^/svc/agentd/(.*)$
+      path: ^/svc/agentd/(api/v1/openapi\.json|api/v1/(?:runs|runs/[^/]+/(?:antwort|schritte|stopp|bewertung)|vorschlaege|agents/catalog|hinweise))$
       rewriteTarget: /$1
       uri: http://agentd:9580
 server:

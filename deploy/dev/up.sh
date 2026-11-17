@@ -53,11 +53,13 @@ else
 fi
 cargo build $($ci || echo -q) $(printf -- '-p %s ' "${services[@]}") -p mako-seed
 
-# The demo configuration, its peers and its database moved to loopback.
+# The demo configuration, its peers and its database moved to loopback; the
+# public Nachrechnen link, served by the demo's edge on :8000, goes to portald.
 mkdir -p "$dir" deploy/dev/.data/edmd-warehouse
 for s in "${services[@]}"; do
   perl -pe 's#http://(makod|marktd|invoicd|edmd|processd|netzbilanzd|productd|einsd|billingd|accountingd|portald|agentd|vertragd|outputd):(\d+)#http://127.0.0.1:$2#g;
             s#^addr *= *"0\.0\.0\.0:#addr = "127.0.0.1:#;
+            s#http://localhost:8000/nachrechnen/#http://127.0.0.1:9480/nachrechnen/#g;
             s#\@postgres:5432/#\@localhost:'"$pg"'/#g' "deploy/demo/$s.toml" >"$dir/$s.toml"
 done
 

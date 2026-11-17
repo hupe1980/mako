@@ -193,7 +193,7 @@ impl MockGnb {
         };
 
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("GNB: execute ReceiveUtilmd 44001");
     }
@@ -217,7 +217,7 @@ impl MockGnb {
                     obligations: vec![],
                     stammdaten: mako_engine::payload::Stammdaten::default(),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))
@@ -230,7 +230,7 @@ impl MockGnb {
     /// Transitions state from `AntwortGesendet` to `Active`.
     async fn activate(&self) {
         self.process
-            .run(GasSupplierChangeCommand::Activate, RunOptions::new())
+            .run(GasSupplierChangeCommand::Activate, RunOptions::system())
             .await
             .expect("GNB: execute Activate");
     }
@@ -410,7 +410,7 @@ async fn e2e_lieferbeginn_gas_ahb_validation_failure() {
                 ],
                 received_at: time::OffsetDateTime::now_utc(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("ReceiveUtilmd with invalid message must not panic");
@@ -462,7 +462,7 @@ async fn e2e_lieferbeginn_gas_duplicate_message_rejected() {
                 validation_errors: vec![],
                 received_at: time::OffsetDateTime::now_utc(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect_err("second ReceiveUtilmd must be rejected");

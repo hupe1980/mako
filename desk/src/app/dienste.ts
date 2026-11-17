@@ -25,6 +25,7 @@ const GELESEN = [
   "edmd",
   "netzbilanzd",
   "accountingd",
+  "einsd",
   "agentd",
 ] as const satisfies readonly (Service | "agentd")[];
 
@@ -34,7 +35,6 @@ export const DIENST: Record<Service | "agentd", string> = benannt(GELESEN);
 /** Every service an assistant skill may read, as an operator knows it. */
 const ALLE: Record<string, string> = benannt([
   ...GELESEN,
-  "einsd",
   "productd",
   "portald",
   "sperrd",

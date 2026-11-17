@@ -779,3 +779,90 @@ fn serialized_activation_survives_the_namespace_checked_parse() {
     let back = redispatch_xml::parse(&xml).expect("namespace-checked parse succeeds");
     assert!(matches!(back, redispatch_xml::Document::Activation(_)));
 }
+
+// ── ActivationDocument AWT 1.1g ──────────────────────────────────────────────
+
+/// AWT 1.1g's one change (Änderungshistorie zu den XML-Datenformaten für den
+/// Redispatch 2.0, Stand 01.10.2026, Änd-ID X15156, S. 37–38) adds the
+/// Bahnstrom control area `11YRBAHNSTROM--P` to `ConnectingArea`, `InArea` and
+/// `OutArea` of the Use-Cases „Übermittlung des Abrufs einer SR an anweisenden
+/// NB mit/ohne DP", „Aktualisierung der Abrufrückmeldung für den Abruf einer SR
+/// mit/ohne DP" and „Rückmeldung zur Umsetzbarkeit auf den Abruf im
+/// Aufforderungsfall" (AWT 1.1g S. 12–14, 28–30, 36–38). The model applies one
+/// German control-area list to every Use-Case, so a document carrying the code
+/// in those places must be read and validated — no date switch, because 1.1g
+/// widens what is permitted and the model never held the narrower 1.1f list.
+#[test]
+fn activation_awt_1_1g_bahnstrom_area_is_accepted() {
+    use redispatch_xml::documents::activation::ScheduleTimeSeries;
+
+    let bahnstrom = "11YRBAHNSTROM--P";
+    let mut ts = sample_activation_ts();
+    ts.connecting_area = AttrVWithScheme {
+        v: ControlZone::Bahnstrom,
+        coding_scheme: EicCodingScheme::Eic,
+    };
+    let area = |v: &str| AttrVWithScheme {
+        v: v.to_string(),
+        coding_scheme: EicCodingScheme::Eic,
+    };
+    let doc = ActivationDocument {
+        schedule_time_series: vec![ScheduleTimeSeries {
+            time_series_identification: sample_doc_id(),
+            business_type: AttrV {
+                v: "A06".to_string(),
+            },
+            product: AttrV {
+                v: "8716867000016".to_string(),
+            },
+            in_area: area(bahnstrom),
+            out_area: area(bahnstrom),
+            in_party: area("11XBK-LF-------9"),
+            out_party: area("11XBK-STD------Y"),
+            measurement_unit: AttrV {
+                v: MeasureUnit::Megawatt,
+            },
+            period: sample_period(),
+        }],
+        document_identification: sample_doc_id(),
+        document_version: sample_doc_version(),
+        document_type: AttrV {
+            v: ActivationDocType::RedispatchActivation,
+        },
+        process_type: AttrV {
+            v: ActivationProcessType::Redispatch,
+        },
+        sender_identification: sample_sender(),
+        sender_role: AttrV {
+            v: MarketRoleType::GridOperator,
+        },
+        receiver_identification: sample_receiver(),
+        receiver_role: AttrV {
+            v: MarketRoleType::ResourceProvider,
+        },
+        creation_date_time: AttrV { v: sample_ts() },
+        activation_time_interval: sample_interval(),
+        order_identification: None,
+        order_identification_version: None,
+        time_series: vec![ts],
+        reason: None,
+    };
+
+    let xml = redispatch_xml::serialize_as(&doc, true).unwrap();
+    let xml = std::str::from_utf8(&xml).unwrap().replace(
+        "<ActivationDocument",
+        "<ActivationDocument xmlns=\"urn:entsoe.eu:wgedi:errp:activationdocument:5:0\"",
+    );
+    assert!(xml.contains(bahnstrom));
+    let parsed = redispatch_xml::parse_and_validate(xml.as_bytes())
+        .unwrap_or_else(|e| panic!("AWT 1.1g Bahnstrom area refused: {e:?}"));
+    let redispatch_xml::Document::Activation(back) = parsed else {
+        panic!("not an ActivationDocument");
+    };
+    assert_eq!(
+        back.time_series[0].connecting_area.v,
+        ControlZone::Bahnstrom
+    );
+    assert_eq!(back.schedule_time_series[0].in_area.v, bahnstrom);
+    assert_eq!(back.schedule_time_series[0].out_area.v, bahnstrom);
+}

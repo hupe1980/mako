@@ -105,7 +105,7 @@ impl MockBkv {
                     biko_id: BikoId::new(BIKO_ID),
                     message_ref: MessageRef::new(format!("MSCONS-BK-2026-01-V{n}")),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|_| phase)
@@ -123,7 +123,7 @@ impl MockBkv {
                     abweisungsgrund: None,
                     message_ref: MessageRef::new(format!("IFTSTA-DS-V{n}")),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|_| ())
@@ -148,7 +148,7 @@ impl MockBkv {
                     grund: grund.map(ToOwned::to_owned),
                     message_ref: MessageRef::new(format!("IFTSTA-PM-V{n}")),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|_| ())
@@ -157,7 +157,7 @@ impl MockBkv {
 
     async fn close(&self, lauf: Abrechnungslauf) -> Result<(), String> {
         self.process
-            .run(BillingCommand::CloseClearing { lauf }, RunOptions::new())
+            .run(BillingCommand::CloseClearing { lauf }, RunOptions::system())
             .await
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -277,7 +277,7 @@ async fn an_outbound_pruefmitteilung_cannot_arrive() {
                     abweisungsgrund: None,
                     message_ref: MessageRef::new("IN"),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await;
         assert!(err.is_err(), "PID {pid} is outbound");
@@ -324,7 +324,7 @@ async fn an_abgewiesene_pruefmitteilung_no_longer_stands() {
                 abweisungsgrund: Some("MaBiS-ZP für diesen Monat nicht aktiv".into()),
                 message_ref: MessageRef::new("IFTSTA-AB-1"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("Abweisung accepted");

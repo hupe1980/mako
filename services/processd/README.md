@@ -14,7 +14,7 @@ Sperrauftrag queue that turns ORDERS 17115 / 17117 into field work and IFTSTA
 |---|---|
 | **Port** | 8580 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — approval queue, decisions, read model, Sperrauftrag queue |
-| **MCP** | 22 tools, 8 prompts at `/mcp` |
+| **MCP** | 23 tools, 8 prompts at `/mcp` |
 | **Emits** | `de.obs.deadline.approaching`, `de.obs.stp.parity.alert`, `de.sperr.*` |
 | **Consumes** | `de.mako.*` and `de.markt.versorgung.*` at `POST /webhook` (HMAC) |
 | **Depends on** | makod, marktd; einsd and vertragd optional |
@@ -40,11 +40,13 @@ cargo run -p processd --no-default-features --features nb-only   # one role only
 |---|---|
 | `POST /webhook` | Inbound CloudEvent from `marktd` |
 | `GET /api/v1/decisions`, `/api/v1/queue` | Anmeldung STP decisions; approval queue |
-| `POST /api/v1/queue/{id}/approve` · `/reject` | Decide a queued answer |
+| `GET /api/v1/klaerfaelle` | Open Klärfälle: cause, action and due date from code tables |
+| `POST /api/v1/queue/{id}/approve` · `/reject` | Decide a queued answer (`application/json`; `body_sha256` → `412` when stale); makod's pre-send check runs first — `422 pruefung_abgelehnt` / `nicht_geprueft`, nothing marked |
 | `POST /api/v1/start-supply` · `-gas`, `/end-supply` · `-gas` | LF Lieferbeginn / Lieferende bootstrap |
 | `GET /api/v1/eog`, `/api/v1/neuanlage` | EoG and `E_0608` Neuanlage case logs |
 | `GET /obs/processes`, `/obs/kpis`, `/obs/overdue` | Process read model |
 | `GET /api/v1/audit/gleichbehandlung` | § 7a Abs. 5 EnWG evidence (`?year=&format=csv`) |
+| `GET /api/v1/counterparties`, `/{mp_id}/{rolle}` | Gegenpartei-Akte: how a counterparty answered what it owed (`?von=&bis=&format=csv`) |
 | `/api/v1/sperr-orders` | Sperrauftrag queue (NB build) |
 
 Every route checks a Cedar action in `policies/processd.cedar`; the full table is

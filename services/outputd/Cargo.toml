@@ -59,6 +59,10 @@ typst-layout = "0.15"
 typst-pdf    = "0.15"
 typst-assets = { version = "0.15", features = ["fonts"] }
 
+# The QR code beside the Nachrechnen link on an invoice letter, drawn as SVG
+# for Typst. Project Nayuki's reference encoder: MIT, no dependencies.
+qrcodegen    = "1.8"
+
 # Carrier surgery: locating the XMP stream `document::facturx` extends, and
 # reading page text so gates prove mandatory content is printed. Version kept
 # in step with en16931-formats' own lopdf.

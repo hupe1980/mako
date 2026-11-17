@@ -27,7 +27,7 @@ let bytes = serialize(&doc)?;                    // back to XML
 
 | Document type | XSD version |
 |---|---|
-| `ActivationDocument` (ACO/ACR/AAR) | 1.1f |
+| `ActivationDocument` (ACO/ACR/AAR) | 1.1f (AWT 1.1g from 01.04.2027) |
 | `AcknowledgementDocument` | 1.0g |
 | `Kaskade` | 1.0 |
 | `PlannedResourceScheduleDocument` | 1.0f |

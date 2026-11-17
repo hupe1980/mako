@@ -935,6 +935,7 @@ async fn enqueue(
         ),
         window.expires_at,
         cfg.tenant.clone(),
+        "msb-module",
     )
     .with_commands(approve.0, reject.0, Some(approve.1))
     .with_answer_payload(
@@ -1058,6 +1059,7 @@ pub async fn handle_preisanfrage_reqote(
             ),
             window.expires_at,
             cfg.tenant.clone(),
+            "msb-module",
         )
         .with_approve_command(
             mako_markt::commands::WIM_PREISANFRAGE_ANGEBOT_SENDEN,

@@ -29,6 +29,8 @@ export interface Eintrag {
   /** The task — why it waits — the row's first line. */
   grund: string;
   frist: Instant | null;
+  /** Since when it waits, where the service states it: the Arbeitsvorrat's „älteste vom". */
+  seit?: Instant | null;
   /** The MaLo or process the agent's Hinweise are filed under. */
   bezug: string[];
   /** What the assistant is asked about when this item has focus. */
@@ -47,7 +49,7 @@ export interface Eintrag {
 /** Every source Heute reads, in no particular order. */
 export const QUELLE_IDS = [
   "freigaben",
-  "ueberfaellig",
+  "klaerfaelle",
   "anmeldungen",
   "nicht_uebermittelt",
   "korrekturbedarf",
@@ -56,6 +58,8 @@ export const QUELLE_IDS = [
   "gehalten",
   "pruefposten",
   "geparkt",
+  "abrechnungen",
+  "mahnungen",
   "hinweise",
 ] as const;
 
@@ -76,6 +80,10 @@ export const OHNE_WARUM: Partial<Record<QuelleId, string>> = {
     "Der Assistent liest die Rechnungsprüfung nicht; zur MaLo nennte er nicht, warum die Rechnung angehalten ist.",
   gehalten:
     "Der Assistent liest die offenen Prüfschritte nicht; warum die Rechnung gehalten ist, steht schon in der Zeile.",
+  mahnungen:
+    "Der Assistent liest das Mahnwesen nicht; Stufe und offener Betrag stehen schon in der Zeile.",
+  abrechnungen:
+    "Der Assistent liest die offenen Abrechnungen nicht; warum eine Periode offen ist, sagt der Code der Abrechnung in der Zeile.",
 };
 
 /** The Anker „Warum?" asks about for an item, or null where it is not offered. */

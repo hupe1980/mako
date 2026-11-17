@@ -9,8 +9,8 @@ no grid topology, no EDIFACT and no customer master data.
 | | |
 |---|---|
 | **Port** | 9280 (`deploy/ports.toml`) |
-| **Database** | PostgreSQL — `billing_records`, `steuerzeilen`, `invoice_number_series`, `event_outbox` |
-| **MCP** | 13 tools, 6 prompts at `/mcp` |
+| **Database** | PostgreSQL — `billing_records`, `steuerzeilen`, `unbilled_periods`, `invoice_number_series`, `event_outbox` |
+| **MCP** | 16 tools, 6 prompts at `/mcp` |
 | **Emits** | `de.billing.rechnung.erstellt`, `de.billing.xrechnung.b2g.ready`, `de.billing.abrechnungsinformation.monatlich`, `de.vpp.settlement.berechnet` |
 | **Consumes** | `de.vpp.dispatch.confirmed` at `POST /api/v1/webhooks/vpp-dispatch` |
 | **Depends on** | `productd`, `edmd`, `marktd`, `vertragd`, `outputd`, `accountingd` |
@@ -28,6 +28,8 @@ BILLINGD_CONFIG=deploy/demo/billingd.toml cargo run -p billingd -- --check-confi
 |---|---|
 | `POST /api/v1/billing/{malo_id}/calculate` · `/preview` · `/tarifwechsel` | bill a period, dry-run it, split it at a tariff change |
 | `GET /api/v1/billing` · `/{id}` · `/review-queue` | records and the review queue |
+| `GET /api/v1/billing/unbilled` · `/deadline-summary` | the § 40c Abs. 2 EnWG watch: periods the run could not bill, and per Lieferant owed / on time / late / overdue |
+| `GET /api/v1/billing/{id}/nachrechnung` · `POST /nachrechnen` (token in the body) · `POST /{id}/verify-token/revoke` | Rechnung nachrechnen: the recomputation and seal verdict, the masked view portald renders, revoking the link |
 | `POST /api/v1/billing/{id}/correction` | Storno, releasing the period for a fresh original |
 | `POST /api/v1/billing/{id}/release` · `/reviewed` · `/versenden` | the risk gate's release, the review, dispatch |
 | `GET /api/v1/billing/{id}/xrechnung` · `/ubl` · `/pdf` | XRechnung CII, PEPPOL UBL, ZUGFeRD PDF/A-3 |

@@ -28,8 +28,12 @@
 //! | `PUT`    | `/api/v1/anlagen/{tr_id}` | Update plant |
 //! | `DELETE` | `/api/v1/anlagen/{tr_id}` | Decommission plant |
 //! | `GET`    | `/api/v1/anlagen/foerderung-auslaufend` | Plants expiring within 180 days |
+//! | `GET`    | `/api/v1/anlagen/ohne-mastr` | Active plants not registered in the MaStR |
+//! | `GET`    | `/api/v1/anlagen/unabgerechnet/{year}/{month}` | Active plants with no receipt for the month |
 //! | `POST`   | `/api/v1/anlagen/{tr_id}/settle/{year}/{month}` | Trigger monthly settlement |
 //! | `GET`    | `/api/v1/anlagen/{tr_id}/settlements` | Settlement history |
+//! | `GET`    | `/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/erklaerung` | One receipt with its positions |
+//! | `GET`    | `/api/v1/openapi.json` | The OpenAPI document of the typed reads (`reads`) |
 //! | `GET`    | `/api/v1/anlagen/{tr_id}/pflichtverstoesse` | §52 Abs. 1 breaches recorded against the plant |
 //! | `POST`   | `/api/v1/anlagen/{tr_id}/pflichtverstoesse` | Record one — the only path for the nine Nummern einsd cannot derive |
 //! | `PUT`    | `/api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben` | Record the cure (§52 Abs. 3 Satz 1 Nr. 1) |

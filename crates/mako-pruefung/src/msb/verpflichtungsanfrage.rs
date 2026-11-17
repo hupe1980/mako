@@ -19,9 +19,9 @@
 //! not refused `E17`: it escalates with the finding, beside the Ermessens-
 //! decision it needs anyway.
 //!
-//! A late **Gas** request escalates too: the PID-Übersicht 4.0 publishes the
-//! Gas Verpflichtungsanfrage as 44168 → 44169 and no Ablehnungs-PID, so
-//! `E_2006`'s `E17` has no message to ride.
+//! A late **Gas** request is refused `E17` out of `E_2006` (Codeliste `G_0071`,
+//! EBD 4.3 Kap. 14.3.6, S. 776), carried by 44170 (PID-Übersicht 4.0
+//! Lesefassung Stand 12.08.2026, Tabelle 1 Lfd. Nr. 39260, S. 76).
 
 use mako_fristen::HolidayCalendar;
 use mako_fristen::vorlauf::{VorlaufVerdict, vorlauf};
@@ -37,10 +37,9 @@ const VORLAUF_KEY: &str = "wim.verpflichtungsanfrage";
 
 /// Judge the Verpflichtungsanfrage's ÜT against its window.
 ///
-/// `Some(Reject(E17))` when a Strom request arrived after the 5. WT vor the
-/// Zuordnungsende, `Some(Escalate)` when it arrived before the 8. or is a late
-/// Gas request, `None` when it is in time and the gMSB's own decision is all
-/// that is left.
+/// `Some(Reject(E17))` when the request arrived after the 5. WT vor the
+/// Zuordnungsende, `Some(Escalate)` when it arrived before the 8., `None` when
+/// it is in time and the gMSB's own decision is all that is left.
 ///
 /// # Panics
 ///
@@ -66,21 +65,16 @@ pub fn pruefe_verpflichtungsanfrage_frist(
                  {vorlaeufiges_zuordnungsende} ({})",
                 row.source
             );
-            Some(match sparte {
-                Sparte::Strom => MsbEntscheidung::Reject(RejectReason::new(
-                    EBD_VERPFLICHTUNGSANFRAGE,
-                    lookup(EBD_VERPFLICHTUNGSANFRAGE, "E17")
-                        .expect("E17 is published for the Verpflichtungsanfrage"),
-                    4,
-                    befund,
-                )),
-                Sparte::Gas => MsbEntscheidung::Escalate {
-                    reason: format!(
-                        "{befund}; {EBD_VERPFLICHTUNGSANFRAGE_GAS} veröffentlicht E17, die \
-                         Gas-Verpflichtungsanfrage hat aber keine Ablehnungs-PID (44168 → 44169)"
-                    ),
-                },
-            })
+            let tree = match sparte {
+                Sparte::Strom => EBD_VERPFLICHTUNGSANFRAGE,
+                Sparte::Gas => EBD_VERPFLICHTUNGSANFRAGE_GAS,
+            };
+            Some(MsbEntscheidung::Reject(RejectReason::new(
+                tree,
+                lookup(tree, "E17").expect("E17 is published for the Verpflichtungsanfrage"),
+                4,
+                befund,
+            )))
         }
         VorlaufVerdict::TooEarly { excess_wt } => Some(MsbEntscheidung::Escalate {
             reason: format!(
@@ -127,13 +121,16 @@ mod tests {
         }
     }
 
-    /// 44168 has no Ablehnungs-PID to carry `E17`.
+    /// A late Gas request is refused `E17` out of `E_2006`, carried by 44170.
     #[test]
-    fn a_late_gas_request_escalates_for_want_of_a_carrier() {
-        assert!(matches!(
-            pruefe_verpflichtungsanfrage_frist(Sparte::Gas, date!(2026 - 12 - 08), ENDE, CAL),
-            Some(MsbEntscheidung::Escalate { reason }) if reason.contains("44169")
-        ));
+    fn a_late_gas_request_is_refused_e17() {
+        match pruefe_verpflichtungsanfrage_frist(Sparte::Gas, date!(2026 - 12 - 08), ENDE, CAL) {
+            Some(MsbEntscheidung::Reject(r)) => {
+                assert_eq!(r.antwort.antwortcode, "E17");
+                assert_eq!(r.antwort.tree, EBD_VERPFLICHTUNGSANFRAGE_GAS);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

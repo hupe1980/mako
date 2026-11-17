@@ -130,6 +130,7 @@ fn malo_of(msg: &edi_energy::AnyMessage) -> String {
 async fn eog_anmelden(state: &makod::commands_api::CommandsApiState, malo: &str) -> ProcessId {
     let outcome = makod::commands_api::dispatch_command(
         state,
+        mako_engine::envelope::Akteur::System,
         "geli.eog.anmelden",
         &crate::support::geli_eog_anmeldung(malo, LF_MP),
     )

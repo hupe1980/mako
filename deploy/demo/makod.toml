@@ -11,6 +11,10 @@
 
 [authz]
 permit_all = true
+# A service key listed here is the system: its own commands are counted as
+# no person's, and processd may name the person whose approval it relays in
+# `Mako-Akteur`. Every name must be a key in `[http] auth_keys`.
+act_on_behalf = ["processd", "netzbilanzd", "invoicd", "marktd"]
 
 [logging]
 level  = "info"
@@ -22,9 +26,17 @@ allow_volatile = true
 [http]
 addr = "0.0.0.0:8080"
 # The HTTP port submits commands, so makod refuses to open it without a key.
-# The other demo configs and the seeder call makod with `dev-makod-key`;
-# agentd's MCP client presents `dev-mcp-key`.
-auth_keys = ["dev=dev-makod-key", "agentd=dev-mcp-key"]
+# The seeder and the Desk call makod with `dev-makod-key`; agentd's MCP
+# client presents `dev-mcp-key`, and each service that sends commands its own
+# key, so makod tells a service's command from a person's.
+auth_keys = [
+  "dev=dev-makod-key",
+  "agentd=dev-mcp-key",
+  "processd=dev-processd-key",
+  "netzbilanzd=dev-netzbilanzd-makod-key",
+  "invoicd=dev-invoicd-makod-key",
+  "marktd=dev-marktd-makod-key",
+]
 
 # The roles this instance plays; each needs exactly one [[party]] MP-ID. The
 # Stadtwerk acts in Gas under its DVGW-Codenummer: a Marktteilnehmer holds one

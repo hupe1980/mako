@@ -79,6 +79,18 @@ pub struct PositionTrace {
 
     /// Human-readable note on rounding, if applicable.
     pub rounding_note: Option<String>,
+
+    /// How the metered quantity was obtained (§ 40 Abs. 2 Nr. 6 EnWG) — the
+    /// [`Ablesungsart`](crate::Ablesungsart) label. `None` on a line that bills
+    /// no metered quantity, or where the reading's origin was not stated.
+    #[serde(default)]
+    pub quantity_source: Option<String>,
+
+    /// The metered quantity is an estimate or an Ersatzwert, not a reading
+    /// (§ 40a EnWG). The engine's input carries one flag for both, so the
+    /// trace does not say which of the two it is.
+    #[serde(default)]
+    pub estimated: bool,
 }
 
 impl PositionTrace {
@@ -103,6 +115,8 @@ impl PositionTrace {
             tariff_source: None,
             pro_rata_fraction: None,
             rounding_note: None,
+            quantity_source: None,
+            estimated: false,
         }
     }
 
@@ -126,6 +140,8 @@ impl PositionTrace {
             tariff_source: None,
             pro_rata_fraction: None,
             rounding_note: None,
+            quantity_source: None,
+            estimated: false,
         }
     }
 

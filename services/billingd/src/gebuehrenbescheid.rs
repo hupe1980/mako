@@ -238,6 +238,7 @@ pub async fn speichern(
             total_netto_eur: gebuehr.netto_eur,
             total_brutto_eur: gebuehr.brutto_eur,
             steuerzeilen: &crate::steuerzeilen::aus_rechnung(gebuehr),
+            due_on: None,
         },
     )
     .await?;

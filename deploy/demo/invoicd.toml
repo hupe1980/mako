@@ -21,7 +21,7 @@ tenant = "9900357000004"
 
 [makod]
 url     = "http://makod:8080"
-api_key = "dev-makod-key"
+api_key = "dev-invoicd-makod-key"
 
 [marktd]
 url     = "http://marktd:8180"

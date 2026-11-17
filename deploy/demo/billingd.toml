@@ -53,3 +53,19 @@ eur    = "500000"
 # dev principal. Reported as a warning by `--check-config`.
 [oidc]
 mode = "demo"
+
+# portald relays the public „Rechnung nachrechnen" page under its own key, so
+# billingd sees User::"portald" — the one principal the token route admits.
+[[oidc.service_keys]]
+name = "portald"
+key  = "dev-portald-key"
+
+# Rechnung nachrechnen: every issued invoice carries a link — and on the
+# letter a QR code — to portald's public page, which recomputes it line by
+# line. The token is derived from this key and the record id, so the key is a
+# secret like any other; this one is a development literal. `just dev` serves
+# portald on loopback; in `just demo` the page is reached inside the compose
+# network.
+[nachrechnen]
+token_key  = "dev-nachrechnen-token-key-0123456789abcdef"
+public_url = "http://localhost:8000/nachrechnen/"

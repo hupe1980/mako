@@ -123,7 +123,7 @@ impl MockLfn {
                         stammdaten: mako_engine::payload::Stammdaten::default(),
                     })),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))
@@ -176,7 +176,7 @@ impl MockLfn {
             .dispatch(&raw as &dyn Any, &self.fv)
             .expect("LFN: adapt NB response to LfAnmeldungCommand");
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("LFN: execute HandleAntwort");
     }
@@ -285,7 +285,7 @@ impl MockNb {
         };
 
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("NB: execute ReceiveUtilmd");
     }
@@ -308,7 +308,7 @@ impl MockNb {
                     obligations,
                     lfa_lieferende: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))

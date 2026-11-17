@@ -80,7 +80,7 @@ async fn lf_initiate_sperrauftrag_transitions_to_auftrag_gesendet() {
             message_ref: msg("LF-SPERR-001"),
             gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("InitiateSperrung must succeed from New");
@@ -105,7 +105,7 @@ async fn lf_initiate_entsperrauftrag_transitions_to_auftrag_gesendet() {
             message_ref: msg("LF-ENTSPERR-001"),
             gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("InitiateSperrung (Entsperrauftrag) must succeed from New");
@@ -130,7 +130,7 @@ async fn lf_happy_path_sperrauftrag_bestaetigt() {
             message_ref: msg("LF-SPERR-002"),
             gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -144,7 +144,7 @@ async fn lf_happy_path_sperrauftrag_bestaetigt() {
             sender: lf_gnb(),
             reason: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveOrdrsp (Bestätigung) must succeed from AuftragGesendet");
@@ -170,7 +170,7 @@ async fn lf_rejection_transitions_to_ordrsp_abgelehnt() {
             message_ref: msg("LF-SPERR-003"),
             gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -183,7 +183,7 @@ async fn lf_rejection_transitions_to_ordrsp_abgelehnt() {
             sender: lf_gnb(),
             reason: Some("Keine Zuständigkeit für diese Marktlokation".to_owned()),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveOrdrsp (Ablehnung) must succeed from AuftragGesendet");
@@ -209,7 +209,7 @@ async fn lf_stornierung_before_ordrsp() {
             message_ref: msg("LF-SPERR-004"),
             gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -218,7 +218,7 @@ async fn lf_stornierung_before_ordrsp() {
         GasSperrungLfCommand::SendStornierung {
             message_ref: msg("LF-STORNO-001"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("SendStornierung must succeed from AuftragGesendet");
@@ -243,7 +243,7 @@ async fn lf_stornierung_accepted_path() {
             message_ref: msg("LF-SPERR-005"),
             gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -252,7 +252,7 @@ async fn lf_stornierung_accepted_path() {
         GasSperrungLfCommand::SendStornierung {
             message_ref: msg("LF-STORNO-002"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("stornierung");
@@ -265,7 +265,7 @@ async fn lf_stornierung_accepted_path() {
             message_ref: msg("GNB-STORNO-001"),
             sender: lf_gnb(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveStornoOrdrsp (Bestätigung) must succeed from StornierungGesendet");
@@ -292,7 +292,7 @@ async fn lf_timeout_is_a_frist_breach() {
             message_ref: msg("LF-SPERR-006"),
             gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -302,7 +302,7 @@ async fn lf_timeout_is_a_frist_breach() {
             deadline_id: DeadlineId::new(),
             label: Box::from(mako_geli_gas::sperrung_lf::ANTWORT_WINDOW_LABEL),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired must succeed from AuftragGesendet");
@@ -342,7 +342,7 @@ fn receive_sperrung_cmd(validation_passed: bool) -> GasSperrungNbCommand {
 async fn nb_receive_valid_sperrauftrag_validation_passed() {
     let p = nb_process();
 
-    p.run(receive_sperrung_cmd(true), RunOptions::new())
+    p.run(receive_sperrung_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveSperrung (valid) must succeed from New");
 
@@ -358,7 +358,7 @@ async fn nb_receive_valid_sperrauftrag_validation_passed() {
 async fn nb_receive_invalid_sperrauftrag_transitions_to_rejected() {
     let p = nb_process();
 
-    p.run(receive_sperrung_cmd(false), RunOptions::new())
+    p.run(receive_sperrung_cmd(false), RunOptions::system())
         .await
         .expect("ReceiveSperrung (invalid) must not return Err — it emits Rejected event");
 
@@ -375,7 +375,7 @@ async fn nb_receive_invalid_sperrauftrag_transitions_to_rejected() {
 async fn nb_happy_path_ausgefuehrt() {
     let p = nb_process();
 
-    p.run(receive_sperrung_cmd(true), RunOptions::new())
+    p.run(receive_sperrung_cmd(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -384,7 +384,7 @@ async fn nb_happy_path_ausgefuehrt() {
             durchgefuehrt: true,
             reason: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("BestaetigueSperrung must succeed from ValidationPassed");
@@ -405,7 +405,7 @@ async fn nb_happy_path_ausgefuehrt() {
 async fn nb_bestaetige_nicht_durchgefuehrt_transitions_to_rejected() {
     let p = nb_process();
 
-    p.run(receive_sperrung_cmd(true), RunOptions::new())
+    p.run(receive_sperrung_cmd(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -414,7 +414,7 @@ async fn nb_bestaetige_nicht_durchgefuehrt_transitions_to_rejected() {
             durchgefuehrt: false,
             reason: Some("Kundenanlage nicht zugänglich".to_owned()),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("BestaetigueSperrung (nicht durchgeführt) must succeed");
@@ -432,7 +432,7 @@ async fn nb_bestaetige_nicht_durchgefuehrt_transitions_to_rejected() {
 async fn nb_receive_msb_antwort_bestaetigung() {
     let p = nb_process();
 
-    p.run(receive_sperrung_cmd(true), RunOptions::new())
+    p.run(receive_sperrung_cmd(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -442,7 +442,7 @@ async fn nb_receive_msb_antwort_bestaetigung() {
             is_confirmed: true,
             message_ref: msg("MSB-ORDRSP-001"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveMsbAntwort (Bestätigung) must succeed from ValidationPassed");
@@ -460,7 +460,7 @@ async fn nb_receive_msb_antwort_bestaetigung() {
 async fn nb_receive_stornierung_transitions_to_storniert() {
     let p = nb_process();
 
-    p.run(receive_sperrung_cmd(true), RunOptions::new())
+    p.run(receive_sperrung_cmd(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -470,7 +470,7 @@ async fn nb_receive_stornierung_transitions_to_storniert() {
             sender: MarktpartnerCode::new("4012345000023"),
             message_ref: msg("LF-STORNO-NB-001"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveStornierung must succeed from ValidationPassed");
@@ -489,7 +489,7 @@ async fn nb_receive_stornierung_transitions_to_storniert() {
 async fn nb_timeout_is_a_frist_breach() {
     let p = nb_process();
 
-    p.run(receive_sperrung_cmd(true), RunOptions::new())
+    p.run(receive_sperrung_cmd(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -499,7 +499,7 @@ async fn nb_timeout_is_a_frist_breach() {
             deadline_id: DeadlineId::new(),
             label,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired must succeed from active state");
@@ -530,7 +530,7 @@ async fn nb_domain_data_preserved_in_validation_passed() {
             validation_passed: true,
             validation_errors: vec![],
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("receive");

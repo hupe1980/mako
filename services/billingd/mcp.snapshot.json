@@ -457,6 +457,131 @@
     }
   },
   {
+    "name": "list_unbilled_periods",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "include_settled": {
+          "description": "Include the periods an invoice has since discharged (default `false`).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Max results (default 100, clamped to 1–500).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "UnbilledPeriodRow": {
+          "description": "One recorded unbilled period, as the Desk's Heute and the MCP tool read it.",
+          "type": "object",
+          "properties": {
+            "malo_id": {
+              "type": "string"
+            },
+            "lf_mp_id": {
+              "type": "string"
+            },
+            "period_from": {
+              "type": "string",
+              "format": "date"
+            },
+            "period_to": {
+              "type": "string",
+              "format": "date"
+            },
+            "final_invoice": {
+              "description": "The period ends with the supply and is owed an Abschlussrechnung.",
+              "type": "boolean"
+            },
+            "reason_code": {
+              "description": "Stable refusal code — word it from the catalogue, never show it raw.",
+              "type": "string"
+            },
+            "message": {
+              "description": "The refusal's developer message (for „Details\").",
+              "type": "string"
+            },
+            "due_on": {
+              "description": "§ 40c Abs. 2 EnWG: the last day the invoice may reach the customer.",
+              "type": "string",
+              "format": "date"
+            },
+            "days_left": {
+              "description": "Days from today (Europe/Berlin) to `due_on`; negative once overdue.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "attempts": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "settled_by": {
+              "description": "The invoice that discharged the period; `None` while it is open.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "malo_id",
+            "lf_mp_id",
+            "period_from",
+            "period_to",
+            "final_invoice",
+            "reason_code",
+            "message",
+            "due_on",
+            "days_left",
+            "attempts",
+            "settled_by"
+          ]
+        }
+      },
+      "required": [
+        "periods",
+        "count",
+        "saturated"
+      ],
+      "type": "object",
+      "properties": {
+        "periods": {
+          "description": "The earliest `due_on` first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UnbilledPeriodRow"
+          }
+        },
+        "count": {
+          "description": "How many periods `periods` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "At least `limit` periods matched: more may be waiting than were listed.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
     "name": "list_vpp_settlements",
     "annotations": {
       "readOnlyHint": true,
@@ -534,6 +659,351 @@
       }
     },
     "outputSchema": null
+  },
+  {
+    "name": "recompute_invoice",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the billing record.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Verdict": {
+          "description": "The verdict on one invoice.",
+          "type": "object",
+          "properties": {
+            "matches": {
+              "description": "Every line and total recomputes and the seal holds — „Stimmt überein\".",
+              "type": "boolean"
+            },
+            "arithmetic_matches": {
+              "description": "Every line and total recomputes to the cent.",
+              "type": "boolean"
+            },
+            "seal_holds": {
+              "description": "The stored document still hashes to the seal taken at issue. `None`\nfor a record never issued (no seal yet).",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "mismatched_positions": {
+              "description": "The positions whose stated amount does not recompute.",
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "storniert": {
+              "description": "The invoice was cancelled by a Storno.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "matches",
+            "arithmetic_matches",
+            "seal_holds",
+            "mismatched_positions",
+            "storniert"
+          ]
+        },
+        "LineView": {
+          "description": "One recomputed line, amounts as decimal strings.",
+          "type": "object",
+          "properties": {
+            "position": {
+              "description": "`positionsnummer`, from 1.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "text": {
+              "description": "The line's text as printed.",
+              "type": "string"
+            },
+            "quantity": {
+              "description": "Quantity as stated.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unit": {
+              "description": "Unit (`KWH`, `Tage`, …).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unit_price_eur": {
+              "description": "Unit price in EUR, full precision.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "stated_eur": {
+              "description": "The line amount the invoice states.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "recomputed_eur": {
+              "description": "Quantity × unit price, to the cent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "difference_eur": {
+              "description": "`stated − recomputed`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "matches": {
+              "description": "The line recomputes to the cent.",
+              "type": "boolean"
+            },
+            "formula": {
+              "description": "The calculation as the engine wrote it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rules": {
+              "description": "Provisions the line bills under.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "price_source": {
+              "description": "Where the unit price comes from.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "quantity_source": {
+              "description": "How the quantity was obtained (§ 40 Abs. 2 Nr. 6 EnWG).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "estimated": {
+              "description": "The quantity is an estimate or an Ersatzwert (§ 40a EnWG).",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "position",
+            "text",
+            "quantity",
+            "unit",
+            "unit_price_eur",
+            "stated_eur",
+            "recomputed_eur",
+            "difference_eur",
+            "matches",
+            "formula",
+            "rules",
+            "price_source",
+            "quantity_source",
+            "estimated"
+          ]
+        },
+        "TotalView": {
+          "description": "One recomputed document total.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "description": "`NETTO`, `STEUER`, `STEUERBASIS`, `GESAMTSTEUER`, `BRUTTO`, `ZU_ZAHLEN`.",
+              "type": "string"
+            },
+            "rate_percent": {
+              "description": "VAT rate in percent, on a `STEUER` row.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "stated_eur": {
+              "description": "The amount the invoice states.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "recomputed_eur": {
+              "description": "The amount recomputed.",
+              "type": "string"
+            },
+            "matches": {
+              "description": "The two agree to the cent.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "rate_percent",
+            "stated_eur",
+            "recomputed_eur",
+            "matches"
+          ]
+        }
+      },
+      "required": [
+        "record_id",
+        "rechnungsnummer",
+        "malo_id",
+        "period_from",
+        "period_to",
+        "verdict",
+        "lines",
+        "totals",
+        "vorauszahlungen_eur",
+        "public_link"
+      ],
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "description": "The billing record.",
+          "type": "string"
+        },
+        "rechnungsnummer": {
+          "description": "§ 14 Abs. 4 Nr. 4 UStG Rechnungsnummer.",
+          "type": "string"
+        },
+        "malo_id": {
+          "description": "11-digit MaLo-ID.",
+          "type": "string"
+        },
+        "period_from": {
+          "description": "First day of the billed period.",
+          "type": "string",
+          "format": "date"
+        },
+        "period_to": {
+          "description": "Last day of the billed period.",
+          "type": "string",
+          "format": "date"
+        },
+        "verdict": {
+          "description": "The verdict, on top.",
+          "$ref": "#/$defs/Verdict"
+        },
+        "lines": {
+          "description": "Every line, in the invoice's order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LineView"
+          }
+        },
+        "totals": {
+          "description": "Every document total.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TotalView"
+          }
+        },
+        "vorauszahlungen_eur": {
+          "description": "Sum of the Vorauszahlungen deducted.",
+          "type": "string"
+        },
+        "public_link": {
+          "description": "The public Nachrechnen link printed on the invoice (and in its QR\ncode), when `[nachrechnen]` is configured — what the customer opens.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        }
+      }
+    }
+  },
+  {
+    "name": "summarize_billing_deadlines",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "DeadlineSummaryRow": {
+          "description": "One Lieferant's § 40c Abs. 2 EnWG standing — the Überblick tile.",
+          "type": "object",
+          "properties": {
+            "lf_mp_id": {
+              "type": "string"
+            },
+            "owed": {
+              "description": "Open unbilled periods still inside their deadline.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "issued_on_time": {
+              "description": "Invoices issued on or before their `due_on` (Berlin date of issue).",
+              "type": "integer",
+              "format": "int64"
+            },
+            "issued_late": {
+              "description": "Invoices issued after their `due_on`.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "overdue": {
+              "description": "Open unbilled periods past their deadline.",
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "lf_mp_id",
+            "owed",
+            "issued_on_time",
+            "issued_late",
+            "overdue"
+          ]
+        }
+      },
+      "required": [
+        "lieferanten"
+      ],
+      "type": "object",
+      "properties": {
+        "lieferanten": {
+          "description": "One row per Lieferant (MP-ID).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DeadlineSummaryRow"
+          }
+        }
+      }
+    }
   },
   {
     "name": "validate_tariff_config",

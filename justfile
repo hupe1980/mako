@@ -216,7 +216,7 @@ test-accountingd-db:
     {{ just_executable() }} suite accountingd eeg_payout --include-ignored --test-threads=1
     {{ just_executable() }} suite accountingd receivables --include-ignored --test-threads=1
     {{ just_executable() }} suite accountingd sharing_booking --include-ignored
-    {{ just_executable() }} suite accountingd router_builds --include-ignored
+    {{ just_executable() }} suite accountingd router_builds --include-ignored --test-threads=1
     {{ just_executable() }} suite accountingd mcp_round_trips --include-ignored
 
 # Records integration tests for billingd.
@@ -293,7 +293,7 @@ test-policy-db:
 test-processd-db:
     cargo test -p processd --no-default-features --features integrated --test it -- \
         --include-ignored --test-threads=1 \
-        sql_integration:: worker_integration:: rebuild:: webhook_fanout:: db_scenarios::
+        sql_integration:: worker_integration:: rebuild:: webhook_fanout:: db_scenarios:: klaerfall::
 
 # Every real-PostgreSQL suite is `#[ignore]`d and named by a `test-*-db` recipe.
 #
@@ -733,6 +733,15 @@ desk-budgets:
 desk-axe:
     cd desk && npm run zugang
 
+# Every route's accessibility tree (the ARIA snapshot of `main`) held to its
+# baseline in desk/aria/; a change fails until it is blessed (`just desk-aria
+# --bless`). Text, so the same on every OS. Needs Playwright's Chromium, so it
+# is not part of `desk-check`.
+#
+# Every route's accessibility tree compared with its baseline
+desk-aria *args:
+    cd desk && node scripts/aria.ts {{ args }}
+
 # The Einrichtung view in light, dark and at a phone's width, held to its
 # baselines in desk/vergleich/ with a pixel tolerance; a change fails until it
 # is blessed (`just desk-vergleich --bless`). The baselines are Linux
@@ -756,7 +765,8 @@ desk-vergleich *args:
 
 # Needs Node (desk/.node-version) and no browser or Docker.
 #
-# The Desk's own gate: generated types current, typecheck, lint, unit tests
+# The Desk's own gate: generated types current, typecheck, lint, unit tests,
+# the production build within its size budget (scripts/umfang.ts)
 desk-check:
     cd desk && npm ci --no-audit --no-fund && npm run check
 

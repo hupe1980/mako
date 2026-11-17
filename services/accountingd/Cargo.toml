@@ -26,6 +26,10 @@ mako-markt  = { workspace = true, features = ["makod-client"] }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics", "mcp"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
+# The OpenAPI 3.1 document at `/api/v1/openapi.json`, committed as
+# `openapi.json`; `utoipa-axum` mounts a route and its entry in one call.
+utoipa       = { workspace = true }
+utoipa-axum  = { workspace = true }
 axum         = { version = "0.8" }
 sqlx         = { workspace = true, features = ["rust_decimal"] }
 tokio        = { version = "1", features = ["full"] }
@@ -54,6 +58,7 @@ testcontainers-modules = { workspace = true }
 sqlx = { workspace = true, features = ["rust_decimal"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

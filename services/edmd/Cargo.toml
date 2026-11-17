@@ -57,6 +57,8 @@ rmcp               = { workspace = true }
 # need for their money and energy fields. Declared here, where it is used,
 # rather than left to arrive through another crate's feature unification.
 schemars           = { workspace = true, features = ["rust_decimal1"] }
+utoipa             = { workspace = true }
+utoipa-axum        = { workspace = true }
 secrecy            = "0.10"
 sqlx               = { workspace = true, features = ["rust_decimal"] }
 rust_decimal       = { workspace = true }

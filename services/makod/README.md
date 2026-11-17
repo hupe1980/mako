@@ -5,7 +5,7 @@ declares: it assembles the domain workflow crates into one process engine on a
 durable [SlateDB](https://github.com/slatedb/slatedb) event store, receives and
 sends EDIFACT over AS4, takes ERP commands over REST and serves the BDEW
 API-Webdienste Strom.
-Seven modules register **77 workflows** over 498 Prüfidentifikatoren; which
+Seven modules register **77 workflows** over 499 Prüfidentifikatoren; which
 ones run is decided by `[deployment] rollen`.
 
 | | |
@@ -37,7 +37,7 @@ or `[as4] allow_no_signing`).
 | Route | Purpose |
 |---|---|
 | `POST /api/v1/commands` | ERP command — starts or answers a process |
-| `POST /api/v1/probe/{command}` | Rehearse a command; writes nothing |
+| `POST /api/v1/probe/{command}` | Rehearse a command — an Anmeldung or any Freigabe answer; writes nothing |
 | `POST /edifact` | Raw EDIFACT interchange |
 | `POST /as4/inbox/<MP-ID>` (`:4080`) | AS4 inbox per `[[party]]`, signed and encrypted |
 | `GET /api/v1/invoic/{process_id}/rechnung` | BO4E billing data of an INVOIC process |

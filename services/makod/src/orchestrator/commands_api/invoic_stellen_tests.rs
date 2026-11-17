@@ -124,7 +124,13 @@ fn wire_valid(msg: &mako_engine::outbox::OutboxMessage) -> String {
 async fn invoic_nne_stellen_spawns_once_and_sends_one_valid_invoic() {
     let state = nb_state().await;
     let p = payload(&nn_rechnung());
-    let first = dispatch_command(&state, "invoic.nne.stellen", &p).await;
+    let first = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "invoic.nne.stellen",
+        &p,
+    )
+    .await;
     let Ok(DispatchOutcome::Spawned { process_id }) = first else {
         panic!("expected a spawn, got {first:?}");
     };
@@ -134,7 +140,13 @@ async fn invoic_nne_stellen_spawns_once_and_sends_one_valid_invoic() {
     assert!(wire.contains("RFF+Z13:31002'"), "{wire}");
     assert!(wire.contains("MOA+203:80'"), "{wire}");
 
-    let again = dispatch_command(&state, "invoic.nne.stellen", &p).await;
+    let again = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "invoic.nne.stellen",
+        &p,
+    )
+    .await;
     match again {
         Err(DispatchError::DuplicateInvoice {
             process_id: existing,
@@ -158,7 +170,13 @@ async fn invoic_nne_abschlag_stellen_spawns_and_sends_a_valid_invoic() {
         o.remove("zugehoeriges_dokument");
         o.remove("preise_mp_id")
     });
-    let r = dispatch_command(&state, "invoic.nne-abschlag.stellen", &p).await;
+    let r = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "invoic.nne-abschlag.stellen",
+        &p,
+    )
+    .await;
     assert!(matches!(r, Ok(DispatchOutcome::Spawned { .. })), "{r:?}");
     let sent = outbox(&state, "INVOIC").await;
     assert_eq!(sent.len(), 1, "{sent:?}");
@@ -178,7 +196,13 @@ async fn invoic_mmm_stellen_sends_a_mehrmenge_as_31006() {
         o.remove("zugehoeriges_dokument");
         o.remove("preise_mp_id")
     });
-    let r = dispatch_command(&state, "invoic.mmm.stellen", &p).await;
+    let r = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "invoic.mmm.stellen",
+        &p,
+    )
+    .await;
     assert!(matches!(r, Ok(DispatchOutcome::Spawned { .. })), "{r:?}");
     let sent = outbox(&state, "INVOIC").await;
     assert_eq!(sent.len(), 1, "{sent:?}");
@@ -195,7 +219,13 @@ async fn a_storno_through_invoic_nne_stellen_goes_out_as_31004() {
     let original = nn_rechnung();
     let mut p = payload(&stornorechnung(&original));
     p["original_rechnungsdatum"] = "2026-02-15T00:00:00Z".into();
-    let r = dispatch_command(&state, "invoic.nne.stellen", &p).await;
+    let r = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "invoic.nne.stellen",
+        &p,
+    )
+    .await;
     let Ok(DispatchOutcome::Spawned { process_id }) = r else {
         panic!("expected a spawn, got {r:?}");
     };
@@ -232,7 +262,13 @@ async fn no_issuing_command_answers_process_not_found() {
         "invoic.sonstige-leistung.stellen",
     ] {
         let state = nb_state().await;
-        let r = dispatch_command(&state, command, &payload(&nn_rechnung())).await;
+        let r = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            command,
+            &payload(&nn_rechnung()),
+        )
+        .await;
         assert!(
             matches!(
                 r,
@@ -253,7 +289,14 @@ async fn an_invalid_rechnung_is_refused_and_nothing_is_sent() {
         marktlokation: None,
         ..nn_rechnung()
     };
-    match dispatch_command(&state, "invoic.nne.stellen", &payload(&r)).await {
+    match dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "invoic.nne.stellen",
+        &payload(&r),
+    )
+    .await
+    {
         Err(DispatchError::InvoicNichtDarstellbar { places, .. }) => {
             assert!(places.contains(&"00029".to_owned()), "{places:?}");
         }
@@ -276,6 +319,12 @@ async fn an_invoice_ref_that_is_not_the_rechnungsnummer_is_refused() {
     let state = nb_state().await;
     let mut p = payload(&nn_rechnung());
     p["invoice_ref"] = "SOMETHING-ELSE".into();
-    let r = dispatch_command(&state, "invoic.nne.stellen", &p).await;
+    let r = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "invoic.nne.stellen",
+        &p,
+    )
+    .await;
     assert!(matches!(r, Err(DispatchError::InvalidPayload(_))), "{r:?}");
 }

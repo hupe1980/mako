@@ -54,6 +54,7 @@ fn new_event() -> NewEvent {
         "TestEvent",
         1,
         serde_json::json!({"v": 1}),
+        mako_engine::envelope::Akteur::System,
     )
 }
 

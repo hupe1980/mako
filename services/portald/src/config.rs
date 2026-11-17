@@ -112,6 +112,18 @@ pub struct PortaldConfig {
     /// wrote down. Every request is logged at `warn` in this mode.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
+
+    /// How the public Rechnung-nachrechnen page addresses the reader: `sie`
+    /// (the default) or `du`. Set it to the value of outputd's
+    /// `[policy] anrede`, so the page speaks like the letter that links to it.
+    #[serde(default)]
+    pub nachrechnen_anrede: crate::nachrechnen::Anrede,
+
+    /// Reverse proxies whose `X-Forwarded-For` the public Nachrechnen page's
+    /// rate limit believes — their last entry only. Empty: the TCP peer is the
+    /// client.
+    #[serde(default)]
+    pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
 impl PortaldConfig {

@@ -224,8 +224,13 @@ pub struct ProcessProjection {
     pub malo_id: Option<String>,
     /// MP-ID of the counterparty (NB/GNB/MSB).
     pub partner_mp_id: Option<String>,
-    /// Canonical Marktrolle from `marktrole` (e.g. `"LF"`, `"NB"`).
+    /// The operator's own Marktrolle in this process, from `marktrole` — which
+    /// marktd derives from the workflow name (e.g. `"LF"`, `"NB"`) — not the
+    /// counterparty's.
     pub mdm_role: Option<String>,
+    /// The most human actor any of the process's events named
+    /// (`makoakteur`); `None` until an event names one.
+    pub eingriff: Option<mako_engine::envelope::Eingriffsklasse>,
     /// The **business Antwortfrist**, from `mako_fristen::antwort`.
     ///
     /// `None` when no Festlegung this codebase has read quantifies the window
@@ -339,6 +344,89 @@ pub struct KpiReport {
     pub avg_cycle_time_hours: Option<f64>,
     /// 95th-percentile cycle time in hours, or `None` when nothing has closed.
     pub p95_cycle_time_hours: Option<f64>,
+    /// How the processes that **ended** in the period were handled — bucketed
+    /// by the ending, not by `started_at` like the figures above.
+    pub eingriff: EingriffReport,
+}
+
+/// Below this many ended processes a share is not served: four processes
+/// make 25 % steps, and a share reads as a rate where it is an anecdote.
+pub const MIN_FUER_ANTEIL: u64 = 20;
+
+/// The definition every surface serving [`EingriffReport`] names beside it.
+pub const EINGRIFF_DEFINITION: &str = "Gezählt werden Prozesse, die im Zeitraum geendet haben (completed, rejected, failed; nach dem Tag des Endes in Europe/Berlin), je einmal nach dem menschlichsten Akteur unter ihren Ereignissen: Person vor Freigabe nach Änderung vor Freigabe unverändert vor System. „Ohne Eingriff“: kein Ereignis hat eine Person verursacht. „Freigabe unverändert“: eine Person hat einen Vorschlag freigegeben, und Befehl und Inhalt (RFC 8785) glichen dem gespeicherten Vorschlag. Offene Prozesse zählen nicht. Anteile erst ab 20 beendeten Prozessen.";
+
+/// Ended processes by their most human actor: the share that ran
+/// without a person, per PID.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EingriffReport {
+    /// Processes that ended in the period and name an actor — the denominator.
+    pub beendet: u64,
+    /// No event was caused by a person.
+    pub ohne_eingriff: u64,
+    /// A person approved a proposal unchanged.
+    pub freigabe_unveraendert: u64,
+    /// A person approved a proposal after changing it.
+    pub freigabe_geaendert: u64,
+    /// A person acted directly.
+    pub person: u64,
+    /// The four shares, served only from [`MIN_FUER_ANTEIL`] ended processes.
+    pub anteile: Option<EingriffAnteile>,
+    /// [`EINGRIFF_DEFINITION`].
+    pub definition: String,
+}
+
+/// The four classes as shares of [`EingriffReport::beendet`], each in `0..=1`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EingriffAnteile {
+    pub ohne_eingriff: f64,
+    pub freigabe_unveraendert: f64,
+    pub freigabe_geaendert: f64,
+    pub person: f64,
+}
+
+impl EingriffReport {
+    /// The report over the four counts; shares only from [`MIN_FUER_ANTEIL`].
+    #[must_use]
+    pub fn from_counts(
+        ohne_eingriff: u64,
+        freigabe_unveraendert: u64,
+        freigabe_geaendert: u64,
+        person: u64,
+    ) -> Self {
+        let beendet = ohne_eingriff + freigabe_unveraendert + freigabe_geaendert + person;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a count of processes stays far below 2^52"
+        )]
+        let share = |n: u64| n as f64 / beendet as f64;
+        Self {
+            beendet,
+            ohne_eingriff,
+            freigabe_unveraendert,
+            freigabe_geaendert,
+            person,
+            anteile: (beendet >= MIN_FUER_ANTEIL).then(|| EingriffAnteile {
+                ohne_eingriff: share(ohne_eingriff),
+                freigabe_unveraendert: share(freigabe_unveraendert),
+                freigabe_geaendert: share(freigabe_geaendert),
+                person: share(person),
+            }),
+            definition: EINGRIFF_DEFINITION.to_owned(),
+        }
+    }
+
+    /// The count of one class.
+    #[must_use]
+    pub fn count(&self, klasse: mako_engine::envelope::Eingriffsklasse) -> u64 {
+        use mako_engine::envelope::Eingriffsklasse;
+        match klasse {
+            Eingriffsklasse::System => self.ohne_eingriff,
+            Eingriffsklasse::Freigabe => self.freigabe_unveraendert,
+            Eingriffsklasse::FreigabeGeaendert => self.freigabe_geaendert,
+            Eingriffsklasse::Person => self.person,
+        }
+    }
 }
 
 // ── § 7a Abs. 5 EnWG parity ──────────────────────────────────────────────────
@@ -536,6 +624,7 @@ mod tests {
             malo_id: None,
             partner_mp_id: None,
             mdm_role: None,
+            eingriff: None,
             deadline_at: None,
             deadline_source: None,
             deadline_risk: DeadlineRisk::Unknown,

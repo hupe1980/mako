@@ -1,0 +1,47 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Nachrechnen" [level=1]
+  - paragraph: Rechnung R-2026-0042 · MaLo 51238696012 · 01.10.2025 – 30.09.2026
+  - region "Stimmt überein":
+    - heading "Stimmt überein" [level=2]
+    - paragraph: Jede Position und jede Summe wurde aus den Angaben der Rechnung neu berechnet und stimmt auf den Cent. Das Siegel der ausgestellten Rechnung ist gültig.
+    - paragraph: 1.332,13 € Brutto
+  - text: Link für die Kundin oder den Kunden
+  - code: https://portal.stadtwerke-musterstadt.example/nachrechnen/7Kq2fM
+  - button "Link kopieren"
+  - heading "Berechnet aus" [level=2]
+  - list "Berechnet aus":
+    - listitem:
+      - text: 1 Arbeitspreis Ökostrom Klassik 716,80 € stimmt
+      - paragraph: 3.200 kWh × 0,2240 €/kWh
+      - term: Menge
+      - definition: Ablesung 30.09.2026 (Messwert) − Ablesung 30.09.2025 (Messwert)
+      - term: Preis
+      - definition: Produkt Ökostrom Klassik, Preisstand 01.06.2026
+      - paragraph:
+        - 'button "Quelle: § 40 Abs. 2 Nr. 6 EnWG"': § 40 Abs. 2 Nr. 6 EnWG
+    - listitem:
+      - text: 2 Grundpreis 142,80 € stimmt
+      - paragraph: 12 Monate × 11,90 €
+      - term: Preis
+      - definition: Produkt Ökostrom Klassik, Preisstand 01.06.2026
+    - listitem:
+      - text: 3 Netzentgelt Arbeitspreis 259,84 € stimmt
+      - paragraph: 3.200 kWh × 0,0812 €/kWh
+      - term: Menge
+      - definition: wie Position 1
+      - term: Preis
+      - definition: Preisblatt Stadtwerke Musterstadt Netz, gültig ab 01.01.2026
+      - paragraph:
+        - 'button "Quelle: Preisblatt Netz 2026"': Preisblatt Netz 2026
+  - term: Netto
+  - definition: 1.119,44 €
+  - term: Umsatzsteuer 19 %
+  - definition: 212,69 €
+  - term: Brutto
+  - definition: 1.332,13 €
+  - term: Zu zahlen
+  - definition: 264,13 €
+  - term: Abschläge abgezogen
+  - definition: 1.068,00 €

@@ -52,6 +52,8 @@ export interface Answer {
   saetze: AnswerSentence[];
   /** A decision the assistant proposes for a Freigabe, a Disput or a geparkte Buchung — prefilled, never sent. */
   vorschlag: Vorschlag | null;
+  /** The gate's verdict on `vorschlag`, where agentd held it against the services' rules. */
+  pruefvermerk?: Pruefvermerk | null;
   /**
    * For a pre-fill run: the interview answers a sentence was read into, each
    * identifier kept by agentd only where the sentence contains it — shown for
@@ -62,6 +64,31 @@ export interface Answer {
   schritte: { quelle: string; fertig: boolean }[];
   /** The reader's own standing verdict — `true` for „hilfreich" — or null. */
   hilfreich: boolean | null;
+}
+
+/** One stage of the gate: processd's decision route or makod's rehearsal. */
+export interface Pruefstufe {
+  stufe: "entscheidung" | "probe";
+  urteil: PruefUrteil;
+  /** The stable code of a refusal, or of why the stage did not run. */
+  code: string | null;
+  /** The rule a refusal rests on: an Entscheidungsbaum (`E_0622`) or a profile rule. */
+  regel: string | null;
+  segment: string | null;
+  /** The service's own sentence. */
+  text: string | null;
+}
+
+export type PruefUrteil = "bestanden" | "abgelehnt" | "nicht_geprueft";
+
+/** The gate's verdict on a proposal, agentd's `Pruefvermerk`. */
+export interface Pruefvermerk {
+  urteil: PruefUrteil;
+  stufen: Pruefstufe[];
+  /** Why nothing was checked (`unreachable`, `keine_probe`, …). */
+  grund: string | null;
+  body_sha256: string | null;
+  geprueft_um: string;
 }
 
 export interface Vorschlag {

@@ -208,9 +208,14 @@ fn gated(
 async fn gpke_eog_anmelden_renders_a_55013_its_profile_accepts() {
     use edi_energy::EdiEnergyMessage as _;
     let c = combined().await;
-    dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
-        .await
-        .expect("gpke.eog.anmelden spawns");
+    dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &anmeldung(),
+    )
+    .await
+    .expect("gpke.eog.anmelden spawns");
     let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
     let pending = OutboxStore::pending(&*c.store, 100, now)
         .await
@@ -247,9 +252,14 @@ async fn a_marktlokation_without_messlokation_is_announced_pauschal() {
     record.messlokationen.clear();
     let mut c = combined().await;
     c.state.marktd_client = Some(Arc::new(crate::support::stub_marktd(Some(record)).await));
-    dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
-        .await
-        .expect("gpke.eog.anmelden spawns");
+    dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &anmeldung(),
+    )
+    .await
+    .expect("gpke.eog.anmelden spawns");
     let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
     let pending = OutboxStore::pending(&*c.store, 100, now)
         .await
@@ -278,7 +288,14 @@ async fn gpke_eog_anmelden_without_its_master_data_is_refused() {
     record.anschrift = None;
     let mut c = combined().await;
     c.state.marktd_client = Some(Arc::new(crate::support::stub_marktd(Some(record)).await));
-    match dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung()).await {
+    match dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &anmeldung(),
+    )
+    .await
+    {
         Err(makod::commands_api::DispatchError::StammdatenUnvollstaendig { fehlend, .. }) => {
             assert!(
                 fehlend
@@ -291,14 +308,25 @@ async fn gpke_eog_anmelden_without_its_master_data_is_refused() {
     }
     c.state.marktd_client = Some(Arc::new(crate::support::unreachable_marktd()));
     assert!(matches!(
-        dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung()).await,
+        dispatch_command(
+            &c.state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.eog.anmelden",
+            &anmeldung()
+        )
+        .await,
         Err(makod::commands_api::DispatchError::MarktdUnavailable(_))
     ));
     let mut body = anmeldung();
     body["haushaltskunde"] = serde_json::json!(true);
-    let err = dispatch_command(&c.state, "gpke.eog.anmelden", &body)
-        .await
-        .expect_err("an undeclared key is refused");
+    let err = dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &body,
+    )
+    .await
+    .expect_err("an undeclared key is refused");
     assert!(format!("{err:?}").contains("haushaltskunde"), "{err:?}");
     let pending = OutboxStore::pending(
         &*c.store,
@@ -330,9 +358,14 @@ async fn a_combined_deployment_runs_the_strom_eog_to_its_answer() {
     let c = combined().await;
 
     // 1. The NB assigns the Marktlokation to its own Grundversorger.
-    let nb = match dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
-        .await
-        .expect("gpke.eog.anmelden spawns")
+    let nb = match dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &anmeldung(),
+    )
+    .await
+    .expect("gpke.eog.anmelden spawns")
     {
         DispatchOutcome::Spawned { process_id } => process_id,
         other => panic!("gpke.eog.anmelden must spawn, got {other:?}"),
@@ -352,9 +385,14 @@ async fn a_combined_deployment_runs_the_strom_eog_to_its_answer() {
 
     // 3. The LF confirms the Ersatzversorgung; the loopback below holds the
     //    55014 to its profile.
-    let answered = dispatch_command(&c.state, "gpke.eog.bestaetigen", &bestaetigung())
-        .await
-        .expect("the LF answers its own process");
+    let answered = dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.bestaetigen",
+        &bestaetigung(),
+    )
+    .await
+    .expect("the LF answers its own process");
     assert!(
         matches!(answered, DispatchOutcome::Dispatched { process_id } if process_id == lf),
         "gpke.eog.bestaetigen answers the LF's process, got {answered:?}"
@@ -414,9 +452,14 @@ async fn a_55013_payload_without_its_ergaenzung_does_not_render() {
         other => panic!("a 55013 without its Ergänzung must not render, got {other:?}"),
     }
 
-    dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
-        .await
-        .expect("gpke.eog.anmelden spawns");
+    dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &anmeldung(),
+    )
+    .await
+    .expect("gpke.eog.anmelden spawns");
     let pending = OutboxStore::pending(
         &*c.store,
         100,
@@ -435,9 +478,14 @@ async fn a_55013_payload_without_its_ergaenzung_does_not_render() {
 /// The NB's 55013 as `gpke.eog.anmelden` writes it from marktd's record.
 pub(crate) async fn rendered_55013() -> mako_engine::outbox::OutboxMessage {
     let c = combined().await;
-    dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
-        .await
-        .expect("gpke.eog.anmelden spawns");
+    dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &anmeldung(),
+    )
+    .await
+    .expect("gpke.eog.anmelden spawns");
     let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
     OutboxStore::pending(&*c.store, 100, now)
         .await
@@ -451,13 +499,23 @@ pub(crate) async fn rendered_55013() -> mako_engine::outbox::OutboxMessage {
 /// deployment — the NB's 55013 delivered to the LF side, then answered.
 pub(crate) async fn rendered_55014() -> mako_engine::outbox::OutboxMessage {
     let c = combined().await;
-    dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
-        .await
-        .expect("gpke.eog.anmelden spawns");
+    dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &anmeldung(),
+    )
+    .await
+    .expect("gpke.eog.anmelden spawns");
     c.loopback().await;
-    dispatch_command(&c.state, "gpke.eog.bestaetigen", &bestaetigung())
-        .await
-        .expect("the LF answers");
+    dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.bestaetigen",
+        &bestaetigung(),
+    )
+    .await
+    .expect("the LF answers");
     let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
     OutboxStore::pending(&*c.store, 100, now)
         .await
@@ -491,9 +549,14 @@ fn bestaetigung() -> serde_json::Value {
 #[tokio::test]
 async fn gpke_eog_bestaetigen_without_a_muss_fact_is_refused() {
     let c = combined().await;
-    dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
-        .await
-        .expect("gpke.eog.anmelden spawns");
+    dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &anmeldung(),
+    )
+    .await
+    .expect("gpke.eog.anmelden spawns");
     let lf = match c.loopback().await.as_slice() {
         [(55013, IngestOutcome::Spawned { process_id, .. })] => *process_id,
         other => panic!("the LF's copy of the 55013 opens its process, got {other:?}"),
@@ -506,9 +569,14 @@ async fn gpke_eog_bestaetigen_without_a_muss_fact_is_refused() {
     ] {
         let mut body = bestaetigung();
         body.as_object_mut().expect("an object").remove(missing);
-        let err = dispatch_command(&c.state, "gpke.eog.bestaetigen", &body)
-            .await
-            .expect_err("a 55014 without it is refused");
+        let err = dispatch_command(
+            &c.state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.eog.bestaetigen",
+            &body,
+        )
+        .await
+        .expect_err("a 55014 without it is refused");
         assert!(
             format!("{err:?}").contains(missing),
             "the refusal names {missing:?}: {err:?}"
@@ -516,9 +584,14 @@ async fn gpke_eog_bestaetigen_without_a_muss_fact_is_refused() {
     }
     let mut body = bestaetigung();
     body["enfg_grundlage"] = serde_json::json!("ZG0");
-    let err = dispatch_command(&c.state, "gpke.eog.bestaetigen", &body)
-        .await
-        .expect_err("a Privilegierung beside ZG0 is refused");
+    let err = dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.bestaetigen",
+        &body,
+    )
+    .await
+    .expect_err("a Privilegierung beside ZG0 is refused");
     assert!(format!("{err:?}").contains("[463]"), "{err:?}");
 
     let mut record = crate::support::strom_stammdaten(MALO, NB_MP);
@@ -527,7 +600,14 @@ async fn gpke_eog_bestaetigen_without_a_muss_fact_is_refused() {
     }
     let mut c = c;
     c.state.marktd_client = Some(Arc::new(crate::support::stub_marktd(Some(record)).await));
-    match dispatch_command(&c.state, "gpke.eog.bestaetigen", &bestaetigung()).await {
+    match dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.bestaetigen",
+        &bestaetigung(),
+    )
+    .await
+    {
         Err(makod::commands_api::DispatchError::StammdatenUnvollstaendig { fehlend, .. }) => {
             assert!(
                 fehlend.iter().any(|f| f.contains("haushaltskunde")),
@@ -548,9 +628,14 @@ async fn gpke_eog_bestaetigen_without_a_muss_fact_is_refused() {
 #[tokio::test]
 async fn a_combined_deployment_runs_the_strom_eog_to_its_ablehnung() {
     let c = combined().await;
-    let nb = match dispatch_command(&c.state, "gpke.eog.anmelden", &anmeldung())
-        .await
-        .expect("gpke.eog.anmelden spawns")
+    let nb = match dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.eog.anmelden",
+        &anmeldung(),
+    )
+    .await
+    .expect("gpke.eog.anmelden spawns")
     {
         DispatchOutcome::Spawned { process_id } => process_id,
         other => panic!("gpke.eog.anmelden must spawn, got {other:?}"),
@@ -558,6 +643,7 @@ async fn a_combined_deployment_runs_the_strom_eog_to_its_ablehnung() {
     c.loopback().await;
     dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "gpke.eog.ablehnen",
         &serde_json::json!({ "malo_id": MALO, "reason": "A05" }),
     )
@@ -570,5 +656,52 @@ async fn a_combined_deployment_runs_the_strom_eog_to_its_ablehnung() {
     assert!(
         matches!(c.state_of(nb).await, EogState::Abgelehnt { .. }),
         "the NB's EoG ends in the Ablehnung"
+    );
+}
+
+/// An inbound UTILMD is the system's act: the LF's process the 55013 opens
+/// names no person, while the NB's process names the person who sent the
+/// Anmeldung.
+#[tokio::test]
+async fn an_inbound_utilmd_is_attributed_to_the_system() {
+    use mako_engine::envelope::Akteur;
+
+    let c = combined().await;
+    let person = Akteur::Person {
+        principal: "sachbearbeiterin".to_owned(),
+    };
+    let nb = match dispatch_command(&c.state, person.clone(), "gpke.eog.anmelden", &anmeldung())
+        .await
+        .expect("gpke.eog.anmelden spawns")
+    {
+        DispatchOutcome::Spawned { process_id } => process_id,
+        other => panic!("gpke.eog.anmelden must spawn, got {other:?}"),
+    };
+    let lf = match c.loopback().await.as_slice() {
+        [(55013, IngestOutcome::Spawned { process_id, .. })] => *process_id,
+        other => panic!("the 55013 opens the LF's process, got {other:?}"),
+    };
+    let actors = |process: ProcessId| {
+        let store = &c.store;
+        let tenant = c.state.tenant_id;
+        async move {
+            store
+                .load(&StreamId::for_process(tenant, &process))
+                .await
+                .expect("stream loads")
+                .into_iter()
+                .map(|e| e.akteur)
+                .collect::<Vec<_>>()
+        }
+    };
+    let nb_actors = actors(nb).await;
+    assert!(
+        !nb_actors.is_empty() && nb_actors.iter().all(|a| *a == person),
+        "{nb_actors:?}"
+    );
+    let lf_actors = actors(lf).await;
+    assert!(
+        !lf_actors.is_empty() && lf_actors.iter().all(|a| *a == Akteur::System),
+        "{lf_actors:?}"
     );
 }

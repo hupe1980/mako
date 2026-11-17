@@ -713,6 +713,7 @@ mod tests {
             payload: serde_json::to_value(CounterEventV1::Incremented).unwrap(),
             verlauf: None,
             antwort: None,
+            akteur: crate::envelope::Akteur::System,
         }
     }
 

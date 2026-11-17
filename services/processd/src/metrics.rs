@@ -45,6 +45,30 @@ fn decisions() -> &'static IntCounterVec {
     })
 }
 
+static BEENDET: OnceLock<IntCounterVec> = OnceLock::new();
+
+fn beendet() -> &'static IntCounterVec {
+    BEENDET.get_or_init(|| {
+        register_int_counter_vec!(
+            "mako_process_beendet_total",
+            "Processes that ended, by Prüfidentifikator and their most human actor \
+             (eingriff: system, freigabe, freigabe-geaendert, person). \
+             `increase(mako_process_beendet_total{eingriff=\"system\"}[30d]) / \
+             increase(mako_process_beendet_total[30d])` is the share that ran without a \
+             person — the definition the KPI report serves beside it.",
+            &["pid", "eingriff"]
+        )
+        .expect("mako_process_beendet_total registration")
+    })
+}
+
+/// Record one ended process, once, when the read model sees its ending.
+pub fn record_beendet(pid: u32, eingriff: mako_engine::envelope::Eingriffsklasse) {
+    beendet()
+        .with_label_values(&[&pid.to_string(), eingriff.as_str()])
+        .inc();
+}
+
 /// Record one NB STP decision. Called where the decision is made.
 pub fn record_decision(decision: &str, pid: u32) {
     decisions()

@@ -35,6 +35,7 @@ import { useT } from "../i18n";
 import type { QuelleId } from "../inbox/model";
 import { useQuellen, useVorschlaege } from "../inbox/quellen";
 import { VorschlagBilanz } from "../views/Bilanz";
+import { useDarstellbar } from "../views/entscheidungsprobe";
 import { monogram, useKundenSuche } from "../views/kundenSuche";
 import {
   type Aktion,
@@ -258,6 +259,12 @@ export function CommandPalette({
       icon: "flow",
       run: () => navigate({ to: "/prozess", search: {} }),
     },
+    {
+      id: "gegenparteien",
+      label: t.gegenpartei.liste,
+      icon: "person",
+      run: () => navigate({ to: "/gegenparteien", search: {} }),
+    },
     ...(import.meta.env.DEV
       ? [
           {
@@ -420,10 +427,30 @@ function Kopf({ g, zusatz }: { g: Gefunden; zusatz?: string }) {
   );
 }
 
-/** The proposal is for this action: the values it fills in, or null. */
-function vorbelegt(a: Aktion, wartend: Answer | undefined): Werte | null {
+/**
+ * The proposal is for this action: the values it fills in, or null. A
+ * Freigabe's proposal fills in only where the gate passed it and
+ * the services render what it sends (SR-035) — the Freigabe form's rule.
+ */
+function vorbelegt(
+  a: Aktion,
+  wartend: Answer | undefined,
+  darstellbar: "ja" | "nein" | "offen",
+): Werte | null {
   const v = wartend?.vorschlag;
+  if (
+    a.handlung.dienst === "processd" &&
+    (wartend?.pruefvermerk?.urteil !== "bestanden" || darstellbar !== "ja")
+  )
+    return null;
   return v ? a.vorbelegen(v) : null;
+}
+
+/** Whether a Freigabe's waiting proposal can be rendered; `ja` for anything that is no Freigabe. */
+function useDarstellbarFuer(g: Gefunden, wartend: Answer | undefined): "ja" | "nein" | "offen" {
+  const f = g.ding.art === "freigabe" ? g.ding.f : null;
+  const d = useDarstellbar(f, f ? (wartend?.vorschlag ?? null) : null);
+  return f ? d : "ja";
 }
 
 /**
@@ -446,6 +473,7 @@ export function AktionPanel({
   /** The gallery's still: no focus taken, and a refusal to show. */
   vorschau?: { verweigert?: string };
 }) {
+  const darstellbar = useDarstellbarFuer(g, wartend);
   const t = useT();
   const [filter, setFilter] = useState("");
   const [markiert, setMarkiert] = useState(0);
@@ -503,7 +531,7 @@ export function AktionPanel({
       <div id={liste} role="listbox" aria-label={t.palette.aktionen} className="p-2">
         {sichtbar.map((a, i) => {
           const grund = verweigert(a.handlung);
-          const vorgeschlagen = vorbelegt(a, wartend) !== null;
+          const vorgeschlagen = vorbelegt(a, wartend, darstellbar) !== null;
           return (
             // biome-ignore lint/a11y/useKeyWithClickEvents: the combobox above carries the keyboard; a click is the pointer's way to the same choice
             <div
@@ -577,7 +605,8 @@ export function AktionForm({
   const [werte, setWerte] = useState<Werte>(leer);
   const [herkunft, setHerkunft] = useState<Herkunft | null>(null);
   const [beruehrt, setBeruehrt] = useState({ code: false, text: false });
-  const vor = vorbelegt(a, wartend);
+  const darstellbar = useDarstellbarFuer(g, wartend);
+  const vor = vorbelegt(a, wartend, darstellbar);
   const gruppe = useRef<HTMLFieldSetElement>(null);
 
   // The proposal fills in once it is read — unless the person was first.

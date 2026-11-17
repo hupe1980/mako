@@ -102,6 +102,8 @@ fn malo_identified_entry(
         workflow_name: "".into(),
         format_version: None,
         trace_context: mako_engine::trace_ctx::current().map(Into::into),
+        // A counterparty's callback: the system acts.
+        akteur: mako_engine::envelope::Eingriffsklasse::System,
     }
 }
 

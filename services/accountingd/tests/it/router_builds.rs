@@ -189,3 +189,71 @@ async fn the_demo_config_builds_a_router() {
         .expect("the demo configuration parses");
     let _app = build(cfg, url, pool).await;
 }
+
+/// A payment to match carries the payer's IBAN, so it is posted as a body: no
+/// access log, trace span or log line — at any level — records the IBAN, and
+/// the query-string form is no route at all.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_payment_match_logs_no_iban() {
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::layer::SubscriberExt as _;
+    const IBAN: &str = "DE89370400440532013000";
+
+    #[derive(Clone)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("buffer").extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let Some((app, _pool, _pg)) = dev_app().await else {
+        return;
+    };
+    let buf = Buf(Arc::new(Mutex::new(Vec::new())));
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new("trace"))
+        .with(tracing_subscriber::fmt::layer().with_writer(move || writer.clone()));
+    let _guard = tracing::subscriber::set_default(subscriber);
+    // Callsites another test of this binary hit with no subscriber cached
+    // `Interest::never`; recompute it for this one. A thread-local subscriber
+    // sees only its own thread, which is why `test-accountingd-db` runs this
+    // suite with one test thread.
+    tracing::callsite::rebuild_interest_cache();
+
+    let (status, body) = call(
+        app.clone(),
+        axum::http::Request::post("/api/v1/payments/match")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({
+                    "amount_ct": 12_500, "reference": "Rechnung 4711", "iban": IBAN,
+                })
+                .to_string(),
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    let log = String::from_utf8(buf.0.lock().expect("buffer").clone()).expect("utf-8");
+    // The IBAN rung ran — by its hash — and was traced.
+    assert!(log.contains("iban_hash"), "{log}");
+    assert!(!log.contains(IBAN), "{log}");
+
+    let (status, _) = call(
+        app,
+        axum::http::Request::get(format!(
+            "/api/v1/payments/match?amount_ct=12500&reference=x&iban={IBAN}"
+        ))
+        .body(axum::body::Body::empty())
+        .expect("request"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::METHOD_NOT_ALLOWED);
+}

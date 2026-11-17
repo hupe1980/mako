@@ -73,6 +73,11 @@ compares the record's `malo_id` with the
 authorised one. Starting without `vertragd_url` is refused unless
 `allow_insecure_no_auth = true`.
 
+**One route without a customer session:** `GET /nachrechnen/{token}`. The
+verify token printed on the invoice is the credential, and all it reaches is
+billingd's masked view of that one invoice — see [Rechnung
+nachrechnen](#nachrechnen).
+
 portald serves neither `GET /api/v1/policy` nor `GET /admin/einrichtung`: it
 holds no operator verifier — the only token it sees is a customer's, relayed to
 `vertragd` — so an operator report here would be readable by any portal
@@ -125,6 +130,26 @@ included. `/dokumente` is what the customer was **sent**, byte for byte, with
 delivery evidence; opening one records the read receipt a § 41f EnWG dispute
 asks about. `outputd` refuses a document query that names neither a MaLo nor a
 Kundennummer.
+
+---
+
+## Rechnung nachrechnen {#nachrechnen}
+
+`GET /nachrechnen/{token}` (no `/api/v1/portal` prefix, no sign-in) renders
+billingd's `POST /api/v1/billing/nachrechnen` (the token in the body; billingd admits it only from
+the service key it names `portald`, which `billingd_api_key` carries) as one HTML page that needs
+no script: the verdict („Stimmt überein ✓" or „Weicht ab"), the
+Rechnungsnummer, the period, the masked MaLo-ID, the total, then each line with
+its arithmetic and inputs and each total. It shows no name and no address.
+Mobile first, light and dark from the reader's system setting, German,
+addressed as `nachrechnen_anrede` says (`sie`, the default, or `du` — set it to
+outputd's `[policy] anrede`). An unknown, malformed or revoked token answers
+the same `404`. Each client address may ask 30 times a minute, all clients
+together 600 (`429` beyond). The client address is the TCP peer; behind a
+reverse proxy list it in `trusted_proxies`, and only then is the last entry of
+its `X-Forwarded-For` taken. The route's metrics label is its template, so a
+token never reaches `/metrics`.
+billingd issues the token; see [billingd](@/docs/services/billingd.md#nachrechnen).
 
 ---
 
@@ -204,6 +229,11 @@ outputd_url     = "http://outputd:9880"
 # MP-ID a self-service SEPA mandate is registered under. Defaults to `tenant`;
 # must match accountingd's `lf_mp_id`.
 # lf_mp_id = "9900357000004"
+
+# How the public Rechnung-nachrechnen page addresses the reader: sie | du.
+# nachrechnen_anrede = "sie"
+# Reverse proxies whose X-Forwarded-For the Nachrechnen rate limit believes.
+# trusted_proxies = ["10.0.0.2"]
 
 # Local development only: serve portal routes without resolving ownership.
 # allow_insecure_no_auth = true

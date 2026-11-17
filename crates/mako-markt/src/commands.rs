@@ -447,6 +447,52 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     WIM_GERAETEUEBERNAHME_BESTELLEN,
 ];
 
+/// Every command an approval-queue entry (a Freigabe) dispatches when a
+/// person approves or rejects it — the answers processd freezes or lets an
+/// operator state.
+///
+/// processd rehearses each of them at `makod` before it marks a decision
+/// taken, so `makod` must be able to rehearse every one: its probe test holds
+/// this list inside its rehearsable set, and processd's test holds every
+/// command its modules enqueue inside this list.
+pub const FREIGABE_ANTWORTEN: &[&str] = &[
+    GPKE_LIEFERBEGINN_BESTAETIGEN,
+    GPKE_LIEFERBEGINN_ABLEHNEN,
+    GPKE_LIEFERENDE_BESTAETIGEN,
+    GPKE_LIEFERENDE_ABLEHNEN,
+    GELI_LIEFERBEGINN_BESTAETIGEN,
+    GELI_LIEFERBEGINN_ABLEHNEN,
+    GELI_LIEFERENDE_BESTAETIGEN,
+    GELI_LIEFERENDE_ABLEHNEN,
+    GPKE_NB_LIEFERENDE_BESTAETIGEN,
+    GPKE_NB_LIEFERENDE_ABLEHNEN,
+    GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
+    GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+    GPKE_KUENDIGUNG_BESTAETIGEN,
+    GPKE_KUENDIGUNG_ABLEHNEN,
+    GPKE_ZUORDNUNG_LF_BESTAETIGEN,
+    GPKE_ZUORDNUNG_LF_ABLEHNEN,
+    GPKE_EOG_BESTAETIGEN,
+    GPKE_EOG_ABLEHNEN,
+    GELI_NB_LIEFERENDE_BESTAETIGEN,
+    GELI_NB_LIEFERENDE_ABLEHNEN,
+    GELI_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
+    GELI_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+    GELI_KUENDIGUNG_BESTAETIGEN,
+    GELI_KUENDIGUNG_ABLEHNEN,
+    GELI_EOG_BESTAETIGEN,
+    GELI_EOG_ABLEHNEN,
+    WIM_GERAETEWECHSEL_BESTAETIGEN,
+    WIM_GERAETEWECHSEL_ABLEHNEN,
+    WIM_STEUERUNGSAUFTRAG_BESTAETIGEN,
+    WIM_STEUERUNGSAUFTRAG_ABLEHNEN,
+    WIM_PREISANFRAGE_ANGEBOT_SENDEN,
+    WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN,
+    WIM_WERTEBESTELLUNG_BESTELLUNG_BEANTWORTEN,
+    WIM_WERTEBESTELLUNG_ABBESTELLUNG_BEANTWORTEN,
+    WIM_WERTEBESTELLUNG_STORNIERUNG_BEANTWORTEN,
+];
+
 /// Constants `makod` itself needs but no out-of-process caller posts, with why.
 ///
 /// Empty, and worth keeping that way. This module's whole claim is that it
@@ -1152,6 +1198,16 @@ mod tests {
     /// So a `pub const … : &str` here must appear in [`DISPATCHED_BY_SERVICES`]
     /// or in [`MAKOD_INTERNAL`] with a reason. Read out of this file's own
     /// text, because the set of exports is not a value the compiler hands us.
+    /// A Freigabe answer is posted by processd, so it is one makod's registry
+    /// test holds: a name outside `DISPATCHED_BY_SERVICES` would be rehearsed
+    /// and dispatched without that check.
+    #[test]
+    fn every_freigabe_answer_is_dispatched_by_a_service() {
+        for c in super::FREIGABE_ANTWORTEN {
+            assert!(super::DISPATCHED_BY_SERVICES.contains(c), "{c}");
+        }
+    }
+
     #[test]
     fn every_constant_is_accounted_for() {
         let src = include_str!("commands.rs");

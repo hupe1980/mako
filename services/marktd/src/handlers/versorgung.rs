@@ -18,112 +18,20 @@ use mako_markt::{
     cloudevents::{EventExtensions, MarktEvent},
     domain::MaloId,
     error::MdmError,
-    repository::{
-        LfZuordnung, LieferStatus, VersorgungsStatusHistoryRecord, VersorgungsStatusRecord,
-        ZuordnungsStatus,
-    },
+    repository::{LfZuordnung, LieferStatus, VersorgungsStatusRecord, ZuordnungsStatus},
 };
 use mako_service::cedar::CedarEnforcer;
-use mako_service::{ApiError, Json};
-use serde::{Deserialize, Serialize};
+use mako_service::{ApiError, ApiResult, Json};
+use serde::Deserialize;
 
 use crate::pg::PgVersorgungsStatusRepository;
-use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
 use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, parse_if_match};
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, ToSchema)]
-pub struct VersorgungsStatusResponse {
-    pub malo_id: String,
-    #[schema(value_type = String, example = "Beliefert")]
-    pub lieferstatus: String,
-    /// Every Lieferant holding a share of this Marktlokation — the authoritative
-    /// answer to „who supplies it". A tranchierte Marktlokation carries several.
-    #[schema(value_type = Vec<Object>)]
-    pub zuordnungen: Vec<LfZuordnung>,
-    /// The single active Lieferant, when there is exactly one.
-    ///
-    /// Derived from `zuordnungen` and **absent on a tranchierte
-    /// Marktlokation**, where no single supplier exists — read `zuordnungen`
-    /// there rather than treating the omission as „unsupplied".
-    pub lf_mp_id: Option<String>,
-    /// The single announced Lieferant, when exactly one Anmeldung is pending.
-    /// Derived, with the same caveat as `lf_mp_id`.
-    pub lf_mp_id_next: Option<String>,
-    pub lf_next_lieferbeginn: Option<String>,
-    pub lieferbeginn: Option<String>,
-    pub lieferende: Option<String>,
-    pub msb_mp_id: Option<String>,
-    pub nb_mp_id: String,
-    /// Start of the running Ersatz-/Grundversorgung (§38/§36 EnWG), if any.
-    pub eog_seit: Option<String>,
-    pub last_process_id: Option<String>,
-    pub updated_at: String,
-    pub version: i64,
-}
-
-impl From<VersorgungsStatusRecord> for VersorgungsStatusResponse {
-    fn from(r: VersorgungsStatusRecord) -> Self {
-        Self {
-            malo_id: r.malo_id.as_ref().to_owned(),
-            lieferstatus: r.lieferstatus.to_string(),
-            lf_mp_id: r.lf_mp_id().map(ToOwned::to_owned),
-            lf_mp_id_next: r.lf_mp_id_next().map(ToOwned::to_owned),
-            lf_next_lieferbeginn: r.lf_next_lieferbeginn().map(|d| d.to_string()),
-            lieferbeginn: r.lieferbeginn().map(|d| d.to_string()),
-            zuordnungen: r.zuordnungen,
-            lieferende: r.lieferende.map(|d| d.to_string()),
-            msb_mp_id: r.msb_mp_id,
-            nb_mp_id: r.nb_mp_id,
-            eog_seit: r.eog_seit.map(|d| d.to_string()),
-            last_process_id: r.last_process_id.map(|u| u.to_string()),
-            updated_at: r
-                .updated_at
-                .format(&Rfc3339)
-                .unwrap_or_else(|_| r.updated_at.to_string()),
-            version: r.version,
-        }
-    }
-}
-
-/// Single supply-state history entry (response DTO).
-#[derive(Debug, Serialize, ToSchema)]
-pub struct VersorgungsStatusHistoryResponse {
-    pub id: i64,
-    pub malo_id: String,
-    #[schema(value_type = String, example = "Beliefert")]
-    pub lieferstatus: String,
-    /// The assignment list as it stood at `valid_from`.
-    #[schema(value_type = Vec<Object>)]
-    pub zuordnungen: Vec<LfZuordnung>,
-    pub lieferende: Option<String>,
-    pub msb_mp_id: Option<String>,
-    pub nb_mp_id: String,
-    pub last_process_id: Option<String>,
-    pub version: i64,
-    /// UTC instant when this state became active.
-    pub valid_from: String,
-}
-
-impl From<VersorgungsStatusHistoryRecord> for VersorgungsStatusHistoryResponse {
-    fn from(r: VersorgungsStatusHistoryRecord) -> Self {
-        Self {
-            id: r.id,
-            malo_id: r.malo_id.as_ref().to_owned(),
-            lieferstatus: r.lieferstatus.to_string(),
-            zuordnungen: r.zuordnungen,
-            lieferende: r.lieferende.map(|d| d.to_string()),
-            msb_mp_id: r.msb_mp_id,
-            nb_mp_id: r.nb_mp_id,
-            last_process_id: r.last_process_id.map(|u| u.to_string()),
-            version: r.version,
-            valid_from: r.valid_from.to_string(),
-        }
-    }
-}
+pub use crate::reads::{VersorgungsStatusHistorie, VersorgungsStatusResponse};
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -179,135 +87,69 @@ fn default_history_size() -> u32 {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-/// GET /api/v1/versorgung/:malo_id
-///
-/// Returns the current supply state.  Add `?at=YYYY-MM-DD` to query the state
-/// as of a specific calendar date (German local time, CET/CEST).
+/// `GET /api/v1/versorgung/{malo_id}` — the current supply state, or with
+/// `?at=YYYY-MM-DD` the state as of that German calendar day.
+#[utoipa::path(
+    get,
+    path = "/api/v1/versorgung/{malo_id}",
+    tag = "versorgung",
+    operation_id = "get_versorgung_at",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), VersorgungQuery),
+    responses(
+        (status = 200, description = "The supply state; `ETag` carries its version", body = VersorgungsStatusResponse),
+        (status = 403, description = "Missing read-versorgungsstatus"),
+        (status = 404, description = "`versorgung_not_found`"),
+        (status = 422, description = "`invalid_malo_id` or an invalid `at`"),
+    )
+)]
 pub async fn get_versorgungsstatus(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
     Path(malo_id): Path<String>,
     Query(query): Query<VersorgungQuery>,
-    Extension(vs_repo): Extension<Arc<PgVersorgungsStatusRepository>>,
-) -> impl IntoResponse {
-    if enforcer
+) -> ApiResult<impl IntoResponse> {
+    enforcer
         .check(&claims.principal(), "read-versorgungsstatus", &state.tenant)
-        .is_err()
-    {
-        return MdmError::Forbidden {
-            reason: "access denied",
-        }
-        .into_response();
+        .map_err(|_| ApiError::forbidden("access denied"))?;
+    let status =
+        crate::reads::versorgung(&pool, &state.tenant, &malo_id, query.at.as_deref()).await?;
+    let mut resp_headers = HeaderMap::new();
+    if let Ok(v) = etag(status.version).parse() {
+        resp_headers.insert("ETag", v);
     }
-    let malo_id = match malo_id.parse::<MaloId>() {
-        Ok(id) => id,
-        Err(e) => {
-            return MdmError::InvalidMaloId {
-                id: malo_id,
-                reason: e.to_string(),
-            }
-            .into_response();
-        }
-    };
-
-    // If `?at=` is present, delegate to the history-based point-in-time query.
-    if let Some(at_str) = &query.at {
-        let at = match time::Date::parse(
-            at_str,
-            &time::format_description::well_known::Iso8601::DEFAULT,
-        ) {
-            Ok(d) => d,
-            Err(e) => {
-                return MdmError::Unprocessable {
-                    reason: format!("invalid ?at date '{at_str}': {e}"),
-                }
-                .into_response();
-            }
-        };
-        return match vs_repo.find_at(&malo_id, &state.tenant, at).await {
-            Ok(Some(rec)) => {
-                let version = rec.version;
-                let mut resp_headers = HeaderMap::new();
-                resp_headers.insert("ETag", etag(version).parse().unwrap());
-                (
-                    StatusCode::OK,
-                    resp_headers,
-                    Json(VersorgungsStatusResponse::from(rec)),
-                )
-                    .into_response()
-            }
-            Ok(None) => {
-                ApiError::not_found(format!("no Versorgungsstatus for MaLo {malo_id} at {at}"))
-                    .into_response()
-            }
-            Err(e) => e.into_response(),
-        };
-    }
-
-    match vs_repo.find(&malo_id, &state.tenant).await {
-        Ok(Some(rec)) => {
-            let version = rec.version;
-            let mut resp_headers = HeaderMap::new();
-            resp_headers.insert("ETag", etag(version).parse().unwrap());
-            (
-                StatusCode::OK,
-                resp_headers,
-                Json(VersorgungsStatusResponse::from(rec)),
-            )
-                .into_response()
-        }
-        Ok(None) => {
-            ApiError::not_found(format!("no Versorgungsstatus for MaLo {malo_id}")).into_response()
-        }
-        Err(e) => e.into_response(),
-    }
+    Ok((StatusCode::OK, resp_headers, Json(status)))
 }
 
-/// GET /api/v1/versorgung/:malo_id/history
-///
-/// Returns the full supply-state change history for a MaLo, newest first.
-/// Backed by the `versorgungsstatus_history` table.
+/// `GET /api/v1/versorgung/{malo_id}/history` — the supply-state change
+/// history, newest first, paged.
+#[utoipa::path(
+    get,
+    path = "/api/v1/versorgung/{malo_id}/history",
+    tag = "versorgung",
+    operation_id = "get_versorgungsstatus_history",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), HistoryQuery),
+    responses(
+        (status = 200, description = "One page of the history", body = VersorgungsStatusHistorie),
+        (status = 403, description = "Missing read-versorgungsstatus"),
+        (status = 422, description = "`invalid_malo_id`"),
+    )
+)]
 pub async fn get_versorgungsstatus_history(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
     Path(malo_id): Path<String>,
     Query(query): Query<HistoryQuery>,
-    Extension(vs_repo): Extension<Arc<PgVersorgungsStatusRepository>>,
-) -> impl IntoResponse {
-    if enforcer
+) -> ApiResult<Json<VersorgungsStatusHistorie>> {
+    enforcer
         .check(&claims.principal(), "read-versorgungsstatus", &state.tenant)
-        .is_err()
-    {
-        return MdmError::Forbidden {
-            reason: "access denied",
-        }
-        .into_response();
-    }
-    let malo_id = match malo_id.parse::<MaloId>() {
-        Ok(id) => id,
-        Err(e) => {
-            return MdmError::InvalidMaloId {
-                id: malo_id,
-                reason: e.to_string(),
-            }
-            .into_response();
-        }
-    };
-    match vs_repo
-        .find_history(&malo_id, &state.tenant, query.page, query.size)
+        .map_err(|_| ApiError::forbidden("access denied"))?;
+    crate::reads::versorgungsstatus_history(&pool, &state.tenant, &malo_id, query.page, query.size)
         .await
-    {
-        Ok(page) => Json(serde_json::json!({
-            "items": page.items.into_iter().map(VersorgungsStatusHistoryResponse::from).collect::<Vec<_>>(),
-            "total": page.total,
-            "page":  page.page,
-            "size":  page.size,
-        }))
-        .into_response(),
-        Err(e) => e.into_response(),
-    }
+        .map(Json)
 }
 
 /// PUT /api/v1/versorgung/:malo_id

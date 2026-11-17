@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "accountingd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -32,6 +32,9 @@ dependencies = [
  "toml 0.8.23",
  "tower",
  "tracing",
+ "tracing-subscriber",
+ "utoipa",
+ "utoipa-axum",
  "uuid",
 ]
 
@@ -133,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "agentd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "agentplane",
  "anyhow",
@@ -1504,13 +1507,15 @@ dependencies = [
 
 [[package]]
 name = "billingd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "en16931",
  "en16931-formats",
  "energy-billing",
+ "hmac 0.12.1",
  "mako-events",
  "mako-fristen",
  "mako-geli-gas",
@@ -1523,7 +1528,9 @@ dependencies = [
  "schemars 1.2.3",
  "secrecy",
  "serde",
+ "serde_jcs",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx 0.9.0",
  "testcontainers",
  "testcontainers-modules",
@@ -3782,7 +3789,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "edifact",
  "rust_decimal",
@@ -3896,7 +3903,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "criterion",
  "edifact",
@@ -3939,7 +3946,7 @@ dependencies = [
 
 [[package]]
 name = "edmd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -3971,6 +3978,8 @@ dependencies = [
  "toml 0.8.23",
  "tower",
  "tracing",
+ "utoipa",
+ "utoipa-axum",
  "uuid",
 ]
 
@@ -3988,7 +3997,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "billing",
  "grid-billing",
@@ -4003,7 +4012,7 @@ dependencies = [
 
 [[package]]
 name = "einsd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4031,6 +4040,8 @@ dependencies = [
  "toml 0.8.23",
  "tower",
  "tracing",
+ "utoipa",
+ "utoipa-axum",
  "uuid",
 ]
 
@@ -4156,7 +4167,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "axum",
  "base64ct",
@@ -4178,7 +4189,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -5052,7 +5063,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "billing",
  "mako-markt",
@@ -6050,7 +6061,7 @@ dependencies = [
 
 [[package]]
 name = "invoic-checker"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "billing",
  "energy-billing",
@@ -6065,7 +6076,7 @@ dependencies = [
 
 [[package]]
 name = "invoicd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6858,7 +6869,7 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "asx-rs",
  "thiserror 2.0.21",
@@ -6866,7 +6877,7 @@ dependencies = [
 
 [[package]]
 name = "mako-emob"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -6882,7 +6893,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "criterion",
  "mako-events",
@@ -6903,11 +6914,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.36.0"
+version = "0.37.0"
 
 [[package]]
 name = "mako-fristen"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "time",
  "time-tz",
@@ -6915,7 +6926,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "dvgw-edi",
  "mako-engine",
@@ -6932,7 +6943,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6948,7 +6959,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6964,7 +6975,7 @@ dependencies = [
 
 [[package]]
 name = "mako-invoic"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "mako-engine",
  "rubo4e",
@@ -6976,7 +6987,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -6994,7 +7005,7 @@ dependencies = [
 
 [[package]]
 name = "mako-markt"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -7013,7 +7024,7 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "mako-fristen",
  "rubo4e",
@@ -7025,7 +7036,7 @@ dependencies = [
 
 [[package]]
 name = "mako-pruefung"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "edi-energy",
  "mako-fristen",
@@ -7040,7 +7051,7 @@ dependencies = [
 
 [[package]]
 name = "mako-redispatch"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -7052,7 +7063,7 @@ dependencies = [
 
 [[package]]
 name = "mako-seed"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7069,7 +7080,7 @@ dependencies = [
 
 [[package]]
 name = "mako-service"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7079,6 +7090,7 @@ dependencies = [
  "figment_file_provider_adapter",
  "governor",
  "hmac 0.12.1",
+ "jsonschema",
  "jsonwebtoken",
  "mako-events",
  "mako-markt",
@@ -7110,12 +7122,14 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "utoipa",
+ "utoipa-axum",
  "uuid",
 ]
 
 [[package]]
 name = "mako-wim"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7132,7 +7146,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -7197,7 +7211,7 @@ dependencies = [
 
 [[package]]
 name = "makotest-native"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "edi-energy",
  "edifact",
@@ -7211,7 +7225,7 @@ dependencies = [
 
 [[package]]
 name = "marktd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7248,6 +7262,7 @@ dependencies = [
  "tower",
  "tracing",
  "utoipa",
+ "utoipa-axum",
  "uuid",
 ]
 
@@ -7501,7 +7516,7 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 
 [[package]]
 name = "netzbilanzd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8244,7 +8259,7 @@ dependencies = [
 
 [[package]]
 name = "outputd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8254,6 +8269,7 @@ dependencies = [
  "lopdf",
  "mako-fristen",
  "mako-service",
+ "qrcodegen",
  "roxmltree 0.21.2",
  "rust_decimal",
  "secrecy",
@@ -8909,7 +8925,7 @@ dependencies = [
 
 [[package]]
 name = "portald"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9100,7 +9116,7 @@ dependencies = [
 
 [[package]]
 name = "processd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9121,7 +9137,9 @@ dependencies = [
  "schemars 1.2.3",
  "secrecy",
  "serde",
+ "serde_jcs",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx 0.9.0",
  "testcontainers",
  "testcontainers-modules",
@@ -9158,7 +9176,7 @@ dependencies = [
 
 [[package]]
 name = "productd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9351,6 +9369,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "qrcodegen"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4339fc7a1021c9c1621d87f5e3505f2805c8c105420ba2f2a4df86814590c142"
 
 [[package]]
 name = "quad-rand"
@@ -9678,7 +9702,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -13351,6 +13375,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "utoipa-axum"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c25bae5bccc842449ec0c5ddc5cbb6a3a1eaeac4503895dc105a1138f8234a0"
+dependencies = [
+ "axum",
+ "paste",
+ "tower-layer",
+ "tower-service",
+ "utoipa",
+]
+
+[[package]]
 name = "utoipa-gen"
 version = "5.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13453,7 +13490,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vertragd"
-version = "0.36.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",

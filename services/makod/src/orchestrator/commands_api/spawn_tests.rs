@@ -22,7 +22,7 @@ const LF_MP_ID: &str = "9905550000005";
 const NB_MP_ID: &str = "9900357000004";
 const MALO_ID: &str = "51238696012";
 
-async fn lf_state() -> CommandsApiState {
+pub(super) async fn lf_state() -> CommandsApiState {
     let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
         .await
         .expect("open in-memory SlateDB");
@@ -44,7 +44,7 @@ async fn lf_state() -> CommandsApiState {
     }
 }
 
-fn malo_record() -> energy_api::models::electricity::MaloIdentResultPositive {
+pub(super) fn malo_record() -> energy_api::models::electricity::MaloIdentResultPositive {
     serde_json::from_value(serde_json::json!({
         "dataMarketLocation": {
             "maloId": MALO_ID,
@@ -61,7 +61,7 @@ fn malo_record() -> energy_api::models::electricity::MaloIdentResultPositive {
     .expect("MaLo fixture matches the energy-api schema")
 }
 
-async fn outbox_len(state: &CommandsApiState) -> usize {
+pub(super) async fn outbox_len(state: &CommandsApiState) -> usize {
     state
         .store
         .pending_now(1_000)
@@ -83,13 +83,23 @@ async fn a_failed_key_write_fails_the_spawn_and_the_reissue_sends_one_utilmd() {
     let faulted = KEY_REGISTRATION_FAULT
         .scope(
             true,
-            dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload),
+            dispatch_command(
+                &state,
+                mako_engine::envelope::Akteur::System,
+                "gpke.lieferbeginn.anmelden",
+                &payload,
+            ),
         )
         .await;
     // The ERP re-issues the command, as a failed answer tells it to.
-    let reissued = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload)
-        .await
-        .expect("the re-issued Anmeldung is accepted");
+    let reissued = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.anmelden",
+        &payload,
+    )
+    .await
+    .expect("the re-issued Anmeldung is accepted");
     assert!(matches!(reissued, DispatchOutcome::Spawned { .. }));
     assert_eq!(
         outbox_len(&state).await,
@@ -103,7 +113,13 @@ async fn a_failed_key_write_fails_the_spawn_and_the_reissue_sends_one_utilmd() {
     );
 
     // And the spawned process is now findable: a further re-issue is refused.
-    let again = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload).await;
+    let again = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.anmelden",
+        &payload,
+    )
+    .await;
     assert!(
         matches!(again, Err(DispatchError::DuplicateProcess { .. })),
         "the running Anmeldung must block a further one; got {again:?}"
@@ -129,7 +145,13 @@ async fn the_command_door_waits_for_the_business_key_lock() {
     let task = {
         let state = Arc::clone(&state);
         tokio::spawn(async move {
-            dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload).await
+            dispatch_command(
+                &state,
+                mako_engine::envelope::Akteur::System,
+                "gpke.lieferbeginn.anmelden",
+                &payload,
+            )
+            .await
         })
     };
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -152,7 +174,7 @@ async fn the_command_door_waits_for_the_business_key_lock() {
 
 /// A 55001 body with every fact its column makes Muss (UTILMD AHB Strom 2.2
 /// Kap. 8.2).
-fn anmeldung_55001() -> serde_json::Value {
+pub(super) fn anmeldung_55001() -> serde_json::Value {
     serde_json::json!({
         "malo_id": MALO_ID,
         "lieferbeginn_datum": "2026-10-01",

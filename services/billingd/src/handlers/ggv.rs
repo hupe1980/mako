@@ -260,6 +260,7 @@ pub async fn post_tarifwechsel(
             total_netto_eur: netto,
             total_brutto_eur: brutto,
             steuerzeilen: &crate::steuerzeilen::aus_rechnung(&merged),
+            due_on: None,
         },
     )
     .await;
@@ -680,6 +681,7 @@ pub async fn post_ggv_billing(
                 total_netto_eur: t.invoice.netto_eur,
                 total_brutto_eur: t.invoice.brutto_eur,
                 steuerzeilen: &crate::steuerzeilen::aus_rechnung(&t.invoice),
+                due_on: None,
             },
         )
         .await;

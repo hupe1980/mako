@@ -222,7 +222,7 @@ async fn nb(marktd: Option<mako_markt::marktd_client::MarktdClient>) -> Nb {
                 validation_passed: true,
                 validation_errors: vec![],
             },
-            RunOptions::new().correlations(&[key]),
+            RunOptions::system().correlations(&[key]),
         )
         .await
         .expect("the 17132 opens the NB's process");
@@ -233,6 +233,7 @@ impl Nb {
     async fn beantworten(&self, antwort_pid: u32) -> Result<(), DispatchError> {
         dispatch_command(
             &self.state,
+            mako_engine::envelope::Akteur::System,
             "gpke.geschaeftsdatenanfrage.beantworten",
             &serde_json::json!({
                 "anfragender_mp_id": LF_MP,

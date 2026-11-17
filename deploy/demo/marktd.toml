@@ -21,7 +21,7 @@ tenant = "9900357000004"
 
 [makod]
 base_url = "http://makod:8080"
-api_key  = "dev-makod-key"
+api_key  = "dev-marktd-makod-key"
 
 [webhook]
 inbound_path   = "/api/v1/events"

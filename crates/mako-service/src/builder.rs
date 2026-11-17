@@ -58,10 +58,17 @@ impl ServiceBuilder {
     }
 
     /// Add HTTP request/response tracing via `tower-http` [`TraceLayer`].
+    ///
+    /// The request span names the matched route template (`route_span`),
+    /// never the URI: a path segment can be a credential — portald's
+    /// `/nachrechnen/{token}` — and the request log is read by more people
+    /// than the token's holder.
     #[must_use]
     pub fn with_trace_layer(self) -> Self {
         Self {
-            router: self.router.layer(TraceLayer::new_for_http()),
+            router: self
+                .router
+                .layer(TraceLayer::new_for_http().make_span_with(route_span)),
         }
     }
 
@@ -223,6 +230,22 @@ async fn metrics_stub() -> impl axum::response::IntoResponse {
     )
 }
 
+/// The DEBUG `request` span of one request: its method, the route template
+/// it matched (`{unmatched}` when none did) and the HTTP version — the fields
+/// of `tower-http`'s default span with the URI replaced by the template.
+fn route_span<B>(req: &axum::http::Request<B>) -> tracing::Span {
+    let route = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or("{unmatched}", axum::extract::MatchedPath::as_str);
+    tracing::debug_span!(
+        "request",
+        method = %req.method(),
+        route = %route,
+        version = ?req.version(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use axum::{
@@ -263,5 +286,74 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// Every span field and event field a subscriber sees, as `name=value`.
+    #[derive(Clone, Default)]
+    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+    struct Fields<'a>(&'a mut Vec<String>);
+
+    impl tracing::field::Visit for Fields<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.push(format!("{}={value:?}", field.name()));
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Recorded {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _: &tracing::span::Id,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut seen = self.0.lock().unwrap();
+            seen.push(format!("span {}", attrs.metadata().name()));
+            attrs.record(&mut Fields(&mut seen));
+        }
+
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            event.record(&mut Fields(&mut self.0.lock().unwrap()));
+        }
+    }
+
+    /// A path segment can be a credential (portald's
+    /// `/nachrechnen/{token}`), so the request span names the matched route
+    /// template and never the URI — no span or event of a traced request
+    /// carries the token.
+    #[tokio::test]
+    async fn the_request_span_carries_the_route_template_not_the_path() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let recorded = Recorded::default();
+        let subscriber = tracing_subscriber::registry().with(recorded.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        const TOKEN: &str = "Zq3v9TOKENxY7pL0aBcDeF";
+        let app = ServiceBuilder::new()
+            .merge(Router::new().route("/nachrechnen/{token}", get(|| async { "ok" })))
+            .with_trace_layer()
+            .build();
+        let resp = app
+            .oneshot(
+                Request::get(format!("/nachrechnen/{TOKEN}?q={TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let seen = recorded.0.lock().unwrap().join("\n");
+        assert!(seen.contains("span request"), "no request span: {seen}");
+        assert!(
+            seen.contains("/nachrechnen/{token}"),
+            "the span names the route template: {seen}"
+        );
+        assert!(!seen.contains(TOKEN), "the token reached a span: {seen}");
     }
 }

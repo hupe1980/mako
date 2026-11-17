@@ -126,6 +126,27 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
                 .then(|| 1.0 - (breached as f64 / with_frist as f64)),
             avg_cycle_time_hours: None,
             p95_cycle_time_hours: None,
+            eingriff: {
+                use mako_engine::envelope::Eingriffsklasse as K;
+                let ended = |k: K| -> u64 {
+                    guard
+                        .values()
+                        .filter(|p| {
+                            p.pid == pid
+                                && p.state.is_terminal()
+                                && p.last_event_at.date() >= from
+                                && p.last_event_at.date() <= to
+                                && p.eingriff == Some(k)
+                        })
+                        .count() as u64
+                };
+                crate::obs::domain::EingriffReport::from_counts(
+                    ended(K::System),
+                    ended(K::Freigabe),
+                    ended(K::FreigabeGeaendert),
+                    ended(K::Person),
+                )
+            },
         })
     }
 
@@ -219,6 +240,7 @@ mod tests {
             malo_id: Some("DE00001".into()),
             partner_mp_id: Some("9900000000001".into()),
             mdm_role: Some("LF".into()),
+            eingriff: None,
             deadline_at: None,
             deadline_source: None,
             deadline_risk: DeadlineRisk::Unknown,
@@ -258,6 +280,7 @@ mod tests {
                 state: ProcessState::Completed,
                 malo_id: None,
                 partner_mp_id: None,
+                eingriff: None,
                 mdm_role: None,
                 deadline_at: None,
                 deadline_source: None,

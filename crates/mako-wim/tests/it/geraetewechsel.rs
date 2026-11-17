@@ -80,7 +80,7 @@ async fn happy_path_full_lifecycle() {
     let p = make_process();
 
     // Step 1: Receive valid UTILMD → Initiated + ValidationPassed
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveUtilmd with valid message must succeed");
 
@@ -96,7 +96,7 @@ async fn happy_path_full_lifecycle() {
             positive: true,
             reason: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("DispatchAperak must succeed from ValidationPassed");
@@ -116,7 +116,7 @@ async fn happy_path_full_lifecycle() {
             bemerkung: None,
             abweichender_termin: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("DispatchAntwort must succeed from AperakSent");
@@ -132,7 +132,7 @@ async fn happy_path_full_lifecycle() {
         DeviceChangeCommand::Complete {
             device_id: DeviceId::new("MSB-DEVICE-001"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Complete must succeed from AntwortGesendet");
@@ -155,7 +155,7 @@ async fn happy_path_full_lifecycle() {
 async fn validation_failure_rejects_process() {
     let p = make_process();
 
-    p.run(receive_utilmd_cmd(false), RunOptions::new())
+    p.run(receive_utilmd_cmd(false), RunOptions::system())
         .await
         .expect("ReceiveUtilmd with invalid message must still succeed as a command");
 
@@ -177,7 +177,7 @@ async fn validation_failure_rejects_process() {
 async fn negative_aperak_rejects_process() {
     let p = make_process();
 
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveUtilmd must succeed");
 
@@ -186,7 +186,7 @@ async fn negative_aperak_rejects_process() {
             positive: false,
             reason: Some("Messlokation nicht im Netzgebiet".to_owned()),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Negative DispatchAperak must succeed from ValidationPassed");
@@ -208,7 +208,7 @@ async fn negative_aperak_rejects_process() {
 async fn answer_deadline_timeout_is_a_frist_breach() {
     let p = make_process();
 
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveUtilmd must succeed");
 
@@ -224,7 +224,7 @@ async fn answer_deadline_timeout_is_a_frist_breach() {
             deadline_id,
             label: mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired on ValidationPassed must succeed");
@@ -247,7 +247,7 @@ async fn deadline_on_rejected_is_absorbed() {
     let p = make_process();
 
     // Validation failure → directly Rejected
-    p.run(receive_utilmd_cmd(false), RunOptions::new())
+    p.run(receive_utilmd_cmd(false), RunOptions::system())
         .await
         .expect("ReceiveUtilmd with invalid message must succeed");
 
@@ -257,7 +257,7 @@ async fn deadline_on_rejected_is_absorbed() {
             deadline_id,
             label: mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired on already-Rejected must be absorbed");
@@ -278,7 +278,7 @@ async fn deadline_on_completed_is_absorbed() {
     let p = make_process();
 
     // Drive to Completed
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .unwrap();
     p.run(
@@ -286,7 +286,7 @@ async fn deadline_on_completed_is_absorbed() {
             positive: true,
             reason: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -297,7 +297,7 @@ async fn deadline_on_completed_is_absorbed() {
             bemerkung: None,
             abweichender_termin: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -305,7 +305,7 @@ async fn deadline_on_completed_is_absorbed() {
         DeviceChangeCommand::Complete {
             device_id: DeviceId::new("MSB-DEVICE-001"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -316,7 +316,7 @@ async fn deadline_on_completed_is_absorbed() {
             deadline_id,
             label: mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired on Completed must be absorbed");
@@ -345,7 +345,7 @@ async fn aperak_from_new_is_rejected() {
                 positive: true,
                 reason: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 
@@ -368,7 +368,7 @@ async fn projection_tracks_full_lifecycle() {
         WorkflowId::new("wim-device-change", "FV2025-10-01"),
     );
 
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .unwrap();
     p.run(
@@ -376,7 +376,7 @@ async fn projection_tracks_full_lifecycle() {
             positive: true,
             reason: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -387,7 +387,7 @@ async fn projection_tracks_full_lifecycle() {
             bemerkung: None,
             abweichender_termin: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -395,7 +395,7 @@ async fn projection_tracks_full_lifecycle() {
         DeviceChangeCommand::Complete {
             device_id: DeviceId::new("MSB-DEVICE-001"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -449,7 +449,7 @@ async fn projection_tracks_rejected_process() {
         WorkflowId::new("wim-device-change", "FV2025-10-01"),
     );
 
-    p.run(receive_utilmd_cmd(false), RunOptions::new())
+    p.run(receive_utilmd_cmd(false), RunOptions::system())
         .await
         .unwrap();
 
@@ -487,7 +487,7 @@ async fn initiate_device_change_spawns_outbound_order() {
     let p = make_process();
 
     let output = p
-        .run(initiate_cmd(55_042), RunOptions::new())
+        .run(initiate_cmd(55_042), RunOptions::system())
         .await
         .map(|ran| (ran.events, ran.outbox))
         .expect("InitiateDeviceChange must succeed from New");
@@ -520,7 +520,7 @@ async fn initiate_device_change_spawns_outbound_order() {
 async fn initiate_device_change_accepts_all_wim_pids() {
     for pid in [55_039_u32, 55_042, 55_051, 55_168] {
         let p = make_process();
-        p.run(initiate_cmd(pid), RunOptions::new())
+        p.run(initiate_cmd(pid), RunOptions::system())
             .await
             .unwrap_or_else(|e| panic!("PID {pid} must be accepted: {e}"));
         assert_eq!(p.state().await.unwrap().status_str(), "AuftragGesendet");
@@ -532,7 +532,7 @@ async fn initiate_device_change_accepts_all_wim_pids() {
 async fn initiate_device_change_rejects_foreign_pid() {
     let p = make_process();
     let err = p
-        .run(initiate_cmd(55_001), RunOptions::new())
+        .run(initiate_cmd(55_001), RunOptions::system())
         .await
         .expect_err("PID 55001 is GPKE Lieferbeginn, not a WiM MSB-Wechsel");
     assert!(
@@ -545,12 +545,12 @@ async fn initiate_device_change_rejects_foreign_pid() {
 #[tokio::test]
 async fn initiate_device_change_requires_new_state() {
     let p = make_process();
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .expect("inbound UTILMD sets up prior state");
 
     let err = p
-        .run(initiate_cmd(55_042), RunOptions::new())
+        .run(initiate_cmd(55_042), RunOptions::system())
         .await
         .expect_err("must not issue an outbound order over an inbound process");
     assert!(
@@ -569,7 +569,7 @@ async fn projection_tracks_outbound_order() {
         WorkflowId::new("wim-device-change", "FV2025-10-01"),
     );
 
-    p.run(initiate_cmd(55_039), RunOptions::new())
+    p.run(initiate_cmd(55_039), RunOptions::system())
         .await
         .unwrap();
 
@@ -599,11 +599,11 @@ fn antwort_cmd(pid: u32, reason: Option<&str>) -> DeviceChangeCommand {
 #[tokio::test]
 async fn antwort_bestaetigung_closes_the_order() {
     let p = make_process();
-    p.run(initiate_cmd(55_042), RunOptions::new())
+    p.run(initiate_cmd(55_042), RunOptions::system())
         .await
         .unwrap();
 
-    p.run(antwort_cmd(55_043, None), RunOptions::new())
+    p.run(antwort_cmd(55_043, None), RunOptions::system())
         .await
         .expect("55043 confirms a 55042 order");
     assert_eq!(p.state().await.unwrap().status_str(), "AuftragBestaetigt");
@@ -612,7 +612,7 @@ async fn antwort_bestaetigung_closes_the_order() {
         DeviceChangeCommand::Complete {
             device_id: DeviceId::new("ZHR-77777777"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Complete must be reachable from AuftragBestaetigt");
@@ -623,13 +623,13 @@ async fn antwort_bestaetigung_closes_the_order() {
 #[tokio::test]
 async fn antwort_ablehnung_rejects_with_reason() {
     let p = make_process();
-    p.run(initiate_cmd(55_042), RunOptions::new())
+    p.run(initiate_cmd(55_042), RunOptions::system())
         .await
         .unwrap();
 
     p.run(
         antwort_cmd(55_044, Some("MeLo unbekannt")),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("55044 rejects a 55042 order");
@@ -647,10 +647,10 @@ async fn antwort_ablehnung_rejects_with_reason() {
 async fn antwort_pairs_match_their_request_pid() {
     for (antwort, request, confirmed) in mako_wim::DEVICE_CHANGE_ANTWORT_PIDS.iter().copied() {
         let p = make_process();
-        p.run(initiate_cmd(request), RunOptions::new())
+        p.run(initiate_cmd(request), RunOptions::system())
             .await
             .unwrap();
-        p.run(antwort_cmd(antwort, Some("x")), RunOptions::new())
+        p.run(antwort_cmd(antwort, Some("x")), RunOptions::system())
             .await
             .unwrap_or_else(|e| panic!("{antwort} must answer {request}: {e}"));
 
@@ -674,12 +674,12 @@ async fn antwort_pairs_match_their_request_pid() {
 #[tokio::test]
 async fn antwort_for_a_different_request_is_rejected() {
     let p = make_process();
-    p.run(initiate_cmd(55_039), RunOptions::new())
+    p.run(initiate_cmd(55_039), RunOptions::system())
         .await
         .unwrap();
 
     let err = p
-        .run(antwort_cmd(55_043, None), RunOptions::new())
+        .run(antwort_cmd(55_043, None), RunOptions::system())
         .await
         .expect_err("55043 answers 55042, not 55039");
     let msg = err.to_string();
@@ -698,11 +698,11 @@ async fn antwort_for_a_different_request_is_rejected() {
 #[tokio::test]
 async fn antwort_rejects_non_antwort_pid() {
     let p = make_process();
-    p.run(initiate_cmd(55_042), RunOptions::new())
+    p.run(initiate_cmd(55_042), RunOptions::system())
         .await
         .unwrap();
     let err = p
-        .run(antwort_cmd(55_001, None), RunOptions::new())
+        .run(antwort_cmd(55_001, None), RunOptions::system())
         .await
         .expect_err("55001 is GPKE Lieferbeginn, not a WiM Antwort");
     assert!(err.to_string().contains("55043"), "got: {err}");
@@ -713,7 +713,7 @@ async fn antwort_rejects_non_antwort_pid() {
 async fn antwort_requires_an_open_order() {
     let p = make_process();
     let err = p
-        .run(antwort_cmd(55_043, None), RunOptions::new())
+        .run(antwort_cmd(55_043, None), RunOptions::system())
         .await
         .expect_err("no order was sent");
     assert!(err.to_string().contains("AuftragGesendet"), "got: {err}");
@@ -724,10 +724,10 @@ async fn antwort_requires_an_open_order() {
 #[tokio::test]
 async fn answered_order_absorbs_the_response_deadline() {
     let p = make_process();
-    p.run(initiate_cmd(55_042), RunOptions::new())
+    p.run(initiate_cmd(55_042), RunOptions::system())
         .await
         .unwrap();
-    p.run(antwort_cmd(55_043, None), RunOptions::new())
+    p.run(antwort_cmd(55_043, None), RunOptions::system())
         .await
         .unwrap();
 
@@ -791,22 +791,77 @@ fn antwort_pid_table_is_complete_and_consistent() {
             .filter(|(_, r, c)| r == req && !*c)
             .count();
         assert_eq!(ja, 1, "request {req} needs exactly one Bestätigung");
-        // 44168 is the one request with **no Ablehnungs-Prüfidentifikator**.
-        // PID-Übersicht 4.0 publishes 44168 and 44169 and nothing else; the
-        // 44170 of PID 3.3 was withdrawn with FV2026-10-01. Its Codeliste
-        // `G_0071` still exists, so the codes have no carrier and the workflow
-        // escalates instead of inventing one.
-        let erwartet = usize::from(*req != 44_168);
-        assert_eq!(
-            nein, erwartet,
-            "request {req} needs exactly {erwartet} Ablehnung(en)"
-        );
+        assert_eq!(nein, 1, "request {req} needs exactly one Ablehnung");
     }
+    // PID-Übersicht 4.0 Lesefassung Stand 12.08.2026, Tabelle 1 Lfd. Nr. 39260
+    // (S. 76): 44170 „Ablehnung Verpflichtungsanfrage", Antwort auf 44168.
     assert_eq!(
         mako_wim::geraetewechsel::antwort_pid_for(44_168, false),
-        None,
-        "there is no Ablehnung PID for the Gas Verpflichtungsanfrage"
+        Some(44_170)
     );
+    assert_eq!(mako_wim::antwort_pid_meaning(44_170), Some((44_168, false)));
+}
+
+/// A refused Gas Verpflichtungsanfrage is answered on 44170 with a `G_0071`
+/// code — the Gas twin of 55168 → 55170.
+///
+/// Without the 44170 row the gMSB holds an `E_2006` Ablehnungscode and no
+/// Prüfidentifikator to send it on, and the NB never learns of the refusal.
+#[tokio::test]
+async fn a_refused_gas_verpflichtungsanfrage_is_answered_on_44170() {
+    let p = make_process();
+    let DeviceChangeCommand::ReceiveUtilmd {
+        sender,
+        receiver,
+        melo_id,
+        device_id,
+        document_date,
+        message_ref,
+        vorgangsnummer,
+        process_date,
+        received_at,
+        ..
+    } = receive_utilmd_cmd(true)
+    else {
+        unreachable!()
+    };
+    p.run(
+        DeviceChangeCommand::ReceiveUtilmd {
+            transaktionsgrund: Some("E03".to_owned()),
+            pid: Pruefidentifikator::new(44_168).unwrap(),
+            sender,
+            receiver,
+            melo_id,
+            device_id,
+            document_date,
+            message_ref,
+            vorgangsnummer,
+            process_date,
+            validation_passed: true,
+            validation_errors: vec![],
+            received_at,
+        },
+        RunOptions::system(),
+    )
+    .await
+    .expect("ReceiveUtilmd 44168");
+    let state = p.state().await.expect("state");
+
+    // `Z07` „Ablehnung (Keine Berechtigung)" — an `E_2006` Ablehnungscode.
+    let out = WimDeviceChangeWorkflow::handle(
+        &state,
+        DeviceChangeCommand::DispatchAntwort {
+            bestaetigt: false,
+            antwort_code: "Z07".to_owned(),
+            bemerkung: None,
+            abweichender_termin: None,
+        },
+    )
+    .expect("a refused Gas Verpflichtungsanfrage has an answer PID");
+    let payload = &out.outbox[0].payload;
+    assert_eq!(payload["pid"].as_u64(), Some(44_170));
+    assert_eq!(payload["antwort_code"].as_str(), Some("Z07"));
+    assert_eq!(payload["antwort_codeliste"].as_str(), Some("G_0071"));
 }
 
 /// Every WiM MSB-Wechsel PID resolves to a Sparte, an Entscheidungsbaum and a

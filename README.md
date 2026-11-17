@@ -34,11 +34,11 @@ person decides; every answer, amount and Frist carries its source.
 
 | Layer | What it is |
 |---|---|
-| **Protocol** | `edi-energy`, `dvgw-edi`, `redispatch-xml` formats · `mako-engine` runtime · `makod` — 77 workflows over 498 Prüfidentifikatoren, AS4 with mutual TLS |
+| **Protocol** | `edi-energy`, `dvgw-edi`, `redispatch-xml` formats · `mako-engine` runtime · `makod` — 77 workflows over 499 Prüfidentifikatoren, AS4 with mutual TLS |
 | **Market data** | `mako-markt` · `marktd` hub: master data, registries, Referenzreihen, durable CloudEvents fan-out |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer** | `vertragd` contracts and online Vertragsschluss · `productd` catalogue · `accountingd` ledger · `outputd` documents · `portald` portal |
-| **Agents** | 11 of the 14 services expose an MCP server — **183 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
+| **Agents** | 11 of the 14 services expose an MCP server — **189 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
 | **Desk** | [`desk/`](desk/) — one inbox per Rolle, the rule behind every item, an assistant that cites every sentence ([guide](https://hupe1980.github.io/mako/docs/guide/desk/)) |
 | **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties and a `pytest` plugin |
 
@@ -158,16 +158,16 @@ One PostgreSQL schema per daemon; routes, configuration and deployment are in
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 77 workflows over 498 Prüfidentifikatoren, AS4 · REST · iMS |
+| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 77 workflows over 499 Prüfidentifikatoren, AS4 · REST · iMS |
 | [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, Zuordnungsermächtigungen, Referenzreihen, CloudEvents fan-out |
 | [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Answers the Entscheidungsbäume and escalates what it cannot decide; process KPIs, Fristen, the § 7a Abs. 5 EnWG report, the Sperrauftrag queue |
-| [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 16 MCP tools |
+| [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 17 MCP tools |
 | [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — online Vertragsschluss with its Bestellnachweis, Widerruf, every contract with a Kunde on one side · 20 MCP tools |
 | [`productd`](services/productd/) | `:9080` | LF | Product catalogue — 14 categories (13 billable kinds and Bundle), Endkunden-Angebote, EPEX and BEHG price series · 14 MCP tools |
 | [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement — NNE, KA, MMM, MSB, AWH and the MaBiS Summenzeitreihen; issues the INVOIC · 13 MCP tools |
 | [`einsd`](services/einsd/) | `:9180` | NB · LF | Einspeiser registry and EEG/KWKG settlement · 20 MCP tools + 6 prompts |
 | [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle · 9 MCP tools |
-| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 13 MCP tools |
+| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 16 MCP tools |
 | [`accountingd`](services/accountingd/) | `:9380` | LF | Massenkontokorrent — tamper-evident double-entry ledger, SEPA, Mahnwesen |
 | [`outputd`](services/outputd/) | `:9880` | — | Customer documents and their delivery, addressed by `[policy] anrede` |
 | [`portald`](services/portald/) | `:9480` | LF | Customer portal gateway and the § 41 EnWG self-service writes |
@@ -194,7 +194,7 @@ use mako_gpke::lf_anmeldung::GpkeLfAnmeldungWorkflow;
 let ctx = EngineBuilder::new().with_event_store(InMemoryEventStore::new()).build();
 let tenant = mako_engine::ids::TenantId::new();        // `define_id!` newtype
 let process = ctx.spawn::<GpkeLfAnmeldungWorkflow>(tenant, wf_id);
-process.run(initiate_cmd, RunOptions::new()).await?;
+process.run(initiate_cmd, RunOptions::system()).await?;
 let state = process.state().await?;     // replayed from the stored events
 ```
 
@@ -269,7 +269,8 @@ gh attestation verify oci://ghcr.io/hupe1980/mako-makod:X.Y.Z --repo hupe1980/ma
 ```
 
 See [What a release carries](https://hupe1980.github.io/mako/docs/compliance/release-lifecycle/#what-a-release-carries),
-[CHANGELOG.md](./CHANGELOG.md) and [SECURITY.md](./SECURITY.md).
+[CHANGELOG.md](./CHANGELOG.md) and [SECURITY.md](./SECURITY.md); the threats
+and the control answering each are in [THREAT_MODEL.md](./THREAT_MODEL.md).
 
 ## Contributing
 

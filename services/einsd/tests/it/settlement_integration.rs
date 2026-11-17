@@ -1900,14 +1900,13 @@ async fn a_correction_without_sect51_figures_keeps_the_accrual() {
         .expect("list receipts");
     assert_eq!(receipts.len(), 2);
     assert!(
-        receipts
-            .iter()
-            .any(|r| r["is_correction"].as_bool() == Some(true)),
+        receipts.iter().any(|r| r.is_correction),
         "the correction must be marked as one: {receipts:?}"
     );
     assert!(
-        receipts.iter().any(|r| r["correction_reason"]
-            .as_str()
+        receipts.iter().any(|r| r
+            .correction_reason
+            .as_deref()
             .is_some_and(|s| s.contains("Ersatzwert"))),
         "the stated reason belongs in the § 147 AO audit trail: {receipts:?}"
     );
@@ -4588,14 +4587,9 @@ async fn the_settlements_query_filters_by_year_and_month() {
         .expect("seed receipt");
     }
 
-    let period = |rows: &[serde_json::Value]| -> Vec<(i64, i64)> {
+    let period = |rows: &[einsd::pg::SettlementReceipt]| -> Vec<(i64, i64)> {
         rows.iter()
-            .map(|r| {
-                (
-                    r["billing_year"].as_i64().expect("billing_year"),
-                    r["billing_month"].as_i64().expect("billing_month"),
-                )
-            })
+            .map(|r| (i64::from(r.billing_year), i64::from(r.billing_month)))
             .collect()
     };
 
@@ -4654,7 +4648,8 @@ async fn the_settlements_endpoint_honours_year_and_month() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&body).expect("an array of receipts");
+    let answer: serde_json::Value = serde_json::from_str(&body).expect("an Abrechnungen object");
+    let rows = answer["settlements"].as_array().expect("the receipts");
     assert_eq!(rows.len(), 1, "the filter must be applied: {body}");
     assert_eq!(rows[0]["billing_year"], 2026);
     assert_eq!(rows[0]["billing_month"], 7);

@@ -26,6 +26,7 @@ fn projection() -> ProcessProjection {
         malo_id: None,
         partner_mp_id: None,
         mdm_role: None,
+        eingriff: None,
         deadline_at: Some(OffsetDateTime::UNIX_EPOCH),
         deadline_source: None,
         deadline_risk: DeadlineRisk::Unknown,

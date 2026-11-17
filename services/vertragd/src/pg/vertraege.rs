@@ -941,14 +941,30 @@ pub struct BillingCandidateRow {
     pub vertragsende: Option<Date>,
     pub lieferbeginn: Date,
     pub lieferende: Option<Date>,
+    /// Supply has ended (`BEENDET`): the period up to `lieferende` is owed a
+    /// Schlussrechnung.
+    pub beendet: bool,
 }
 
-/// All active supply components eligible for scheduled billing (§ 40b EnWG).
+/// How long an ended supply stays in the billing feed: twelve weeks, twice the
+/// § 40c Abs. 2 EnWG six weeks. A Schlussrechnung the run could not issue by
+/// then is a recorded stuck period in billingd, which keeps it visible after
+/// the feed drops it.
+pub const ENDED_SUPPLY_WINDOW_DAYS: i32 = 84;
+
+/// All supply components billingd's scheduled run bills (§ 40b EnWG).
 ///
 /// A component is in supply from the moment the MaKo Lieferbeginn is confirmed.
 /// `BESTAETIGT` is that state — nothing ever promotes it to `AKTIV` — so
 /// requiring `AKTIV` alone left the § 40b billing feed permanently empty. Every
 /// other reader already accepts both.
+///
+/// A component whose supply has ended (`BEENDET`) stays in the feed, flagged
+/// `beendet`, for [`ENDED_SUPPLY_WINDOW_DAYS`] after its `lieferende` — also
+/// under a contract `close_due_supply` already set `ABGELAUFEN` — because the
+/// period that ends with the supply is owed an Abschlussrechnung (§ 40c Abs. 2
+/// Satz 1 EnWG) and only the run issues one unasked. vertragd cannot see
+/// billingd's records, so billingd decides whether it already exists.
 ///
 /// # Errors
 ///
@@ -960,16 +976,23 @@ pub async fn list_billing_candidates(
     Ok(sqlx::query_as::<_, BillingCandidateRow>(
         "SELECT k.malo_id, k.lf_mp_id, k.nb_mp_id, k.sparte,
                 v.abrechnungszyklus, v.vertragsbeginn, v.vertragsende,
-                k.lieferbeginn, k.lieferende
+                k.lieferbeginn, k.lieferende, (k.status = 'BEENDET') AS beendet
          FROM versorgungsvertraege v
          JOIN vertragskomponenten k ON k.vertrag_id = v.id
          WHERE v.tenant = $1
-           AND v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT')
-           AND k.status IN ('AKTIV','BESTAETIGT')
            AND k.malo_id IS NOT NULL
+           AND (
+                (v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT')
+                 AND k.status IN ('AKTIV','BESTAETIGT'))
+             OR (v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT','ABGELAUFEN')
+                 AND k.status = 'BEENDET'
+                 AND k.lieferende IS NOT NULL
+                 AND k.lieferende >= heute() - $2::int)
+           )
          ORDER BY k.malo_id",
     )
     .bind(tenant)
+    .bind(ENDED_SUPPLY_WINDOW_DAYS)
     .fetch_all(pool)
     .await?)
 }

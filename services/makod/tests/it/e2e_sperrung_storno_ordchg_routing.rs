@@ -84,7 +84,7 @@ async fn gpke_sperrung_ordchg_39000_resumes_by_order_ref() {
                 validation_passed: true,
                 validation_errors: vec![],
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("spawn ReceiveSperrung");
@@ -139,7 +139,7 @@ async fn geli_gas_sperrung_nb_ordchg_39000_resumes_by_order_ref() {
                 validation_passed: true,
                 validation_errors: vec![],
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("spawn ReceiveSperrung (Gas)");

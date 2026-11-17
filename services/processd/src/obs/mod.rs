@@ -54,6 +54,7 @@
 //! [`worker`](crate::obs::worker) emits `de.obs.deadline.approaching` and `de.obs.stp.parity.alert`
 //! to `marktd`'s ingest when `[obs] outbound_url` is configured.
 
+pub mod counterparty;
 pub mod domain;
 pub mod error;
 pub(crate) mod mcp;

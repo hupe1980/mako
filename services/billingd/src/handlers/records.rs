@@ -365,15 +365,18 @@ pub async fn render_record(
             ));
         }
         renders += 1;
+        let ident = id.to_string();
+        let link = crate::nachrechnen::public_link(&deps.cfg, id);
         let rendered = outputd
-            .render_invoice(
+            .render_invoice(&crate::clients::RenderInvoiceRequest {
                 model,
-                xml.clone(),
-                &specification_id,
-                chosen.as_deref(),
+                xml: &xml,
+                specification_id: &specification_id,
+                template_hash: chosen.as_deref(),
                 date,
-                &id.to_string(),
-            )
+                ident: &ident,
+                nachrechnen_url: link.as_deref(),
+            })
             .await
             .map_err(|e| match e {
                 // outputd's deterministic refusals are this record's (or this
@@ -761,7 +764,6 @@ pub async fn issue_and_deliver(
     row: &crate::pg::BillingRecordRow,
     model: &en16931::Invoice,
 ) -> BillingResult<crate::clients::IssuedDocument> {
-    let _ = &deps.cfg;
     // Prepare, do not render: outputd's document endpoint renders inside the
     // call that records the bytes, so rendering here would produce a second PDF
     // that is discarded — and a different one if the template moved between.
@@ -788,6 +790,7 @@ pub async fn issue_and_deliver(
             kunden_nr: None,
             recipient,
             channels,
+            nachrechnen_url: crate::nachrechnen::public_link(&deps.cfg, id),
         })
         .await
         .map_err(|e| BillingError::upstream("outputd", format!("{e:#}")))?;

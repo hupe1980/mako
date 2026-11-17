@@ -30,6 +30,9 @@ use std::collections::BTreeSet;
 const POLICY: &str = include_str!("../../policies/einsd.cedar");
 const ROUTES: &str = include_str!("../../src/routes.rs");
 const HANDLERS: &str = include_str!("../../src/handlers.rs");
+/// The shared reads (one function behind a REST GET and its MCP tool) name
+/// their action by a `pub const`, not a literal.
+const READS: &str = include_str!("../../src/reads.rs");
 
 /// Actions enforced somewhere other than a handler body.
 ///
@@ -114,6 +117,35 @@ fn code_actions() -> BTreeSet<String> {
                     .all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit())
             {
                 found.insert(lit.to_owned());
+            }
+        }
+    }
+    found.extend(read_actions());
+    found
+}
+
+/// Every action a shared read authorizes with: a `pub const NAME: &str =
+/// "action";` of `reads.rs` counts once `NAME` is the action argument of an
+/// `authorize(` call there. A constant nothing authorizes with stays dead.
+fn read_actions() -> BTreeSet<String> {
+    let mut consts = Vec::new();
+    for line in READS.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("pub const ")
+            && let Some((name, value)) = rest.split_once(": &str = \"")
+            && let Some(lit) = value.strip_suffix("\";")
+        {
+            consts.push((name.to_owned(), lit.to_owned()));
+        }
+    }
+    let mut found = BTreeSet::new();
+    let mut rest = READS;
+    while let Some(i) = rest.find("authorize(") {
+        rest = &rest[i + "authorize(".len()..];
+        let call = &rest[..rest.find(')').unwrap_or(rest.len())];
+        for (name, lit) in &consts {
+            if call.split([',', ' ', '\n']).any(|arg| arg == name) {
+                found.insert(lit.clone());
             }
         }
     }

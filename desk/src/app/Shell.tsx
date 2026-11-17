@@ -1,5 +1,5 @@
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
 import { Button, Dialog, Link, Modal, ModalOverlay, RouterProvider } from "react-aria-components";
 import { Icon, type IconName } from "../design/Icon";
 import { Kbd } from "../design/Kbd";
@@ -14,6 +14,10 @@ import { LaufPills } from "./LaufPills";
 import { RolleBadge } from "./RolleBadge";
 import { ROLLEN, useRolle } from "./rollen";
 import { ShortcutSheet } from "./ShortcutSheet";
+
+// The drift banner and the follow-up on last page's decisions wait for the
+// first paint: nothing in them is urgent.
+const Kopfzeilen = lazy(() => import("./Kopfzeilen").then((m) => ({ default: m.Kopfzeilen })));
 
 function NavItem({
   to,
@@ -92,6 +96,9 @@ function Seitenleiste({ onShortcuts }: { onShortcuts: () => void }) {
           )}
           <NavItem to="/prozess" icon="flow">
             {t.shell.prozesse}
+          </NavItem>
+          <NavItem to="/gegenparteien" match="/gegenpartei" icon="person">
+            {t.gegenpartei.liste}
           </NavItem>
         </Group>
         <Group titel={t.shell.groupSystem}>
@@ -210,6 +217,9 @@ export function Shell() {
                 </span>
               </Button>
             </header>
+            <Suspense fallback={null}>
+              <Kopfzeilen />
+            </Suspense>
             <Outlet />
           </main>
         </div>

@@ -1,0 +1,38 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Heute" [level=1]
+  - region "Arbeitsvorrat":
+    - list "Arbeitsvorrat":
+      - listitem:
+        - link "Freigaben älteste vom 04.11.2026 1":
+          - /url: /freigaben
+      - listitem:
+        - link "Klärfälle nichts offen 0":
+          - /url: /heute?quelle=klaerfaelle
+      - listitem:
+        - link "Gehaltene Rechnungen nichts offen 0":
+          - /url: /heute?quelle=gehalten
+      - listitem:
+        - link "Korrekturbedarf nichts offen 0":
+          - /url: /heute?quelle=korrekturbedarf
+  - region "Nächste 7 Tage 1":
+    - heading "Nächste 7 Tage 1" [level=2]
+    - list "Nächste 7 Tage":
+      - listitem:
+        - 'button "Anmeldung eines verbundenen Lieferanten (Antwortfrist 2026-11-05) 51238696012 · PID 55001 · Antwort offen Frist: in 1 Tag entscheiden"':
+          - text: Anmeldung eines verbundenen Lieferanten (Antwortfrist 2026-11-05) 51238696012 · PID 55001 · Antwort offen
+          - time: "Frist: in 1 Tag"
+          - text: entscheiden
+        - button "Warum?"
+  - region "Fragen zu 51238696012":
+    - heading "Fragen zu 51238696012" [level=2]
+    - region "Fragen":
+      - textbox "Frage an den Assistenten":
+        - /placeholder: Frag den Assistenten …  ⌘J
+      - button "Fragen" [disabled]
+      - paragraph: Antwortet mit claude-sonnet-5 · anthropic · liest nur, handelt nie
+      - button "Was schlägst du vor?"
+      - button "Warum liegt das bei uns?"
+      - button "Was kam zuletzt an?"
+  - paragraph: J K oder ↑↓ wählen · ↵ öffnet, Freigaben, Dispute, Prüfposten und geparkte Buchungen werden hier entschieden (A / R, U übernimmt den Vorschlag) · ? fragt, warum der gewählte Eintrag hier steht · ⌘J fragt den Assistenten zum gewählten Eintrag · ⌘K listet seine Aktionen

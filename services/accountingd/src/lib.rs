@@ -32,7 +32,9 @@ pub mod handlers;
 pub mod ledger;
 pub mod mahnung;
 pub mod mcp_server;
+pub mod openapi;
 pub mod pg;
+pub mod reads;
 pub mod sepa;
 pub mod sperr;
 

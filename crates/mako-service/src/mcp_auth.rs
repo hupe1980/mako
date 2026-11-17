@@ -841,6 +841,32 @@ impl McpAuth {
         }
         self.try_api_key(token).map(McpApiKey::identity)
     }
+
+    /// The Marktrollen of the verified caller behind `headers` — what Cedar
+    /// evaluates as `context.principal_roles`, for a tool body that keeps its
+    /// rows to the caller's own roles as the REST twin does.
+    ///
+    /// A JWT answers its `mako_roles` (after the tenant pin), a named key the
+    /// roles its configuration declares, dev mode the dev principal's. `None`
+    /// when no caller could be verified; an empty list is a role-less key. A
+    /// tool must refuse on either rather than read the tenant's rows unfiltered.
+    #[must_use]
+    pub fn roles(&self, headers: &axum::http::HeaderMap) -> Option<Vec<String>> {
+        if self.is_dev_request(headers) {
+            return Some(self.oidc.disabled_claims().mako_roles);
+        }
+        let token = headers
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))?;
+        if OidcVerifier::looks_like_jwt(token) {
+            let claims = self.oidc.verify(token).ok()?;
+            self.check_token_tenant(claims.mako_tenant.as_deref())
+                .ok()?;
+            return Some(claims.mako_roles);
+        }
+        self.try_api_key(token).map(|k| k.roles.clone())
+    }
 }
 
 impl McpApiKey {
@@ -1240,5 +1266,16 @@ mod tests {
         let debug = format!("{id:?}");
         assert!(debug.contains("agentd"));
         assert!(debug.contains("ApiKey"));
+    }
+
+    /// A tool keeping rows to the caller's roles reads them here: a key's
+    /// declared roles, a role-less key as empty, an unknown token as nobody.
+    #[test]
+    fn roles_are_the_verified_callers_own() {
+        let auth = lf_only_auth().with_named_key("role-less", "key-none");
+        assert_eq!(auth.roles(&bearer("key-lf")), Some(vec!["LF".to_owned()]));
+        assert_eq!(auth.roles(&bearer("key-none")), Some(Vec::new()));
+        assert_eq!(auth.roles(&bearer("unknown")), None);
+        assert_eq!(auth.roles(&axum::http::HeaderMap::new()), None);
     }
 }

@@ -82,7 +82,7 @@ async fn registered(
 async fn a_datenabruf_without_its_zeitspanne_is_refused() {
     let state = lfg_state().await;
     let refused = dispatch_command(
-        &state,
+        &state, mako_engine::envelope::Akteur::System,
         "geli.datenabruf.anfragen",
         &serde_json::json!({ "malo_id": MALO_ID, "melo_id": MELO_ID, "zeitspanne_von": "2026-01-01" }),
     )
@@ -105,6 +105,7 @@ async fn a_datenabruf_waits_for_the_tenth_werktag_of_the_following_month() {
         .expect("calendar date");
     let outcome = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "geli.datenabruf.anfragen",
         &serde_json::json!({
             "malo_id": MALO_ID,
@@ -141,6 +142,7 @@ async fn a_datenabruf_without_its_messlokation_is_refused() {
     let state = lfg_state().await;
     let refused = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "geli.datenabruf.anfragen",
         &serde_json::json!({
             "malo_id": MALO_ID,
@@ -186,6 +188,7 @@ async fn a_stornierung_with_nothing_to_cancel_is_refused() {
     let state = lfg_state().await;
     let refused = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "geli.stornierung.initiieren",
         &serde_json::json!({ "malo_id": MALO_ID }),
     )
@@ -201,6 +204,7 @@ async fn a_stornierung_inherits_the_cancelled_messages_window() {
     let state = lfg_state().await;
     let anmeldung = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "geli.lieferbeginn.anmelden",
         &serde_json::json!({
             "malo_id": MALO_ID,
@@ -235,6 +239,7 @@ async fn a_stornierung_inherits_the_cancelled_messages_window() {
 
     let storno = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "geli.stornierung.initiieren",
         &serde_json::json!({ "malo_id": MALO_ID }),
     )

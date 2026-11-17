@@ -83,6 +83,33 @@ function services() {
           result = {
             structuredContent: { overdue: OVERDUE, count: 2, saturated: false, limit: 500 },
           };
+        else if (name === "list_klaerfaelle")
+          result = {
+            structuredContent: {
+              count: 1,
+              saturated: false,
+              klaerfaelle: [
+                {
+                  id: "k-1",
+                  message_ref: "51238696012",
+                  process_id: "p-1",
+                  pid: 55001,
+                  origins: ["frist_missed", "dead_letter"],
+                  ursache_code: "Z29",
+                  ursache_liste: "APERAK",
+                  bedeutung: null,
+                  aktion: "escalate_to_operator",
+                  hinweis: "operator decides",
+                  befehl: null,
+                  due_at: "2026-10-05T09:00:00Z",
+                  due_source: null,
+                  overdue: true,
+                  occurrences: 2,
+                  opened_at: "2026-10-01T08:00:00Z",
+                },
+              ],
+            },
+          };
         else if (name === "list_dead_letters")
           result = { structuredContent: { dead_letters: DEAD, gesamt: 1 } };
         else if (name === "get_process_history")

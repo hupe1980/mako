@@ -108,7 +108,7 @@ async fn spawn_supplier_change(
                 validation_passed: true,
                 validation_errors: vec![],
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("spawn_supplier_change: ReceiveUtilmd");
@@ -159,7 +159,7 @@ async fn initiate_lf_anmeldung(
         })),
     };
     process
-        .run(cmd, RunOptions::new())
+        .run(cmd, RunOptions::system())
         .await
         .expect("initiate_lf_anmeldung: execute");
     process_id
@@ -255,7 +255,7 @@ async fn handle_antwort_accepted_transitions_to_active() {
                     stammdaten: mako_engine::payload::Stammdaten::default(),
                 })),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("InitiateAnmeldung");
@@ -275,7 +275,7 @@ async fn handle_antwort_accepted_transitions_to_active() {
                 response_ref: mako_engine::types::MessageRef::new("REF-001"),
                 antwort: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("HandleAntwort accepted");
@@ -320,7 +320,7 @@ async fn handle_antwort_rejected_transitions_to_rejected() {
                     stammdaten: mako_engine::payload::Stammdaten::default(),
                 })),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .unwrap();
@@ -334,7 +334,7 @@ async fn handle_antwort_rejected_transitions_to_rejected() {
                 response_ref: mako_engine::types::MessageRef::new("REF-002"),
                 antwort: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .unwrap();
@@ -413,10 +413,14 @@ async fn nb_lieferbeginn_bestaetigen_dispatches_to_supplier_change_workflow() {
         "antwort_code": "A51",
         "antwort_codeliste": "E_0623",
     });
-    let outcome =
-        makod::commands_api::dispatch_command(&state, "gpke.lieferbeginn.bestaetigen", &payload)
-            .await
-            .expect("bestaetigen must succeed");
+    let outcome = makod::commands_api::dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.bestaetigen",
+        &payload,
+    )
+    .await
+    .expect("bestaetigen must succeed");
 
     assert!(
         matches!(outcome, makod::commands_api::DispatchOutcome::Dispatched { process_id: pid } if pid == process_id),
@@ -458,10 +462,14 @@ async fn nb_lieferbeginn_ablehnen_dispatches_to_supplier_change_workflow() {
         "antwort_codeliste": "E_0622",
         "bemerkung": "Stammdaten unbekannt",
     });
-    let outcome =
-        makod::commands_api::dispatch_command(&state, "gpke.lieferbeginn.ablehnen", &payload)
-            .await
-            .expect("ablehnen must succeed");
+    let outcome = makod::commands_api::dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.ablehnen",
+        &payload,
+    )
+    .await
+    .expect("ablehnen must succeed");
 
     assert!(
         matches!(outcome, makod::commands_api::DispatchOutcome::Dispatched { process_id: pid } if pid == process_id),
@@ -500,10 +508,14 @@ async fn nb_lieferende_bestaetigen_dispatches_to_supplier_change_workflow() {
         "antwort_code": "A11",
         "antwort_codeliste": "E_0607",
     });
-    let outcome =
-        makod::commands_api::dispatch_command(&state, "gpke.lieferende.bestaetigen", &payload)
-            .await
-            .expect("lieferende.bestaetigen must succeed");
+    let outcome = makod::commands_api::dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferende.bestaetigen",
+        &payload,
+    )
+    .await
+    .expect("lieferende.bestaetigen must succeed");
 
     assert!(
         matches!(
@@ -531,10 +543,14 @@ async fn nb_lieferende_ablehnen_dispatches_to_supplier_change_workflow() {
         "antwort_codeliste": "E_0607",
         "bemerkung": "Keine Umzugsmeldung",
     });
-    let outcome =
-        makod::commands_api::dispatch_command(&state, "gpke.lieferende.ablehnen", &payload)
-            .await
-            .expect("lieferende.ablehnen must succeed");
+    let outcome = makod::commands_api::dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferende.ablehnen",
+        &payload,
+    )
+    .await
+    .expect("lieferende.ablehnen must succeed");
 
     assert!(
         matches!(
@@ -556,10 +572,14 @@ async fn nb_bestaetigen_unknown_malo_returns_process_not_found() {
         "antwort_code": "A51",
         "antwort_codeliste": "E_0623",
     });
-    let err =
-        makod::commands_api::dispatch_command(&state, "gpke.lieferbeginn.bestaetigen", &payload)
-            .await
-            .expect_err("bestaetigen for unknown MaLo must fail");
+    let err = makod::commands_api::dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.bestaetigen",
+        &payload,
+    )
+    .await
+    .expect_err("bestaetigen for unknown MaLo must fail");
 
     assert!(
         matches!(
@@ -621,6 +641,7 @@ async fn an_nb_answer_without_an_antwortcode_is_refused() {
 
     let err = makod::commands_api::dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "gpke.lieferbeginn.bestaetigen",
         &serde_json::json!({ "malo_id": malo_id }),
     )
@@ -643,6 +664,7 @@ async fn a_bestaetigen_command_may_not_carry_an_ablehnungscode() {
 
     let err = makod::commands_api::dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "gpke.lieferbeginn.bestaetigen",
         &serde_json::json!({
             "malo_id": malo_id,
@@ -668,6 +690,7 @@ async fn an_answer_code_must_belong_to_the_named_tree() {
 
     let err = makod::commands_api::dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "gpke.lieferende.ablehnen",
         &serde_json::json!({
             "malo_id": malo_id,
@@ -696,6 +719,7 @@ async fn a_gas_answer_is_validated_against_its_tree_without_a_de1131() {
     // `A02` is the *Strom* Vorlauffrist code; `G_0007` publishes `E17` instead.
     let err = makod::commands_api::dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "gpke.lieferende.ablehnen",
         &serde_json::json!({
             "malo_id": malo_id,
@@ -714,6 +738,7 @@ async fn a_gas_answer_is_validated_against_its_tree_without_a_de1131() {
     // `E17` is, and it dispatches.
     makod::commands_api::dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "gpke.lieferende.ablehnen",
         &serde_json::json!({
             "malo_id": malo_id,
@@ -735,6 +760,7 @@ async fn a_gas_eog_answer_is_validated_against_e_3008() {
     for code in ["A07", "ZZ9"] {
         let err = makod::commands_api::dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "geli.eog.bestaetigen",
             &serde_json::json!({
                 "malo_id": "51238696012",

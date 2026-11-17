@@ -952,17 +952,31 @@ impl OidcConfig {
         shutdown: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<OidcVerifier> {
         use anyhow::Context as _;
+        let resolve_keys = |c: &OidcConfig| -> anyhow::Result<Vec<ServiceKey>> {
+            let mut keys = Vec::with_capacity(c.service_keys.len());
+            for sk in &c.service_keys {
+                let secret = crate::config::resolve_env_secret(&sk.key)
+                    .with_context(|| format!("service_key {:?}", sk.name))?;
+                keys.push(ServiceKey::new(
+                    secret,
+                    sk.name.clone(),
+                    tenant_id,
+                    sk.roles.clone(),
+                    sk.sparte.clone(),
+                ));
+            }
+            Ok(keys)
+        };
         if let Some(c) = cfg.filter(|c| c.mode == OidcMode::Demo) {
-            anyhow::ensure!(
-                c.service_keys.is_empty(),
-                "[oidc] mode = \"demo\" takes no service_keys: every opaque key is admitted"
-            );
             tracing::warn!(
                 "OIDC demo mode — tokens signed by mako's public demo key are accepted and \
                  requests without a token are admitted as dev-admin. A demonstration, never \
                  a deployment."
             );
-            return Ok(OidcVerifier::demo(tenant_id));
+            // A configured service key is that service's principal in the demo
+            // as in production, so a policy naming a service principal never
+            // has to admit `dev-admin` to keep the demo working.
+            return Ok(OidcVerifier::demo(tenant_id).with_service_keys(resolve_keys(c)?));
         }
         if let Some(c) = cfg {
             anyhow::ensure!(
@@ -980,18 +994,7 @@ impl OidcConfig {
                 .context("OIDC discovery")?;
             let _refresh = v.spawn_refresh_task(http.clone(), c.jwks_refresh_secs, shutdown);
             // Resolve any configured service-to-service keys (env: indirection).
-            let mut keys = Vec::with_capacity(c.service_keys.len());
-            for sk in &c.service_keys {
-                let secret = crate::config::resolve_env_secret(&sk.key)
-                    .with_context(|| format!("service_key {:?}", sk.name))?;
-                keys.push(ServiceKey::new(
-                    secret,
-                    sk.name.clone(),
-                    tenant_id,
-                    sk.roles.clone(),
-                    sk.sparte.clone(),
-                ));
-            }
+            let keys = resolve_keys(c)?;
             if !keys.is_empty() {
                 tracing::info!(count = keys.len(), "OIDC: service-to-service keys enabled");
             }

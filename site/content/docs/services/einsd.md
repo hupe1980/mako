@@ -1073,10 +1073,13 @@ Mitteilung is mako's JSON shape.
 | `GET` | `/api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` | Form in force, for processd |
 | `POST` | `/api/v1/anlagen/{tr_id}/switch-veraeusserungsform` | § 21b switch |
 | `POST` | `/api/v1/anlagen/{tr_id}/wind-reevaluation` | § 36h Abs. 2 |
-| `GET` | `/api/v1/anlagen/foerderung-auslaufend` | Förderende within `?days=` |
+| `GET` | `/api/v1/anlagen/foerderung-auslaufend` | Förderende within `?days=` (`AuslaufendeAnlagen`) |
+| `GET` | `/api/v1/anlagen/ohne-mastr` | Active plants not in the MaStR, with the § 52 Pflichtzahlung (`AnlagenOhneMastr`) |
+| `GET` | `/api/v1/anlagen/unabgerechnet/{year}/{month}` | Active plants with no receipt for the month (`UnabgerechneteAnlagen`) |
 | `POST` | `/api/v1/anlagen/{tr_id}/settle/{year}/{month}` | Monthly settlement |
 | `POST` | `/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction` | Correction receipt |
-| `GET` | `/api/v1/anlagen/{tr_id}/settlements` | History (`?year=&month=&limit=`; unknown parameters are `400`) |
+| `GET` | `/api/v1/anlagen/{tr_id}/settlements` | History as `Abrechnungen` (`?year=&month=&limit=`; unknown parameters are `400`) |
+| `GET` | `/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/erklaerung` | The month's receipt with its positions and legal bases (`AbrechnungsErklaerung`) |
 | `POST` | `/api/v1/settle/{year}/{month}` | Batch settle |
 | `POST` | `/api/v1/anlagen/{tr_id}/jahresabrechnung/{year}` | Annual reconciliation |
 | `POST/GET` | `/api/v1/enfg/ledger/{year}/{month}` | Book / read the EnFG ledger from accountingd's payments |
@@ -1086,6 +1089,7 @@ Mitteilung is mako's JSON shape.
 | `PUT/GET` | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}` | Anlage 1 Marktwert, `art` = `monat` \| `jahr` |
 | `GET` | `/api/v1/marktwert/{year}/nachbewertung` | Months on a provisional Jahresmarktwert |
 | `POST` | `/api/v1/verguetungssatz-lookup` | Rate lookup |
+| `GET` | `/api/v1/openapi.json` | OpenAPI 3.1 document of the reads above that carry a response type |
 | `GET` | `/api/v1/policy` | Operator policy report (`read-policy`) |
 | `GET` | `/admin/einrichtung` | Configuration findings and policy (`read-config`) |
 | `POST` | `/mcp` | MCP (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session) |
@@ -1280,6 +1284,26 @@ Seventeen tools read; three write — `trigger_settle`, `import_marktwert` and
 `check_einspeiseverguetung_anspruch` · `check_sect44b_quota` ·
 `import_marktwert` · `get_marktwert` ·
 `get_settlement_state_history` · `explain_settlement` · `get_aw_reduktionen`
+
+Six reads are shared with a documented REST route: the tool and the route
+call one function, answer one type — the tool's `outputSchema` (pinned in
+`services/einsd/mcp.snapshot.json`) and the route's response in
+`/api/v1/openapi.json` (committed as `services/einsd/openapi.json`) — and
+authorize with the same Cedar action, so the tool admits exactly the callers
+the route does:
+
+| Tool | `GET` | Cedar | Answer |
+|---|---|---|---|
+| `get_plant` | `/api/v1/anlagen/{tr_id}` | `read-anlage` | `AnlageRow` |
+| `list_expiring` | `/api/v1/anlagen/foerderung-auslaufend` | `read-anlage` | `AuslaufendeAnlagen` |
+| `list_plants_without_mastr` | `/api/v1/anlagen/ohne-mastr` | `read-anlage` | `AnlagenOhneMastr` |
+| `list_settlements` | `/api/v1/anlagen/{tr_id}/settlements` | `read-settlement` | `Abrechnungen` — each receipt with `status`, `error_detail`, `faelligkeitsdatum` and the correction chain |
+| `explain_settlement` | `/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/erklaerung` | `read-settlement` | `AbrechnungsErklaerung`; a month without a receipt is `settlement_not_found` |
+| `list_unsettled_plants` | `/api/v1/anlagen/unabgerechnet/{year}/{month}` | `read-settlement` | `UnabgerechneteAnlagen` |
+
+Decimals are strings (`format: decimal`), dates `YYYY-MM-DD`, instants
+RFC 3339. A refusal is the route's `4xx` and the tool's error result
+`<code>: <message>`.
 
 `check_einspeiseverguetung_anspruch` lists active plants over 100 kW on the
 Einspeisevergütung (they settle `kein_anspruch`). `check_sect44b_quota` reports

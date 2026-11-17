@@ -175,6 +175,37 @@ pub struct DocumentView {
     pub totals: TotalsView,
     /// BT-22 — free-text notes, in document order.
     pub notes: Vec<String>,
+    /// The public page that recomputes this invoice, when the operator runs
+    /// one: not an EN 16931 term, so the embedded XML does not carry it.
+    pub nachrechnen: Option<NachrechnenView>,
+}
+
+/// The Nachrechnen link a letter prints, and its QR code.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct NachrechnenView {
+    /// The link, printed as text.
+    pub url: String,
+    /// The same link as a QR code, an SVG document — `image(bytes(..),
+    /// format: "svg")`.
+    pub qr_svg: String,
+}
+
+impl DocumentView {
+    /// The view with the Nachrechnen link and its QR code.
+    ///
+    /// # Errors
+    ///
+    /// A link that is not `http(s)` or does not fit a QR code.
+    pub fn with_nachrechnen(mut self, url: &str) -> Result<Self, String> {
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            return Err(format!("nachrechnen_url {url:?} is not an http(s) link"));
+        }
+        self.nachrechnen = Some(NachrechnenView {
+            url: url.to_owned(),
+            qr_svg: super::qr::svg(url)?,
+        });
+        Ok(self)
+    }
 }
 
 fn allowance(a: &en16931::invoice::DocumentAllowanceCharge) -> AllowanceView {
@@ -267,6 +298,7 @@ impl DocumentView {
                 due: inv.totals.due.to_string(),
             },
             notes: inv.notes.iter().filter_map(|n| n.note.clone()).collect(),
+            nachrechnen: None,
         }
     }
 }

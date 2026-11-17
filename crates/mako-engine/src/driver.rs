@@ -188,7 +188,7 @@ where
         Process::<W, _>::from_identity(Arc::clone(store), identity)
             .run_timeout(
                 deadline,
-                RunOptions::new().snapshot(snapshots, snapshot_interval),
+                RunOptions::system().snapshot(snapshots, snapshot_interval),
             )
             .await
     })

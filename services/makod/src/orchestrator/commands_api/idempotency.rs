@@ -76,11 +76,26 @@ fn suffix(tenant: &str, key: &str) -> String {
     format!("{:x}", h.finalize())
 }
 
-/// Fingerprint of the request a key is bound to.
+/// Fingerprint of the request a key is bound to: the command, who it is
+/// attributed to, and the payload.
+///
+/// The actor is part of the request: the same key sent under another actor
+/// must not replay the first one's response, or a person's command would be
+/// answered as the system's — and the second actor's act never recorded.
 #[must_use]
-pub(crate) fn fingerprint(command: &str, payload: &serde_json::Value) -> String {
+pub(crate) fn fingerprint(
+    command: &str,
+    akteur: &mako_engine::envelope::Akteur,
+    payload: &serde_json::Value,
+) -> String {
     let mut h = Sha256::new();
     h.update(command.as_bytes());
+    h.update([0u8]);
+    h.update(
+        serde_json::to_string(akteur)
+            .expect("an actor serialises")
+            .as_bytes(),
+    );
     h.update([0u8]);
     // `to_string` on a `serde_json::Value` orders object keys deterministically
     // (the default feature set keeps a `BTreeMap`), so a re-serialised
@@ -185,7 +200,11 @@ mod tests {
     #[tokio::test]
     async fn an_unused_key_is_fresh() {
         let s = store().await;
-        let fp = fingerprint("gpke.lieferbeginn.anmelden", &json!({"malo_id": "1"}));
+        let fp = fingerprint(
+            "gpke.lieferbeginn.anmelden",
+            &mako_engine::envelope::Akteur::System,
+            &json!({"malo_id": "1"}),
+        );
         assert!(matches!(
             lookup(&s, "9900357000004", "k1", &fp).await.unwrap(),
             Lookup::Fresh
@@ -195,7 +214,11 @@ mod tests {
     #[tokio::test]
     async fn the_same_request_replays_the_recorded_response() {
         let s = store().await;
-        let fp = fingerprint("gpke.lieferbeginn.anmelden", &json!({"malo_id": "1"}));
+        let fp = fingerprint(
+            "gpke.lieferbeginn.anmelden",
+            &mako_engine::envelope::Akteur::System,
+            &json!({"malo_id": "1"}),
+        );
         let body = json!({"status": "accepted", "process_id": "p-1"});
         record(&s, "9900357000004", "k1", &fp, &body).await.unwrap();
         match lookup(&s, "9900357000004", "k1", &fp).await.unwrap() {
@@ -206,11 +229,41 @@ mod tests {
 
     /// A key reused for a different command must not answer with the first
     /// command's `process_id`.
+    #[test]
+    fn a_reused_key_under_another_actor_is_idempotency_key_reuse() {
+        let payload = json!({"malo_id": "1"});
+        let system = fingerprint(
+            "gpke.lieferbeginn.anmelden",
+            &mako_engine::envelope::Akteur::System,
+            &payload,
+        );
+        let person = fingerprint(
+            "gpke.lieferbeginn.anmelden",
+            &mako_engine::envelope::Akteur::Person {
+                principal: "erika".into(),
+            },
+            &payload,
+        );
+        assert_ne!(
+            system, person,
+            "the same key under another actor is another request, refused as reuse"
+        );
+    }
+
     #[tokio::test]
     async fn reusing_a_key_for_a_different_request_conflicts() {
         let s = store().await;
-        let first = fingerprint("gpke.lieferbeginn.anmelden", &json!({"malo_id": "1"}));
-        let second = fingerprint("gpke.lieferende.abmelden", &json!({"malo_id": "1"}));
+        let first = fingerprint(
+            "gpke.lieferbeginn.anmelden",
+            &mako_engine::envelope::Akteur::System,
+            &json!({"malo_id": "1"}),
+        );
+
+        let second = fingerprint(
+            "gpke.lieferende.abmelden",
+            &mako_engine::envelope::Akteur::System,
+            &json!({"malo_id": "1"}),
+        );
         record(
             &s,
             "9900357000004",
@@ -231,7 +284,11 @@ mod tests {
     #[tokio::test]
     async fn records_are_scoped_to_the_tenant() {
         let s = store().await;
-        let fp = fingerprint("gpke.lieferbeginn.anmelden", &json!({"malo_id": "1"}));
+        let fp = fingerprint(
+            "gpke.lieferbeginn.anmelden",
+            &mako_engine::envelope::Akteur::System,
+            &json!({"malo_id": "1"}),
+        );
         record(
             &s,
             "9900357000004",
@@ -252,7 +309,11 @@ mod tests {
     #[tokio::test]
     async fn a_hostile_key_is_stored_under_a_digest() {
         let s = store().await;
-        let fp = fingerprint("gpke.lieferbeginn.anmelden", &json!({}));
+        let fp = fingerprint(
+            "gpke.lieferbeginn.anmelden",
+            &mako_engine::envelope::Akteur::System,
+            &json!({}),
+        );
         let hostile = "../../e/tenant/stream\u{0}\u{1}";
         record(&s, "9900357000004", hostile, &fp, &json!({"ok": true}))
             .await
@@ -275,7 +336,11 @@ mod tests {
     #[tokio::test]
     async fn expired_records_are_swept() {
         let s = store().await;
-        let fp = fingerprint("gpke.lieferbeginn.anmelden", &json!({}));
+        let fp = fingerprint(
+            "gpke.lieferbeginn.anmelden",
+            &mako_engine::envelope::Akteur::System,
+            &json!({}),
+        );
         record(&s, "9900357000004", "k1", &fp, &json!({"ok": true}))
             .await
             .unwrap();

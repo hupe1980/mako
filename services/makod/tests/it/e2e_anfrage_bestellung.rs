@@ -177,7 +177,7 @@ impl MockNb {
         };
 
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("NB: execute ReceiveAnfrage");
     }
@@ -190,7 +190,7 @@ impl MockNb {
                     data_provided,
                     reason: reason.map(str::to_owned),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("NB: execute DispatchResponse");
@@ -294,7 +294,7 @@ async fn e2e_anfrage_bestellung_validation_failure() {
                 validation_passed: false,
                 validation_errors: vec!["IDE segment missing mandatory Vorgangsnummer".to_owned()],
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("ReceiveAnfrage with invalid message must not panic");

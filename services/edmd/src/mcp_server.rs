@@ -3,20 +3,21 @@
 //! Exposes meter data time-series and billing-period summaries.
 //! Mounted at `/mcp` on the existing HTTP port.
 //!
-//! ## Tools (15)
+//! ## Tools (16)
 //!
 //! | Tool | Description |
 //! |---|---|
-//! | `get_timeseries`             | Read meter data for a MaLo in a time range |
+//! | `get_timeseries`             | Meter data for a MaLo in a window, typed (`Messwerte`); REST twin `GET /api/v1/timeseries/{malo_id}` |
+//! | `get_coverage`               | One state per day (gemessen/ersatzwert/korrigiert/fehlt), typed (`Abdeckung`); REST twin `GET /api/v1/coverage/{malo_id}` |
 //! | `get_imbalance`              | Mehr-/Mindermengen imbalance report |
 //! | `get_billing_period`         | MeterBillingPeriod summary (arbeitsmenge, spitzenleistung, brennwert) |
 //! | `get_device_history`         | RAG: comprehensive device history for LanceDB indexing |
-//! | `get_quality_warnings`       | Quality verdict over a window (grade A/B/C/F) |
+//! | `get_quality_warnings`       | Quality verdict over a window (grade A/B/C/F), typed (`Qualitaetsbefund`); REST twin `GET /api/v1/quality/{malo_id}` |
 //! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
 //! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§ 40b Abs. 1 EnWG compliance), typed, with `frist` |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
 //! | `trigger_substitution`       | Generate + store § 60 Abs. 1 MsbG Ersatzwerte for a gap window |
-//! | `get_correction_history`     | § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit: list corrections for a MaLo |
+//! | `get_correction_history`     | § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit: corrections for a MaLo, typed (`Korrekturen`); REST twin `GET /api/v1/corrections/{malo_id}` |
 //! | `validate_timeseries`        | Run the metering validation rules on meter reads, per register |
 //! | `get_quality_assessments`    | Per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)) |
 //! | `get_summenzeitreihe`        | Monthly aggregated kWh for MaBiS |
@@ -88,9 +89,9 @@ pub struct EdmdMcpState {
 pub struct GetTimeseriesParams {
     /// 11-digit Marktlokations-ID.
     pub malo_id: String,
-    /// ISO 8601 start of the query range (inclusive).
+    /// RFC 3339 start of the window (inclusive).
     pub from: String,
-    /// ISO 8601 end of the query range (inclusive).
+    /// RFC 3339 end of the window; at most 93 days after `from`.
     pub to: String,
 }
 
@@ -151,6 +152,21 @@ pub struct GetQualityWarningsParams {
     pub from: Option<String>,
     /// ISO-8601 end datetime (exclusive). Defaults to now when omitted.
     pub to: Option<String>,
+}
+
+/// Parameters for `get_coverage`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetCoverageParams {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// First day, `YYYY-MM-DD`.
+    pub from: String,
+    /// Last day, `YYYY-MM-DD` (inclusive); at most 366 days.
+    pub to: String,
+    /// `STROM`, `GAS`, `WAERME` or `WASSER`; absent, the Sparte the MaLo's
+    /// readings are stored under.
+    #[serde(default)]
+    pub sparte: Option<String>,
 }
 
 // ── Reading orders ─────────────────────────────────────────────────────────
@@ -433,56 +449,24 @@ impl EdmdMcpHandler {
     /// unit, bo4e_version) ordered by `dtm_from` ascending.  Empty array
     /// means no MSCONS data has been received yet for this MaLo and period.
     #[tool(
-        description = "Read meter data (Messwert) for a MaLo between from..to (ISO 8601)",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Read the stored meter data of a MaLo between from..to (RFC 3339, at most 93 days): every register's intervals, oldest first, with quantity (decimal string), quality and OBIS code. Same read as GET /api/v1/timeseries/{malo_id}.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::reads::Messwerte>()
     )]
     async fn get_timeseries(
         &self,
         Parameters(p): Parameters<GetTimeseriesParams>,
     ) -> Result<CallToolResult, McpError> {
-        use time::format_description::well_known::Rfc3339;
-
-        let from = time::OffsetDateTime::parse(&p.from, &Rfc3339).map_err(|_| {
-            McpError::invalid_params("from is not a valid ISO 8601 timestamp", None)
-        })?;
-        let to = time::OffsetDateTime::parse(&p.to, &Rfc3339)
-            .map_err(|_| McpError::invalid_params("to is not a valid ISO 8601 timestamp", None))?;
-
-        let reads = self
-            .state
-            .repo
-            .query(&TimeSeriesQuery {
-                malo_id: p.malo_id.clone(),
-                from,
-                to,
-                sparte: None,
-                tenant: self.state.tenant.clone(),
-            })
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let readings: Vec<serde_json::Value> = reads
-            .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "dtm_from": r.dtm_from,
-                    "dtm_to": r.dtm_to,
-                    "quantity_kwh": r.quantity_kwh.to_string(),
-                    "quality": r.quality.as_str(),
-                    "obis_code": r.obis_code,
-                })
-            })
-            .collect();
-
-        ContentBlock::json(serde_json::json!({
-            "malo_id": p.malo_id,
-            "from": p.from,
-            "to": p.to,
-            "readings": readings,
-            "count": readings.len(),
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+        mako_service::mcp::answer(
+            crate::reads::timeseries(
+                &self.state.repo,
+                &self.state.tenant,
+                &p.malo_id,
+                &p.from,
+                &p.to,
+            )
+            .await,
+        )
     }
 
     /// Read the Mehr-/Mindermengensaldo for a MaLo and month.
@@ -846,77 +830,47 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
     /// `get_quality_warnings` — the quality verdict for a MaLo over a window,
     /// recomputed from the version-resolved series.
     #[tool(
-        description = "Query quality warnings for a MaLo in a time range. \
-Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverage %.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Quality verdict for a MaLo over from..to (RFC 3339; default the last 30 days): grade A/B/C/F, gaps, zero runs, coverage %, outlier and capacity instants, recomputed from the stored series by the ingest scorer. `no_data` when nothing is stored in the window. Same read as GET /api/v1/quality/{malo_id}.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::reads::Qualitaetsbefund>()
     )]
     async fn get_quality_warnings(
         &self,
         Parameters(p): Parameters<GetQualityWarningsParams>,
     ) -> Result<CallToolResult, McpError> {
-        use metering::MeterInterval;
-        use time::format_description::well_known::Rfc3339;
-        let now = time::OffsetDateTime::now_utc();
-        let from_dt = p
-            .from
-            .as_deref()
-            .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())
-            .unwrap_or_else(|| now - time::Duration::days(30));
-        let to_dt =
-            p.to.as_deref()
-                .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())
-                .unwrap_or(now);
+        mako_service::mcp::answer(
+            crate::reads::quality_warnings(
+                &self.state.repo,
+                &self.state.tenant,
+                &p.malo_id,
+                p.from.as_deref(),
+                p.to.as_deref(),
+            )
+            .await,
+        )
+    }
 
-        // There is no stored per-interval `quality_warnings` column —
-        // meterstore owns the readings. Recompute the validation verdict on the
-        // fly from the version-resolved series — the same scorer the ingest and
-        // rescore paths use — so the tool reports a fresh grade for the window.
-        let reads = self
-            .state
-            .repo
-            .query(&TimeSeriesQuery {
-                malo_id: p.malo_id.clone(),
-                from: from_dt,
-                to: to_dt,
-                sparte: None,
-                tenant: self.state.tenant.clone(),
-            })
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let intervals: Vec<MeterInterval> =
-            reads.iter().filter_map(|r| r.interval().ok()).collect();
-
-        // The **same** scorer the REST surface runs, not a second one: the
-        // Sparte's preset, the observed grid and the requested window. An agent
-        // and an operator asking the same question get the same answer.
-        let Some(sparte) = reads.first().map(|r| r.sparte) else {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "no_data: No meter reads for MaLo '{}' in the window.",
-                p.malo_id
-            ))]));
-        };
-        let report = crate::server::compute_quality(&intervals, sparte, from_dt, to_dt);
-
-        ContentBlock::json(serde_json::json!({
-            "malo_id": p.malo_id,
-            "window_from": from_dt.to_string(),
-            "window_to": to_dt.to_string(),
-            "interval_count": report.intervals_accepted,
-            "grade": report.grade,
-            "has_warnings": report.has_warnings,
-            "gaps_detected": report.gaps_detected,
-            "zero_run_length": report.zero_run_length,
-            "coverage_pct": report.coverage_pct,
-            "intervals_consistent": report.intervals_consistent,
-            "expected_intervals": report.expected_intervals,
-            "outlier_intervals": report.outlier_intervals,
-            "spike_intervals": report.spike_intervals,
-            "algorithm": report.algorithm,
-            "hint": "Use POST /api/v1/quality-score/{malo_id} to persist this rescore to quality_assessments.",
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+    /// `get_coverage` — the completeness ribbon: one state per day.
+    #[tool(
+        description = "One state per day for a MaLo from..to (YYYY-MM-DD, at most 366 days): gemessen, ersatzwert (an Ersatz- or Prognosewert), korrigiert, or fehlt (any slot of an energy register without a billable value). Gas days are Gastage (06:00-06:00 Berlin). Days not yet ended are left out; `bis` names the last day answered. Same read as GET /api/v1/coverage/{malo_id}.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::reads::Abdeckung>()
+    )]
+    async fn get_coverage(
+        &self,
+        Parameters(p): Parameters<GetCoverageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        mako_service::mcp::answer(
+            crate::reads::coverage(
+                &self.state.repo,
+                &self.state.tenant,
+                &p.malo_id,
+                &p.from,
+                &p.to,
+                p.sparte.as_deref(),
+            )
+            .await,
+        )
     }
 
     /// List reading orders (Ablesesteuerung) for a MaLo.
@@ -1201,82 +1155,25 @@ Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverag
     /// and operator — enabling full § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit-trail reconstruction.
     #[tool(
         name = "get_correction_history",
-        description = "§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit: list all retroactive corrections applied to a MaLo's \
-                       meter reads. Each entry shows original value, corrected value, reason, \
-                       source (MSCONS_UPDATE/OPERATOR/AUTO_SUBSTITUTE), and timestamp.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit: the retroactive corrections recorded for a MaLo, newest first, by corrected_at in from..to (RFC 3339; default the last 90 days), at most `limit` (100, max 1000; `saturated` when reached). Each names the interval, register, original and corrected value and quality, reason, source and who corrected it. Same read as GET /api/v1/corrections/{malo_id}.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::reads::Korrekturen>()
     )]
     async fn get_correction_history(
         &self,
         Parameters(p): Parameters<GetCorrectionHistoryParams>,
     ) -> Result<CallToolResult, McpError> {
-        use time::format_description::well_known::Rfc3339;
-        let pool = &self.state.pool;
-        let now = time::OffsetDateTime::now_utc();
-        let limit_val = p.limit.unwrap_or(100).min(1000) as i64;
-        let malo_id = p.malo_id;
-
-        let from_ts = p
-            .from
-            .as_deref()
-            .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())
-            .unwrap_or_else(|| now - time::Duration::days(90));
-        let to_ts =
-            p.to.as_deref()
-                .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())
-                .unwrap_or(now);
-
-        let rows = sqlx::query(
-            r"SELECT correction_id, malo_id, dtm_from, dtm_to,
-                     original_kwh, original_quality, corrected_kwh, corrected_quality,
-                     reason, source, corrected_by, corrected_at
-              FROM meter_read_corrections
-              WHERE malo_id = $1
-                AND corrected_at >= $2
-                AND corrected_at <= $3
-                AND tenant = $5
-              ORDER BY corrected_at DESC
-              LIMIT $4",
+        mako_service::mcp::answer(
+            crate::reads::correction_history(
+                &self.state.repo,
+                &self.state.tenant,
+                &p.malo_id,
+                p.from.as_deref(),
+                p.to.as_deref(),
+                p.limit,
+            )
+            .await,
         )
-        .bind(&malo_id)
-        .bind(from_ts)
-        .bind(to_ts)
-        .bind(limit_val)
-        .bind(&self.state.tenant)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let corrections: Vec<serde_json::Value> = rows
-            .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "correction_id": r.try_get::<uuid::Uuid, _>("correction_id").ok(),
-                    "malo_id": r.try_get::<String, _>("malo_id").ok(),
-                    "dtm_from": r.try_get::<time::OffsetDateTime, _>("dtm_from").ok().map(|t| t.format(&Rfc3339).ok()),
-                    "dtm_to": r.try_get::<time::OffsetDateTime, _>("dtm_to").ok().map(|t| t.format(&Rfc3339).ok()),
-                    "original_kwh": r.try_get::<String, _>("original_kwh").ok(),
-                    "original_quality": r.try_get::<String, _>("original_quality").ok(),
-                    "corrected_kwh": r.try_get::<String, _>("corrected_kwh").ok(),
-                    "corrected_quality": r.try_get::<String, _>("corrected_quality").ok(),
-                    "reason": r.try_get::<String, _>("reason").ok(),
-                    "source": r.try_get::<String, _>("source").ok(),
-                    "corrected_by": r.try_get::<Option<String>, _>("corrected_by").ok().flatten(),
-                    "corrected_at": r.try_get::<time::OffsetDateTime, _>("corrected_at").ok().map(|t| t.format(&Rfc3339).ok()),
-                })
-            })
-            .collect();
-
-        let out = serde_json::json!({
-            "malo_id": malo_id,
-            "period": { "from": from_ts.format(&Rfc3339).ok(), "to": to_ts.format(&Rfc3339).ok() },
-            "correction_count": corrections.len(),
-            "corrections": corrections,
-            "_note": "Use POST /api/v1/corrections/{malo_id} to submit new corrections (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD))"
-        });
-        serde_json::to_string_pretty(&out)
-            .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
-            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
     /// `validate_timeseries` — run the metering validation engine on a MaLo's time-series.
@@ -1893,8 +1790,9 @@ impl ServerHandler for EdmdMcpHandler {
              quality assessments, Gas quality data, and manages reading orders.\n\
              Quality scoring runs metering's validation rules per register over the requested window.\n\
              \n\
-             ## Tools (15)\n\
+             ## Tools (16)\n\
              - `get_timeseries` — read meter reads for a MaLo in a time range\n\
+             - `get_coverage` — one state per day: gemessen, ersatzwert, korrigiert or fehlt\n\
              - `get_imbalance` — Mehr-/Mindermengen imbalance report (GPKE (BK6-24-174) Teil 1 Kap. 8.4)\n\
              - `get_billing_period` — MeterBillingPeriod (arbeitsmenge_kwh, brennwert, spitzenleistung)\n\
              - `get_device_history` — M9 RAG: comprehensive device history for LanceDB indexing\n\
@@ -1925,14 +1823,17 @@ impl ServerHandler for EdmdMcpHandler {
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
-/// The Cedar action a destructive MCP tool requires, or `None` for a read tool.
+/// The Cedar action an MCP tool requires beyond `use-mcp` — the action its
+/// REST twin enforces — or `None` for a tool with no twin.
 ///
 /// The blanket `use-mcp` gate the auth middleware applies allows any role of the
 /// tenant. The two mutating tools call the same cores as their REST endpoints —
 /// which require `write-timeseries` / `write-reading-order` (MSB/NB/admin) — so
 /// they must be gated with the same action, or an LF-role token escalates to
-/// Ersatzwert generation and §40 campaign dispatch through MCP.
-fn destructive_tool_action(body: &[u8]) -> Option<&'static str> {
+/// Ersatzwert generation and §40 campaign dispatch through MCP. The shared
+/// reads (`crate::reads`) are gated with their route's read action, so one
+/// policy decides both doors.
+fn tool_action(body: &[u8]) -> Option<&'static str> {
     let v: serde_json::Value = serde_json::from_slice(body).ok()?;
     if v.get("method")?.as_str()? != "tools/call" {
         return None;
@@ -1940,6 +1841,8 @@ fn destructive_tool_action(body: &[u8]) -> Option<&'static str> {
     match v.get("params")?.get("name")?.as_str()? {
         "trigger_substitution" => Some("write-timeseries"),
         "trigger_jahresablesung" => Some("write-reading-order"),
+        "get_timeseries" | "get_quality_warnings" | "get_coverage" => Some("read-timeseries"),
+        "get_correction_history" => Some("read-corrections"),
         _ => None,
     }
 }
@@ -1949,8 +1852,8 @@ async fn mcp_auth_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
-    // A `tools/call` for a destructive tool must clear the same Cedar write
-    // action its REST twin enforces, not just `use-mcp`. Buffer the body to read
+    // A `tools/call` for a tool with a REST twin must clear the same Cedar
+    // action that twin enforces, not just `use-mcp`. Buffer the body to read
     // the tool name, authorize, then reconstruct the request for `authenticate`.
     const MAX_MCP_BODY: usize = 1024 * 1024;
     let (parts, body) = request.into_parts();
@@ -1963,7 +1866,7 @@ async fn mcp_auth_middleware(
             .into_response();
         }
     };
-    if let Some(action) = destructive_tool_action(&bytes)
+    if let Some(action) = tool_action(&bytes)
         && let Err(resp) = state.auth.authorize(&parts.headers, action)
     {
         return resp;
@@ -1995,7 +1898,7 @@ pub fn router(state: Arc<EdmdMcpState>, _shutdown: CancellationToken) -> Router 
 
 #[cfg(test)]
 mod auth_gate_tests {
-    use super::destructive_tool_action;
+    use super::tool_action;
 
     fn call(name: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
@@ -2008,25 +1911,34 @@ mod auth_gate_tests {
     #[test]
     fn destructive_tools_map_to_their_rest_write_action() {
         assert_eq!(
-            destructive_tool_action(&call("trigger_substitution")),
+            tool_action(&call("trigger_substitution")),
             Some("write-timeseries")
         );
         assert_eq!(
-            destructive_tool_action(&call("trigger_jahresablesung")),
+            tool_action(&call("trigger_jahresablesung")),
             Some("write-reading-order")
         );
     }
 
     #[test]
-    fn read_tools_and_non_tool_calls_need_no_extra_action() {
-        assert_eq!(destructive_tool_action(&call("get_timeseries")), None);
+    fn shared_reads_map_to_their_rest_read_action() {
+        for tool in ["get_timeseries", "get_quality_warnings", "get_coverage"] {
+            assert_eq!(tool_action(&call(tool)), Some("read-timeseries"), "{tool}");
+        }
         assert_eq!(
-            destructive_tool_action(
-                &serde_json::to_vec(&serde_json::json!({"method": "tools/list"})).unwrap()
-            ),
+            tool_action(&call("get_correction_history")),
+            Some("read-corrections")
+        );
+    }
+
+    #[test]
+    fn tools_without_a_twin_and_non_tool_calls_need_no_extra_action() {
+        assert_eq!(tool_action(&call("list_reading_orders")), None);
+        assert_eq!(
+            tool_action(&serde_json::to_vec(&serde_json::json!({"method": "tools/list"})).unwrap()),
             None
         );
-        assert_eq!(destructive_tool_action(b"not json"), None);
+        assert_eq!(tool_action(b"not json"), None);
     }
 }
 
@@ -2048,6 +1960,141 @@ mod contract_tests {
         if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
             panic!("{e}");
         }
+    }
+
+    fn tools() -> Vec<rmcp::model::Tool> {
+        EdmdMcpHandler::tool_router().list_all()
+    }
+
+    fn documented() -> serde_json::Value {
+        serde_json::to_value(crate::api::document()).expect("the document serializes")
+    }
+
+    /// The tool's answer satisfies its declared schema, and that schema is
+    /// the shape the REST twin documents — both derived from one type.
+    fn holds(tool: &str, path: &str, sample: &impl Serialize) {
+        let value = serde_json::to_value(sample).expect("the sample serializes");
+        mako_service::mcp::conformance::assert_structured_output(&tools(), tool, &value);
+        mako_service::mcp::conformance::assert_rest_twin(&tools(), tool, &documented(), path);
+    }
+
+    #[test]
+    fn get_timeseries_is_typed_and_shared_with_rest() {
+        use crate::reads::{Messwert, Messwerte, Messwertqualitaet};
+        holds(
+            "get_timeseries",
+            "/api/v1/timeseries/{malo_id}",
+            &Messwerte {
+                malo_id: "51238696012".into(),
+                from: "2026-06-09T22:00:00Z".into(),
+                to: "2026-06-10T22:00:00Z".into(),
+                count: 2,
+                readings: vec![
+                    Messwert {
+                        dtm_from: "2026-06-09T22:00:00Z".into(),
+                        dtm_to: "2026-06-09T22:15:00Z".into(),
+                        quantity_kwh: "0.25000".into(),
+                        quality: Messwertqualitaet::Measured,
+                        obis_code: Some("1-1:1.29.0".into()),
+                    },
+                    Messwert {
+                        dtm_from: "2026-06-09T22:15:00Z".into(),
+                        dtm_to: "2026-06-09T22:30:00Z".into(),
+                        quantity_kwh: "0.1".into(),
+                        quality: Messwertqualitaet::Substituted,
+                        obis_code: None,
+                    },
+                ],
+            },
+        );
+    }
+
+    #[test]
+    fn get_quality_warnings_is_typed_and_shared_with_rest() {
+        use crate::reads::{Note, Qualitaetsbefund};
+        holds(
+            "get_quality_warnings",
+            "/api/v1/quality/{malo_id}",
+            &Qualitaetsbefund {
+                malo_id: "51238696012".into(),
+                window_from: "2026-05-01T00:00:00Z".into(),
+                window_to: "2026-05-31T00:00:00Z".into(),
+                interval_count: 2876,
+                grade: Note::B,
+                has_warnings: true,
+                gaps_detected: 4,
+                zero_run_length: 0,
+                coverage_pct: "99.86".into(),
+                intervals_consistent: true,
+                expected_intervals: Some(2880),
+                outlier_intervals: vec!["2026-05-12T10:15:00Z".into()],
+                spike_intervals: vec![],
+                algorithm: "vee::validation(STROM)".into(),
+            },
+        );
+    }
+
+    #[test]
+    fn get_correction_history_is_typed_and_shared_with_rest() {
+        use crate::reads::{Korrektur, Korrekturen, Messwertqualitaet};
+        holds(
+            "get_correction_history",
+            "/api/v1/corrections/{malo_id}",
+            &Korrekturen {
+                malo_id: "51238696012".into(),
+                from: "2026-08-01T00:00:00Z".into(),
+                to: "2026-11-01T00:00:00Z".into(),
+                count: 1,
+                saturated: false,
+                corrections: vec![Korrektur {
+                    correction_id: "0b8a3f6e-6a43-4f3e-9b0e-2f1c8f0e7a11".into(),
+                    dtm_from: "2026-09-01T10:00:00Z".into(),
+                    dtm_to: "2026-09-01T10:15:00Z".into(),
+                    obis_code: Some("1-1:1.29.0".into()),
+                    original_kwh: "0.00000".into(),
+                    original_quality: Messwertqualitaet::Faulty,
+                    corrected_kwh: "0.31000".into(),
+                    corrected_quality: Messwertqualitaet::Corrected,
+                    reason: "Zähler getauscht".into(),
+                    source: "OPERATOR".into(),
+                    corrected_by: None,
+                    corrected_at: "2026-09-03T08:12:00Z".into(),
+                }],
+            },
+        );
+    }
+
+    #[test]
+    fn get_coverage_is_typed_and_shared_with_rest() {
+        use crate::reads::{Abdeckung, Tag, Tageszustand};
+        holds(
+            "get_coverage",
+            "/api/v1/coverage/{malo_id}",
+            &Abdeckung {
+                malo_id: "51238696012".into(),
+                sparte: "STROM".into(),
+                von: "2026-03-28".into(),
+                bis: "2026-03-30".into(),
+                tage: vec![
+                    Tag {
+                        tag: "2026-03-28".into(),
+                        zustand: Tageszustand::Gemessen,
+                    },
+                    Tag {
+                        tag: "2026-03-29".into(),
+                        zustand: Tageszustand::Fehlt,
+                    },
+                    Tag {
+                        tag: "2026-03-30".into(),
+                        zustand: Tageszustand::Ersatzwert,
+                    },
+                ],
+                gemessen: 1,
+                ersatzwert: 1,
+                korrigiert: 0,
+                fehlt: 1,
+            },
+        );
     }
 
     /// The Frist of a reading order is the end of the Berlin day

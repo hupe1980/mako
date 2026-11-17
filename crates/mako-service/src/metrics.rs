@@ -125,13 +125,14 @@ pub async fn metrics_handler() -> impl axum::response::IntoResponse {
 
 /// Axum `from_fn` middleware that records HTTP request metrics.
 ///
-/// Normalises path labels to avoid high-cardinality explosion from IDs:
-/// any path segment that is a UUID, pure-digit string, or longer than 24
-/// chars is replaced with `{id}`.
+/// The `path` label is the **matched route template** (`/nachrechnen/{token}`),
+/// never the request path: a path segment can be a credential — portald's
+/// public verify token is one — and `/metrics` is scraped by whoever can reach
+/// it. A request no route matched is labelled `{unmatched}`, which also bounds
+/// the label set against a caller inventing paths.
 pub async fn recording_middleware(req: Request, next: Next) -> Response {
     let method = req.method().to_string();
-    let raw_path = req.uri().path().to_string();
-    let path = normalise_path(&raw_path);
+    let path = route_label(&req);
     let start = Instant::now();
     let response = next.run(req).await;
     let duration = start.elapsed().as_secs_f64();
@@ -140,39 +141,11 @@ pub async fn recording_middleware(req: Request, next: Next) -> Response {
     response
 }
 
-/// Replace variable path segments with `{id}` to bound label cardinality.
-fn normalise_path(path: &str) -> String {
-    let segments: Vec<&str> = path.split('/').collect();
-    let normalised: Vec<&str> = segments
-        .iter()
-        .map(|seg| {
-            if seg.is_empty() {
-                // Preserve empty segments produced by leading/trailing `/`
-                *seg
-            } else if !seg.contains('.') && is_variable_segment(seg) {
-                "{id}"
-            } else {
-                seg
-            }
-        })
-        .collect();
-    normalised.join("/")
-}
-
-fn is_variable_segment(s: &str) -> bool {
-    // UUID pattern (with dashes)
-    if s.len() == 36 && s.chars().filter(|&c| c == '-').count() == 4 {
-        return true;
-    }
-    // Pure digits (IDs, years-as-segment, etc.) > 4 chars
-    if s.len() > 4 && s.chars().all(|c| c.is_ascii_digit()) {
-        return true;
-    }
-    // Very long opaque tokens
-    if s.len() > 30 {
-        return true;
-    }
-    false
+/// The route template a request matched, or `{unmatched}`.
+fn route_label(req: &Request) -> String {
+    req.extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(|| "{unmatched}".to_owned(), |m| m.as_str().to_owned())
 }
 
 #[cfg(test)]
@@ -207,22 +180,38 @@ mod tests {
         );
     }
 
-    #[test]
-    fn normalise_keeps_short_paths() {
-        assert_eq!(normalise_path("/health/live"), "/health/live");
-        assert_eq!(normalise_path("/health"), "/health");
-        assert_eq!(normalise_path("/api/v1/malos"), "/api/v1/malos");
-    }
-
-    #[test]
-    fn normalise_replaces_uuid() {
-        let path = "/api/v1/malos/550e8400-e29b-41d4-a716-446655440000";
-        assert_eq!(normalise_path(path), "/api/v1/malos/{id}");
-    }
-
-    #[test]
-    fn normalise_replaces_digit_ids() {
-        let path = "/api/v1/malos/51238696012";
-        assert_eq!(normalise_path(path), "/api/v1/malos/{id}");
+    /// A token-shaped segment never reaches a label: the label is the route
+    /// template, and a path no route matches is `{unmatched}`.
+    #[tokio::test]
+    async fn the_path_label_is_the_route_template_never_the_request_path() {
+        use tower::ServiceExt as _;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let record = std::sync::Arc::clone(&seen);
+        let app = axum::Router::new()
+            .route(
+                "/nachrechnen/{token}",
+                axum::routing::get(|| async { "ok" }),
+            )
+            .layer(axum::middleware::from_fn(
+                move |req: Request, next: Next| {
+                    let record = std::sync::Arc::clone(&record);
+                    async move {
+                        record.lock().expect("lock").push(route_label(&req));
+                        next.run(req).await
+                    }
+                },
+            ));
+        for uri in [
+            "/nachrechnen/q3Zf9-xY_7aBcDeFgHiJkL",
+            "/elsewhere/q3Zf9-xY_7aBcDeFgHiJkL",
+        ] {
+            let req = axum::http::Request::get(uri)
+                .body(axum::body::Body::empty())
+                .expect("request");
+            let _ = app.clone().oneshot(req).await.expect("responds");
+        }
+        let labels = seen.lock().expect("lock").clone();
+        assert_eq!(labels, vec!["/nachrechnen/{token}", "{unmatched}"]);
+        assert!(labels.iter().all(|l| !l.contains("q3Zf9")));
     }
 }

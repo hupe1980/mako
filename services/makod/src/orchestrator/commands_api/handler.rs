@@ -6,6 +6,62 @@
 use super::*;
 use mako_service::{ApiError, Json};
 
+/// The header a service names a command's actor in: the JSON of an
+/// [`Akteur`].
+pub const AKTEUR_HEADER: &str = "mako-akteur";
+
+/// Who a command is attributed to: the authenticated caller as a
+/// [`Akteur::Person`]; for a service granted Cedar `ActOnBehalf`,
+/// [`Akteur::System`], or the [`Akteur::Freigabe`] it names in
+/// [`AKTEUR_HEADER`].
+///
+/// # Errors
+///
+/// `403 actor_not_permitted` for a named actor from a caller without the
+/// grant, or an assertion that is not an approval; `400` for a repeated
+/// header.
+fn command_actor(
+    state: &CommandsApiState,
+    identity: &crate::cedar_authz::CallerIdentity,
+    headers: &axum::http::HeaderMap,
+    resource: &CommandResource<'_>,
+) -> Result<Akteur, ApiError> {
+    let named = mako_service::headers::single_str(headers, AKTEUR_HEADER)
+        .map_err(|e| ApiError::bad_request(e.to_string()).with_code("duplicate_actor_header"))?;
+    // A principal granted `ActOnBehalf` is a service: its own commands are
+    // automatic, and only an approval it relays names a person.
+    let service = state.cedar.authorize_act_on_behalf(identity, resource);
+    let Some(named) = named else {
+        return Ok(if service {
+            Akteur::System
+        } else {
+            Akteur::Person {
+                principal: identity.name.to_string(),
+            }
+        });
+    };
+    if !service {
+        return Err(ApiError::forbidden(
+            "this caller may not name the actor of a command (Cedar ActOnBehalf)",
+        )
+        .with_code("actor_not_permitted"));
+    }
+    // A service relays a person's approval and nothing else: an assertion
+    // naming a person, the system or the relaying service itself would let it
+    // attribute its own act. The service is the authenticated caller.
+    let refused = || {
+        ApiError::forbidden(format!(
+            "{AKTEUR_HEADER} names an approval (principal, vorschlag, unveraendert) and \
+             nothing else"
+        ))
+        .with_code("actor_not_permitted")
+    };
+    serde_json::from_str::<mako_engine::envelope::Freigabeauftrag>(named)
+        .map_err(|_| refused())?
+        .durch(&identity.name)
+        .map_err(|_| refused())
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 /// Build the ERP commands router: the command door and its rehearsal.
@@ -110,17 +166,27 @@ pub(crate) async fn handle_command(
     };
 
     // ── Cedar authorization ───────────────────────────────────────────────────
-    if !state.cedar.authorize_command(
-        &identity,
-        &CommandResource {
-            name: &cmd_lower,
-            marktrolle: &effective_marktrolle,
-            pid: command_primary_pid(&cmd_lower).map_or(0, Pruefidentifikator::as_u32),
-            tenant: &state.tenant_id.to_string(),
-        },
-    ) {
+    let tenant_str = state.tenant_id.to_string();
+    let resource = CommandResource {
+        name: &cmd_lower,
+        marktrolle: &effective_marktrolle,
+        pid: command_primary_pid(&cmd_lower).map_or(0, Pruefidentifikator::as_u32),
+        tenant: &tenant_str,
+    };
+    if !state.cedar.authorize_command(&identity, &resource) {
         return ApiError::forbidden("Cedar policy denied this command").into_response();
     }
+
+    // ── Actor ─────────────────────────────────────────────────────────────────
+    //
+    // The caller acted, unless a service Cedar grants `ActOnBehalf` names the
+    // actor in `Mako-Akteur` (processd dispatching a person's approval). A
+    // named actor from any other caller is refused before anything runs: it
+    // would attribute the events to someone who did not send them.
+    let akteur = match command_actor(&state, &identity, &headers, &resource) {
+        Ok(akteur) => akteur,
+        Err(refusal) => return refusal.into_response(),
+    };
 
     // ── Idempotency key ───────────────────────────────────────────────────────
     //
@@ -162,7 +228,7 @@ pub(crate) async fn handle_command(
     // re-dispatching, because "I could not tell whether this already ran" is
     // not a licence to run it again.
     let tenant = state.tenant_id.to_string();
-    let fingerprint = idempotency::fingerprint(&cmd_lower, &envelope.payload);
+    let fingerprint = idempotency::fingerprint(&cmd_lower, &akteur, &envelope.payload);
     match idempotency::lookup(&state.store, &tenant, &idempotency_key, &fingerprint).await {
         Ok(idempotency::Lookup::Replay(body)) => {
             info!(
@@ -207,7 +273,9 @@ pub(crate) async fn handle_command(
     );
 
     // ── Dispatch to workflow ──────────────────────────────────────────────────
-    let resolved_process_id = match dispatch_command(&state, &cmd_lower, &envelope.payload).await {
+    let resolved_process_id = match dispatch_command(&state, akteur, &cmd_lower, &envelope.payload)
+        .await
+    {
         Ok(DispatchOutcome::Spawned { process_id }) => {
             info!(
                 idempotency_key = %idempotency_key,
@@ -430,7 +498,19 @@ pub(crate) async fn handle_command(
 /// other starts invisible, so the initiated-versus-completed dashboard shows
 /// completions with no matching initiations. A counter belongs at the single
 /// point the thing it counts actually happens.
+///
+/// `akteur` is who the command's events are attributed to; every process the
+/// command runs stamps it on its events.
 pub async fn dispatch_command(
+    state: &CommandsApiState,
+    akteur: Akteur,
+    command: &str,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    als(akteur, dispatch_command_als(state, command, payload)).await
+}
+
+pub(super) async fn dispatch_command_als(
     state: &CommandsApiState,
     command: &str,
     payload: &serde_json::Value,

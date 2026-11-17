@@ -49,7 +49,7 @@ and the **state** to know whether that window is still open.
 Deadline scheduler (makod/src/orchestrator/deadline_dispatch.rs)
   ├─ delivery window (fristen::is_delivery_window) → regulatory alert, no workflow
   ├─ label ∉ Workflow::DEADLINE_LABELS             → logged as unowned, nothing acts
-  └─ Process::run_timeout(&deadline, RunOptions::new())
+  └─ Process::run_timeout(&deadline, RunOptions::system())
        └─ Workflow::on_deadline(deadline, state)   → None: the window is closed
             └─ Some(TimeoutExpired) → Workflow::handle → events + outbox, one write
 ```

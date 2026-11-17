@@ -105,7 +105,7 @@ mod tests {
         let src = r#"
 async fn anmelden(state: &S) -> R {
     let process = Process::<W, Arc<SlateDbStore>>::new(Arc::clone(&state.store), t, wf);
-    process.run(cmd, RunOptions::new().deadlines(&[d])).await?;
+    process.run(cmd, RunOptions::system().deadlines(&[d])).await?;
     if let Err(e) = state.store.as_process_registry()
         .register_correlated(state.tenant_id, malo, process.process_id(), id).await {}
     Ok(())
@@ -133,7 +133,7 @@ async fn keyed(state: &S) {
 /// The two-write shape was `Process::new(..)` then `.register_correlated(..)`.
 async fn anmelden(state: &S) -> R {
     let msg = "never .register_correlated( after Process::new(";
-    process.run(cmd, RunOptions::new().correlations(&keys)).await?;
+    process.run(cmd, RunOptions::system().correlations(&keys)).await?;
     Ok(())
 }
 #[cfg(test)]

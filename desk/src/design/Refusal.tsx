@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { refusalCode } from "../app/codes";
 import { useT } from "../i18n";
 import { Icon } from "./Icon";
@@ -6,7 +6,9 @@ import { Icon } from "./Icon";
 /**
  * A service said no. The catalogue's sentence for the service's stable
  * `code` is what the operator reads; the service's own text — written for a
- * developer — waits under „Details". One action, the way on.
+ * developer, in English — waits under „Details", marked as served text. One
+ * action, the way on. It takes the focus when it appears and stays until the
+ * person moves on: a refusal is never dismissed for them.
  */
 export function Refusal({
   title,
@@ -20,8 +22,15 @@ export function Refusal({
 }) {
   const t = useT();
   const { sentence } = refusalCode(raw);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => ref.current?.focus(), []);
   return (
-    <div role="status" className="flex flex-col items-start gap-2 py-2">
+    <div
+      ref={ref}
+      role="status"
+      tabIndex={-1}
+      className="flex flex-col items-start gap-2 py-2 outline-none"
+    >
       <p className="m-0 text-title3 font-semibold text-text">{title}</p>
       <p className="measure m-0 text-body text-text-2">{sentence ?? t.refusal.unknown}</p>
       <details className="group">
@@ -29,7 +38,9 @@ export function Refusal({
           <Icon name="chevron" size={11} className="transition-transform group-open:rotate-90" />
           {t.refusal.details}
         </summary>
-        <p className="measure m-0 mt-1.5 font-mono text-callout break-words text-text-2">{raw}</p>
+        <p lang="en" className="measure m-0 mt-1.5 font-mono text-callout break-words text-text-2">
+          {raw}
+        </p>
       </details>
       {action && <div className="mt-2">{action}</div>}
     </div>

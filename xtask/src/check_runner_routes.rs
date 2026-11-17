@@ -38,11 +38,10 @@ fn runner_routes(workspace_root: &Path) -> Vec<String> {
         // line-at-a-time reader sees two of the four routes. Only the real
         // calls matter — the module docs show `/webhook` as an example of what
         // a *service* router carries.
-        let code: String = src
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        // Only production code mounts routes: a `#[cfg(test)]` module may
+        // build a router of its own to exercise a layer, and its paths are no
+        // runner route.
+        let code = crate::check_error_tuples::production_text(&src);
         let mut rest = code.as_str();
         while let Some(at) = rest.find(".route(") {
             rest = &rest[at + ".route(".len()..];

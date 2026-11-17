@@ -250,7 +250,12 @@ impl Daemon for Accountingd {
             );
         }
 
+        // The documented routes (`openapi::api_router`): the reads MCP shares,
+        // each in `GET /api/v1/openapi.json`.
+        let (documented, doc) = crate::openapi::api_router();
         let app = Router::new()
+            .merge(documented)
+            .merge(crate::openapi::document_route(doc))
             // ── Readiness and operator posture: GET /admin/einrichtung (Cedar
             // `read-config`) and GET /api/v1/policy (Cedar `read-policy`) ──────
             .merge(mako_service::einrichtung::router(Arc::clone(
@@ -266,14 +271,6 @@ impl Daemon for Accountingd {
             .route(
                 "/api/v1/accounts/{malo_id}/verbraucher",
                 put(handlers::put_account_verbraucher),
-            )
-            .route(
-                "/api/v1/accounts/{malo_id}/balance",
-                get(handlers::get_balance),
-            )
-            .route(
-                "/api/v1/accounts/{malo_id}/ledger",
-                get(handlers::get_ledger),
             )
             .route(
                 "/api/v1/accounts/{malo_id}/kontoauszug",
@@ -342,9 +339,7 @@ impl Daemon for Accountingd {
             // the router is assembled — i.e. at startup. The ledger gauges get
             // their own path, the way `invoicd` and `processd` already do.
             .route("/accountingd/metrics", get(handlers::metrics))
-            .route("/api/v1/offene-posten", get(handlers::get_offene_posten))
             // ── Dunning ────────────────────────────────────────────────────────────
-            .route("/api/v1/dunning", get(handlers::get_dunning))
             .route(
                 "/api/v1/dunning/{account_id}/escalate",
                 post(handlers::escalate_dunning),

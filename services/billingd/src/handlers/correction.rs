@@ -154,6 +154,7 @@ pub async fn post_correction(
             total_brutto_eur: brutto,
             // The Storno's lines are the original's, negated in the insert.
             steuerzeilen: &[],
+            due_on: None,
         },
         original.id,
         Some(&req.reason),

@@ -231,7 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 kunde_namensformat: None,
                 fallgruppe: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
 
@@ -294,7 +294,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 obligations: Vec::new(),
                 lfa_lieferende: None,
             },
-            RunOptions::new().context(antwort_ctx),
+            RunOptions::system().context(antwort_ctx),
         )
         .await?;
 
@@ -337,7 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[5/6] Activating supply relationship...");
 
     let activate_envs = process
-        .run(SupplierChangeCommand::Activate, RunOptions::new())
+        .run(SupplierChangeCommand::Activate, RunOptions::system())
         .await?;
     for env in &activate_envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
@@ -420,7 +420,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 kunde_namensformat: None,
                 fallgruppe: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .unwrap_err();

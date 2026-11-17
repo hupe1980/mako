@@ -82,10 +82,16 @@ pub async fn serve(
 ) -> anyhow::Result<()> {
     let addr = listener.local_addr().context("get listener addr")?;
     tracing::info!(%addr, "listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { ct.cancelled().await })
-        .await
-        .context("HTTP serve")
+    // The peer address reaches every handler as `ConnectInfo`, so a per-peer
+    // limit (`rate_limit::caller_key`, portald's public page) keys on it
+    // rather than on one bucket shared by everyone.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move { ct.cancelled().await })
+    .await
+    .context("HTTP serve")
 }
 
 // ── Signal helpers ────────────────────────────────────────────────────────────

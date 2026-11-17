@@ -171,10 +171,34 @@ CREATE TABLE billing_records (
     template_hash       TEXT,
 
     dispatched_at       TIMESTAMPTZ,
+
+    -- § 40c Abs. 2 EnWG: the last day this invoice may reach the customer,
+    -- from `mako_fristen::vorlauf::abrechnung_faellig`. Set on every invoice
+    -- of a supply period (the run and `/calculate`); NULL on documents the
+    -- paragraph does not govern (a § 41e VPP settlement, a Sammelrechnung
+    -- wrapper, a GGV bundle, a Gebührenbescheid).
+    due_on              DATE,
+
+    -- Rechnung nachrechnen. `seal_sha256` is the SHA-256 over the
+    -- RFC 8785 (JCS) canonical form of `rechnung_json` at issue; a verdict
+    -- states whether the stored document still hashes to it. The verify token
+    -- lets anyone holding the invoice recompute it without signing in; only
+    -- its SHA-256 is stored, so a database read does not yield a working link.
+    seal_sha256         TEXT,
+    verify_token_sha256 TEXT,
+    verify_revoked_at   TIMESTAMPTZ,
+    -- Who revoked the token (the OIDC subject).
+    verify_revoked_by   TEXT,
+    CONSTRAINT br_revocation_attributed
+        CHECK ((verify_revoked_at IS NULL) = (verify_revoked_by IS NULL)),
+
     tenant              TEXT        NOT NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX br_verify_token ON billing_records (verify_token_sha256)
+    WHERE verify_token_sha256 IS NOT NULL;
 
 COMMENT ON TABLE billing_records IS
     '§ 14b UStG / § 147 AO / GoBD: 8-year audit ledger for all issued documents. '
@@ -225,6 +249,44 @@ CREATE UNIQUE INDEX br_unique_original
       AND outcome <> 'cancelled'
       AND category <> 'VPP';
 
+-- No two live originals of one MaLo, Lieferant and product cover the same
+-- day. `br_unique_original` only matches an identical period, so without this
+-- a Schlussrechnung could be issued over days an earlier invoice already
+-- billed, and the customer would pay them twice.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+ALTER TABLE billing_records ADD CONSTRAINT br_no_overlapping_original
+    EXCLUDE USING gist (
+        tenant WITH =, malo_id WITH =, lf_mp_id WITH =, product_code WITH =,
+        daterange(period_from, period_to, '[]') WITH &&
+    ) WHERE (is_correction = false AND sammelrechnung_id IS NULL
+             AND outcome <> 'cancelled' AND category <> 'VPP'
+             AND dokumentart = 'RECHNUNG');
+
+-- An issued document is what the customer holds: its stored form and its
+-- seal never change afterwards. A draft (`generated`) may be replaced by a
+-- re-run; once issued only the status, the derived columns and the verify
+-- token's revocation move. The seal is written once, by the issuing
+-- transaction, after the record turned `dispatched`.
+CREATE OR REPLACE FUNCTION billing_records_immutable_after_issue() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.outcome <> 'generated' AND (
+           NEW.rechnung_json IS DISTINCT FROM OLD.rechnung_json
+        OR (OLD.seal_sha256 IS NOT NULL AND NEW.seal_sha256 IS DISTINCT FROM OLD.seal_sha256)
+        OR (OLD.verify_token_sha256 IS NOT NULL
+            AND NEW.verify_token_sha256 IS DISTINCT FROM OLD.verify_token_sha256)
+        OR NEW.total_netto_eur IS DISTINCT FROM OLD.total_netto_eur
+        OR NEW.total_brutto_eur IS DISTINCT FROM OLD.total_brutto_eur) THEN
+        RAISE EXCEPTION 'billing record % is issued; its document and seal are immutable', OLD.id
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER billing_records_immutable_after_issue
+    BEFORE UPDATE ON billing_records
+    FOR EACH ROW EXECUTE FUNCTION billing_records_immutable_after_issue();
+
 -- Period lookup per MaLo
 CREATE INDEX br_malo_period   ON billing_records (malo_id, lf_mp_id, period_from DESC);
 -- Outcome workflow
@@ -240,6 +302,90 @@ CREATE INDEX br_sammel_group  ON billing_records (sammelrechnung_id)
     WHERE sammelrechnung_id IS NOT NULL;
 -- Tenant-scoped reporting
 CREATE INDEX br_tenant_period ON billing_records (tenant, period_from DESC);
+
+-- ── Unbilled periods (§ 40c Abs. 2 EnWG watch) ───────────────────────────────
+
+-- A billing period the scheduled run attempted and could not bill, with the
+-- refusal it got and the § 40c Abs. 2 EnWG date it is owed by. A log line and
+-- a counter do not tell a person which customer is about to miss a Frist; a
+-- row does. The run writes it with one upsert per attempt; the trigger below
+-- closes it when any path writes the period's invoice, and re-opens it when
+-- that invoice is cancelled by a Storno.
+CREATE TABLE unbilled_periods (
+    tenant          TEXT        NOT NULL,
+    malo_id         TEXT        NOT NULL,
+    lf_mp_id        TEXT        NOT NULL,
+    period_from     DATE        NOT NULL,
+    period_to       DATE        NOT NULL,
+    -- The period ends with the supply: it is owed an Abschlussrechnung.
+    final_invoice   BOOLEAN     NOT NULL DEFAULT false,
+    -- The stable refusal code (`NO_METER_DATA`, `RATE_REFUSED`,
+    -- `ABSCHLAEGE_UNBEKANNT`, `STORNIERT`, …); the Desk words it from its
+    -- catalogue.
+    reason_code     TEXT        NOT NULL,
+    -- The refusal's developer message; shown only under „Details".
+    message         TEXT        NOT NULL,
+    due_on          DATE        NOT NULL,
+    attempts        INTEGER     NOT NULL DEFAULT 1 CHECK (attempts > 0),
+    first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- The invoice that discharged the period; NULL while it is open.
+    settled_by      UUID        REFERENCES billing_records(id) ON DELETE SET NULL,
+    settled_at      TIMESTAMPTZ,
+    CONSTRAINT up_settled_together CHECK ((settled_by IS NULL) = (settled_at IS NULL)),
+    CONSTRAINT up_period CHECK (period_from <= period_to),
+    PRIMARY KEY (tenant, malo_id, period_from, period_to)
+);
+
+CREATE INDEX up_open_by_due ON unbilled_periods (tenant, due_on)
+    WHERE settled_by IS NULL;
+
+-- An issued invoice for the period discharges it, whichever path wrote it —
+-- the run, `/calculate`, a manual re-bill after a Storno. A record the risk
+-- gate holds (`generated`) has reached nobody, so it discharges nothing until
+-- it is released.
+CREATE OR REPLACE FUNCTION unbilled_periods_settle() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE unbilled_periods
+       SET settled_by = NEW.id, settled_at = now()
+     WHERE tenant = NEW.tenant AND malo_id = NEW.malo_id
+       AND period_from = NEW.period_from AND period_to = NEW.period_to
+       AND settled_by IS NULL;
+    RETURN NULL;
+END $$;
+
+CREATE TRIGGER billing_records_settle_unbilled
+    AFTER INSERT OR UPDATE OF outcome ON billing_records
+    FOR EACH ROW
+    WHEN (NEW.outcome = 'dispatched' AND NEW.is_correction = false
+          AND NEW.dokumentart = 'RECHNUNG')
+    EXECUTE FUNCTION unbilled_periods_settle();
+
+-- A Storno takes the period's invoice back, so the period is owed one again
+-- by the same date. Only an invoice that carries a § 40c date re-opens a watch.
+CREATE OR REPLACE FUNCTION unbilled_periods_reopen() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO unbilled_periods
+        (tenant, malo_id, lf_mp_id, period_from, period_to, final_invoice,
+         reason_code, message, due_on)
+    VALUES (NEW.tenant, NEW.malo_id, NEW.lf_mp_id, NEW.period_from, NEW.period_to,
+            NEW.rechnung_json @> '{"zusatzAttribute": [{"name": "mako:rechnungsart", "wert": "SCHLUSSRECHNUNG"}]}',
+            'STORNIERT', 'invoice ' || NEW.rechnungsnummer || ' was cancelled by a Storno',
+            NEW.due_on)
+    ON CONFLICT (tenant, malo_id, period_from, period_to) DO UPDATE
+       SET reason_code = 'STORNIERT', message = EXCLUDED.message,
+           settled_by = NULL, settled_at = NULL, last_seen_at = now();
+    RETURN NULL;
+END $$;
+
+CREATE TRIGGER billing_records_reopen_unbilled
+    AFTER UPDATE OF outcome ON billing_records
+    FOR EACH ROW
+    WHEN (NEW.outcome = 'cancelled' AND OLD.outcome <> 'cancelled'
+          AND NEW.is_correction = false AND NEW.due_on IS NOT NULL)
+    EXECUTE FUNCTION unbilled_periods_reopen();
 
 -- ── Strom- and Energiesteuer lines ────────────────────────────────────────────
 

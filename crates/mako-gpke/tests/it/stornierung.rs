@@ -85,7 +85,7 @@ fn receive_stornierung_cmd(validation_passed: bool) -> GpkeStornierungCommand {
 async fn receive_valid_stornierung_transitions_to_initiated() {
     let p = make_process();
 
-    p.run(receive_stornierung_cmd(true), RunOptions::new())
+    p.run(receive_stornierung_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveUtilmd (55022 valid) must succeed from New");
 
@@ -104,7 +104,7 @@ async fn receive_valid_stornierung_transitions_to_initiated() {
 async fn receive_invalid_stornierung_transitions_to_rejected() {
     let p = make_process();
 
-    p.run(receive_stornierung_cmd(false), RunOptions::new())
+    p.run(receive_stornierung_cmd(false), RunOptions::system())
         .await
         .expect("ReceiveUtilmd (invalid) must not return Err — emits rejected event");
 
@@ -124,13 +124,13 @@ async fn receive_invalid_stornierung_transitions_to_rejected() {
 async fn happy_path_bestaetigung_completes_process() {
     let p = make_process();
 
-    p.run(receive_stornierung_cmd(true), RunOptions::new())
+    p.run(receive_stornierung_cmd(true), RunOptions::system())
         .await
         .expect("receive");
 
     p.run(
         GpkeStornierungCommand::SendAntwort { ablehnung: None },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("SendAntwort (Bestätigung) must succeed from ValidationPassed");
@@ -147,7 +147,7 @@ async fn happy_path_bestaetigung_completes_process() {
 async fn ablehnung_transitions_to_rejected() {
     let p = make_process();
 
-    p.run(receive_stornierung_cmd(true), RunOptions::new())
+    p.run(receive_stornierung_cmd(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -155,7 +155,7 @@ async fn ablehnung_transitions_to_rejected() {
         GpkeStornierungCommand::SendAntwort {
             ablehnung: Some(StornoAblehnung::SchonBeantwortet),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("SendAntwort (Ablehnung) must succeed from ValidationPassed");
@@ -177,7 +177,7 @@ async fn ablehnung_transitions_to_rejected() {
 async fn timeout_fires_while_awaiting_the_answer() {
     let p = make_process();
 
-    p.run(receive_stornierung_cmd(true), RunOptions::new())
+    p.run(receive_stornierung_cmd(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -186,7 +186,7 @@ async fn timeout_fires_while_awaiting_the_answer() {
             deadline_id: DeadlineId::new(),
             label: Box::from(STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired must succeed from ValidationPassed");
@@ -218,7 +218,7 @@ async fn domain_data_preserved_in_validation_passed() {
             validation_passed: true,
             validation_errors: vec![],
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("receive");

@@ -14,7 +14,7 @@ tenant         = "9900357000004"
 marktd_url     = "http://marktd:8180"
 marktd_api_key = "dev-marktd-key"
 makod_url      = "http://makod:8080"
-makod_api_key  = "dev-makod-key"
+makod_api_key  = "dev-netzbilanzd-makod-key"
 edmd_url       = "http://edmd:8380"
 edmd_api_key   = "dev-edmd-key"
 

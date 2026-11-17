@@ -96,6 +96,18 @@ pub struct ApprovalQueueEntry {
     /// `sub` of the principal who decided this entry (§ 20 EnWG / GoBD).
     pub decided_by: Option<String>,
     pub tenant: String,
+    /// Who proposed the answer this entry holds — the rule (the enqueuing
+    /// module) that decided to hold or escalate it.
+    pub vorschlag_quelle: mako_engine::envelope::Vorschlag,
+    /// The proposal's fingerprint ([`vorschlag_sha256`]): the command and the
+    /// body an approval dispatches with no operator input, written by
+    /// [`PgApprovalQueue::enqueue`]. `None` where nothing complete was
+    /// proposed — an escalation leaves the answer to the operator.
+    pub vorschlag_sha256: Option<String>,
+    /// The fingerprint ([`vorschlag_sha256`]) of the command and body the
+    /// decision dispatched, written with the claim; `None` while pending and
+    /// for a decision with no market message.
+    pub gesendet_sha256: Option<String>,
 }
 
 impl ApprovalQueueEntry {
@@ -109,6 +121,7 @@ impl ApprovalQueueEntry {
         reason: String,
         expires_at: OffsetDateTime,
         tenant: String,
+        regel: &str,
     ) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -130,6 +143,59 @@ impl ApprovalQueueEntry {
             decided_at: None,
             decided_by: None,
             tenant,
+            vorschlag_quelle: mako_engine::envelope::Vorschlag::Regel {
+                name: regel.to_owned(),
+            },
+            vorschlag_sha256: None,
+            gesendet_sha256: None,
+        }
+    }
+
+    /// The fingerprint of what this entry proposes: the approve command with
+    /// the body `decision_body` builds from the frozen answer alone. `None`
+    /// where there is no approve command or the frozen answer is incomplete
+    /// (an escalation), because then the operator states the answer and
+    /// nothing was proposed.
+    #[must_use]
+    pub fn proposal_sha256(&self) -> Option<String> {
+        let command = self.approve_command.as_deref()?;
+        let body = decision_body(
+            self,
+            command,
+            self.answer_payload.as_ref(),
+            &OperatorAnswer::default(),
+        )
+        .ok()?;
+        Some(vorschlag_sha256(command, &body))
+    }
+
+    /// Who a decision of this entry is attributed to, dispatching `command`
+    /// with `body` (before `approved_by`/`rejected_by` is added).
+    ///
+    /// The approval processd asserts to makod (`Mako-Akteur`), which makes it
+    /// an [`Akteur::Freigabe`] naming processd as the relaying service.
+    ///
+    /// The one definition of „unverändert" the KPI report counts: a decision
+    /// is a Freigabe of the entry's rule, unchanged exactly when
+    /// the dispatched command and its RFC 8785 canonical body hash to the
+    /// stored [`Self::vorschlag_sha256`]. An escalation stored no proposal, so
+    /// the answer the person stated is a change.
+    ///
+    /// [`Akteur::Freigabe`]: mako_engine::envelope::Akteur::Freigabe
+    #[must_use]
+    pub fn akteur_der_entscheidung(
+        &self,
+        command: &str,
+        body: &serde_json::Value,
+        decided_by: &str,
+    ) -> mako_engine::envelope::Freigabeauftrag {
+        mako_engine::envelope::Freigabeauftrag {
+            principal: decided_by.to_owned(),
+            vorschlag: self.vorschlag_quelle.clone(),
+            unveraendert: self
+                .vorschlag_sha256
+                .as_deref()
+                .is_some_and(|proposed| proposed == vorschlag_sha256(command, body)),
         }
     }
 
@@ -203,11 +269,23 @@ impl ApprovalQueueEntry {
     }
 }
 
+/// SHA-256 (hex) of `{"command": command, "body": body}` in its RFC 8785
+/// (JCS) canonical form, so key order and number spelling cannot make an
+/// unchanged body look changed.
+#[must_use]
+pub fn vorschlag_sha256(command: &str, body: &serde_json::Value) -> String {
+    use sha2::Digest as _;
+    let canonical = serde_jcs::to_string(&serde_json::json!({ "command": command, "body": body }))
+        .expect("a JSON value always canonicalises");
+    format!("{:x}", sha2::Sha256::digest(canonical.as_bytes()))
+}
+
 /// Every column `map_entry` reads.
 const ENTRY_COLUMNS: &str = "id, process_id, pid, malo_id, reason, status, approve_command, \
                              reject_command, marktrolle, followup_command, followup_payload, \
                              answer_payload, reject_payload, ablehnung_ebd, \
-                             expires_at, created_at, decided_at, decided_by, tenant";
+                             expires_at, created_at, decided_at, decided_by, tenant, \
+                             vorschlag_quelle, vorschlag_sha256, gesendet_sha256";
 
 fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
     let status_str: String = row.try_get("status")?;
@@ -237,7 +315,27 @@ fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
         decided_at: row.try_get("decided_at")?,
         decided_by: row.try_get("decided_by")?,
         tenant: row.try_get("tenant")?,
+        vorschlag_quelle: serde_json::from_value(row.try_get("vorschlag_quelle")?).map_err(
+            |e| sqlx::Error::ColumnDecode {
+                index: "vorschlag_quelle".into(),
+                source: Box::new(e),
+            },
+        )?,
+        vorschlag_sha256: row.try_get("vorschlag_sha256")?,
+        gesendet_sha256: row.try_get("gesendet_sha256")?,
     })
+}
+
+/// What [`PgApprovalQueue::list_page`] selects; every field narrows, none
+/// set lists the tenant's whole queue.
+#[derive(Debug, Clone, Default)]
+pub struct QueueFilter {
+    /// Only entries in this status.
+    pub status: Option<QueueStatus>,
+    /// Only entries answered under this Marktrolle.
+    pub marktrolle: Option<String>,
+    /// Only the entries of this process.
+    pub process_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -252,7 +350,7 @@ impl PgApprovalQueue {
 
     pub async fn enqueue(&self, entry: &ApprovalQueueEntry) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO approval_queue (id, process_id, pid, malo_id, reason, status, approve_command, reject_command, marktrolle, followup_command, followup_payload, answer_payload, reject_payload, ablehnung_ebd, expires_at, created_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (process_id, tenant) DO NOTHING",
+            "INSERT INTO approval_queue (id, process_id, pid, malo_id, reason, status, approve_command, reject_command, marktrolle, followup_command, followup_payload, answer_payload, reject_payload, ablehnung_ebd, expires_at, created_at, tenant, vorschlag_quelle, vorschlag_sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (process_id, tenant) DO NOTHING",
         )
         .bind(entry.id).bind(entry.process_id).bind(entry.pid).bind(&entry.malo_id)
         .bind(&entry.reason).bind(entry.status.to_string())
@@ -261,6 +359,8 @@ impl PgApprovalQueue {
         .bind(&entry.answer_payload).bind(&entry.reject_payload)
         .bind(&entry.ablehnung_ebd)
         .bind(entry.expires_at).bind(entry.created_at).bind(&entry.tenant)
+        .bind(serde_json::to_value(&entry.vorschlag_quelle).map_err(|e| sqlx::Error::Encode(Box::new(e)))?)
+        .bind(entry.proposal_sha256())
         .execute(&self.pool).await?;
         Ok(())
     }
@@ -272,21 +372,27 @@ impl PgApprovalQueue {
     /// einwilligung and an ablehnen (different idempotency keys) while the DB
     /// recorded only one, and let a terminal entry re-trigger a market message.
     /// `Ok(None)` means the entry is gone or no longer Pending.
+    ///
+    /// `gesendet_sha256` is the fingerprint of what the decision dispatches
+    /// ([`vorschlag_sha256`]), `None` for a decision with no market message.
     pub async fn claim(
         &self,
         id: Uuid,
         tenant: &str,
         status: QueueStatus,
         decided_by: &str,
+        gesendet_sha256: Option<&str>,
     ) -> Result<Option<ApprovalQueueEntry>, sqlx::Error> {
         let opt = sqlx::query(mako_service::sql::dynamic(format!(
-            "UPDATE approval_queue SET status = $3, decided_at = now(), decided_by = $4 \
+            "UPDATE approval_queue SET status = $3, decided_at = now(), decided_by = $4, \
+             gesendet_sha256 = $5 \
              WHERE id = $1 AND tenant = $2 AND status = 'Pending' RETURNING {ENTRY_COLUMNS}"
         )))
         .bind(id)
         .bind(tenant)
         .bind(status.to_string())
         .bind(decided_by)
+        .bind(gesendet_sha256)
         .fetch_optional(&self.pool)
         .await?;
         opt.map(|r| map_entry(&r)).transpose()
@@ -295,8 +401,8 @@ impl PgApprovalQueue {
     /// Release a claim taken by [`Self::claim`] so the operator can retry.
     pub async fn unclaim(&self, id: Uuid, tenant: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE approval_queue SET status = 'Pending', decided_at = NULL, decided_by = NULL \
-             WHERE id = $1 AND tenant = $2",
+            "UPDATE approval_queue SET status = 'Pending', decided_at = NULL, decided_by = NULL, \
+             gesendet_sha256 = NULL WHERE id = $1 AND tenant = $2",
         )
         .bind(id)
         .bind(tenant)
@@ -321,16 +427,36 @@ impl PgApprovalQueue {
         marktrolle: Option<&str>,
         limit: u32,
     ) -> Result<Vec<ApprovalQueueEntry>, sqlx::Error> {
-        let status_str = status.map(|s| s.to_string());
+        let filter = QueueFilter {
+            status,
+            marktrolle: marktrolle.map(ToOwned::to_owned),
+            process_id: None,
+        };
+        self.list_page(tenant, &filter, limit, 0).await
+    }
+
+    /// The entries `filter` selects, the earliest `expires_at` first, `limit`
+    /// of them after skipping `offset`.
+    pub async fn list_page(
+        &self,
+        tenant: &str,
+        filter: &QueueFilter,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<ApprovalQueueEntry>, sqlx::Error> {
+        let status_str = filter.status.map(|s| s.to_string());
         let rows = sqlx::query(mako_service::sql::dynamic(format!(
             "SELECT {ENTRY_COLUMNS} FROM approval_queue WHERE tenant = $1 \
              AND ($2::text IS NULL OR status = $2) AND ($3::text IS NULL OR marktrolle = $3) \
-             ORDER BY expires_at ASC, created_at ASC, id ASC LIMIT $4"
+             AND ($4::uuid IS NULL OR process_id = $4) \
+             ORDER BY expires_at ASC, created_at ASC, id ASC LIMIT $5 OFFSET $6"
         )))
         .bind(tenant)
         .bind(status_str)
-        .bind(marktrolle)
+        .bind(filter.marktrolle.as_deref())
+        .bind(filter.process_id)
         .bind(i64::from(limit))
+        .bind(i64::from(offset))
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(map_entry).collect()
@@ -621,6 +747,11 @@ pub struct OperatorAnswer {
     /// `ZF9+<Grund der Privilegierung>` ([`enfg_werte`]).
     #[serde(default)]
     pub enfg: Option<String>,
+    /// The `body_sha256` of the body the person was shown
+    /// (`rehearse_decision`); the decision is refused 412 when the body it
+    /// would dispatch is another. Never part of the dispatched body.
+    #[serde(default)]
+    pub body_sha256: Option<String>,
 }
 
 /// Why a decision cannot be dispatched.
@@ -867,7 +998,7 @@ pub fn decision_body(
 /// | escalated | reject | Ablehnung |
 /// | held | reject | the **other** cluster than the held answer's — rejecting a held answer overrides it (the LF and ESA queues dispatch the opposite command) |
 ///
-/// A held answer's approval is frozen, and [`decision_body`] already refuses
+/// A held answer's approval is frozen, and `decision_body` already refuses
 /// a code stated on it. A Zustimmung is drawn from the tree the Bestätigung
 /// comes from — the same tree, or for a Vorprüfung the tree it hands over to
 /// ([`mako_pruefung::codes::zustimmung_tree_of`]); an Ablehnung from the
@@ -929,8 +1060,99 @@ mod decision_tests {
             "test".into(),
             OffsetDateTime::now_utc(),
             "t".into(),
+            "test-regel",
         )
         .with_commands(approve, reject, Some("NB"))
+    }
+
+    /// The entry as `enqueue` stores it.
+    fn enqueued(e: ApprovalQueueEntry) -> ApprovalQueueEntry {
+        let sha = e.proposal_sha256();
+        ApprovalQueueEntry {
+            vorschlag_sha256: sha,
+            ..e
+        }
+    }
+
+    fn held_accept() -> ApprovalQueueEntry {
+        enqueued(
+            entry(
+                mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN,
+                mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN,
+            )
+            .with_answer_payload(serde_json::json!({
+                "antwort_code": "A01", "antwort_tree": "E_0622", "zustimmung": true,
+            })),
+        )
+    }
+
+    #[test]
+    fn an_approved_unchanged_answer_is_a_freigabe() {
+        use mako_engine::envelope::{Freigabeauftrag, Vorschlag};
+        let e = held_accept();
+        let command = mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN;
+        let body = decision_body(
+            &e,
+            command,
+            e.answer_payload.as_ref(),
+            &OperatorAnswer::default(),
+        )
+        .expect("complete");
+        // Key order is not a change: the fingerprint is over the canonical form.
+        let reordered: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&body).expect("json")).expect("json");
+        assert_eq!(
+            e.akteur_der_entscheidung(command, &reordered, "erika"),
+            Freigabeauftrag {
+                principal: "erika".into(),
+                vorschlag: Vorschlag::Regel {
+                    name: "test-regel".into()
+                },
+                unveraendert: true,
+            }
+        );
+    }
+
+    #[test]
+    fn an_edited_answer_is_a_freigabe_geaendert() {
+        let e = held_accept();
+        let command = mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN;
+        // The operator's Bemerkung fills a gap the frozen answer left: the
+        // dispatched body is no longer the proposal.
+        let edited = decision_body(
+            &e,
+            command,
+            e.answer_payload.as_ref(),
+            &OperatorAnswer {
+                bemerkung: Some("Rückfrage geklärt".into()),
+                ..OperatorAnswer::default()
+            },
+        )
+        .expect("complete");
+        assert!(
+            !e.akteur_der_entscheidung(command, &edited, "erika")
+                .unveraendert
+        );
+        // Rejecting the held Accept dispatches the other command: a change.
+        let reject = mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN;
+        assert!(
+            !e.akteur_der_entscheidung(reject, &edited, "erika")
+                .unveraendert
+        );
+    }
+
+    #[test]
+    fn an_escalation_answered_by_the_operator_is_a_freigabe_geaendert() {
+        let e = enqueued(entry(
+            mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN,
+            mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN,
+        ));
+        assert_eq!(e.vorschlag_sha256, None, "nothing complete was proposed");
+        assert!(
+            !e.akteur_der_entscheidung("x", &serde_json::json!({}), "erika")
+                .unveraendert,
+            "the answer the person stated is no proposal approved unchanged"
+        );
     }
 
     /// A held Accept is approved with what the automatic path would have sent.

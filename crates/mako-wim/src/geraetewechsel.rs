@@ -302,12 +302,9 @@ pub const DEVICE_CHANGE_ANTWORT_PIDS: &[(u32, u32, bool)] = &[
     (44_052, 44_051, true),
     (44_053, 44_051, false),
     (44_169, 44_168, true),
-    // **44170 does not exist.** The Gas Verpflichtungsanfrage publishes a
-    // Bestätigung and no Ablehnungs-PID (PID-Übersicht 4.0 rows 39240/39250);
-    // the 44170 of PID 3.3 was withdrawn with FV2026-10-01. `E_2006` still
-    // publishes the Ablehnungs-Codeliste `G_0071`, so the codes exist with no
-    // carrier — [`antwort_pid_for`] returns `None` and the caller escalates
-    // rather than inventing a Prüfidentifikator the market does not accept.
+    // PID-Übersicht 4.0 Lesefassung Stand 12.08.2026, Tabelle 1 Lfd. Nr. 39260
+    // (S. 76, Änd-ID 27363): „Ablehnung Verpflichtungsanfrage", gMSB → NB.
+    (44_170, 44_168, false),
 ];
 
 /// Resolve a response PID to `(request_pid, is_confirmed)`.

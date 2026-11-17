@@ -93,6 +93,10 @@ pub struct KpiReportView {
     pub avg_cycle_time_hours: Option<f64>,
     /// 95th-percentile hours from start to end; `None` when nothing has closed.
     pub p95_cycle_time_hours: Option<f64>,
+    /// How the processes that ended in the month were handled, by their most
+    /// human actor — counts always, shares only from 20 ended processes, and
+    /// the definition the figure is read by.
+    pub eingriff: crate::obs::domain::EingriffReport,
     pub note: &'static str,
 }
 
@@ -117,6 +121,7 @@ impl From<crate::obs::domain::KpiReport> for KpiReportView {
             frist_compliance_rate: r.frist_compliance_rate,
             avg_cycle_time_hours: r.avg_cycle_time_hours,
             p95_cycle_time_hours: r.p95_cycle_time_hours,
+            eingriff: r.eingriff,
             note: KPI_NOTE,
         }
     }
@@ -1204,6 +1209,7 @@ mod schema_tests {
             malo_id: None,
             partner_mp_id: None,
             mdm_role: None,
+            eingriff: None,
             deadline_at: None,
             deadline_source: None,
             deadline_risk: DeadlineRisk::Unknown,

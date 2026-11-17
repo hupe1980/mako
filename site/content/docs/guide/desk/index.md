@@ -8,8 +8,8 @@ tools — the same typed read surface the agents are granted — and renders wha
 they answer. It computes nothing that decides: every Frist, amount and verdict
 on screen is the one a service returned.
 
-[![Prozesse: one MaLo, two processes, the earliest Frist first](prozesse-light.png)](prozesse-light.png)
-[![Prozesse: one MaLo, two processes, the earliest Frist first](prozesse-dark.png)](prozesse-dark.png)
+[![A process page: its state and next Frist, the steps, the decision waiting on you, the Verlauf beside the details](prozesse-light.png)](prozesse-light.png)
+[![A process page: its state and next Frist, the steps, the decision waiting on you, the Verlauf beside the details](prozesse-dark.png)](prozesse-dark.png)
 
 ## Run it
 
@@ -53,14 +53,44 @@ Type a MaLo-ID, MeLo-ID or Vorgangsnummer on **Prozesse**, or anywhere press
 [![The command palette offering to open a process by its MaLo-ID](palette-dark.png)](palette-dark.png)
 
 A key can name several processes — a Lieferantenwechsel beside an
-Anfrage/Bestellung. Each is a card, ordered by its earliest pending Frist,
-leaving out any process the person's role may not read.
+Anfrage/Bestellung. They stand as a row of links above the page, ordered by
+their earliest pending Frist, the first one open; a process the person's role
+may not read is left out.
 
-Each card is titled the way an operator says it — „Lieferantenwechsel · Strom"
-— with the workflow and its ids under „Technische Angaben". Once the
-Marktpartner has answered, the card names its Antwortcode with the BDEW's
-wording from the list the answer named, that list as the source; a code the
-catalogue holds no wording for stands with its list and no meaning.
+Every process page reads top to bottom the same way:
+
+- **The head.** The path back to Prozesse, the title the way an operator says
+  it — „Lieferantenwechsel · Strom" — with the Prozessüberwachung's state
+  beside it („läuft", „abgelehnt"), one line of facts (MaLo, PID, the
+  Gegenpartei as the Marktstammdaten name it, the process family), and the
+  next pending Frist large on the right, named for what it is.
+- **The steps.** Every market message the history records, ticked; then what
+  is still awaited — an APERAK, a CONTRL, the answer — for each Frist still
+  pending; then the end, ticked once the Prozessüberwachung states one. The
+  Desk reads no step off an event's name.
+- **The decision bar**, only while the Prozessüberwachung holds a Freigabe for
+  this process: „Wartet auf deine Entscheidung", its reason, the
+  Entscheidungsbaum as its source and one button, **Entscheiden**, which opens
+  the same decision as Freigaben and Heute — held for undo, the market message
+  included. A process with nothing to decide has no bar.
+- **Verlauf and Nachweise** on the left, **Details** on the right — the
+  workflow and its ids, the family, the Gegenpartei's MP-ID, when it began, the
+  Antwortfrist with its Festlegung as the source. Once the Marktpartner has
+  answered, the details name its Antwortcode with the BDEW's wording from the
+  list the answer named, that list as the source; a code the catalogue holds
+  no wording for stands with its list and no meaning.
+
+The **Nachweise** are a chain: each message of the process one row, ticked
+with its time and document number when the history records it; an APERAK the
+Prozessüberwachung recorded with an error code is a row with a warning, not
+ticked; and every message a pending Frist still waits for is an open row with
+its Frist-Uhr. A missing APERAK is the row that is not ticked.
+
+**Stand** — the slider over the Verlauf — shows the process as it stood at any
+of its recorded events: the Verlauf, the steps and the Nachweise up to that
+event, „Stand zu 03.11.2026, 11:12" above them. The Fristen pending now are
+left out of an earlier Stand, because they say nothing about it. It is the
+same read, fewer rows.
 
 Its **Verlauf** threads the market messages: received on the left, sent on the
 right, each with PID, Berlin time and document number, as the workflow
@@ -172,6 +202,15 @@ Some answers the Prozessüberwachung does not send on its own: an Anmeldung of
 an affiliated supplier held for a person, or a case its Entscheidungsbaum
 could not settle. **Freigaben** lists them for the Rolle you wear, the
 earliest Frist first; the sidebar shows how many wait.
+
+Before you decide, the Freigabe shows what approving would send: the
+Prozessüberwachung rehearses the decision, and the Marktkommunikation renders
+the message with its AHB names — or says it cannot render it ahead, and shows
+the body instead. The approval names that body by its hash, so a decision is
+never sent for a body you were not shown. Where the Marktkommunikation cannot
+render the message, the assistant's proposal is not taken in unchanged — you
+decide yourself — and the Prozessüberwachung refuses a decision its check
+did not pass, which the Freigabe says in words, with the rule it broke.
 
 Each opens with its reason and its Frist. A held answer says which Antwortcode
 it will send; an open one asks you for the code, and the form offers only the
@@ -303,10 +342,10 @@ Each item is something a service holds open for this Rolle:
 
 | Rolle | What Heute lists |
 |---|---|
-| Netz | Freigaben, overdue processes, received invoices held at an open Prüfschritt, Korrekturbedarf after a negative Prüfmitteilung |
-| Lieferant | Anmeldungen waiting on the Netzbetreiber, Freigaben, overdue processes, disputed invoices, received invoices held at an open Prüfschritt, invoices held for review, bookings the ledger refused, Anmeldungen not yet sent |
-| Messstelle | Freigaben, overdue processes, overdue reading orders |
-| Energieservice | Freigaben, overdue processes, received invoices held at an open Prüfschritt |
+| Netz | Freigaben, Klärfälle, received invoices held at an open Prüfschritt, Korrekturbedarf after a negative Prüfmitteilung |
+| Lieferant | Anmeldungen waiting on the Netzbetreiber, Freigaben, Klärfälle, disputed invoices, received invoices held at an open Prüfschritt, invoices held for review, bookings the ledger refused, Anmeldungen not yet sent, Mahnungen due, billing periods not yet billed — each with the reason in words, its due date and the days left as the Abrechnung counts them |
+| Messstelle | Freigaben, Klärfälle, overdue reading orders |
+| Energieservice | Freigaben, Klärfälle, received invoices held at an open Prüfschritt |
 
 The list is read in bands — **Überfällig**, **Heute**, **Nächste 7 Tage**,
 **Später**, **Ohne Frist** — by the Frist each service returned; the Desk
@@ -364,6 +403,18 @@ it, no proposal is shown.
 
 A Korrekturbedarf opens nothing: the Desk has no Netzentgelte view.
 
+A **Klärfall** is one case per cause the Prozessüberwachung opened — a
+refused message, a dead letter, a missed Frist. Its row reads as the cause in
+the words of the list that defines the code, what to do about it („Korrigieren
+und neu senden", „Selbst klären"), and how often it occurred; it is due when
+the Prozessüberwachung says. „Warum?" only explains it — the case is closed by
+the action, never by the assistant.
+
+On the **Überblick**, „Ohne Eingriff" counts the processes of a PID that ended
+this month with no person touching them, as the Prozessüberwachung counts
+them: „3 von 13" below 20 ended processes, its share from 20 up, its
+definition on the tile.
+
 [![A disputed invoice decided in Heute: its finding, the assistant's proposal resting on it, Beilegen and Ablehnung senden](heute-disput-light.png)](heute-disput-light.png)
 [![A disputed invoice decided in Heute: its finding, the assistant's proposal resting on it, Beilegen and Ablehnung senden](heute-disput-dark.png)](heute-disput-dark.png)
 
@@ -383,14 +434,76 @@ not on a Korrekturbedarf, an overdue reading order or an invoice under review,
 whose sources it does not read. While the assistant is unreachable, „Warum?" is
 not offered.
 
-Under the list each source says how many it returned, or why it did not
-answer — one unreachable service never empties Heute. As Lieferant one
+Above the bands the **Arbeitsvorrat** gives each source of the Rolle one row:
+its count and — while the service returned the whole list — the day of its
+oldest item („älteste vom 22.09.2026"). A source with nothing open keeps its
+row with „0"; a source that did not answer says so in its row and shows no
+number, because unreachable is not zero — and one unreachable service never
+empties Heute. A row opens the source's own view (Freigaben, Fristen) or
+narrows Heute to that source. As Lieferant one
 **Lage** line heads the page with what the list cannot say — the services'
 totals beyond its page, no model in it — and is absent when it would only
 repeat the list.
 
 [![Heute as Lieferant: the Lage, then the items in Frist bands, a Hinweis of the assistant under the item it concerns](heute-light.png)](heute-light.png)
 [![Heute as Lieferant: the Lage, then the items in Frist bands, a Hinweis of the assistant under the item it concerns](heute-dark.png)](heute-dark.png)
+
+## A Marktlokation, its supply, metering and account
+
+Every MaLo on a process page opens its **Lokation** page, read from the
+services' REST API — the same documented API an integrator uses:
+
+- **Versorgung** — one band per state the Marktstammdaten kept, the oldest
+  first: Beliefert, Grund- or Ersatzversorgung, unsupplied, each with its
+  dates and Lieferant, an announced Zuordnung drawn dashed.
+- **Messkonzept** — the Lokationsbündel for today, drawn: the Marktlokation on
+  top, its Messlokationen with their Zähler beneath, Netzlokation and
+  Ressourcen below, a line for each Zuordnung, the Lokationsbündelcode and the
+  day it is resolved for. Two codes in one bündel are named as a contradiction.
+- **Messwerte** — a ribbon of the last 30 days, one cell per day as the
+  Messwerte service states it (gemessen, Ersatzwert, korrigiert, fehlt), then
+  the Lastgang of the last seven days.
+- **Konto** (Lieferant) — the balance and the statement with its running
+  balance, as the Kundenkonten keep them; the Kunde view shows the same
+  Konto for each Lieferstelle.
+
+The Versorgung bands are drawn to the time each state held; the
+Lokationsbündelcode carries its BDEW wording; the Messwerte panel adds the
+service's quality grade and every correction with its reason; and opened from
+a Messlokation (`?knoten=`), the page marks that node in the Messkonzept. In
+the Verlauf, each message says who caused it — automatisch, freigegeben with
+the proposal unchanged or changed (in the assistant's colour), or a person.
+
+Each panel answers or refuses on its own; one service that does not answer
+never empties the page.
+
+[![The Lokation page: Versorgung bands, the Messkonzept drawn from the Lokationsbündel, the Messwerte ribbon and the Lastgang](lokation-light.png)](lokation-light.png)
+[![The Lokation page: Versorgung bands, the Messkonzept drawn from the Lokationsbündel, the Messwerte ribbon and the Lastgang](lokation-dark.png)](lokation-dark.png)
+
+## Nachrechnen
+
+An invoice under review opens **Nachrechnen**: the Abrechnung recomputes it
+from what it was issued from. The verdict leads — „Stimmt überein" with the
+amount, or „Weicht ab" naming the line that does not recompute, and whether
+the issued invoice's seal still holds — then every line with the quantity and
+price it came from, the rule behind it and the arithmetic. None of it is
+computed in the Desk.
+
+[![Nachrechnen: the verdict first, then each line with its sources](nachrechnen-light.png)](nachrechnen-light.png)
+[![Nachrechnen: the verdict first, then each line with its sources](nachrechnen-dark.png)](nachrechnen-dark.png)
+
+## Gegenparteien
+
+**Gegenparteien** lists every market partner the Prozessüberwachung counted,
+and each opens its record — also from the Gegenpartei on a process page: how
+its answers arrived against their Fristen, the share within the Frist only
+where the Prozessüberwachung states one (below its threshold the counts
+alone), its refusals with the wording of the list that defines each code, and
+every process behind a figure. The terms are defined under „Begriffe";
+„Als Nachweis exportieren" downloads the record as CSV.
+
+[![A Gegenpartei's record: figures, refusals with their wording, the processes, export as evidence](gegenpartei-light.png)](gegenpartei-light.png)
+[![A Gegenpartei's record: figures, refusals with their wording, the processes, export as evidence](gegenpartei-dark.png)](gegenpartei-dark.png)
 
 ## The Lieferant starts from the customer
 
@@ -501,8 +614,8 @@ view shows one pane at a time, and no view scrolls sideways.
 
 Holding several market roles, a person wears one at a time — **Netz** (NB),
 **Lieferant** (LF), **Messstelle** (MSB), **Energieservice** (ESA) — in the
-toolbar or with <kbd>⌃1</kbd>–<kbd>⌃4</kbd>. Each has its own accent and start
-page; switching shows no data of the role left. What a role may read is each
+toolbar or with <kbd>⌃1</kbd>–<kbd>⌃4</kbd>. The badge names the role you
+wear, and each role has its own start page; switching shows no data of the role left. What a role may read is each
 service's Cedar policy.
 
 [![The role switcher in the toolbar](rolle-light.png)](rolle-light.png)
@@ -545,8 +658,30 @@ of two widths — reading (≈720 px) for a document-like view, work for a list
 or grid — so a title never moves between views. The type is the macOS ramp
 (Large Title 26 pt down to Caption 11 pt, Regular and Semibold only); status
 is tinted text on its own faint fill, and the only solid fill is the one
-primary button. What the assistant wrote is upright text behind a thin violet
-rule and its sparkle.
+primary button. There is one accent colour, teal, for every role — the
+primary button, a selection, a link; the only other hue is the assistant's
+violet, kept for what a model wrote: upright text behind a thin violet rule
+and its sparkle. `desk/src/design/tokens.test.ts` refuses a second accent and
+holds every text colour to WCAG AA on every surface, light and dark.
+
+When a service serves one of the tools the Desk was generated against with a
+different schema, a banner at the top names that service, instead of a view
+failing later. Until the Desk matches that service again it offers no
+decision on it, and it checks again whenever the window regains focus.
+
+A decision leaves the Desk with an `Idempotency-Key`, so a request repeated
+on the way is one decision at the service. One sent as the tab closed — its
+hold flushed on `pagehide` — may never have its answer read; the next load
+shows it under „Beim letzten Mal gesendet" with what the service says became
+of it (a Freigabe's outcome from the Prozessüberwachung), until you confirm
+you have seen it.
+
+When the assistant has prepared a proposal for the Freigabe on a process
+page, the decision bar shows it — labelled, with the gate's verdict
+(agentd's Prüfvermerk): only a proposal that passed the Entscheidungsbaum and
+the pre-send check can be taken in („Übernehmen"); a refused or unchecked one
+says why, and the bar's one action is „Bearbeiten", which opens the decision
+empty. The decision itself never waits on the assistant.
 
 `/dev/gallery` (development builds) shows every colour token, the type ramp,
 each status and every control in every state, light and dark side by side —
@@ -562,10 +697,11 @@ taken from the production build.
 | `just dev` | every service, the seed and the Desk with hot reload |
 | `just dev-ui` | the Desk alone on its recorded answers (`desk/fixtures`) |
 | `just desk-gen` | refresh `services/*/mcp.snapshot.json` and regenerate the Desk's types |
-| `just desk-check` | generated types current, `tsc`, Biome, Vitest — part of `just ci` |
+| `just desk-check` | generated types current, `tsc`, Biome, Vitest, the production build within its size budget — part of `just ci` |
 | `just desk-screenshots` | regenerate the screenshots on this page |
 | `just desk-budgets` | measure the interaction budgets in a browser (below); not part of `just ci` |
-| `just desk-axe` | axe-core over the assistant's trail, receipt, pill and ⌘K action panel; not part of `just ci` |
+| `just desk-axe` | axe-core over the assistant's trail, receipt, pill, ⌘K action panel and the process page; not part of `just ci` |
+| `just desk-aria` | every route's accessibility tree against its baseline in `desk/aria/` (`--bless` after a deliberate change); not part of `just ci` |
 
 `cargo xtask check-desk` holds the first two rules, and each service's
 `mcp.snapshot.json` the third. The screenshots are produced by
@@ -573,6 +709,25 @@ taken from the production build.
 are recorded responses in the schema it declares, agentd's stream is a
 recorded run, the browser clock is fixed and the zone is Europe/Berlin, so
 every run draws the same pictures.
+
+Two lint rules sit beside `check-desk`: Biome's plugin `desk/lint/zahlen.grit`
+refuses `Number(` and `parseFloat(` outside `src/format/` as you type — an
+amount is a `Decimal` string, and a float would lose or invent a Cent — and
+`desk/scripts/umfang.ts` fails `desk-check` when the entry script or the
+stylesheet outgrows its gzip budget. The drift banner compares each tool's
+fingerprint (`src/data/oberflaeche.ts`), written into `src/data/gen` by
+`npm run gen`, with the one computed over what the service lists.
+
+The Desk is becoming a client of the documented REST API: `npm run gen` also
+merges every committed `services/<service>/openapi.json` into
+`desk/openapi.json` as the gateway routes it and writes the types
+`openapi-fetch` reads (`src/data/api/`); a path no document describes does not
+type-check, and `desk-check` refuses stale types. Views move to it service by
+service as each document lands. The gateway (`desk/deploy/gateway.yaml`)
+forwards only each service's `/mcp`, its document and the write routes the
+Desk calls — never `/admin`, `/metrics` or `/health`. Biome's plugin
+`desk/lint/html.grit` refuses raw HTML sinks and an `href` built from a value,
+so a counterparty's text is always rendered as text.
 
 The assistant's stream is tested without agentd or a model:
 `desk/fixtures/run-*.jsonl` are recorded runs, one stream event per line as
@@ -597,6 +752,6 @@ first step 1.5 s late, and the first budget must refuse it by name.
 alone, light and dark with reduced motion, and fails on a serious or critical
 axe finding, a running animation, a control Tab cannot reach, or a citation
 that stays under the top bar when focused from beneath it. The Desk CI job
-runs both after `just desk-check`.
+runs both, and `just desk-aria`, after `just desk-check`.
 
 `desk/AGENTS.md` holds the rules for working on the Desk.

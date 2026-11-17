@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {#- ⚠ Guarded numbers. `services/makod/tests/it/published_counts.rs` reads this file
-    and requires the phrases "498 Prüfidentifikatoren" and "77 workflows" to
+    and requires the phrases "499 Prüfidentifikatoren" and "77 workflows" to
     survive tag-stripping, so a number must stay immediately before its unit with
     only markup between them. `e2e_ahb_rule_coverage_guard.rs` reads the AHB-rule
     count out of the last <strong> element preceding the words it greps for in
@@ -42,17 +42,17 @@
 
 <section class="stats" aria-label="Scope">
   <div class="stats-inner">
-    <div><strong>482 / 482</strong><span>published Prüfidentifikatoren imported</span></div>
-    <div><strong>498</strong><span>Prüfidentifikatoren routed</span></div>
+    <div><strong>483 / 483</strong><span>published Prüfidentifikatoren imported</span></div>
+    <div><strong>499</strong><span>Prüfidentifikatoren routed</span></div>
     <div><strong>77</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>14</strong><span>services</span></div>
     <div><strong>5</strong><span>deployable roles</span></div>
   </div>
-  <p class="stats-note wrap">Every one of the 482 Prüfidentifikatoren the BDEW
-    Anwendungsübersicht publishes is imported, and 460 of them are routed to a workflow. In all,
-    498 Prüfidentifikatoren are <em>routed</em>: those 460, five that AHB editions in force carry
-    beyond the overview, and 33 further DVGW gas codes BDEW does not publish. <strong>463</strong>
+  <p class="stats-note wrap">Every one of the 483 Prüfidentifikatoren the BDEW
+    Anwendungsübersicht publishes is imported, and 461 of them are routed to a workflow. In all,
+    499 Prüfidentifikatoren are <em>routed</em>: those 461, five that AHB editions in force carry
+    beyond the overview, and 33 further DVGW gas codes BDEW does not publish. <strong>464</strong>
     additionally carry validated AHB segment rules; the 35 that do not are the DVGW codes —
     ALOCAT, NOMINT/NOMRES and SSQNOT ride <code>dvgw-edi</code>, for which no BDEW AHB exists.
     The 22 published codes not routed are listed in the PID reference. A release that would shrink
@@ -265,7 +265,7 @@ graph TB
           portal, and an
           <!-- check-tool-grants pins the two phrases below verbatim; keep each on one
                line, and update the counts only via the guard's own numbers. -->
-          agent plane over the platform's 183 MCP tools.
+          agent plane over the platform's 189 MCP tools.
           Its 30 declarative specialists are advisory by
           construction: no active manifest grants a mutating tool, every model and tool call
           is a journaled effect, and a triage worklist carries what a person has to see.</p>

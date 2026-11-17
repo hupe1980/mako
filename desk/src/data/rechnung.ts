@@ -9,6 +9,7 @@
 // undo before it leaves — in its view as in ⌘K — and none asks confirmation.
 
 import { problem, sentence } from "./problem";
+import { kopf, SOFORT, type Versand } from "./versand";
 import { type Handlung, verweigern } from "./verweigert";
 
 /** The service refused the decision; its words, shown in place. */
@@ -25,18 +26,18 @@ async function senden(
   url: string,
   handlung: Handlung,
   body: object | null,
-  keepalive = false,
+  v: Versand = SOFORT,
 ): Promise<void> {
   const res = await fetch(
     url,
     body
       ? {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: kopf(v, true),
           body: JSON.stringify(body),
-          keepalive,
+          keepalive: v.keepalive,
         }
-      : { method: "POST", keepalive },
+      : { method: "POST", headers: kopf(v, false), keepalive: v.keepalive },
   );
   if (res.ok) return;
   const p = await problem(res);
@@ -52,19 +53,19 @@ const BILLING = "/svc/billingd/api/v1/billing";
 const DISPUT: Handlung = { dienst: "invoicd", aktion: "entscheiden" };
 
 /** Close a dispute settled out of band; sends nothing. */
-export function beilegen(id: string, bemerkung: string, keepalive = false): Promise<void> {
+export function beilegen(id: string, bemerkung: string, v: Versand = SOFORT): Promise<void> {
   const note = bemerkung.trim();
   return senden(
     `${RECEIPTS}/${encodeURIComponent(id)}/resolve-dispute`,
     DISPUT,
     note ? { note } : {},
-    keepalive,
+    v,
   );
 }
 
 /** Send the refusal (REMADV) a disputed receipt is still owed. */
-export function ablehnungSenden(id: string, keepalive = false): Promise<void> {
-  return senden(`${RECEIPTS}/${encodeURIComponent(id)}/dispatch-answer`, DISPUT, null, keepalive);
+export function ablehnungSenden(id: string, v: Versand = SOFORT): Promise<void> {
+  return senden(`${RECEIPTS}/${encodeURIComponent(id)}/dispatch-answer`, DISPUT, null, v);
 }
 
 const FESTSTELLEN: Handlung = { dienst: "invoicd", aktion: "feststellen" };
@@ -115,13 +116,13 @@ export function feststellen(
   id: string,
   feststellungen: Feststellungen,
   begruendung: string,
-  keepalive = false,
+  v: Versand = SOFORT,
 ): Promise<void> {
   return senden(
     `${RECEIPTS}/${encodeURIComponent(id)}/feststellungen`,
     FESTSTELLEN,
     { feststellungen, begruendung: begruendung.trim() },
-    keepalive,
+    v,
   );
 }
 
@@ -139,26 +140,29 @@ export interface Leistungsnachweis {
 }
 
 /** Record a Leistungsnachweis; every invoice held on its order walks again. */
-export function leistungsnachweisErfassen(n: Leistungsnachweis, keepalive = false): Promise<void> {
-  return senden("/svc/invoicd/api/v1/leistungsnachweise", FESTSTELLEN, n, keepalive);
+export function leistungsnachweisErfassen(
+  n: Leistungsnachweis,
+  v: Versand = SOFORT,
+): Promise<void> {
+  return senden("/svc/invoicd/api/v1/leistungsnachweise", FESTSTELLEN, n, v);
 }
 
 /** Issue an invoice the risk gate held. */
-export function freigeben(id: string, keepalive = false): Promise<void> {
+export function freigeben(id: string, v: Versand = SOFORT): Promise<void> {
   return senden(
     `${BILLING}/${encodeURIComponent(id)}/release`,
     { dienst: "billingd", aktion: "freigeben" },
     null,
-    keepalive,
+    v,
   );
 }
 
 /** Record that an issued invoice under review was looked at; sends nothing. */
-export function geprueft(id: string, keepalive = false): Promise<void> {
+export function geprueft(id: string, v: Versand = SOFORT): Promise<void> {
   return senden(
     `${BILLING}/${encodeURIComponent(id)}/reviewed`,
     { dienst: "billingd", aktion: "pruefen" },
     null,
-    keepalive,
+    v,
   );
 }

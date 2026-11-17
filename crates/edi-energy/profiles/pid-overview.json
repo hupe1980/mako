@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_document": "BDEW Anwendungsübersicht der Prüfidentifikatoren (PID_4_0_info_20260401.xlsx), sheet „Prüf-ID Prozessschritt\"",
+  "source_document": "BDEW Anwendungsübersicht der Prüfidentifikatoren 4.0 - konsolidierte Lesefassung mit Fehlerkorrekturen Stand: 12.08.2026 (Anwendungsübersicht_der_Prüfidentifikatoren_4.0_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_12.08.2026.pdf, SHA-256 599bf735792208effbe141f77a72bb8f8ff91d6be6227f7efcb9fb41256b6290), Tabelle 1 „Prüfidentifikator zu Prozessschritt\"",
   "ahbs": {
     "COMDIS AHB": [
       "29001",
@@ -310,6 +310,7 @@
       "44167",
       "44168",
       "44169",
+      "44170",
       "44175",
       "44176",
       "44180",
@@ -1657,6 +1658,10 @@
       "gas": true
     },
     "44169": {
+      "strom": false,
+      "gas": true
+    },
+    "44170": {
       "strom": false,
       "gas": true
     },
@@ -3611,8 +3616,10 @@
       ]
     },
     "44036": {
-      "geschaeftsvorfall": false,
-      "stelle": []
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
     },
     "44037": {
       "geschaeftsvorfall": false,
@@ -3890,6 +3897,12 @@
         "V"
       ]
     },
+    "44170": {
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
+    },
     "44175": {
       "geschaeftsvorfall": false,
       "stelle": []
@@ -4045,8 +4058,10 @@
       ]
     },
     "55036": {
-      "geschaeftsvorfall": false,
-      "stelle": []
+      "geschaeftsvorfall": true,
+      "stelle": [
+        "V"
+      ]
     },
     "55037": {
       "geschaeftsvorfall": false,

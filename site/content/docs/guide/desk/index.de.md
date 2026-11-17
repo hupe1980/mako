@@ -5,7 +5,7 @@ weight = 3
 
 [extra]
 translated_from = "content/docs/guide/desk/index.md"
-source_sha256 = "91c75d5321660d4c0f7c1fa6aaee237c34d491c47b43631f6a147b2340248fab"
+source_sha256 = "13895e4a52bec732dc4709c943281231e09287e45a7f93a4ef8e3438616044f2"
 
 +++
 **mako Desk** ist deine Arbeitsoberfläche im Betrieb. Er liest die MCP-Tools
@@ -14,8 +14,8 @@ erhalten — und stellt dar, was sie antworten. Er rechnet nichts aus, was
 entscheidet: Jede Frist, jeder Betrag und jedes Ergebnis auf dem Bildschirm ist
 das, was ein Dienst geliefert hat.
 
-[![Prozesse: eine MaLo, zwei Prozesse, die früheste Frist zuerst](prozesse-light.png)](prozesse-light.png)
-[![Prozesse: eine MaLo, zwei Prozesse, die früheste Frist zuerst](prozesse-dark.png)](prozesse-dark.png)
+[![Eine Prozessseite: Zustand und nächste Frist, die Schritte, die Entscheidung, die auf dich wartet, der Verlauf neben den Details](prozesse-light.png)](prozesse-light.png)
+[![Eine Prozessseite: Zustand und nächste Frist, die Schritte, die Entscheidung, die auf dich wartet, der Verlauf neben den Details](prozesse-dark.png)](prozesse-dark.png)
 
 ## Starten
 
@@ -61,15 +61,49 @@ direkt zu öffnen.
 [![Die Befehlspalette bietet an, einen Prozess über seine MaLo-ID zu öffnen](palette-dark.png)](palette-dark.png)
 
 Ein Schlüssel kann mehrere Prozesse benennen — einen Lieferantenwechsel neben
-einer Anfrage/Bestellung. Jeder ist eine Karte, sortiert nach seiner frühesten
-offenen Frist; Prozesse, die die Rolle der Person nicht lesen darf, fehlen.
+einer Anfrage/Bestellung. Sie stehen als Reihe von Links über der Seite,
+sortiert nach ihrer frühesten offenen Frist, der erste ist geöffnet; Prozesse,
+die die Rolle der Person nicht lesen darf, fehlen.
 
-Jede Karte trägt den Titel so, wie man im Betrieb sagt — „Lieferantenwechsel ·
-Strom" —, mit dem Workflow und seinen IDs unter „Technische Angaben". Sobald
-der Marktpartner geantwortet hat, nennt die Karte seinen Antwortcode mit dem
-Wortlaut des BDEW aus der Liste, die die Antwort genannt hat, und diese Liste
-als Quelle; zu einem Code, für den der Katalog keinen Wortlaut hat, steht die
-Liste ohne Bedeutung.
+Jede Prozessseite liest sich von oben nach unten gleich:
+
+- **Der Kopf.** Der Pfad zurück zu Prozesse, der Titel so, wie man im Betrieb
+  sagt — „Lieferantenwechsel · Strom" — mit dem Zustand aus der
+  Prozessüberwachung daneben („läuft", „abgelehnt"), eine Zeile mit den
+  Eckdaten (MaLo, PID, die Gegenpartei mit ihrem Namen aus den
+  Marktstammdaten, die Prozessfamilie) und rechts groß die nächste offene
+  Frist, benannt nach dem, was sie ist.
+- **Die Schritte.** Jede Marktnachricht, die der Verlauf aufzeichnet, mit
+  Haken; dann, was noch aussteht — eine APERAK, eine CONTRL, die Antwort — für
+  jede noch offene Frist; dann das Ende, mit Haken, sobald die
+  Prozessüberwachung eines nennt. Der Desk liest keinen Schritt aus dem Namen
+  eines Ereignisses.
+- **Die Entscheidungsleiste**, nur solange die Prozessüberwachung für diesen
+  Prozess eine Freigabe hält: „Wartet auf deine Entscheidung", ihr Grund, der
+  Entscheidungsbaum als Quelle und ein Button, **Entscheiden**. Er öffnet
+  dieselbe Entscheidung wie in Freigaben und Heute — zum Rückgängigmachen
+  gehalten, die Marktnachricht eingeschlossen. Ein Prozess, bei dem nichts zu
+  entscheiden ist, hat keine Leiste.
+- **Verlauf und Nachweise** links, **Details** rechts — der Workflow und seine
+  IDs, die Familie, die MP-ID der Gegenpartei, der Beginn, die Antwortfrist
+  mit ihrer Festlegung als Quelle. Sobald der Marktpartner geantwortet hat,
+  nennen die Details seinen Antwortcode mit dem Wortlaut des BDEW aus der
+  Liste, die die Antwort genannt hat, und diese Liste als Quelle; zu einem
+  Code, für den der Katalog keinen Wortlaut hat, steht die Liste ohne
+  Bedeutung.
+
+Die **Nachweise** sind eine Kette: jede Nachricht des Prozesses eine Zeile, mit
+Haken, Zeit und Dokumentnummer, wenn der Verlauf sie aufzeichnet; eine APERAK,
+die die Prozessüberwachung mit einem Fehlercode erfasst hat, ist eine Zeile mit
+Warnung, ohne Haken; und jede Nachricht, auf die eine offene Frist noch wartet,
+ist eine offene Zeile mit ihrer Frist-Uhr. Eine fehlende APERAK ist die Zeile
+ohne Haken.
+
+**Stand** — der Regler über dem Verlauf — zeigt den Prozess, wie er zu einem
+seiner aufgezeichneten Ereignisse stand: Verlauf, Schritte und Nachweise bis zu
+diesem Ereignis, darüber „Stand zu 03.11.2026, 11:12". Die jetzt offenen
+Fristen fehlen in einem früheren Stand, weil sie über ihn nichts sagen. Es ist
+derselbe Lesezugriff, nur mit weniger Zeilen.
 
 Sein **Verlauf** fädelt die Marktnachrichten auf: Empfangene links, gesendete
 rechts, jede mit PID, Berliner Zeit und Dokumentnummer, so wie der Workflow sie
@@ -195,6 +229,17 @@ Anmeldung eines verbundenen Lieferanten, die für eine Person zurückgehalten
 wird, oder ein Fall, den ihr Entscheidungsbaum nicht klären konnte.
 **Freigaben** listet sie für die Rolle, die du gerade trägst, die früheste
 Frist zuerst; die Seitenleiste zeigt, wie viele warten.
+
+Bevor du entscheidest, zeigt die Freigabe, was das Freigeben senden würde:
+Die Prozessüberwachung probt die Entscheidung, und die Marktkommunikation
+stellt die Nachricht mit ihren AHB-Namen dar — oder sagt, dass sie sie nicht
+vorab darstellen kann, und zeigt stattdessen den Inhalt. Die Freigabe nennt
+diesen Inhalt mit seinem Hash, sodass nie eine Entscheidung für einen Inhalt
+gesendet wird, den du nicht gesehen hast. Wo die Marktkommunikation die
+Nachricht nicht darstellen kann, wird der Vorschlag des Assistenten nicht
+unverändert übernommen — du entscheidest selbst —, und die Prozessüberwachung
+lehnt eine Entscheidung ab, die ihre Prüfung nicht bestanden hat; die Freigabe
+sagt das in Worten, mit der Regel, gegen die sie verstößt.
 
 Jede beginnt mit ihrem Grund und ihrer Frist. Eine zurückgehaltene Antwort
 sagt, welchen Antwortcode sie senden wird; eine offene fragt dich nach dem
@@ -340,10 +385,10 @@ Jeder Eintrag ist etwas, das ein Dienst für diese Rolle offen hält:
 
 | Rolle | Was Heute listet |
 |---|---|
-| Netz | Freigaben, überfällige Prozesse, empfangene Rechnungen, die an einem offenen Prüfschritt gehalten werden, Korrekturbedarf nach einer negativen Prüfmitteilung |
-| Lieferant | Anmeldungen, die auf den Netzbetreiber warten, Freigaben, überfällige Prozesse, bestrittene Rechnungen, empfangene Rechnungen, die an einem offenen Prüfschritt gehalten werden, zur Prüfung zurückgehaltene Rechnungen, Buchungen, die das Hauptbuch abgelehnt hat, noch nicht gesendete Anmeldungen |
-| Messstelle | Freigaben, überfällige Prozesse, überfällige Ableseaufträge |
-| Energieservice | Freigaben, überfällige Prozesse, empfangene Rechnungen, die an einem offenen Prüfschritt gehalten werden |
+| Netz | Freigaben, Klärfälle, empfangene Rechnungen, die an einem offenen Prüfschritt gehalten werden, Korrekturbedarf nach einer negativen Prüfmitteilung |
+| Lieferant | Anmeldungen, die auf den Netzbetreiber warten, Freigaben, Klärfälle, bestrittene Rechnungen, empfangene Rechnungen, die an einem offenen Prüfschritt gehalten werden, zur Prüfung zurückgehaltene Rechnungen, Buchungen, die das Hauptbuch abgelehnt hat, noch nicht gesendete Anmeldungen, fällige Mahnungen, noch nicht abgerechnete Zeiträume — jeder mit dem Grund in Worten, seinem Fälligkeitstag und den Tagen, die die Abrechnung zählt |
+| Messstelle | Freigaben, Klärfälle, überfällige Ableseaufträge |
+| Energieservice | Freigaben, Klärfälle, empfangene Rechnungen, die an einem offenen Prüfschritt gehalten werden |
 
 Die Liste ist in Bänder gegliedert — **Überfällig**, **Heute**, **Nächste 7
 Tage**, **Später**, **Ohne Frist** — nach der Frist, die jeder Dienst geliefert
@@ -411,6 +456,19 @@ kein Vorschlag gezeigt.
 
 Ein Korrekturbedarf öffnet nichts: Der Desk hat keine Ansicht für Netzentgelte.
 
+Ein **Klärfall** ist ein Fall je Ursache, den die Prozessüberwachung eröffnet
+hat — eine abgelehnte Nachricht, ein Dead Letter, eine versäumte Frist. Seine
+Zeile nennt die Ursache im Wortlaut der Liste, die den Code definiert, was zu
+tun ist („Korrigieren und neu senden", „Selbst klären") und wie oft er
+auftrat; fällig ist er, wann die Prozessüberwachung es sagt. „Warum?" erklärt
+ihn nur — geschlossen wird der Fall durch die Aktion, nie durch den
+Assistenten.
+
+Im **Überblick** zählt „Ohne Eingriff" die Prozesse einer PID, die in diesem
+Monat ohne den Handgriff einer Person endeten, so wie die Prozessüberwachung
+sie zählt: „3 von 13" unter 20 beendeten Prozessen, ab 20 ihr Anteil, ihre
+Definition auf der Kachel.
+
 [![Eine bestrittene Rechnung, in Heute entschieden: ihr Befund, der darauf beruhende Vorschlag des Assistenten, Beilegen und Ablehnung senden](heute-disput-light.png)](heute-disput-light.png)
 [![Eine bestrittene Rechnung, in Heute entschieden: ihr Befund, der darauf beruhende Vorschlag des Assistenten, Beilegen und Ablehnung senden](heute-disput-dark.png)](heute-disput-dark.png)
 
@@ -432,15 +490,82 @@ Hinweis —, und nicht bei einem Korrekturbedarf, einem überfälligen
 Ableseauftrag oder einer Rechnung in Prüfung, deren Quellen er nicht liest.
 Solange der Assistent nicht erreichbar ist, wird „Warum?" nicht angeboten.
 
-Unter der Liste sagt jede Quelle, wie viele Einträge sie geliefert hat oder
-warum sie nicht geantwortet hat — ein einzelner unerreichbarer Dienst leert
-Heute nie. Als Lieferant steht oben auf der Seite eine **Lage**-Zeile mit dem,
+Über den Bändern gibt der **Arbeitsvorrat** jeder Quelle der Rolle eine Zeile:
+ihre Anzahl und — solange der Dienst die ganze Liste geliefert hat — den Tag
+ihres ältesten Eintrags („älteste vom 22.09.2026"). Eine Quelle, bei der nichts
+offen ist, behält ihre Zeile mit „0"; eine Quelle, die nicht geantwortet hat,
+sagt das in ihrer Zeile und zeigt keine Zahl, denn nicht erreichbar ist nicht
+null — und ein einzelner unerreichbarer Dienst leert Heute nie. Eine Zeile
+öffnet die eigene Ansicht der Quelle (Freigaben, Fristen) oder beschränkt
+Heute auf diese Quelle. Als Lieferant steht oben auf der Seite eine **Lage**-Zeile mit dem,
 was die Liste nicht sagen kann — die Gesamtzahlen der Dienste über ihre Seite
 hinaus, kein Modell darin —, und sie fehlt, wenn sie nur die Liste wiederholen
 würde.
 
 [![Heute als Lieferant: die Lage, dann die Einträge in Frist-Bändern, ein Hinweis des Assistenten unter dem Eintrag, den er betrifft](heute-light.png)](heute-light.png)
 [![Heute als Lieferant: die Lage, dann die Einträge in Frist-Bändern, ein Hinweis des Assistenten unter dem Eintrag, den er betrifft](heute-dark.png)](heute-dark.png)
+
+## Eine Marktlokation: Versorgung, Messung, Konto
+
+Jede MaLo auf einer Prozessseite öffnet ihre **Lokation**-Seite, gelesen über
+die REST-API der Dienste — dieselbe dokumentierte API, die ein Integrator
+nutzt:
+
+- **Versorgung** — ein Band je Zustand, den die Marktstammdaten geführt
+  haben, der älteste zuerst: beliefert, Grund- oder Ersatzversorgung,
+  unbeliefert, jedes mit seinen Daten und dem Lieferanten, eine angekündigte
+  Zuordnung gestrichelt.
+- **Messkonzept** — das Lokationsbündel für heute, gezeichnet: oben die
+  Marktlokation, darunter ihre Messlokationen mit ihren Zählern, darunter
+  Netzlokation und Ressourcen, eine Linie je Zuordnung, dazu der
+  Lokationsbündelcode und der Tag, für den es aufgelöst ist. Zwei Codes in
+  einem Bündel werden als Widerspruch genannt.
+- **Messwerte** — ein Band der letzten 30 Tage, eine Zelle je Tag, so wie der
+  Messwertdienst ihn nennt (gemessen, Ersatzwert, korrigiert, fehlt), dann
+  der Lastgang der letzten sieben Tage.
+- **Konto** (Lieferant) — der Saldo und der Kontoauszug mit laufendem Saldo,
+  so wie die Kundenkonten sie führen; die Kundenansicht zeigt dasselbe Konto
+  für jede Lieferstelle.
+
+Die Versorgungsbänder sind so breit wie die Zeit, die jeder Zustand galt; der
+Lokationsbündelcode trägt seinen BDEW-Wortlaut; das Feld Messwerte zeigt dazu
+die Qualitätsnote des Dienstes und jede Korrektur mit ihrem Grund; und von
+einer Messlokation aus geöffnet (`?knoten=`), markiert die Seite diesen Knoten
+im Messkonzept. Im Verlauf sagt jede Nachricht, wer sie ausgelöst hat —
+automatisch, freigegeben mit unverändertem oder geändertem Vorschlag (in der
+Farbe des Assistenten) oder eine Person.
+
+Jedes Feld antwortet oder lehnt für sich ab; ein Dienst, der nicht antwortet,
+leert die Seite nie.
+
+[![Die Lokation-Seite: Versorgungsbänder, das aus dem Lokationsbündel gezeichnete Messkonzept, das Messwerteband und der Lastgang](lokation-light.png)](lokation-light.png)
+[![Die Lokation-Seite: Versorgungsbänder, das aus dem Lokationsbündel gezeichnete Messkonzept, das Messwerteband und der Lastgang](lokation-dark.png)](lokation-dark.png)
+
+## Nachrechnen
+
+Eine Rechnung in Prüfung öffnet **Nachrechnen**: Die Abrechnung rechnet sie
+aus dem nach, woraus sie ausgestellt wurde. Das Ergebnis steht vorn —
+„Stimmt überein" mit dem Betrag oder „Weicht ab" mit der Position, die sich
+nicht nachrechnen lässt, und ob das Siegel der ausgestellten Rechnung noch
+gilt —, dann jede Position mit der Menge und dem Preis, aus denen sie kommt,
+der Regel dahinter und der Rechnung. Nichts davon rechnet der Desk.
+
+[![Nachrechnen: zuerst das Ergebnis, dann jede Position mit ihren Quellen](nachrechnen-light.png)](nachrechnen-light.png)
+[![Nachrechnen: zuerst das Ergebnis, dann jede Position mit ihren Quellen](nachrechnen-dark.png)](nachrechnen-dark.png)
+
+## Gegenparteien
+
+**Gegenparteien** listet jeden Marktpartner, den die Prozessüberwachung
+gezählt hat, und jeder öffnet seine Akte — auch von der Gegenpartei auf einer
+Prozessseite aus: wie seine Antworten gegen ihre Fristen eingingen, der Anteil
+fristgerechter Antworten nur, wo die Prozessüberwachung einen nennt (unter
+ihrer Schwelle nur die Anzahlen), seine Ablehnungen mit dem Wortlaut der
+Liste, die den Code definiert, und jeder Prozess hinter einer Zahl. Die
+Begriffe stehen unter „Begriffe"; „Als Nachweis exportieren" lädt die Akte als
+CSV herunter.
+
+[![Die Akte einer Gegenpartei: Kennzahlen, Ablehnungen mit Wortlaut, die Prozesse, Export als Nachweis](gegenpartei-light.png)](gegenpartei-light.png)
+[![Die Akte einer Gegenpartei: Kennzahlen, Ablehnungen mit Wortlaut, die Prozesse, Export als Nachweis](gegenpartei-dark.png)](gegenpartei-dark.png)
 
 ## Der Lieferant beginnt beim Kunden
 
@@ -560,8 +685,8 @@ einen Bereich, und keine Ansicht scrollt seitwärts.
 
 Wer mehrere Marktrollen innehat, trägt immer eine zur Zeit — **Netz** (NB),
 **Lieferant** (LF), **Messstelle** (MSB), **Energieservice** (ESA) —, gewählt in
-der Werkzeugleiste oder mit <kbd>⌃1</kbd>–<kbd>⌃4</kbd>. Jede hat ihre eigene
-Akzentfarbe und Startseite; beim Wechsel bleiben keine Daten der verlassenen
+der Werkzeugleiste oder mit <kbd>⌃1</kbd>–<kbd>⌃4</kbd>. Das Abzeichen nennt
+die Rolle, die du trägst, und jede Rolle hat ihre eigene Startseite; beim Wechsel bleiben keine Daten der verlassenen
 Rolle sichtbar. Was eine Rolle lesen darf, ist die Cedar-Policy des jeweiligen
 Dienstes.
 
@@ -607,8 +732,34 @@ dokumentartige Ansicht, Arbeitsbreite für eine Liste oder ein Raster —, damit
 ein Titel zwischen den Ansichten nie springt. Die Schrift folgt der macOS-Skala
 (Large Title 26 pt bis Caption 11 pt, nur Regular und Semibold); ein Status ist
 getönter Text auf seiner eigenen blassen Fläche, und die einzige volle Fläche
-ist der eine primäre Button. Was der Assistent geschrieben hat, ist aufrechter
-Text hinter einer dünnen violetten Linie und seinem Funkeln.
+ist der eine primäre Button. Es gibt eine Akzentfarbe, Petrol, für jede Rolle —
+der primäre Button, eine Auswahl, ein Link; der einzige andere Farbton ist das
+Violett des Assistenten, reserviert für das, was ein Modell geschrieben hat:
+aufrechter Text hinter einer dünnen violetten Linie und seinem Funkeln.
+`desk/src/design/tokens.test.ts` lehnt einen zweiten Akzent ab und hält jede
+Textfarbe auf jeder Fläche, hell und dunkel, bei WCAG AA.
+
+Bietet ein Dienst eines der Werkzeuge, gegen die der Desk erzeugt wurde, mit
+einem anderen Schema an, nennt ein Banner oben diesen Dienst, statt dass eine
+Ansicht später scheitert. Bis der Desk wieder zu diesem Dienst passt, bietet
+er keine Entscheidung für ihn an, und er prüft erneut, sobald das Fenster den
+Fokus zurückbekommt.
+
+Eine Entscheidung verlässt den Desk mit einem `Idempotency-Key`, sodass eine
+unterwegs wiederholte Anfrage beim Dienst eine Entscheidung bleibt. Eine, die
+beim Schließen des Tabs gesendet wurde — ihr Halten bei `pagehide`
+abgeschlossen —, bekommt ihre Antwort vielleicht nie zu sehen; der nächste
+Aufruf zeigt sie unter „Beim letzten Mal gesendet" mit dem, was der Dienst
+daraus gemacht hat (bei einer Freigabe der Ausgang aus der
+Prozessüberwachung), bis du bestätigst, dass du es gesehen hast.
+
+Hat der Assistent für die Freigabe auf einer Prozessseite einen Vorschlag
+vorbereitet, zeigt ihn die Entscheidungsleiste — gekennzeichnet, mit dem
+Urteil der Prüfung (agentds Prüfvermerk): Nur ein Vorschlag, der
+Entscheidungsbaum und Vorabprüfung bestanden hat, lässt sich übernehmen
+(„Übernehmen"); ein abgelehnter oder ungeprüfter sagt, warum, und die eine
+Aktion der Leiste ist „Bearbeiten", die die Entscheidung leer öffnet. Die
+Entscheidung selbst wartet nie auf den Assistenten.
 
 `/dev/gallery` (Entwicklungs-Builds) zeigt jedes Farb-Token, die Schriftskala,
 jeden Status und jedes Bedienelement in jedem Zustand, hell und dunkel
@@ -624,10 +775,11 @@ Screenshots auf dieser Seite stammen aus dem Produktions-Build.
 | `just dev` | jeder Dienst, der Seed und der Desk mit Hot Reload |
 | `just dev-ui` | der Desk allein auf seinen aufgezeichneten Antworten (`desk/fixtures`) |
 | `just desk-gen` | `services/*/mcp.snapshot.json` aktualisieren und die Typen des Desks neu erzeugen |
-| `just desk-check` | erzeugte Typen aktuell, `tsc`, Biome, Vitest — Teil von `just ci` |
+| `just desk-check` | erzeugte Typen aktuell, `tsc`, Biome, Vitest, der Produktions-Build in seinem Größenbudget — Teil von `just ci` |
 | `just desk-screenshots` | die Screenshots auf dieser Seite neu erzeugen |
 | `just desk-budgets` | die Interaktionsbudgets im Browser messen (unten); nicht Teil von `just ci` |
-| `just desk-axe` | axe-core über Spur, Beleg, Pille und Aktionsbereich von ⌘K des Assistenten; nicht Teil von `just ci` |
+| `just desk-axe` | axe-core über Spur, Beleg, Pille und Aktionsbereich von ⌘K des Assistenten und die Prozessseite; nicht Teil von `just ci` |
+| `just desk-aria` | den Barrierefreiheitsbaum jeder Route gegen seine Basis in `desk/aria/` (`--bless` nach einer gewollten Änderung); nicht Teil von `just ci` |
 
 `cargo xtask check-desk` hält die ersten beiden Regeln, die
 `mcp.snapshot.json` jedes Dienstes die dritte. Die Screenshots erzeugt
@@ -635,6 +787,28 @@ Screenshots auf dieser Seite stammen aus dem Produktions-Build.
 Dienstes sind aufgezeichnete Antworten im Schema, das er deklariert, der Stream
 von agentd ist ein aufgezeichneter Lauf, die Browseruhr ist fest und die Zone
 ist Europe/Berlin, sodass jeder Lauf dieselben Bilder zeichnet.
+
+Zwei Lint-Regeln stehen neben `check-desk`: Biomes Plugin
+`desk/lint/zahlen.grit` lehnt `Number(` und `parseFloat(` außerhalb von
+`src/format/` schon beim Tippen ab — ein Betrag ist ein `Decimal`-String, und
+eine Gleitkommazahl würde einen Cent verlieren oder erfinden —, und
+`desk/scripts/umfang.ts` lässt `desk-check` scheitern, wenn das Einstiegsskript
+oder das Stylesheet sein gzip-Budget überschreitet. Das Drift-Banner vergleicht
+den Fingerabdruck jedes Werkzeugs (`src/data/oberflaeche.ts`), den
+`npm run gen` in `src/data/gen` schreibt, mit dem über die Liste des Dienstes
+berechneten.
+
+Der Desk wird zum Client der dokumentierten REST-API: `npm run gen` führt
+außerdem jede eingecheckte `services/<dienst>/openapi.json` so zu
+`desk/openapi.json` zusammen, wie das Gateway sie weiterleitet, und schreibt
+die Typen, die `openapi-fetch` liest (`src/data/api/`); ein Pfad, den kein
+Dokument beschreibt, besteht die Typprüfung nicht, und `desk-check` lehnt
+veraltete Typen ab. Ansichten wechseln Dienst für Dienst, sobald dessen
+Dokument da ist. Das Gateway (`desk/deploy/gateway.yaml`) leitet je Dienst nur
+`/mcp`, sein Dokument und die Schreibrouten weiter, die der Desk aufruft — nie
+`/admin`, `/metrics` oder `/health`. Biomes Plugin `desk/lint/html.grit` lehnt
+rohe HTML-Senken und ein aus einem Wert gebautes `href` ab, sodass der Text
+einer Gegenpartei immer als Text erscheint.
 
 Der Stream des Assistenten wird ohne agentd und ohne Modell getestet:
 `desk/fixtures/run-*.jsonl` sind aufgezeichnete Läufe, ein Stream-Ereignis pro
@@ -662,6 +836,6 @@ Aktionsbereich allein per Tastatur, hell und dunkel mit reduzierter Bewegung,
 und scheitert an einem ernsten oder kritischen axe-Befund, einer laufenden
 Animation, einem Bedienelement, das Tab nicht erreicht, oder einer
 Quellenangabe, die beim Fokussieren von unten unter der oberen Leiste bleibt.
-Der Desk-CI-Job führt beide nach `just desk-check` aus.
+Der Desk-CI-Job führt beide und `just desk-aria` nach `just desk-check` aus.
 
 `desk/AGENTS.md` enthält die Regeln für die Arbeit am Desk.

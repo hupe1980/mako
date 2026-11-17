@@ -1,0 +1,8 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Kunden" [level=1]
+  - paragraph: Einen Kunden über Namen, Kundennummer oder die MaLo-ID einer Lieferstelle finden.
+  - searchbox "Kunde"
+  - paragraph: Wen suchst du?
+  - text: Drei Zeichen genügen — oder von überall ⌘K .

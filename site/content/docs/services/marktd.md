@@ -212,7 +212,13 @@ fails the test suite when:
 
 ## REST API
 
-OpenAPI: `GET /api/v1/openapi.json`, the document to open in any Swagger UI or Redoc.
+OpenAPI: `GET /api/v1/openapi.json`, the document to open in any Swagger UI or Redoc,
+committed as `services/marktd/openapi.json` (a test fails when the served one
+differs). Three reads are **shared**: one function behind the documented `GET`
+and the MCP tool of the same name, one response type for both, the same Cedar
+action on both — `GET /api/v1/versorgung/{malo_id}[?at=]` (`get_versorgung_at`),
+`…/history` (`get_versorgungsstatus_history`) and
+`GET /api/v1/malos/{malo_id}/lokationsbuendel` (`get_lokationsbuendel`).
 Every request body denies unknown fields.
 
 ### Failures
@@ -320,6 +326,7 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/malos/{malo_id}/utilmd-stammdaten?stichtag=` | `read-utilmd-stammdaten` | The Marktlokation's [UTILMD Stammdaten](#utilmd-stammdaten) on the Stichtag; `404` for an unknown MaLo |
 | `PUT` | `/api/v1/malos/{malo_id}/netznutzungsdaten` | `write-netznutzungsdaten` (NB) | One dated row of the NB's Netznutzungsdaten; an overlapping row is `422` |
 | `GET` | `/api/v1/malos/{malo_id}/lokationsbuendel?stichtag=` | `read-utilmd-stammdaten` | The Marktlokation's [Lokationsbündel](#lokationsbuendel) on the Stichtag and the NB's Angaben of it; `404` for an unknown MaLo |
+| `GET` | `/api/v1/lokationsbuendelstrukturen` | `read-utilmd-stammdaten` | The Codeliste der Lokationsbündelstrukturen (BDEW V1.0): each `lokationsbuendelcode` with its Bezeichnung |
 | `PUT` | `/api/v1/malos/{malo_id}/lokationsbuendel-angaben` | `write-netznutzungsdaten` (NB) | One dated row of the NB's Lokationsbündel-Angaben; an overlapping row is `422` |
 | `GET/PUT` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattMessung`; GET includes `auf_abschlaege` |
 | `GET/PUT` | `/api/v1/preisblaetter-ka/{nb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattKonzessionsabgabe` |
@@ -1539,7 +1546,7 @@ Inbound delivery is idempotent on `event_id`.
 credential layer, `[mcp]` (API key or OIDC), independent of the REST `[oidc]`;
 the principal is then checked against the single Cedar action `use-mcp`.
 
-**Tools (21)**, every one a read:
+**Tools (22)**, every one a read:
 
 | Tool | Description |
 |---|---|
@@ -1550,7 +1557,9 @@ the principal is then checked against the single Cedar action `use-mcp`.
 | `partner_namen` | Names of up to 200 Marktpartner by MP-ID in one read, typed (`PartnerNamen`; snapshot `mcp.snapshot.json`) |
 | `get_preisblatt` | Netznutzung sheet for an NB and date |
 | `list_pricat_versions` | PRICAT history; dispatch stays REST-only, because `use-mcp` cannot tell a read from a write |
-| `get_versorgungsstatus` / `get_versorgungsstatus_history` / `get_versorgung_at` | Supply state — current, history, point-in-time |
+| `get_versorgungsstatus` | Supply state now |
+| `get_versorgungsstatus_history` / `get_versorgung_at` | Supply-state history (paged) and point-in-time; shared reads of the REST `GET`s, typed, Cedar `read-versorgungsstatus` |
+| `get_lokationsbuendel` | The [Lokationsbündel](#lokationsbuendel) on a Stichtag; shared read, typed, Cedar `read-utilmd-stammdaten` |
 | `get_rollenzuordnung` | Dated NB/MSB/LF roles |
 | `get_nb_contract` | NB contract for a MaLo |
 | `get_nb_energiemix` | §42 EnWG energy mix |

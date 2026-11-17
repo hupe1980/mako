@@ -268,6 +268,7 @@ pub async fn post_calculate(
             total_netto_eur: result.netto_eur,
             total_brutto_eur: result.brutto_eur,
             steuerzeilen: &crate::steuerzeilen::aus_rechnung(&result),
+            due_on: Some(crate::handlers::sect40c_due_on(&req, period_to)),
         },
     )
     .await;
@@ -453,6 +454,145 @@ pub async fn get_review_queue(
     .await?;
     Ok(Json(
         serde_json::json!({ "count": rows.len(), "records": rows }),
+    ))
+}
+
+/// `GET /api/v1/billing/unbilled?open=&limit=`
+///
+/// The § 40c Abs. 2 EnWG watch: every period the scheduled run attempted and
+/// could not bill, with its refusal code and the day the invoice is owed by,
+/// the earliest due first. `open=false` includes the ones an invoice has
+/// since discharged.
+pub async fn get_unbilled_periods(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
+    Query(q): Query<UnbilledQuery>,
+) -> BillingResult<impl IntoResponse> {
+    let cfg = &deps.cfg;
+    authorize(&cedar, &claims, "read-billing", &cfg.tenant)?;
+    let rows = crate::pg::list_unbilled_periods(
+        &pool,
+        &cfg.tenant,
+        q.open.unwrap_or(true),
+        q.limit.unwrap_or(100).clamp(1, 1000),
+    )
+    .await?;
+    Ok(Json(
+        serde_json::json!({ "count": rows.len(), "periods": rows }),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UnbilledQuery {
+    /// Only periods no invoice has discharged yet (default `true`).
+    pub open: Option<bool>,
+    pub limit: Option<i64>,
+}
+
+/// `GET /api/v1/billing/deadline-summary`
+///
+/// Per Lieferant: invoices owed, issued on time, issued late and overdue under
+/// § 40c Abs. 2 EnWG.
+pub async fn get_deadline_summary(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
+) -> BillingResult<impl IntoResponse> {
+    let cfg = &deps.cfg;
+    authorize(&cedar, &claims, "read-billing", &cfg.tenant)?;
+    let rows = crate::pg::deadline_summary(&pool, &cfg.tenant).await?;
+    Ok(Json(serde_json::json!({ "lieferanten": rows })))
+}
+
+/// `GET /api/v1/billing/{id}/nachrechnung`
+///
+/// Rechnung nachrechnen: every line and total of the stored invoice recomputed
+/// to the cent, whether the issue-time seal still holds, and the inputs of
+/// each line (quantity and how it was obtained, unit price and its source,
+/// the rule).
+pub async fn get_nachrechnung(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
+    Path(id): Path<Uuid>,
+) -> BillingResult<impl IntoResponse> {
+    let cfg = &deps.cfg;
+    authorize(&cedar, &claims, "read-billing", &cfg.tenant)?;
+    let row = crate::pg::fetch_billing_record(&pool, &cfg.tenant, id)
+        .await?
+        .ok_or_else(|| BillingError::not_found("RECORD_NOT_FOUND", "billing record not found"))?;
+    if row.is_correction {
+        return Err(BillingError::unprocessable(
+            "NOT_AN_ORIGINAL",
+            "a Storno- or Korrekturrechnung is recomputed through its original",
+        ));
+    }
+    let mut view = crate::nachrechnen::nachrechnen(&row)?;
+    view.public_link = crate::nachrechnen::public_link(cfg, id);
+    Ok(Json(view))
+}
+
+/// `POST /api/v1/billing/nachrechnen` `{ "token": "…" }`
+///
+/// The masked projection the public page (portald) renders: no name, no
+/// address, the MaLo-ID masked. An unknown, malformed and a revoked token all
+/// answer `404 RECORD_NOT_FOUND`, so the answer says nothing about whether a
+/// token ever existed. The token travels in the body, never in a path a
+/// request log or a metrics label could keep.
+pub async fn post_public_nachrechnung(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
+    Json(VerifyTokenBody { token }): Json<VerifyTokenBody>,
+) -> BillingResult<impl IntoResponse> {
+    let cfg = &deps.cfg;
+    // portald's service principal alone: a token is a customer's credential,
+    // and an operator holding `read-billing` reads invoices by id instead.
+    authorize(&cedar, &claims, "read-billing-by-token", &cfg.tenant)?;
+    let not_found = || BillingError::not_found("RECORD_NOT_FOUND", "no such invoice");
+    if token.len() != 22 {
+        return Err(not_found());
+    }
+    let hash = crate::nachrechnen::token_hash(&token);
+    let row = crate::pg::fetch_by_verify_token(&pool, &cfg.tenant, &hash)
+        .await?
+        .ok_or_else(not_found)?;
+    Ok(Json(crate::nachrechnen::public_view(&row)?))
+}
+
+/// The body of [`post_public_nachrechnung`].
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyTokenBody {
+    /// The verify token printed on the invoice.
+    pub token: String,
+}
+
+/// `POST /api/v1/billing/{id}/verify-token/revoke`
+///
+/// Revoke the invoice's verify token: its public page answers 404 from now on.
+pub async fn post_revoke_verify_token(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
+    Path(id): Path<Uuid>,
+) -> BillingResult<impl IntoResponse> {
+    let cfg = &deps.cfg;
+    authorize(&cedar, &claims, "correct-billing", &cfg.tenant)?;
+    if !crate::pg::revoke_verify_token(&pool, &cfg.tenant, id, claims.sub()).await? {
+        return Err(BillingError::not_found(
+            "VERIFY_TOKEN_NOT_FOUND",
+            "the record does not exist or carries no verify token",
+        ));
+    }
+    Ok(Json(
+        serde_json::json!({ "record_id": id, "revoked": true }),
     ))
 }
 

@@ -317,7 +317,8 @@ At least one entry; one per Marktpartner-ID.
 | `http.auth_keys` | `MAKOD_AUTH_KEYS` (comma-separated) | `--auth-key` (repeatable) | — | `NAME=TOKEN` API keys |
 | `http.auth_keys_file` | — | — | — | File of `NAME=TOKEN` lines |
 | `authz.cedar_policy_dir` | `MAKOD_CEDAR_POLICY_DIR` | `--cedar-policy-dir` | — | `*.cedar` files merged into one policy set |
-| `authz.permit_all` | `MAKOD_CEDAR_PERMIT_ALL` | `--cedar-permit-all` | `false` | **Development only** — every authenticated principal is admin |
+| `authz.permit_all` | `MAKOD_CEDAR_PERMIT_ALL` | `--cedar-permit-all` | `false` | **Development only** — every authenticated principal is admin, `ActOnBehalf` excepted |
+| `authz.act_on_behalf` | `MAKOD_CEDAR_ACT_ON_BEHALF` (comma-separated) | `--cedar-act-on-behalf` | — | Principals granted `ActOnBehalf`: services (processd) whose own commands are the system's and which may relay a person's approval in `Mako-Akteur` |
 
 `makod` refuses to start when `http.addr` is set with neither an API key nor an
 OIDC issuer, and when neither a policy directory nor `permit_all` is set.
@@ -368,7 +369,7 @@ Every build links every domain crate; makod has no role cargo features and
 enables SlateDB through its `mako-engine` dependency, so a plain
 `cargo build -p makod` is the binary every deployment runs. The declaration
 selects registrations, and `--marktrollen` additionally refuses commands at runtime. Declaring every
-role registers the full **77 workflows over 498 Prüfidentifikatoren**, and the
+role registers the full **77 workflows over 499 Prüfidentifikatoren**, and the
 startup log records the counts a declaration registers. Which principal may
 read which role's processes is the Cedar policy's decision
 ([Authorization](#authorization)).
@@ -406,6 +407,7 @@ MaKo namespace
 
 Actions
 ├── SubmitCommand · RehearseCommand · IngestEdifact
+├── ActOnBehalf        — a service names a command's actor (never in the baseline)
 ├── ReadMetrics · UseMcp · ReadRechnung · AdminMigrations · UseWebdienste
 ├── AdminEinrichtung
 ├── ReadProcess        — evaluated per workflow (§ 6a EnWG role separation)
@@ -415,7 +417,8 @@ Actions
 
 | Action | Guards |
 |---|---|
-| `SubmitCommand` | `POST /api/v1/commands`, MCP `submit_command` |
+| `SubmitCommand` | `POST /api/v1/commands`, MCP `submit_command` — the command's events name the caller as `Akteur::Person` (the API-key name or JWT `sub`), and the Idempotency-Key fingerprint includes the actor |
+| `ActOnBehalf` | `POST /api/v1/commands` from a service: its own commands are the system's, and a `Mako-Akteur` header may only relay a person's approval (`{"principal", "vorschlag", "unveraendert"}`), recorded with the service as `dienst`; anything else is `403 actor_not_permitted`. Granted only by `[authz] act_on_behalf` to a named `--auth-key` (a broader grant blocks the boot); carries `RehearseCommand` |
 | `RehearseCommand` | `POST /api/v1/probe/{command}`, MCP `rehearse_command` — same `Command` resource as `SubmitCommand`; `conservative.cedar` grants it to `erp-operator` |
 | `IngestEdifact` | `POST /edifact` |
 | `AdminMalo*` / `AdminPartner*` | `/admin/malo/*`, `/admin/partners/*` |
@@ -750,7 +753,7 @@ Cedar `UseMcp` action; unauthenticated requests are `401`.
 | `einrichtung_checkliste` | `read_only` | Same as `GET /admin/einrichtung/deployment` — the readiness checklist across `[[einrichtung.dienst]]` (`outputSchema` declared) |
 | `einrichtung_vorschlag` | `read_only` | Same as `POST /admin/einrichtung/vorschlag` — the configuration the setup interview's answers propose, per daemon, against what is loaded (`outputSchema` declared) |
 | `get_process` | `read_only` | Business key (`malo_id`/`melo_id`/`vorgang`) or process id → every process indexed under it, each with its pending deadlines (`outputSchema` declared) |
-| `get_process_history` | `read_only` | A process's events, oldest first; a market message carries `richtung`, `pid` and `message_ref` as its workflow states them (`EventPayload::verlauf`), never parsed from the event type; an answer adds `antwortcode`, `codeliste` (`EventPayload::antwort`) and the BDEW's `bedeutung`, resolved through `mako_pruefung::codes::lies` in that list only (`outputSchema` declared) |
+| `get_process_history` | `read_only` | A process's events, oldest first; a market message carries `richtung`, `pid` and `message_ref` as its workflow states them (`EventPayload::verlauf`), never parsed from the event type; an answer adds `antwortcode`, `codeliste` (`EventPayload::antwort`) and the BDEW's `bedeutung`, resolved through `mako_pruefung::codes::lies` in that list only; every entry names its actor's class `akteur` (`system`, `freigabe`, `freigabe-geaendert`, `person`), never the principal (`outputSchema` declared) |
 | `list_overdue_deadlines` | `read_only` | Deadlines past due and not yet fired — the deadline worker's backlog, not missed Fristen (those are processd `list_overdue_processes`) |
 | `list_active_processes` | `read_only` | Processes started for the tenant, finished ones included — one event stream each |
 | `get_outbox_status` | `read_only` | Pending outbox count and oldest age — alert when stuck > 5 min |
@@ -1859,8 +1862,12 @@ sent or stored**: no process, no outbox entry, no idempotency record, so no
 
 The rehearsal runs the registered door itself, so the verdict is the door's
 own — where the real command is refused, `grund` is that refusal word for
-word. The door ends at its pre-send check, before the duplicate guard and the
-spawn, and `spawn_process` refuses inside a rehearsal as a second line.
+word. An Anmeldung's door ends at its pre-send check, before the duplicate
+guard and the spawn, and `spawn_process` refuses inside a rehearsal as a
+second line. An answer door — every command a processd Freigabe dispatches
+(`mako_markt::commands::FREIGABE_ANTWORTEN`) — ends where it would run the
+process it resumes: the workflow's pure `handle` on the process's state yields
+the answer, which the check judges, and the process is left as it was.
 
 ```http
 POST /api/v1/probe/geli.lieferende.anmelden HTTP/1.1

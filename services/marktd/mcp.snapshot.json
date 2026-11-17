@@ -28,6 +28,376 @@
     "outputSchema": null
   },
   {
+    "name": "get_lokationsbuendel",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "stichtag"
+      ],
+      "properties": {
+        "malo_id": {
+          "description": "11-digit MaLo ID.",
+          "type": "string"
+        },
+        "stichtag": {
+          "description": "The date the bündel is resolved for (YYYY-MM-DD). Required: a bündel\nchanges over time, and „today\" is a choice the caller makes.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Objekt": {
+          "description": "One object of the bündel.",
+          "type": "object",
+          "properties": {
+            "typ": {
+              "$ref": "#/$defs/Objekttyp"
+            },
+            "id": {
+              "type": "string"
+            },
+            "objektcode": {
+              "description": "BO4E `lokationsbuendelObjektcode` — the object's position in the\nLokationsbündelstruktur.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "typ",
+            "id",
+            "objektcode"
+          ]
+        },
+        "Objekttyp": {
+          "description": "The kind of object in a Lokationsbündel.",
+          "type": "string",
+          "enum": [
+            "MALO",
+            "MELO",
+            "NELO",
+            "SR",
+            "TR"
+          ]
+        },
+        "Kante": {
+          "description": "One edge of the bündel valid on the Stichtag, half-open\n`[valid_from, valid_to)`.",
+          "type": "object",
+          "properties": {
+            "von_id": {
+              "type": "string"
+            },
+            "von_typ": {
+              "$ref": "#/$defs/Objekttyp"
+            },
+            "nach_id": {
+              "type": "string"
+            },
+            "nach_typ": {
+              "$ref": "#/$defs/Objekttyp"
+            },
+            "valid_from": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "valid_to": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            }
+          },
+          "required": [
+            "von_id",
+            "von_typ",
+            "nach_id",
+            "nach_typ",
+            "valid_from",
+            "valid_to"
+          ]
+        },
+        "Angaben": {
+          "description": "The NB's Angaben of the bündel no BO4E object carries — one dated row.",
+          "type": "object",
+          "properties": {
+            "valid_from": {
+              "type": "string",
+              "format": "date"
+            },
+            "valid_to": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "uenb_mp_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "technische_einrichtungen": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "standardlastprofil": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "profilverfahren": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Verfahren"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "nna_positionen": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Nna"
+              }
+            },
+            "obis": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Obis"
+              }
+            },
+            "register": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Register"
+              }
+            }
+          },
+          "required": [
+            "valid_from",
+            "valid_to",
+            "uenb_mp_id",
+            "technische_einrichtungen",
+            "standardlastprofil",
+            "profilverfahren",
+            "nna_positionen",
+            "obis",
+            "register"
+          ]
+        },
+        "Verfahren": {
+          "description": "The Verfahren of a normiertes Profil.",
+          "type": "string",
+          "enum": [
+            "SYNTHETISCH",
+            "ANALYTISCH"
+          ]
+        },
+        "Nna": {
+          "description": "One Netznutzungsabrechnungsposition.",
+          "type": "object",
+          "properties": {
+            "artikel_id": {
+              "type": "string"
+            },
+            "zu_abschlag_prozent": {
+              "description": "Zuschlag (> 0) or Abschlag (< 0) in Prozent.",
+              "type": "string",
+              "format": "decimal"
+            }
+          },
+          "required": [
+            "artikel_id",
+            "zu_abschlag_prozent"
+          ]
+        },
+        "Obis": {
+          "description": "One OBIS-Kennzahl of the Marktlokation with its Verwendungszwecke.",
+          "type": "object",
+          "properties": {
+            "obis_kennzahl": {
+              "type": "string"
+            },
+            "verwendungszweck_nb": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "verwendungszweck_lf": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "verwendungszweck_uenb": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wertegranularitaet": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Granularitaet"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "obis_kennzahl",
+            "verwendungszweck_nb",
+            "verwendungszweck_lf",
+            "verwendungszweck_uenb",
+            "wertegranularitaet"
+          ]
+        },
+        "Granularitaet": {
+          "description": "The Wertegranularität of a register.",
+          "type": "string",
+          "enum": [
+            "JAEHRLICH",
+            "HALBJAEHRLICH",
+            "QUARTALSWEISE",
+            "MONATLICH"
+          ]
+        },
+        "Register": {
+          "description": "The Wertegranularität of one register of a Zähler.",
+          "type": "object",
+          "properties": {
+            "zaehler_id": {
+              "type": "string"
+            },
+            "obis_kennzahl": {
+              "type": "string"
+            },
+            "wertegranularitaet": {
+              "$ref": "#/$defs/Granularitaet"
+            }
+          },
+          "required": [
+            "zaehler_id",
+            "obis_kennzahl",
+            "wertegranularitaet"
+          ]
+        },
+        "Zaehler": {
+          "description": "A Zähler of one of the bündel's Messlokationen.",
+          "type": "object",
+          "properties": {
+            "melo_id": {
+              "type": "string"
+            },
+            "zaehler_id": {
+              "type": "string"
+            },
+            "zaehlertyp_spezifikation": {
+              "description": "BO4E `Zaehler.zaehlertypSpezifikation` (`EDL40`, `EDL21`,\n`SONSTIGER_EHZ`, `MME_STANDARD`, `MME_MEDA`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "melo_id",
+            "zaehler_id",
+            "zaehlertyp_spezifikation"
+          ]
+        }
+      },
+      "required": [
+        "malo_id",
+        "stichtag",
+        "energierichtung",
+        "lokationsbuendelcodes",
+        "objekte",
+        "zuordnungen",
+        "angaben",
+        "zaehler"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        },
+        "stichtag": {
+          "description": "The date every edge and the Angaben row are resolved for.",
+          "type": "string",
+          "format": "date"
+        },
+        "energierichtung": {
+          "description": "BO4E `Marktlokation.energierichtung` — `AUSSP` verbrauchend, `EINSP`\nerzeugend.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lokationsbuendelcodes": {
+          "description": "Every distinct `lokationsbuendelcode` the bündel's edges carry; more\nthan one is a graph that disagrees with itself.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "objekte": {
+          "description": "Every object reached, the Marktlokation itself first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Objekt"
+          }
+        },
+        "zuordnungen": {
+          "description": "Every edge valid on the Stichtag that reached them.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Kante"
+          }
+        },
+        "angaben": {
+          "description": "The NB's Angaben row covering the Stichtag.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Angaben"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zaehler": {
+          "description": "The Zähler of the bündel's Messlokationen.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Zaehler"
+          }
+        }
+      }
+    }
+  },
+  {
     "name": "get_malo",
     "annotations": {
       "readOnlyHint": true,
@@ -364,7 +734,189 @@
         }
       }
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Lieferstatus": {
+          "description": "The Lieferstatus of a Marktlokation.",
+          "type": "string",
+          "enum": [
+            "Beliefert",
+            "Unbeliefert",
+            "Grundversorgung",
+            "Ersatzversorgung",
+            "Ruhend",
+            "Stillgelegt"
+          ]
+        },
+        "Zuordnung": {
+          "description": "One Lieferant's share of a Marktlokation.",
+          "type": "object",
+          "properties": {
+            "lf_mp_id": {
+              "description": "MP-ID of the Lieferant holding this share.",
+              "type": "string"
+            },
+            "prozent": {
+              "description": "The share in percent — `100` for an untranchierte Marktlokation.",
+              "type": "string",
+              "format": "decimal"
+            },
+            "tranche_id": {
+              "description": "Tranchen-ID of a tranchierte Marktlokation.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/Zuordnungsstatus"
+            },
+            "zuordnungsbeginn": {
+              "description": "Zuordnungsbeginn — the Lieferbeginn of this assignment.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "zuordnungsende": {
+              "description": "Zuordnungsende, once one is agreed.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "process_id": {
+              "description": "The process that wrote this assignment.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "lf_mp_id",
+            "prozent",
+            "tranche_id",
+            "status",
+            "zuordnungsbeginn",
+            "zuordnungsende",
+            "process_id"
+          ]
+        },
+        "Zuordnungsstatus": {
+          "description": "Whether a Zuordnung is announced (Anmeldung in flight) or running.",
+          "type": "string",
+          "enum": [
+            "Angekuendigt",
+            "Aktiv"
+          ]
+        }
+      },
+      "required": [
+        "malo_id",
+        "lieferstatus",
+        "zuordnungen",
+        "lf_mp_id",
+        "lf_mp_id_next",
+        "lf_next_lieferbeginn",
+        "lieferbeginn",
+        "lieferende",
+        "msb_mp_id",
+        "nb_mp_id",
+        "eog_seit",
+        "last_process_id",
+        "updated_at",
+        "version"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        },
+        "lieferstatus": {
+          "$ref": "#/$defs/Lieferstatus"
+        },
+        "zuordnungen": {
+          "description": "Every Lieferant holding a share of this Marktlokation — the authoritative\nanswer to „who supplies it\". A tranchierte Marktlokation carries several.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Zuordnung"
+          }
+        },
+        "lf_mp_id": {
+          "description": "The single active Lieferant, when there is exactly one.\n\nDerived from `zuordnungen` and **absent on a tranchierte\nMarktlokation**, where no single supplier exists — read `zuordnungen`\nthere rather than treating the omission as „unsupplied\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lf_mp_id_next": {
+          "description": "The single announced Lieferant, when exactly one Anmeldung is pending.\nDerived, with the same caveat as `lf_mp_id`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lf_next_lieferbeginn": {
+          "description": "Lieferbeginn of the announced Lieferant.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "lieferbeginn": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "lieferende": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "msb_mp_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nb_mp_id": {
+          "type": "string"
+        },
+        "eog_seit": {
+          "description": "Start of the running Ersatz-/Grundversorgung (§38/§36 EnWG), if any.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "last_process_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "When this state was written (RFC 3339) — for a state read `at` a date,\nwhen that historic state became active.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "version": {
+          "description": "Optimistic-locking version, also the `ETag`.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    }
   },
   {
     "name": "get_versorgungsstatus",
@@ -407,17 +959,207 @@
           "description": "11-digit MaLo ID.",
           "type": "string"
         },
-        "limit": {
-          "description": "Maximum results (default 20).",
+        "page": {
+          "description": "Zero-based page index (default 0).",
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "uint32",
+          "minimum": 0
+        },
+        "size": {
+          "description": "Page size (default 50, at most 500).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       }
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "VersorgungsStatusHistoryResponse": {
+          "description": "One supply-state change of a Marktlokation.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "malo_id": {
+              "type": "string"
+            },
+            "lieferstatus": {
+              "$ref": "#/$defs/Lieferstatus"
+            },
+            "zuordnungen": {
+              "description": "The assignment list as it stood at `valid_from`.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Zuordnung"
+              }
+            },
+            "lieferende": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "msb_mp_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nb_mp_id": {
+              "type": "string"
+            },
+            "last_process_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "version": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "valid_from": {
+              "description": "The instant this state became active (RFC 3339).",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "malo_id",
+            "lieferstatus",
+            "zuordnungen",
+            "lieferende",
+            "msb_mp_id",
+            "nb_mp_id",
+            "last_process_id",
+            "version",
+            "valid_from"
+          ]
+        },
+        "Lieferstatus": {
+          "description": "The Lieferstatus of a Marktlokation.",
+          "type": "string",
+          "enum": [
+            "Beliefert",
+            "Unbeliefert",
+            "Grundversorgung",
+            "Ersatzversorgung",
+            "Ruhend",
+            "Stillgelegt"
+          ]
+        },
+        "Zuordnung": {
+          "description": "One Lieferant's share of a Marktlokation.",
+          "type": "object",
+          "properties": {
+            "lf_mp_id": {
+              "description": "MP-ID of the Lieferant holding this share.",
+              "type": "string"
+            },
+            "prozent": {
+              "description": "The share in percent — `100` for an untranchierte Marktlokation.",
+              "type": "string",
+              "format": "decimal"
+            },
+            "tranche_id": {
+              "description": "Tranchen-ID of a tranchierte Marktlokation.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/Zuordnungsstatus"
+            },
+            "zuordnungsbeginn": {
+              "description": "Zuordnungsbeginn — the Lieferbeginn of this assignment.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "zuordnungsende": {
+              "description": "Zuordnungsende, once one is agreed.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            },
+            "process_id": {
+              "description": "The process that wrote this assignment.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "lf_mp_id",
+            "prozent",
+            "tranche_id",
+            "status",
+            "zuordnungsbeginn",
+            "zuordnungsende",
+            "process_id"
+          ]
+        },
+        "Zuordnungsstatus": {
+          "description": "Whether a Zuordnung is announced (Anmeldung in flight) or running.",
+          "type": "string",
+          "enum": [
+            "Angekuendigt",
+            "Aktiv"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "size"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersorgungsStatusHistoryResponse"
+          }
+        },
+        "total": {
+          "description": "Every change recorded for the Marktlokation, not only this page's.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "page": {
+          "description": "Zero-based page index.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "size": {
+          "description": "Page size (at most 500).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    }
   },
   {
     "name": "list_malo",

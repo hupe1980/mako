@@ -293,4 +293,29 @@
       text(size: 9pt)[#note \ ]
     }
   }
+
+  // Rechnung nachrechnen: the public page that recomputes this invoice line
+  // by line, as a link and as a QR code for a phone. Absent when the operator
+  // runs no such page.
+  let nachrechnen = invoice.at("nachrechnen", default: none)
+  if nachrechnen != none {
+    v(6mm)
+    block(breakable: false, grid(
+      columns: (24mm, 1fr),
+      column-gutter: 4mm,
+      align: (left + horizon, left + horizon),
+      image(
+        bytes(nachrechnen.qr_svg),
+        format: "svg",
+        width: 24mm,
+        alt: "QR-Code: " + nachrechnen.url,
+      ),
+      [
+        #text(weight: "bold", size: 9.5pt)[Rechnung nachrechnen] \
+        #text(size: 8.5pt)[Jede Position und jede Summe dieser Rechnung, Schritt für
+          Schritt nachgerechnet:] \
+        #text(size: 8.5pt)[#link(nachrechnen.url)[#nachrechnen.url]]
+      ],
+    ))
+  }
 }

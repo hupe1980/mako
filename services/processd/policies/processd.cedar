@@ -72,6 +72,44 @@ permit(
      context.principal_roles.contains("MSB"))
 };
 
+// ── A counterparty's Akte — the market roles ─────────────────────────────────
+//
+// `GET /api/v1/counterparties` and its MCP tools show how a Marktpartner
+// answered the processes we started in a role. Over REST and MCP the rows are
+// kept to the caller's own Marktrollen, so an LF never reads the NB side's
+// processes (§ 6a Abs. 1 EnWG: „die Vertraulichkeit wirtschaftlich sensibler
+// Informationen … gewahrt wird").
+
+permit(
+    principal,
+    action == Action::"read-counterparty",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("NB") ||
+     context.principal_roles.contains("LF") ||
+     context.principal_roles.contains("MSB"))
+};
+
+// ── Klärfälle — a market role, or ADMIN ──────────────────────────────────────
+//
+// `GET /api/v1/klaerfaelle` and MCP `list_klaerfaelle` list the cases of the
+// caller's own Marktrollen (the role mako acted in on the case's process); a
+// case on no process is listed to `ADMIN` alone. A role-less caller would read
+// nothing, so it is refused here rather than answered with an empty list.
+
+permit(
+    principal,
+    action == Action::"read-case",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("NB") ||
+     context.principal_roles.contains("LF") ||
+     context.principal_roles.contains("MSB") ||
+     context.principal_roles.contains("ADMIN"))
+};
+
 // ── Identifying a Neuanlage — NB only ────────────────────────────────────────
 //
 // `PUT /api/v1/neuanlage/{id}/identifikation` names the Marktlokation the NB

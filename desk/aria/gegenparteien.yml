@@ -1,0 +1,33 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Gegenparteien" [level=1]
+  - paragraph: Wie jede Gegenpartei vom 01.08.2026 bis 04.11.2026 geantwortet hat.
+  - grid "Gegenparteien":
+    - rowgroup:
+      - row "Gegenpartei Rolle Prozesse verspätet unbeantwortet Ablehnungen":
+        - columnheader "Gegenpartei"
+        - columnheader "Rolle"
+        - columnheader "Prozesse"
+        - columnheader "verspätet"
+        - columnheader "unbeantwortet"
+        - columnheader "Ablehnungen"
+    - rowgroup:
+      - row "9800357000005":
+        - rowheader "9800357000005":
+          - link "9800357000005":
+            - /url: /gegenpartei/9800357000005/NB
+        - gridcell "NB"
+        - gridcell "13"
+        - gridcell "1"
+        - gridcell "1"
+        - gridcell "1"
+      - row "9900357000004":
+        - rowheader "9900357000004":
+          - link "9900357000004":
+            - /url: /gegenpartei/9900357000004/NB
+        - gridcell "NB"
+        - gridcell "42"
+        - gridcell "0"
+        - gridcell "0"
+        - gridcell "0"

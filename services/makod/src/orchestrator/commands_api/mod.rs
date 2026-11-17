@@ -52,6 +52,7 @@
 //! envelope with an empty `UNS+D` detail section; a document with positions is
 //! built and gated by `billingd`, `invoicd` or `netzbilanzd`.
 
+use mako_engine::envelope::Akteur;
 use mako_engine::process::RunOptions;
 use std::sync::Arc;
 
@@ -353,6 +354,8 @@ mod vorgangsnummer;
 mod wim;
 
 #[cfg(test)]
+mod akteur_tests;
+#[cfg(test)]
 mod command_coverage_tests;
 #[cfg(test)]
 mod geli_frist_tests;
@@ -516,12 +519,45 @@ where
     process
         .run(
             command,
-            RunOptions::new()
+            befehls_optionen()?
                 .deadlines(&deadlines)
                 .correlations(&correlations),
         )
         .await?;
     Ok(process_id)
+}
+
+tokio::task_local! {
+    /// Who the command running on this task is attributed to — scoped by
+    /// [`dispatch_command`] (or [`als`]) and read where a process is run.
+    static AKTEUR: Akteur;
+}
+
+/// Run `fut` on behalf of `akteur`: every process it runs stamps its events
+/// with that actor.
+pub(crate) async fn als<F: std::future::Future>(akteur: Akteur, fut: F) -> F::Output {
+    AKTEUR.scope(akteur, fut).await
+}
+
+/// The actor of the command running on this task — for a door that enqueues
+/// a message without running a process.
+fn befehls_akteur() -> Result<Akteur, DispatchError> {
+    AKTEUR.try_with(Clone::clone).map_err(|_| {
+        DispatchError::Engine(mako_engine::error::EngineError::store(
+            "a command reached its door with no actor — nothing is written",
+        ))
+    })
+}
+
+/// The options a command door runs a process with: the actor its caller
+/// stated. A door reached outside [`als`] has no actor and writes nothing —
+/// a missing actor is a refusal, never [`Akteur::System`] by default.
+fn befehls_optionen() -> Result<RunOptions<'static>, mako_engine::error::EngineError> {
+    AKTEUR.try_with(|a| RunOptions::by(a.clone())).map_err(|_| {
+        mako_engine::error::EngineError::store(
+            "a command reached a process with no actor — nothing is written",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -747,16 +783,21 @@ where
             identity: identity.clone(),
         })
         .collect();
+    let format_version = identity.workflow_id.format_version.clone();
     let process = mako_engine::process::Process::<
         W,
         Arc<mako_engine::store_slatedb::SlateDbStore>,
     >::from_identity(Arc::clone(&state.store), identity);
 
     let domain_cmd = make_command();
+    if probe::active() {
+        let current = process.state().await?;
+        return rehearse_resume::<W>(&current, &format_version, domain_cmd);
+    }
     process
         .run(
             domain_cmd,
-            RunOptions::new()
+            befehls_optionen()?
                 .correlations(&keys)
                 .snapshot(&state.snapshot_store, state.snapshot_interval),
         )
@@ -816,14 +857,34 @@ where
 
     let current = process.state().await?;
     let domain_cmd = make_command(&current, &format_version)?;
+    if probe::active() {
+        return rehearse_resume::<W>(&current, &format_version, domain_cmd);
+    }
     process
         .run(
             domain_cmd,
-            RunOptions::new().snapshot(&state.snapshot_store, state.snapshot_interval),
+            befehls_optionen()?.snapshot(&state.snapshot_store, state.snapshot_interval),
         )
         .await?;
 
     Ok(DispatchOutcome::Dispatched { process_id })
+}
+
+/// Inside a rehearsal a resumed process is not run: the workflow's pure
+/// `handle` on its current state yields the outbox the run would write, the
+/// rehearsal takes it, and the door ends here — so every answer door that
+/// resumes a process is stopped before its write, whether or not it runs its
+/// own pre-send check first. A command the workflow refuses is the door's
+/// refusal, as on the real run.
+fn rehearse_resume<W: mako_engine::workflow::Workflow>(
+    current: &W::State,
+    format_version: &mako_engine::version::FormatVersion,
+    command: W::Command,
+) -> Result<DispatchOutcome, DispatchError> {
+    let out = W::handle(current, command)
+        .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::from(e)))?;
+    probe::halt(format_version, &out.outbox);
+    Err(DispatchError::Geprobt)
 }
 
 /// The one running process of `workflow_name` under `business_key`.
@@ -1224,6 +1285,7 @@ mod tests {
         let state = mabis_dispatch_state(&["BKV"]).await;
         let outcome = dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "mabis.abrechnung.einleiten",
             &mabis_einleiten_payload("20260101120001+00"),
         )
@@ -1244,6 +1306,7 @@ mod tests {
         let state = mabis_dispatch_state(&["BKV"]).await;
         dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "mabis.abrechnung.einleiten",
             &mabis_einleiten_payload("20260101120001+00"),
         )
@@ -1251,6 +1314,7 @@ mod tests {
         .expect("first einleiten");
         let second = dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "mabis.abrechnung.einleiten",
             &mabis_einleiten_payload("20260101120002+00"),
         )
@@ -1267,13 +1331,23 @@ mod tests {
     async fn dispatch_mabis_einleiten_refuses_a_repeated_version() {
         let state = mabis_dispatch_state(&["BKV"]).await;
         let payload = mabis_einleiten_payload("20260101120001+00");
-        dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
-            .await
-            .expect("first einleiten");
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "mabis.abrechnung.einleiten",
+            &payload,
+        )
+        .await
+        .expect("first einleiten");
         assert!(
-            dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
-                .await
-                .is_err(),
+            dispatch_command(
+                &state,
+                mako_engine::envelope::Akteur::System,
+                "mabis.abrechnung.einleiten",
+                &payload
+            )
+            .await
+            .is_err(),
             "the same version twice is a filing error, not a redelivery"
         );
     }
@@ -1287,9 +1361,14 @@ mod tests {
         let mut payload = mabis_einleiten_payload("20260101120001+00");
         payload["zeitreihe"] = serde_json::json!("ZZZ");
         assert!(
-            dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
-                .await
-                .is_err()
+            dispatch_command(
+                &state,
+                mako_engine::envelope::Akteur::System,
+                "mabis.abrechnung.einleiten",
+                &payload
+            )
+            .await
+            .is_err()
         );
     }
 
@@ -1301,9 +1380,14 @@ mod tests {
         for bad in ["1", "vorlaeufig", "2026010112000100"] {
             let payload = mabis_einleiten_payload(bad);
             assert!(
-                dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
-                    .await
-                    .is_err(),
+                dispatch_command(
+                    &state,
+                    mako_engine::envelope::Akteur::System,
+                    "mabis.abrechnung.einleiten",
+                    &payload
+                )
+                .await
+                .is_err(),
                 "version {bad:?} must be refused"
             );
         }
@@ -1315,6 +1399,7 @@ mod tests {
         let state = mabis_dispatch_state(&["BKV"]).await;
         dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "mabis.abrechnung.einleiten",
             &mabis_einleiten_payload("20260101120001+00"),
         )
@@ -1322,6 +1407,7 @@ mod tests {
         .expect("einleiten");
         let outcome = dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "mabis.abrechnung.daten-einreichen",
             &serde_json::json!({
                 "mabis_zp_id":        "DE0001111222233334444555566667777",
@@ -1348,6 +1434,7 @@ mod tests {
         let state = mabis_dispatch_state(&["BKV"]).await;
         dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "mabis.abrechnung.einleiten",
             &mabis_einleiten_payload("20260101120001+00"),
         )
@@ -1357,6 +1444,7 @@ mod tests {
             assert!(
                 dispatch_command(
                     &state,
+                    mako_engine::envelope::Akteur::System,
                     "mabis.abrechnung.daten-einreichen",
                     &serde_json::json!({
                         "mabis_zp_id":        "DE0001111222233334444555566667777",
@@ -1381,6 +1469,7 @@ mod tests {
         let state = mabis_dispatch_state(&["BKV"]).await;
         dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "mabis.abrechnung.einleiten",
             &mabis_einleiten_payload("20260101120001+00"),
         )
@@ -1388,6 +1477,7 @@ mod tests {
         .expect("einleiten");
         let outcome = dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "mabis.abrechnung.begleichen",
             &serde_json::json!({
                 "mabis_zp_id":        "DE0001111222233334444555566667777",
@@ -1414,6 +1504,7 @@ mod tests {
         // Missing required fields → InvalidPayload.
         let err = dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "netzzugang.energysharing.registrieren",
             &serde_json::json!({ "netzanschluss_id": "NA-1" }),
         )
@@ -1424,6 +1515,7 @@ mod tests {
         // Complete payload → Spawned + one outbox message with the antrag.
         let outcome = dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "netzzugang.energysharing.registrieren",
             &serde_json::json!({
                 "netzanschluss_id": "NA-1",
@@ -1475,16 +1567,26 @@ mod tests {
 
         let mut bad = base.clone();
         bad["aktion"] = "stornierung".into();
-        let err = dispatch_command(&state, "netzzugang.zaehlpunktanordnung.beauftragen", &bad)
-            .await
-            .expect_err("invalid aktion must be rejected");
+        let err = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "netzzugang.zaehlpunktanordnung.beauftragen",
+            &bad,
+        )
+        .await
+        .expect_err("invalid aktion must be rejected");
         assert!(matches!(err, DispatchError::InvalidPayload(_)), "{err:?}");
 
         let mut ok = base;
         ok["aktion"] = "aenderung".into();
-        let outcome = dispatch_command(&state, "netzzugang.verrechnungskonzept.beauftragen", &ok)
-            .await
-            .expect("aenderung must succeed");
+        let outcome = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "netzzugang.verrechnungskonzept.beauftragen",
+            &ok,
+        )
+        .await
+        .expect("aenderung must succeed");
         assert!(
             matches!(outcome, DispatchOutcome::Spawned { .. }),
             "{outcome:?}"
@@ -1502,9 +1604,14 @@ mod tests {
             "biko_id": "10YDE-VE-------2",
             "version": "vorlaeufig",
         });
-        let err = dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
-            .await
-            .expect_err("missing billing_period must return Err");
+        let err = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "mabis.abrechnung.einleiten",
+            &payload,
+        )
+        .await
+        .expect_err("missing billing_period must return Err");
         assert!(
             matches!(err, DispatchError::InvalidPayload(_)),
             "must be InvalidPayload; got: {err:?}"

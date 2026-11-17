@@ -25,6 +25,7 @@ import {
   leistungsnachweisErfassen,
   offeneSchritte,
 } from "../data/rechnung";
+import { SOFORT, type Versand } from "../data/versand";
 import type { Handlung } from "../data/verweigert";
 import type { BusinessDate, Instant } from "../format/brands";
 import { faktKoerper } from "../format/fakt";
@@ -69,6 +70,8 @@ export interface Werte {
   text: string;
   /** The facts the action lists, by their body key. */
   fakten?: Record<string, string>;
+  /** The hash of the body the person was shown (processd's rehearsal) — what a decision approves. */
+  koerper?: string | null;
 }
 
 /** The one text parameter an action takes. */
@@ -104,7 +107,7 @@ export interface Aktion {
   /** Everything required is filled in. */
   bereit(w: Werte): boolean;
   /** Send it through the service's door. */
-  senden(w: Werte, keepalive: boolean): Promise<void>;
+  senden(w: Werte, v: Versand): Promise<void>;
   /** The values a waiting proposal fills in, or null where it proposes another action. */
   vorbelegen(v: Vorschlag): Werte | null;
   /** The values sent are the proposal's — what agentd records as `sent`, else `edited`. */
@@ -146,7 +149,7 @@ function freigabeAktionen(f: Freigabe): Aktion[] {
     gehalten: id === "freigeben" ? k.erteilt : k.abgelehnt,
     bereit: (w) =>
       (!codes || codeAus(codes, w.code) !== null) && faktenVollstaendig(fakten, w.fakten ?? {}),
-    senden: (w, keepalive) => {
+    senden: (w, v) => {
       const e: Entscheidung = { aktion: id };
       const code = codeAus(codes, w.code);
       if (codes && code) {
@@ -154,7 +157,8 @@ function freigabeAktionen(f: Freigabe): Aktion[] {
         e.antwort_tree = codes.ebd;
       }
       if (w.text.trim()) e.bemerkung = w.text.trim();
-      return entscheiden(f.id, { ...e, ...faktKoerper(fakten, w.fakten ?? {}) }, keepalive);
+      if (w.koerper) e.body_sha256 = w.koerper;
+      return entscheiden(f.id, { ...e, ...faktKoerper(fakten, w.fakten ?? {}) }, v);
     },
     vorbelegen: (v) => (v.aktion === id ? { code: codeAus(codes, v.antwortcode), text: "" } : null),
     stimmt: (v, w) => v.aktion === id && (v.antwortcode ?? null) === (w.code ?? null),
@@ -185,7 +189,7 @@ function disputAktionen(d: Disput): Aktion[] {
     was: k.beilegenWas,
     gehalten: k.beigelegt,
     bereit: () => true,
-    senden: (w, keepalive) => beilegen(d.id, w.text, keepalive),
+    senden: (w, v) => beilegen(d.id, w.text, v),
     // The Begründung stays the model's: the Bemerkung is the person's own words.
     vorbelegen: (v) => (v.aktion === "beilegen" ? LEER : null),
     stimmt: (v) => v.aktion === "beilegen",
@@ -205,7 +209,7 @@ function disputAktionen(d: Disput): Aktion[] {
       was: k.ablehnungWas,
       gehalten: k.gesendet,
       bereit: () => true,
-      senden: (_w, keepalive) => ablehnungSenden(d.id, keepalive),
+      senden: (_w, v) => ablehnungSenden(d.id, v),
       vorbelegen: (v) => (v.aktion === "aufrechterhalten" ? LEER : null),
       stimmt: (v) => v.aktion === "aufrechterhalten",
     },
@@ -231,7 +235,7 @@ function pruefpostenAktionen(r: Pruefposten): Aktion[] {
           was: k.freigebenWas,
           gehalten: k.freigegeben,
           bereit: () => true,
-          senden: (_w, keepalive) => freigeben(r.id, keepalive),
+          senden: (_w, v) => freigeben(r.id, v),
           vorbelegen: nie,
           stimmt: () => false,
         }
@@ -247,7 +251,7 @@ function pruefpostenAktionen(r: Pruefposten): Aktion[] {
           was: k.gepruefWas,
           gehalten: k.vermerkt,
           bereit: () => true,
-          senden: (_w, keepalive) => geprueft(r.id, keepalive),
+          senden: (_w, v) => geprueft(r.id, v),
           vorbelegen: nie,
           stimmt: () => false,
         },
@@ -276,7 +280,7 @@ function buchungAktionen(b: GeparkteBuchung): Aktion[] {
       was: k.buchenWas,
       gehalten: k.gebucht,
       bereit: (w) => ISO_DATUM.test(w.text),
-      senden: (w, keepalive) => neuBuchen(b.key, w.text as BusinessDate, keepalive),
+      senden: (w, v) => neuBuchen(b.key, w.text as BusinessDate, v),
       vorbelegen: (v) =>
         v.aktion === "neu_buchen" && v.buchungsdatum && ISO_DATUM.test(v.buchungsdatum)
           ? { code: null, text: v.buchungsdatum }
@@ -300,7 +304,7 @@ function buchungAktionen(b: GeparkteBuchung): Aktion[] {
       was: k.verwerfenWas,
       gehalten: k.verworfen,
       bereit: (w) => w.text.trim().length > 0,
-      senden: (w, keepalive) => verwerfen(b.key, w.text, keepalive),
+      senden: (w, v) => verwerfen(b.key, w.text, v),
       vorbelegen: (v) =>
         v.aktion === "verwerfen" && v.grund?.trim() ? { code: null, text: v.grund } : null,
       stimmt: (v, w) => v.aktion === "verwerfen" && w.text.trim() === v.grund?.trim(),
@@ -367,7 +371,7 @@ function gehaltenAktionen(g: GehalteneRechnung): Aktion[] {
       bereit: (w) =>
         w.text.trim().length > 0 &&
         offen.some((s) => w.fakten?.[faktFeld(s.pruefschritt, s.position)]),
-      senden: (w, keepalive) => {
+      senden: (w, v) => {
         const f: Feststellungen = {};
         for (const s of offen) {
           const wert = w.fakten?.[faktFeld(s.pruefschritt, s.position)];
@@ -376,7 +380,7 @@ function gehaltenAktionen(g: GehalteneRechnung): Aktion[] {
           if (map === "preisblatt_version_gueltig") f.preisblatt_version_gueltig = wert === JA;
           else if (map) f[map] = { ...f[map], [`${s.position}`]: wert === JA };
         }
-        return feststellen(g.id, f, w.text, keepalive);
+        return feststellen(g.id, f, w.text, v);
       },
       vorbelegen: nie,
       stimmt: () => false,
@@ -413,7 +417,7 @@ function gehaltenAktionen(g: GehalteneRechnung): Aktion[] {
         ISO_DATUM.test(w.fakten?.von ?? "") &&
         ISO_DATUM.test(w.fakten?.bis ?? "") &&
         (w.fakten?.erbracht === JA || w.fakten?.erbracht === NEIN),
-      senden: (w, keepalive) =>
+      senden: (w, v) =>
         leistungsnachweisErfassen(
           {
             rechnungssteller_mp_id: g.sender_mp_id,
@@ -424,7 +428,7 @@ function gehaltenAktionen(g: GehalteneRechnung): Aktion[] {
             erbracht: w.fakten?.erbracht === JA,
             nachweis: w.text.trim(),
           },
-          keepalive,
+          v,
         ),
       vorbelegen: nie,
       stimmt: () => false,
@@ -471,13 +475,13 @@ export interface Herkunft {
 export async function ausfuehren(
   a: Aktion,
   w: Werte,
-  o: { herkunft?: Herkunft | null; keepalive?: boolean } = {},
+  o: { herkunft?: Herkunft | null; versand?: Versand } = {},
 ): Promise<void> {
-  const keepalive = o.keepalive ?? false;
-  await a.senden(w, keepalive);
+  const versand = o.versand ?? SOFORT;
+  await a.senden(w, versand);
   if (o.herkunft) {
     const was: Schicksal = a.stimmt(o.herkunft.v, w) ? "sent" : "edited";
-    await schicksal(o.herkunft.run, was, keepalive).catch(() => undefined);
+    await schicksal(o.herkunft.run, was, versand.keepalive).catch(() => undefined);
   }
 }
 
@@ -509,9 +513,9 @@ export function useHalten() {
       return hold(
         key,
         a.gehalten,
-        async (keepalive) => {
+        async (versand) => {
           try {
-            await ausfuehren(a, w, { herkunft, keepalive });
+            await ausfuehren(a, w, { herkunft, versand });
             o.gesendet?.();
             void client.invalidateQueries();
           } catch (error) {

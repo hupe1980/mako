@@ -88,7 +88,7 @@ async fn spawn_wim_invoic(store: &SlateDbStore, tenant: TenantId, invoice_ref: &
                 invoice_ref: MessageRef::new(invoice_ref),
                 nachricht: "UNH+1+INVOIC:D:06A:UN:2.8e'UNT+2+1'".to_owned(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("SendInvoic");

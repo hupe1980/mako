@@ -136,7 +136,7 @@ async fn a_settled_process_does_not_block_the_malo_on_the_ingest_path() {
                     durchgefuehrt: true,
                     reason: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("execution confirmation is a legal transition");
@@ -215,7 +215,7 @@ async fn a_running_process_still_owns_the_malo() {
             validation_passed: true,
             validation_errors: Vec::new(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("the Sperrauftrag is a legal transition from New");

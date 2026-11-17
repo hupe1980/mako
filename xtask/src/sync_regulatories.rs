@@ -16,7 +16,7 @@
 //! | Mode | Effect |
 //! |---|---|
 //! | (default) | Fetch the index, reconcile against the mirror, print a report |
-//! | `--download` | Additionally fetch every document the mirror is missing |
+//! | `--download` | Additionally fetch every document the mirror is missing, and every reissued one over the file it corrects |
 //! | `--offline` | Check the manifest against what is on disk; no network |
 //! | `--json` | Emit the reconciliation as JSON |
 //!
@@ -297,6 +297,9 @@ struct Reconciliation {
     unmanifested: Vec<String>,
     /// Upstream documents that superseded one the mirror holds.
     superseded: Vec<String>,
+    /// Mirrored documents BDEW reissued under the same catalogue id — a new
+    /// `fileId` or `correctionDate`. The local bytes are the uncorrected ones.
+    reissued: Vec<String>,
 }
 
 /// Whether two identity tokens name the same thing.
@@ -370,6 +373,97 @@ fn dedupe(mut remote: Vec<RemoteDocument>) -> Vec<RemoteDocument> {
     });
     remote.dedup_by(|a, b| a.title.trim() == b.title.trim());
     remote
+}
+
+/// How the catalogue's entries fall against the mirror.
+#[derive(Debug, Default)]
+struct Plan<'a> {
+    /// In force upstream and in no local file.
+    missing: Vec<&'a RemoteDocument>,
+    /// Mirrored under the same catalogue id, but upstream carries another
+    /// `fileId` or `correctionDate`: BDEW corrected it. Each with the local
+    /// file name it replaces.
+    reissued: Vec<(&'a RemoteDocument, String)>,
+    /// Superseded upstream and not mirrored — nothing cites them.
+    superseded: Vec<String>,
+}
+
+/// One line of the report for a catalogue entry.
+fn describe(doc: &RemoteDocument) -> String {
+    format!(
+        "{} [{}] valid {} → {}",
+        doc.title.trim(),
+        doc.variant(),
+        doc.valid_from.as_deref().unwrap_or("?"),
+        doc.valid_to.as_deref().unwrap_or("open"),
+    )
+}
+
+/// The file name a newly fetched document takes: its generated name, or — when
+/// the manifest already gives that name to another catalogue id, as for a
+/// document republished under a new id with the same title — the name with the
+/// new id appended, so the superseded edition stays beside it.
+fn unused_name(doc: &RemoteDocument, manifest: &Manifest) -> String {
+    let name = doc.mirror_file_name();
+    match manifest.files.get(&name) {
+        Some(e) if e.id != doc.id => match name.rsplit_once('.') {
+            Some((stem, ext)) => format!("{stem}_{}.{ext}", doc.id),
+            None => format!("{name}_{}", doc.id),
+        },
+        _ => name,
+    }
+}
+
+/// Sort every mirrorable catalogue entry against the manifest and the files on
+/// disk.
+fn classify<'a>(
+    remote: &'a [RemoteDocument],
+    manifest: &Manifest,
+    local_tokens: &BTreeMap<String, BTreeSet<String>>,
+    today: &str,
+) -> Plan<'a> {
+    // Index the mirror by the upstream id it came from, so a renamed local file
+    // is still recognised as the same document.
+    let by_id: BTreeMap<u64, (&String, &ManifestEntry)> = manifest
+        .files
+        .iter()
+        .map(|(name, e)| (e.id, (name, e)))
+        .collect();
+
+    // The filename-token fallback exists for files that predate the manifest.
+    // A file the manifest already gives to another catalogue id is that id's;
+    // letting it answer for a new id is how a living document republished
+    // under a new id with an unchanged title (the Redispatch Änderungshistorie)
+    // stays at its old edition.
+    let unmanifested: BTreeMap<String, BTreeSet<String>> = local_tokens
+        .iter()
+        .filter(|(name, _)| !manifest.files.contains_key(*name))
+        .map(|(n, t)| (n.clone(), t.clone()))
+        .collect();
+
+    let mut plan = Plan::default();
+    for doc in remote {
+        if !doc.is_mirrorable() || doc.is_informational() {
+            continue;
+        }
+        if let Some((name, entry)) = by_id.get(&doc.id) {
+            if doc.file_id != Some(entry.file_id) || doc.correction_date != entry.correction_date {
+                plan.reissued.push((doc, (*name).clone()));
+            }
+            continue;
+        }
+        // Not in the manifest — but the mirror predates the manifest, so fall
+        // back to matching the local file whose name carries the same identity.
+        if find_local(doc, &unmanifested).is_some() {
+            continue;
+        }
+        if doc.is_current(today) {
+            plan.missing.push(doc);
+        } else {
+            plan.superseded.push(doc.title.trim().to_owned());
+        }
+    }
+    plan
 }
 
 /// Run the sync. Returns `true` when the mirror is consistent.
@@ -460,50 +554,33 @@ pub fn run(workspace_root: &Path, args: &[String]) -> bool {
             .count()
     );
 
-    // Index the mirror by the upstream id it came from, so a renamed local file
-    // is still recognised as the same document.
-    let by_id: BTreeMap<u64, &String> = manifest
-        .files
+    let plan = classify(&remote, &manifest, &local_tokens, &today);
+    // A reissue is fetched over the file it corrects, so every reference to
+    // that file name now meets the corrected bytes — and a profile whose
+    // `source.sha256` was read from the old ones is refused by
+    // `validate-profiles`.
+    let to_download: Vec<(&RemoteDocument, String)> = plan
+        .missing
         .iter()
-        .map(|(name, e)| (e.id, name))
+        .map(|d| (*d, unused_name(d, &manifest)))
+        .chain(plan.reissued.iter().map(|(d, n)| (*d, n.clone())))
         .collect();
-
-    let mut to_download: Vec<&RemoteDocument> = Vec::new();
-    for doc in &remote {
-        if !doc.is_mirrorable() || doc.is_informational() {
-            continue;
-        }
-        if by_id.contains_key(&doc.id) {
-            continue;
-        }
-        // Not in the manifest — but the mirror predates the manifest, so fall
-        // back to matching the local file whose name carries the same identity.
-        if find_local(doc, &local_tokens).is_some() {
-            continue;
-        }
-        if doc.is_current(&today) {
-            rec.missing.push(format!(
-                "{} [{}] valid {} → {}",
-                doc.title.trim(),
-                doc.variant(),
-                doc.valid_from.as_deref().unwrap_or("?"),
-                doc.valid_to.as_deref().unwrap_or("open"),
-            ));
-            to_download.push(doc);
-        } else {
-            rec.superseded.push(doc.title.trim().to_owned());
-        }
-    }
+    rec.missing = plan.missing.iter().map(|d| describe(d)).collect();
+    rec.reissued = plan
+        .reissued
+        .iter()
+        .map(|(d, n)| format!("{n} ← {}", describe(d)))
+        .collect();
+    rec.superseded = plan.superseded.clone();
 
     if download && !to_download.is_empty() {
         println!("\nDownloading {} document(s):", to_download.len());
         let mut failed: Vec<String> = Vec::new();
-        for doc in &to_download {
+        for (doc, name) in &to_download {
             let Some(file_id) = doc.file_id else { continue };
-            let name = doc.mirror_file_name();
             match download_file(file_id) {
                 Ok(bytes) => {
-                    let path = mirror.join(&name);
+                    let path = mirror.join(name);
                     if let Err(e) = std::fs::write(&path, &bytes) {
                         eprintln!("  FAILED {name}: {e}");
                         failed.push(format!("{} — {e}", doc.title.trim()));
@@ -534,6 +611,7 @@ pub fn run(workspace_root: &Path, args: &[String]) -> bool {
             }
         }
         rec.missing = failed;
+        rec.reissued.clear();
     }
 
     // Adopt every already-mirrored document into the manifest, so the next run
@@ -645,6 +723,17 @@ fn report(rec: &Reconciliation, manifest: &Manifest, json_out: bool, offline: bo
             eprintln!("  {f}");
         }
         eprintln!("\nRe-run with --download to fetch them.");
+    }
+    if !rec.reissued.is_empty() {
+        ok = false;
+        eprintln!(
+            "\n{} mirrored document(s) reissued upstream under the same catalogue id:",
+            rec.reissued.len()
+        );
+        for f in &rec.reissued {
+            eprintln!("  {f}");
+        }
+        eprintln!("\nRe-run with --download to fetch the corrected files.");
     }
     if !rec.superseded.is_empty() {
         println!(
@@ -790,5 +879,116 @@ mod tests {
             .is_informational()
         );
         assert!(!doc("APERAK AHB 1.0", "application/pdf").is_informational());
+    }
+
+    fn manifest_with(name: &str, id: u64, file_id: u64, correction_date: Option<&str>) -> Manifest {
+        let mut m = Manifest::default();
+        m.files.insert(
+            name.to_owned(),
+            ManifestEntry {
+                id,
+                file_id,
+                title: "X".to_owned(),
+                valid_from: None,
+                valid_to: None,
+                sha256: "0".repeat(64),
+                correction_date: correction_date.map(str::to_owned),
+            },
+        );
+        m
+    }
+
+    /// BDEW corrects a document under its catalogue id with a new `fileId` and a
+    /// `correctionDate`. A mirror that skips every id it already holds keeps the
+    /// uncorrected bytes, and a profile read from them looks current.
+    #[test]
+    fn a_mirrored_id_with_a_new_file_is_reissued() {
+        let manifest = manifest_with("X.pdf", 1, 2, None);
+        let mut d = doc("X", "application/pdf");
+        d.file_id = Some(3);
+        d.correction_date = Some("2026-10-01T00:00:00".to_owned());
+        let remote = vec![d];
+        let plan = classify(&remote, &manifest, &BTreeMap::new(), "2026-11-17");
+        assert!(plan.missing.is_empty());
+        assert_eq!(plan.reissued.len(), 1);
+        assert_eq!(plan.reissued[0].1, "X.pdf");
+    }
+
+    /// A correction date alone moves the entry too: BDEW may reissue under the
+    /// same `fileId`.
+    #[test]
+    fn a_new_correction_date_alone_is_a_reissue() {
+        let manifest = manifest_with("X.pdf", 1, 2, Some("2026-09-01T00:00:00"));
+        let mut d = doc("X", "application/pdf");
+        d.correction_date = Some("2026-10-01T00:00:00".to_owned());
+        let remote = vec![d];
+        let plan = classify(&remote, &manifest, &BTreeMap::new(), "2026-11-17");
+        assert_eq!(plan.reissued.len(), 1);
+    }
+
+    /// The unchanged entry is neither missing nor reissued.
+    #[test]
+    fn an_unchanged_mirrored_id_is_left_alone() {
+        let manifest = manifest_with("X.pdf", 1, 2, None);
+        let remote = vec![doc("X", "application/pdf")];
+        let plan = classify(&remote, &manifest, &BTreeMap::new(), "2026-11-17");
+        assert!(plan.missing.is_empty());
+        assert!(plan.reissued.is_empty());
+    }
+
+    /// BDEW also republishes a living document under a *new* catalogue id with
+    /// an unchanged title — the „Änderungshistorie zu den XML-Datenformaten für
+    /// den Redispatch 2.0" moved from id 8268 to 8473 on 01.10.2026. The file the
+    /// manifest records for the old id must not answer the filename-token
+    /// fallback for the new one, or the new edition is never fetched.
+    #[test]
+    fn a_new_id_does_not_match_a_file_the_manifest_gives_another_id() {
+        let name = "Aenderungshistorie_XML-Datenformate_Redispatch_2.0.pdf";
+        let manifest = manifest_with(name, 8268, 12088, None);
+        let mut d = doc(
+            "Änderungshistorie zu den XML-Datenformaten für den Redispatch 2.0 ",
+            "application/pdf",
+        );
+        d.id = 8473;
+        d.file_id = Some(12327);
+        let remote = vec![d];
+        let local: BTreeMap<String, BTreeSet<String>> = [(
+            name.to_owned(),
+            normalise_tokens("Aenderungshistorie_XML-Datenformate_Redispatch_2.0"),
+        )]
+        .into();
+        let plan = classify(&remote, &manifest, &local, "2026-11-17");
+        assert_eq!(plan.missing.len(), 1);
+    }
+
+    /// A file that predates the manifest is still found by its tokens.
+    #[test]
+    fn an_unmanifested_file_still_answers_the_fallback() {
+        let name = "Aenderungshistorie_XML-Datenformate_Redispatch_2.0.pdf";
+        let mut d = doc(
+            "Änderungshistorie zu den XML-Datenformaten für den Redispatch 2.0",
+            "application/pdf",
+        );
+        d.id = 8473;
+        let remote = vec![d];
+        let local: BTreeMap<String, BTreeSet<String>> = [(
+            name.to_owned(),
+            normalise_tokens("Aenderungshistorie_XML-Datenformate_Redispatch_2.0"),
+        )]
+        .into();
+        let plan = classify(&remote, &Manifest::default(), &local, "2026-11-17");
+        assert!(plan.missing.is_empty());
+    }
+
+    /// A new id whose generated name the manifest holds for another id lands
+    /// beside it, never over it.
+    #[test]
+    fn a_new_id_never_overwrites_another_ids_file() {
+        let manifest = manifest_with("X.pdf", 1, 2, None);
+        let mut d = doc("X", "application/pdf");
+        d.id = 9;
+        assert_eq!(unused_name(&d, &manifest), "X_9.pdf");
+        d.id = 1;
+        assert_eq!(unused_name(&d, &manifest), "X.pdf");
     }
 }

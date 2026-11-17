@@ -50,7 +50,8 @@ rust_decimal       = { workspace = true }
 # The Referenzreihen import is idempotent on the file's SHA-256.
 sha2               = "0.10"
 thiserror          = { workspace = true }
-utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
+utoipa             = { workspace = true }
+utoipa-axum        = { workspace = true }
 prometheus         = "0.14"
 sqlx               = { workspace = true, features = ["rust_decimal"] }
 

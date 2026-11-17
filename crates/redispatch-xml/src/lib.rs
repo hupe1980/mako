@@ -22,7 +22,7 @@
 //!
 //! | Document type | XSD version | Latest revision |
 //! |---|---|---|
-//! | `ActivationDocument` | 1.1f | Fehlerkorrektur 2026-02-19 |
+//! | `ActivationDocument` | 1.1f | Fehlerkorrektur 2026-02-19; AWT 1.1g binds from 2027-04-01 |
 //! | `PlannedResourceScheduleDocument` | 1.0f | Fehlerkorrektur 2026-02-19 |
 //! | `AcknowledgementDocument` | 1.0g | 2025-10-01 |
 //! | `Stammdaten` | 1.4b | Fehlerkorrektur 2026-02-19 |

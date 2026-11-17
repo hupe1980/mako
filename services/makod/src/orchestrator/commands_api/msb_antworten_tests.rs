@@ -56,13 +56,16 @@ where
     W: mako_engine::workflow::Workflow,
     Arc<mako_engine::store_slatedb::SlateDbStore>: mako_engine::event_store::AtomicAppend,
 {
-    spawn_process::<W>(
-        &state.store,
-        state.tenant_id,
-        WorkflowId::new(name, latest_format_version()),
-        command,
-        &[],
-        &[key],
+    als(
+        mako_engine::envelope::Akteur::System,
+        spawn_process::<W>(
+            &state.store,
+            state.tenant_id,
+            WorkflowId::new(name, latest_format_version()),
+            command,
+            &[],
+            &[key],
+        ),
     )
     .await
     .expect("seed the inbound leg");
@@ -102,6 +105,7 @@ async fn the_msb_answers_an_anfrage_sperrung_with_19118() {
     seed_anfrage_sperrung_strom(&state).await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GPKE_ANFRAGE_SPERRUNG_BEANTWORTEN,
         &serde_json::json!({ "malo_id": MALO_ID, "antwortcode": "A05" }),
     )
@@ -132,6 +136,7 @@ async fn an_ablehnung_names_the_problem_or_is_refused() {
     seed_anfrage_sperrung_strom(&state).await;
     let ohne = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GPKE_ANFRAGE_SPERRUNG_BEANTWORTEN,
         &serde_json::json!({ "malo_id": MALO_ID, "antwortcode": "A03" }),
     )
@@ -140,6 +145,7 @@ async fn an_ablehnung_names_the_problem_or_is_refused() {
     assert!(outbox(&state, "ORDRSP").await.is_empty());
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GPKE_ANFRAGE_SPERRUNG_BEANTWORTEN,
         &serde_json::json!({
             "malo_id": MALO_ID,
@@ -160,6 +166,7 @@ async fn an_unknown_field_is_refused() {
     seed_anfrage_sperrung_strom(&state).await;
     let err = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GPKE_ANFRAGE_SPERRUNG_BEANTWORTEN,
         &serde_json::json!({ "malo_id": MALO_ID, "antwortcode": "A05", "pid": 19118 }),
     )
@@ -200,6 +207,7 @@ async fn the_gmsb_answers_an_anfrage_sperrung_out_of_e_1001() {
     .await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GELI_ANFRAGE_SPERRUNG_BEANTWORTEN,
         &serde_json::json!({
             "malo_id": MALO_ID,
@@ -268,6 +276,7 @@ async fn an_answered_technik_auftrag_reaches_its_end_state() {
     seed_technik_auftrag(&state).await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::WIM_TECHNIK_AENDERUNG_BEANTWORTEN,
         &technik_antwort("NB", "A02"),
     )
@@ -296,6 +305,7 @@ async fn a_technik_ablehnung_comes_from_the_besteller_s_tree() {
     seed_technik_auftrag(&state).await;
     let fremd = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::WIM_TECHNIK_AENDERUNG_BEANTWORTEN,
         &technik_antwort("NB", "A03"),
     )
@@ -304,6 +314,7 @@ async fn a_technik_ablehnung_comes_from_the_besteller_s_tree() {
     assert!(outbox(&state, "ORDRSP").await.is_empty());
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::WIM_TECHNIK_AENDERUNG_BEANTWORTEN,
         &technik_antwort("NB", "A01"),
     )
@@ -420,6 +431,7 @@ async fn an_answered_werte_anfrage_reaches_its_end_state() {
     ] {
         dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             mako_markt::commands::GPKE_DATENABRUF_ABLEHNEN,
             &ablehnen(pid, tree, code),
         )
@@ -462,6 +474,7 @@ async fn an_anfrage_von_werten_is_answered_with_its_lastgang() {
     });
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GPKE_DATENABRUF_WERTE_SENDEN,
         &body,
     )
@@ -484,6 +497,7 @@ async fn an_anfrage_von_werten_is_answered_with_its_lastgang() {
     seed_werte_anfrage(&zaehlerstand, 17_102, "7", "Z12").await;
     let refused = dispatch_command(
         &zaehlerstand,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GPKE_DATENABRUF_WERTE_SENDEN,
         &serde_json::json!({
             "anfragender_mp_id": NB_MP_ID,
@@ -512,6 +526,7 @@ async fn a_zaehlerstand_anfrage_is_answered_with_its_13017() {
     });
     let ohne_zaehler = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GPKE_DATENABRUF_WERTE_SENDEN,
         &serde_json::json!({
             "anfragender_mp_id": NB_MP_ID,
@@ -527,6 +542,7 @@ async fn a_zaehlerstand_anfrage_is_answered_with_its_13017() {
     assert!(outbox(&state, "MSCONS").await.is_empty());
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GPKE_DATENABRUF_WERTE_SENDEN,
         &serde_json::json!({
             "anfragender_mp_id": NB_MP_ID,
@@ -590,6 +606,7 @@ async fn the_recipient_answers_a_konfiguration_orders() {
     for (pid, code) in [(17_130, "A07"), (17_121, "A05")] {
         dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             mako_markt::commands::GPKE_KONFIGURATION_BEANTWORTEN,
             &serde_json::json!({
                 "absender_mp_id": NB_MP_ID,
@@ -669,6 +686,7 @@ async fn a_command_sent_17004_is_resumed_by_its_19007() {
     let state = state_for(NB_MP_ID, &["NB"]).await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::GPKE_DATENABRUF_ANFORDERN,
         &serde_json::json!({
             "msb_mp_id": MSB_MP_ID,
@@ -777,6 +795,7 @@ async fn the_msbn_sends_a_17009_and_a_19016_ends_it_abgelehnt() {
     let state = state_for(NB_MP_ID, &["MSB"]).await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::WIM_GERAETEWECHSELABSICHT_ANZEIGEN,
         &serde_json::json!({
             "msba_mp_id": MSB_MP_ID,
@@ -831,6 +850,7 @@ async fn the_msbn_orders_with_17001_and_a_19001_confirms_it() {
     let state = state_for(NB_MP_ID, &["MSB"]).await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::WIM_GERAETEUEBERNAHME_BESTELLEN,
         &serde_json::json!({
             "msba_mp_id": MSB_MP_ID,
@@ -919,6 +939,7 @@ async fn a_command_sent_17011_is_resumed_by_its_19005() {
     let state = state_for(NB_MP_ID, &["NB"]).await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::WIM_TECHNIK_AENDERUNG_BESTELLEN,
         &serde_json::json!({
             "besteller": "NB",
@@ -990,6 +1011,7 @@ async fn a_weitere_energieflussrichtung_names_the_marktlokation_and_its_msb() {
     };
     let refused = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::WIM_TECHNIK_AENDERUNG_BESTELLEN,
         &body("LF"),
     )
@@ -998,6 +1020,7 @@ async fn a_weitere_energieflussrichtung_names_the_marktlokation_and_its_msb() {
     assert!(format!("{refused:?}").contains("Lieferant"), "{refused:?}");
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         mako_markt::commands::WIM_TECHNIK_AENDERUNG_BESTELLEN,
         &body("NB"),
     )

@@ -124,7 +124,7 @@ fn allocation_type_from_pid_unknown_returns_none() {
 async fn nb_an_mgv_alocat_received() {
     let proc = make_process();
 
-    proc.run(receive_alocat(70001, "20250115"), RunOptions::new())
+    proc.run(receive_alocat(70001, "20250115"), RunOptions::system())
         .await
         .unwrap();
 
@@ -145,7 +145,7 @@ async fn nb_an_mgv_alocat_received() {
 async fn mgv_an_bkv_alocat_received() {
     let proc = make_process();
 
-    proc.run(receive_alocat(70013, "20250201"), RunOptions::new())
+    proc.run(receive_alocat(70013, "20250201"), RunOptions::system())
         .await
         .unwrap();
 
@@ -158,7 +158,7 @@ async fn mgv_an_bkv_alocat_received() {
 async fn enb_an_nb_alocat_received() {
     let proc = make_process();
 
-    proc.run(receive_alocat(70011, "20250115"), RunOptions::new())
+    proc.run(receive_alocat(70011, "20250115"), RunOptions::system())
         .await
         .unwrap();
 
@@ -171,13 +171,13 @@ async fn enb_an_nb_alocat_received() {
 #[tokio::test]
 async fn a_correction_supersedes_the_initial_allocation() {
     let proc = make_process();
-    proc.run(receive_alocat(70001, "20250115"), RunOptions::new())
+    proc.run(receive_alocat(70001, "20250115"), RunOptions::system())
         .await
         .unwrap();
 
     proc.run(
         receive_alocat_versioned(70001, "20250115", AllocationVersion::Correction(1)),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("§47 Ziffer 1 KoV XV admits corrections after the initial allocation");
@@ -195,12 +195,12 @@ async fn a_correction_supersedes_the_initial_allocation() {
 #[tokio::test]
 async fn no_correction_is_admissible_after_the_final_allocation() {
     let proc = make_process();
-    proc.run(receive_alocat(70001, "20250115"), RunOptions::new())
+    proc.run(receive_alocat(70001, "20250115"), RunOptions::system())
         .await
         .unwrap();
     proc.run(
         receive_alocat_versioned(70001, "20250115", AllocationVersion::Final),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -210,7 +210,7 @@ async fn no_correction_is_admissible_after_the_final_allocation() {
     let result = proc
         .run(
             receive_alocat_versioned(70001, "20250115", AllocationVersion::Correction(2)),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
     assert!(
@@ -224,7 +224,7 @@ async fn no_correction_is_admissible_after_the_final_allocation() {
 #[tokio::test]
 async fn final_allocation_window_closing_without_a_final_is_recorded() {
     let proc = make_process();
-    proc.run(receive_alocat(70001, "20250115"), RunOptions::new())
+    proc.run(receive_alocat(70001, "20250115"), RunOptions::system())
         .await
         .unwrap();
 
@@ -233,7 +233,7 @@ async fn final_allocation_window_closing_without_a_final_is_recorded() {
             deadline_id: DeadlineId::new(),
             label: FINAL_ALOCAT_DEADLINE_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -256,7 +256,7 @@ async fn a_closed_window_enqueues_the_alocat_missing_notification() {
     // Drive the state through the real command path, then hand it to `handle`
     // directly to read the output a closed window produces.
     let proc = make_process();
-    proc.run(receive_alocat(70001, "20250115"), RunOptions::new())
+    proc.run(receive_alocat(70001, "20250115"), RunOptions::system())
         .await
         .unwrap();
     let state = proc.state().await.unwrap();
@@ -301,7 +301,7 @@ async fn a_settled_gas_day_enqueues_no_notification() {
     let proc = make_process();
     proc.run(
         receive_alocat_versioned(70001, "20250115", AllocationVersion::Final),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -351,7 +351,7 @@ async fn on_deadline_is_silent_for_a_gas_day_that_settled() {
     settled
         .run(
             receive_alocat_versioned(70001, "20250115", AllocationVersion::Final),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .unwrap();
@@ -367,7 +367,7 @@ async fn on_deadline_is_silent_for_a_gas_day_that_settled() {
     // Unsettled — only the initial allocation arrived.
     let unsettled = make_process();
     unsettled
-        .run(receive_alocat(70001, "20250115"), RunOptions::new())
+        .run(receive_alocat(70001, "20250115"), RunOptions::system())
         .await
         .unwrap();
     assert!(
@@ -386,7 +386,7 @@ async fn a_settled_gas_day_does_not_go_overdue() {
     let proc = make_process();
     proc.run(
         receive_alocat_versioned(70001, "20250115", AllocationVersion::Final),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -396,7 +396,7 @@ async fn a_settled_gas_day_does_not_go_overdue() {
             deadline_id: DeadlineId::new(),
             label: FINAL_ALOCAT_DEADLINE_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -413,7 +413,7 @@ async fn a_settled_gas_day_does_not_go_overdue() {
 async fn receive_alocat_with_invalid_pid_rejected() {
     let proc = make_process();
     let result = proc
-        .run(receive_alocat(99999, "20250115"), RunOptions::new())
+        .run(receive_alocat(99999, "20250115"), RunOptions::system())
         .await;
     assert!(result.is_err(), "invalid PID must be rejected");
 }
@@ -428,11 +428,11 @@ async fn independent_gas_days_are_independent_streams() {
     let proc2 = make_process();
 
     proc1
-        .run(receive_alocat(70001, "20250115"), RunOptions::new())
+        .run(receive_alocat(70001, "20250115"), RunOptions::system())
         .await
         .unwrap();
     proc2
-        .run(receive_alocat(70001, "20250116"), RunOptions::new())
+        .run(receive_alocat(70001, "20250116"), RunOptions::system())
         .await
         .unwrap();
 

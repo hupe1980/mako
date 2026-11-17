@@ -914,7 +914,7 @@ async fn an_eeg_rueckforderung_is_never_dunned() {
     .await;
     assert_eq!(status, axum::http::StatusCode::OK, "{body}");
     assert!(
-        !body
+        !body["accounts"]
             .as_array()
             .expect("a list")
             .iter()

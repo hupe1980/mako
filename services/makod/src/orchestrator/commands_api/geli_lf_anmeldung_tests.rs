@@ -178,9 +178,14 @@ fn a_44001_without_the_contract_facts_fails_the_pre_send_gate() {
 #[tokio::test]
 async fn a_44001_from_a_full_contract_passes_its_profile() {
     let state = lfg_state().await;
-    dispatch_command(&state, "geli.lieferbeginn.anmelden", &full_body())
-        .await
-        .expect("a full 44001 is accepted");
+    dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "geli.lieferbeginn.anmelden",
+        &full_body(),
+    )
+    .await
+    .expect("a full 44001 is accepted");
     let sent = utilmd(&state).await;
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].recipient.as_ref(), GNB_MP_ID);
@@ -227,7 +232,13 @@ async fn each_missing_contract_fact_is_refused_by_name() {
     ] {
         let mut body = full_body();
         body.as_object_mut().expect("object").remove(key);
-        let refused = dispatch_command(&state, "geli.lieferbeginn.anmelden", &body).await;
+        let refused = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "geli.lieferbeginn.anmelden",
+            &body,
+        )
+        .await;
         assert!(
             matches!(&refused, Err(DispatchError::InvalidPayload(m)) if m.contains(key)),
             "{key}: {refused:?}"
@@ -268,7 +279,13 @@ async fn a_value_the_column_cannot_carry_is_refused() {
     for (key, value, named) in cases {
         let mut body = full_body();
         body[key] = value;
-        let refused = dispatch_command(&state, "geli.lieferbeginn.anmelden", &body).await;
+        let refused = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "geli.lieferbeginn.anmelden",
+            &body,
+        )
+        .await;
         assert!(
             matches!(&refused, Err(DispatchError::InvalidPayload(m)) if m.contains(named)),
             "{key}: {refused:?}"
@@ -280,9 +297,14 @@ async fn a_value_the_column_cannot_carry_is_refused() {
     let mut body = full_body();
     body["netznutzungsvertrag"] = "KUNDE_NB".into();
     body["netznutzung_zahler"] = "KUNDE".into();
-    dispatch_command(&state, "geli.lieferbeginn.anmelden", &body)
-        .await
-        .expect("Z08 with Z10 is the pair [216] admits");
+    dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "geli.lieferbeginn.anmelden",
+        &body,
+    )
+    .await
+    .expect("Z08 with Z10 is the pair [216] admits");
     assert!(wire(&utilmd(&state).await[0]).contains("CAV+Z74:::Z08'CAV+Z73:::Z10'"));
 }
 
@@ -292,6 +314,7 @@ async fn a_44004_needs_no_zaehlpunkt() {
     let state = lfg_state().await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "geli.lieferende.anmelden",
         &serde_json::json!({
             "malo_id": MALO_ID, "process_date": "20261231", "transaktionsgrund": "ZT5"
@@ -308,7 +331,14 @@ async fn a_44004_needs_no_zaehlpunkt() {
 /// write: empty when it passes.
 async fn door_findings(command: &str, body: serde_json::Value) -> Vec<String> {
     let state = lfg_state().await;
-    if let Err(e) = dispatch_command(&state, command, &body).await {
+    if let Err(e) = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        command,
+        &body,
+    )
+    .await
+    {
         return vec![format!("{command} refused: {e:?}")];
     }
     let sent = utilmd(&state).await;
@@ -343,9 +373,14 @@ async fn a_44004_from_the_door_passes_its_profile() {
         let found = door_findings("geli.lieferende.anmelden", body.clone()).await;
         assert!(found.is_empty(), "44004 {grund}:\n{}", found.join("\n"));
         let state = lfg_state().await;
-        dispatch_command(&state, "geli.lieferende.anmelden", &body)
-            .await
-            .expect("accepted");
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "geli.lieferende.anmelden",
+            &body,
+        )
+        .await
+        .expect("accepted");
         let edi = wire(&utilmd(&state).await[0]);
         assert!(edi.contains(&format!("STS+7++{grund}'")), "{edi}");
         assert!(edi.contains(date), "{grund}: {edi}");
@@ -363,7 +398,13 @@ async fn a_44004_needs_a_grund_its_column_admits() {
             "malo_id": MALO_ID, "process_date": "20261231", "transaktionsgrund": "E03"
         }),
     ] {
-        let refused = dispatch_command(&state, "geli.lieferende.anmelden", &body).await;
+        let refused = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "geli.lieferende.anmelden",
+            &body,
+        )
+        .await;
         assert!(
             matches!(&refused, Err(DispatchError::InvalidPayload(_))),
             "{body}: {refused:?}"
@@ -383,15 +424,21 @@ async fn a_44016_goes_to_the_altlieferant_and_passes_its_profile() {
     assert!(found.is_empty(), "44016:\n{}", found.join("\n"));
 
     let state = lfg_state().await;
-    dispatch_command(&state, "geli.kuendigung.anmelden", &body)
-        .await
-        .expect("accepted");
+    dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "geli.kuendigung.anmelden",
+        &body,
+    )
+    .await
+    .expect("accepted");
     let sent = utilmd(&state).await;
     assert_eq!(sent[0].recipient.as_ref(), LFA_MP_ID);
     assert!(wire(&sent[0]).contains(&format!("NAD+MR+{LFA_MP_ID}::332'")));
 
     let refused = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "geli.kuendigung.anmelden",
         &serde_json::json!({ "malo_id": MALO_ID, "process_date": "20261231" }),
     )

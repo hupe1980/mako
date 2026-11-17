@@ -5410,11 +5410,9 @@ const E_2006: Option<&'static str> = Some(EBD_VERPFLICHTUNGSANFRAGE_GAS);
 
 /// `E_2006` — the grundzuständiger MSB's answer to the NB's Verpflichtungsanfrage.
 ///
-/// **The Gas Ablehnung has no Prüfidentifikator of its own.** PID-Übersicht 4.0
-/// publishes 44168 (Anfrage) and 44169 (Bestätigung) and nothing else — the
-/// 44170 of PID 3.3 was withdrawn. `G_0071` is still published, so an Ablehnung
-/// under FV2026-10-01 has a code and no carrier; mako escalates rather than
-/// inventing one.
+/// The Zustimmung rides 44169 with Codeliste `G_0070`, the Ablehnung 44170 with
+/// `G_0071` (PID-Übersicht 4.0 Lesefassung Stand 12.08.2026, Tabelle 1 Lfd.
+/// Nr. 39250 / 39260, S. 76).
 pub const E_2006_CODES: &[AntwortCode] = &[
     code!("E15", E_2006, Zustimmung, "Zustimmung ohne Korrekturen"),
     code!(

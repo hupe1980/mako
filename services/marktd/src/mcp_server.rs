@@ -12,7 +12,9 @@
 //!
 //! `use-mcp` is one blanket gate over the whole MCP surface — it cannot tell a
 //! read tool from a destructive one, so any principal allowed to use MCP at all
-//! would be allowed to use every tool here. Every tool is therefore a read.
+//! would be allowed to use every tool here. Every tool is therefore a read. A
+//! shared read (`crate::reads`) also clears the Cedar action of its REST twin
+//! (`tool_action`).
 //! Nothing on this surface writes, and nothing dispatches a market message.
 //! PRICAT (re-)dispatch is REST-only (`POST /api/v1/pricat/{nb_mp_id}/dispatch`,
 //! Cedar `dispatch-pricat`, NB role): sending PRICAT 27003 to every LF
@@ -32,8 +34,9 @@
 //! | `partner_namen`                   | Names of up to 200 partners by MP-ID, typed (`PartnerNamen`) |
 //! | `get_preisblatt`                  | Read the current PreisblattNetznutzung for an NB |
 //! | `get_versorgungsstatus`           | Read the current VersorgungsStatus for a MaLo |
-//! | `get_versorgungsstatus_history`   | Read full supply-state change history |
-//! | `get_versorgung_at`               | Point-in-time VersorgungsStatus query |
+//! | `get_versorgungsstatus_history`   | Supply-state change history, paged — shared read, typed (`VersorgungsStatusHistorie`) |
+//! | `get_versorgung_at`               | Point-in-time VersorgungsStatus — shared read, typed (`VersorgungsStatusResponse`) |
+//! | `get_lokationsbuendel`            | The Lokationsbündel on a Stichtag — shared read, typed (`Lokationsbuendel`) |
 //! | `get_rollenzuordnung`          | Read active role assignments for a MaLo |
 //! | `get_nb_contract`                 | Read the NB contract for a MaLo |
 //! | `get_correlation`                 | Correlate process ID or ERP order ref |
@@ -167,8 +170,20 @@ pub struct GetRollenzuordnungParams {
 pub struct GetVersorgungsStatusHistoryParams {
     /// 11-digit MaLo ID.
     pub malo_id: String,
-    /// Maximum results (default 20).
-    pub limit: Option<i64>,
+    /// Zero-based page index (default 0).
+    pub page: Option<u32>,
+    /// Page size (default 50, at most 500).
+    pub size: Option<u32>,
+}
+
+/// `get_lokationsbuendel`'s arguments.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetLokationsbuendelParams {
+    /// 11-digit MaLo ID.
+    pub malo_id: String,
+    /// The date the bündel is resolved for (YYYY-MM-DD). Required: a bündel
+    /// changes over time, and „today" is a choice the caller makes.
+    pub stichtag: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -938,48 +953,47 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
+    /// The shared read behind `GET /api/v1/versorgung/{malo_id}/history`.
     #[tool(
-        description = "Get VersorgungsStatus change history for a MaLo. Shows all supply state transitions with timestamps — useful for investigating Lieferbeginn/Lieferende timing.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Get VersorgungsStatus change history for a MaLo, newest first, paged (page, size). Shows all supply state transitions with the instant each became active — useful for investigating Lieferbeginn/Lieferende timing.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::reads::VersorgungsStatusHistorie>()
     )]
     async fn get_versorgungsstatus_history(
         &self,
         Parameters(p): Parameters<GetVersorgungsStatusHistoryParams>,
     ) -> Result<CallToolResult, McpError> {
-        let limit = p.limit.unwrap_or(20).clamp(1, 100);
-        let rows = sqlx::query(
-            r"SELECT id, lieferstatus, zuordnungen, lieferende,
-                     msb_mp_id, nb_mp_id, valid_from
-              FROM versorgungsstatus_history
-              WHERE tenant = $1 AND malo_id = $2
-              ORDER BY valid_from DESC
-              LIMIT $3",
+        mako_service::mcp::answer(
+            crate::reads::versorgungsstatus_history(
+                &self.state.pool,
+                &self.state.tenant,
+                &p.malo_id,
+                p.page.unwrap_or(0),
+                p.size.unwrap_or(50),
+            )
+            .await,
         )
-        .bind(&self.state.tenant)
-        .bind(&p.malo_id)
-        .bind(limit)
-        .fetch_all(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    }
 
-        use sqlx::Row as _;
-        let history: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
-            "id": r.try_get::<i64,_>("id").ok(),
-            "lieferstatus": r.try_get::<String,_>("lieferstatus").ok(),
-            "zuordnungen": r.try_get::<serde_json::Value,_>("zuordnungen").ok(),
-            "lieferende": r.try_get::<Option<time::Date>,_>("lieferende").ok().flatten().map(|d| d.to_string()),
-            "msb_mp_id": r.try_get::<Option<String>,_>("msb_mp_id").ok().flatten(),
-            "nb_mp_id": r.try_get::<String,_>("nb_mp_id").ok(),
-            "valid_from": r.try_get::<time::OffsetDateTime,_>("valid_from").ok().map(|t| t.to_string()),
-        })).collect();
-
-        ContentBlock::json(serde_json::json!({
-            "malo_id": p.malo_id,
-            "count": history.len(),
-            "history": history,
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+    /// The shared read behind `GET /api/v1/malos/{id}/lokationsbuendel`.
+    #[tool(
+        description = "The Lokationsbündel of a MaLo on a Stichtag (YYYY-MM-DD): every object (MaLo, MeLo, NeLo, Technische/Steuerbare Ressource) with its lokationsbuendelObjektcode, the edges valid that day, the lokationsbuendelcode(s), the Zähler of its MeLos and the NB's Angaben (ÜNB, Netznutzungsabrechnungspositionen, OBIS Verwendungszwecke, Wertegranularität). A code's Bezeichnung is in GET /api/v1/lokationsbuendelstrukturen.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::reads::Lokationsbuendel>()
+    )]
+    async fn get_lokationsbuendel(
+        &self,
+        Parameters(p): Parameters<GetLokationsbuendelParams>,
+    ) -> Result<CallToolResult, McpError> {
+        mako_service::mcp::answer(
+            crate::reads::lokationsbuendel(
+                &self.state.pool,
+                &self.state.tenant,
+                &p.malo_id,
+                &p.stichtag,
+            )
+            .await,
+        )
     }
 
     #[tool(
@@ -1303,62 +1317,30 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
         }
     }
 
-    /// Read the VersorgungsStatus valid on a specific reference date.
+    /// Read the VersorgungsStatus valid on a specific reference date — the
+    /// shared read behind `GET /api/v1/versorgung/{malo_id}?at=`.
     ///
     /// Use this for point-in-time supply-state queries (e.g. for billing period
     /// reconstruction or gap analysis).  For the current state use
     /// `get_versorgungsstatus` instead.
     #[tool(
-        description = "Read the VersorgungsStatus for a MaLo at a specific date (YYYY-MM-DD)",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Read the VersorgungsStatus for a MaLo as it stood at the end of a German calendar day (YYYY-MM-DD), from the history log",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::reads::VersorgungsStatusResponse>()
     )]
     async fn get_versorgung_at(
         &self,
         Parameters(p): Parameters<GetVersorgungAtParams>,
     ) -> Result<CallToolResult, McpError> {
-        let at_date = time::Date::parse(
-            &p.at,
-            &time::format_description::well_known::Iso8601::DEFAULT,
+        mako_service::mcp::answer(
+            crate::reads::versorgung(
+                &self.state.pool,
+                &self.state.tenant,
+                &p.malo_id,
+                Some(&p.at),
+            )
+            .await,
         )
-        .map_err(|e| McpError::invalid_params(format!("invalid date '{}': {e}", p.at), None))?;
-
-        // Find the history row whose valid_from is the latest on or before `at_date`.
-        let row = sqlx::query(
-            r"SELECT h.malo_id, h.lieferstatus, h.zuordnungen,
-                     h.lieferende, h.msb_mp_id, h.nb_mp_id, h.valid_from
-              FROM versorgungsstatus_history h
-              WHERE h.malo_id = $1
-                AND h.tenant  = $2
-                AND h.valid_from <= $3
-              ORDER BY h.valid_from DESC
-              LIMIT 1",
-        )
-        .bind(&p.malo_id)
-        .bind(&self.state.tenant)
-        .bind(at_date)
-        .fetch_optional(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        use sqlx::Row as _;
-        match row {
-            Some(r) => ContentBlock::json(serde_json::json!({
-                "malo_id": r.try_get::<String, _>("malo_id").ok(),
-                "lieferstatus": r.try_get::<String, _>("lieferstatus").ok(),
-                "zuordnungen": r.try_get::<serde_json::Value, _>("zuordnungen").ok(),
-                "lieferende": r.try_get::<Option<time::Date>, _>("lieferende").ok().flatten().map(|d| d.to_string()),
-                "msb_mp_id": r.try_get::<Option<String>, _>("msb_mp_id").ok().flatten(),
-                "nb_mp_id": r.try_get::<Option<String>, _>("nb_mp_id").ok().flatten(),
-                "valid_from": r.try_get::<time::OffsetDateTime, _>("valid_from").ok().map(|t| t.to_string()),
-                "queried_at": p.at,
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "versorgung_not_found: No VersorgungsStatus found for MaLo '{}' on or before '{}'.",
-                p.malo_id, p.at
-            ))])),
-        }
     }
 }
 
@@ -1482,7 +1464,7 @@ impl ServerHandler for MdmdMcpHandler {
              \n\
              Provides MaLo/MeLo master data, trading partner registry, NNE price sheets, supply status, and grid topology.\n\
              \n\
-             ## Tools (20)\n\
+             ## Tools (22)\n\
              - `get_malo` — read a MaLo by 11-digit ID (sparte, netzebene, bilanzierungsmethode, regelzone, full BO4E data)\n\
              - `list_malo` — list/filter MaLos by sparte, bilanzierungsmethode, netzebene\n\
              - `get_melo` — read a MeLo by ID (netzebene_messung, regelzone, standorteigenschaften)\n\
@@ -1494,6 +1476,7 @@ impl ServerHandler for MdmdMcpHandler {
              - `get_versorgungsstatus` — read VersorgungsStatus (Beliefert/Unbeliefert/…) for a MaLo\n\
              - `get_versorgungsstatus_history` — full supply state transition history for a MaLo\n\
              - `get_versorgung_at` — point-in-time VersorgungsStatus for a MaLo on a given date\n\
+             - `get_lokationsbuendel` — the Lokationsbündel of a MaLo on a Stichtag (objects, edges, Zähler, NB Angaben)\n\
              - `get_rollenzuordnung` — temporal NB/MSB/LF role assignments for a MaLo\n\
              - `get_nb_contract` — active NB network contract (netzebene, billing_schedule, RLM/SLP)\n\
              - `get_correlation` — look up a process correlation by process_id or erp_order_id\n\
@@ -1515,11 +1498,41 @@ impl ServerHandler for MdmdMcpHandler {
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
+/// The Cedar action a `tools/call` must clear beyond `use-mcp`: a shared read
+/// authorizes as its REST twin does, so a caller the policy keeps from
+/// `GET /api/v1/versorgung/…` cannot read the same answer through MCP.
+fn tool_action(body: &[u8]) -> Option<&'static str> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if v.get("method")?.as_str()? != "tools/call" {
+        return None;
+    }
+    match v.get("params")?.get("name")?.as_str()? {
+        "get_versorgung_at" | "get_versorgungsstatus_history" => Some("read-versorgungsstatus"),
+        "get_lokationsbuendel" => Some("read-utilmd-stammdaten"),
+        _ => None,
+    }
+}
+
 async fn mcp_auth_middleware(
     axum::extract::State(state): axum::extract::State<Arc<MdmdMcpState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    const MAX_MCP_BODY: usize = 1024 * 1024;
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_MCP_BODY).await else {
+        return mako_service::ApiError::payload_too_large(format!(
+            "MCP request body exceeds {MAX_MCP_BODY} bytes"
+        ))
+        .into_response();
+    };
+    if let Some(action) = tool_action(&bytes)
+        && let Err(resp) = state.auth.authorize(&parts.headers, action)
+    {
+        return resp;
+    }
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     state.auth.authenticate(request, next).await
 }
 
@@ -1564,6 +1577,195 @@ mod contract_tests {
         if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
             panic!("{e}");
         }
+    }
+
+    fn tools() -> Vec<rmcp::model::Tool> {
+        MdmdMcpHandler::tool_router().list_all()
+    }
+
+    fn zuordnung() -> crate::reads::Zuordnung {
+        crate::reads::Zuordnung {
+            lf_mp_id: "9900000000003".into(),
+            prozent: "100".into(),
+            tranche_id: None,
+            status: crate::reads::Zuordnungsstatus::Aktiv,
+            zuordnungsbeginn: Some("2026-01-01".into()),
+            zuordnungsende: None,
+            process_id: Some("0195f3c4-7a1e-7c3e-9d1f-2b3c4d5e6f70".into()),
+        }
+    }
+
+    /// `get_versorgung_at` answers the type `GET /api/v1/versorgung/{malo_id}`
+    /// documents, and a sample of it satisfies the declared schema.
+    #[test]
+    fn get_versorgung_at_is_typed_and_shared_with_rest() {
+        use mako_service::mcp::conformance::{assert_rest_twin, assert_structured_output};
+        let sample = crate::reads::VersorgungsStatusResponse {
+            malo_id: "51238696012".into(),
+            lieferstatus: crate::reads::Lieferstatus::Ersatzversorgung,
+            zuordnungen: vec![zuordnung()],
+            lf_mp_id: Some("9900000000003".into()),
+            lf_mp_id_next: None,
+            lf_next_lieferbeginn: None,
+            lieferbeginn: Some("2026-01-01".into()),
+            lieferende: None,
+            msb_mp_id: None,
+            nb_mp_id: "9900000000001".into(),
+            eog_seit: Some("2026-10-01".into()),
+            last_process_id: None,
+            updated_at: "2026-10-01T04:12:00Z".into(),
+            version: 3,
+        };
+        let tools = tools();
+        assert_structured_output(
+            &tools,
+            "get_versorgung_at",
+            &serde_json::to_value(sample).expect("serializes"),
+        );
+        assert_rest_twin(
+            &tools,
+            "get_versorgung_at",
+            &crate::openapi::document(),
+            "/api/v1/versorgung/{malo_id}",
+        );
+    }
+
+    #[test]
+    fn get_versorgungsstatus_history_is_typed_and_shared_with_rest() {
+        use mako_service::mcp::conformance::{assert_rest_twin, assert_structured_output};
+        let sample = crate::reads::VersorgungsStatusHistorie {
+            items: vec![crate::reads::VersorgungsStatusHistoryResponse {
+                id: 7,
+                malo_id: "51238696012".into(),
+                lieferstatus: crate::reads::Lieferstatus::Beliefert,
+                zuordnungen: vec![zuordnung()],
+                lieferende: None,
+                msb_mp_id: Some("9900000000004".into()),
+                nb_mp_id: "9900000000001".into(),
+                last_process_id: None,
+                version: 2,
+                valid_from: "2025-12-31T23:00:00Z".into(),
+            }],
+            total: 1,
+            page: 0,
+            size: 50,
+        };
+        let tools = tools();
+        assert_structured_output(
+            &tools,
+            "get_versorgungsstatus_history",
+            &serde_json::to_value(sample).expect("serializes"),
+        );
+        assert_rest_twin(
+            &tools,
+            "get_versorgungsstatus_history",
+            &crate::openapi::document(),
+            "/api/v1/versorgung/{malo_id}/history",
+        );
+    }
+
+    #[test]
+    fn get_lokationsbuendel_is_typed_and_shared_with_rest() {
+        use crate::reads::{
+            Angaben, Granularitaet, Kante, Lokationsbuendel, Nna, Obis, Objekt, Objekttyp,
+            Register, Verfahren, Zaehler,
+        };
+        use mako_service::mcp::conformance::{assert_rest_twin, assert_structured_output};
+        let melo = "DE00056266802AO6G56M11SN51G21M24S";
+        let sample = Lokationsbuendel {
+            malo_id: "51238696012".into(),
+            stichtag: "2026-11-01".into(),
+            energierichtung: Some("AUSSP".into()),
+            lokationsbuendelcodes: vec!["9992000000026".into()],
+            objekte: vec![
+                Objekt {
+                    typ: Objekttyp::Malo,
+                    id: "51238696012".into(),
+                    objektcode: Some("9992000001016".into()),
+                },
+                Objekt {
+                    typ: Objekttyp::Melo,
+                    id: melo.into(),
+                    objektcode: None,
+                },
+            ],
+            zuordnungen: vec![Kante {
+                von_id: melo.into(),
+                von_typ: Objekttyp::Melo,
+                nach_id: "51238696012".into(),
+                nach_typ: Objekttyp::Malo,
+                valid_from: Some("2026-01-01".into()),
+                valid_to: None,
+            }],
+            angaben: Some(Angaben {
+                valid_from: "2026-01-01".into(),
+                valid_to: None,
+                uenb_mp_id: Some("9900000000002".into()),
+                technische_einrichtungen: Some(false),
+                standardlastprofil: Some("H0".into()),
+                profilverfahren: Some(Verfahren::Synthetisch),
+                nna_positionen: vec![Nna {
+                    artikel_id: "9990001000053".into(),
+                    zu_abschlag_prozent: "-2.5".into(),
+                }],
+                obis: vec![Obis {
+                    obis_kennzahl: "1-0:1.8.0".into(),
+                    verwendungszweck_nb: Some("Z84".into()),
+                    verwendungszweck_lf: None,
+                    verwendungszweck_uenb: None,
+                    wertegranularitaet: Some(Granularitaet::Jaehrlich),
+                }],
+                register: vec![Register {
+                    zaehler_id: "Z1".into(),
+                    obis_kennzahl: "1-0:1.8.0".into(),
+                    wertegranularitaet: Granularitaet::Monatlich,
+                }],
+            }),
+            zaehler: vec![Zaehler {
+                melo_id: melo.into(),
+                zaehler_id: "Z1".into(),
+                zaehlertyp_spezifikation: Some("MME_STANDARD".into()),
+            }],
+        };
+        let tools = tools();
+        assert_structured_output(
+            &tools,
+            "get_lokationsbuendel",
+            &serde_json::to_value(sample).expect("serializes"),
+        );
+        assert_rest_twin(
+            &tools,
+            "get_lokationsbuendel",
+            &crate::openapi::document(),
+            "/api/v1/malos/{id}/lokationsbuendel",
+        );
+    }
+
+    /// A shared read authorizes as its REST twin; every other tool needs only
+    /// `use-mcp`.
+    #[test]
+    fn a_shared_read_authorizes_with_its_rest_action() {
+        let call = |name: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": name, "arguments": {} }
+            }))
+            .expect("serializes")
+        };
+        assert_eq!(
+            tool_action(&call("get_versorgung_at")),
+            Some("read-versorgungsstatus")
+        );
+        assert_eq!(
+            tool_action(&call("get_versorgungsstatus_history")),
+            Some("read-versorgungsstatus")
+        );
+        assert_eq!(
+            tool_action(&call("get_lokationsbuendel")),
+            Some("read-utilmd-stammdaten")
+        );
+        assert_eq!(tool_action(&call("get_malo")), None);
+        assert_eq!(tool_action(br#"{"method":"tools/list"}"#), None);
     }
 
     /// A partner is named by its display name, else by its Geschäftspartner's

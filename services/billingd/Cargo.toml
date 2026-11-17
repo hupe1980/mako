@@ -46,6 +46,11 @@ secrecy      = { version = "0.10" }
 tokio-util   = { workspace = true }
 en16931         = { workspace = true }
 en16931-formats = { workspace = true }
+# Rechnung nachrechnen: the RFC 8785 seal and the HMAC-derived verify token.
+serde_jcs    = "0.1"
+sha2         = "0.10"
+hmac         = "0.12"
+base64       = "0.22"
 
 
 [dev-dependencies]

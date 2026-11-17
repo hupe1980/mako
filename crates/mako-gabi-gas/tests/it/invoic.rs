@@ -90,7 +90,7 @@ async fn the_issuer_leg_is_refused() {
                 invoice_ref: MessageRef::new("INV-1"),
                 nachricht: "UNH+1+INVOIC:D:06A:UN:2.8e'UNT+2+1'".to_owned(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect_err("GaBi Gas does not issue invoices");
@@ -107,7 +107,7 @@ async fn an_inbound_remadv_is_refused() {
                 remadv_ref: MessageRef::new("REM-1"),
                 sender: MarktpartnerCode::new("4012345000023"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect_err("after receiving an invoice this platform sends the REMADV");

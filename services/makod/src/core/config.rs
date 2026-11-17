@@ -475,6 +475,10 @@ pub struct AuthzConfig {
     /// operator's own `permit` statements, only by a `forbid`.
     #[serde(default)]
     pub permit_all: bool,
+    /// Principals granted Cedar `ActOnBehalf` — the services that may name a
+    /// command's actor in the `Mako-Akteur` header (processd).
+    #[serde(default)]
+    pub act_on_behalf: Vec<String>,
 }
 
 /// `[oidc]` — OIDC/JWT bearer token authentication.

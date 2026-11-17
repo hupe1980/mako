@@ -18,6 +18,7 @@ const FREIGABE: Freigabe = {
   grund: "Anmeldung eines verbundenen Lieferanten",
   art: "eskaliert",
   antwort: null,
+  gesendet_sha256: null,
   codes_freigeben: { ebd: "E_0623", codes: [{ code: "E15", bedeutung: "Zustimmung" }] },
   codes_ablehnen: {
     ebd: "E_0622",

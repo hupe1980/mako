@@ -66,6 +66,7 @@ fn draft<'a>(
         total_netto_eur: netto,
         total_brutto_eur: netto * dec!(1.19),
         steuerzeilen: &[],
+        due_on: None,
     }
 }
 
@@ -1792,4 +1793,295 @@ async fn a_mixed_periods_run_delivers_both_documents() {
             .expect("stored");
         assert!(row.template_hash.is_some(), "the sent layout is pinned");
     }
+}
+
+// ── § 40c Abs. 2 EnWG watch ─────────────────────────────────────────────
+
+fn unbilled<'a>(reason: &'a str) -> pg::NewUnbilledPeriod<'a> {
+    pg::NewUnbilledPeriod {
+        tenant: TENANT,
+        malo_id: MALO,
+        lf_mp_id: TENANT,
+        period_from: date!(2026 - 01 - 01),
+        period_to: date!(2026 - 01 - 31),
+        final_invoice: false,
+        reason_code: reason,
+        message: "rate refused",
+        due_on: date!(2026 - 03 - 14),
+    }
+}
+
+/// A period the run could not bill is one row with its refusal and its
+/// § 40c date; the invoice written for it later closes the row, and a Storno of
+/// that invoice opens it again.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_unbilled_period_closes_on_its_invoice_and_reopens_on_storno() {
+    let Some((pool, _pg)) = test_pool("unbilled_watch").await else {
+        return;
+    };
+    pg::record_unbilled_period(&pool, &unbilled("RATE_REFUSED"))
+        .await
+        .expect("record");
+    pg::record_unbilled_period(&pool, &unbilled("RATE_REFUSED"))
+        .await
+        .expect("a second failed run refreshes");
+    let open = pg::list_unbilled_periods(&pool, TENANT, true, 50)
+        .await
+        .expect("list");
+    assert_eq!(open.len(), 1, "one row per period, however often it fails");
+    assert_eq!(open[0].reason_code, "RATE_REFUSED");
+    assert_eq!(open[0].due_on, date!(2026 - 03 - 14));
+    assert_eq!(open[0].attempts, 2);
+
+    // The rate is loaded; the next run bills the period.
+    let json = body();
+    let id = pg::insert_billing_record(
+        &pool,
+        &pg::NewBillingRecord {
+            due_on: Some(date!(2026 - 03 - 14)),
+            ..draft(dec!(100), "RE-2026-000001", &json)
+        },
+    )
+    .await
+    .expect("bill");
+    assert_eq!(
+        pg::list_unbilled_periods(&pool, TENANT, true, 50)
+            .await
+            .expect("list")
+            .len(),
+        1,
+        "a record the risk gate holds has reached nobody — the case stays open"
+    );
+    dispatch(&pool, id).await;
+    assert!(
+        pg::list_unbilled_periods(&pool, TENANT, true, 50)
+            .await
+            .expect("list")
+            .is_empty(),
+        "the invoice closes the case"
+    );
+    let all = pg::list_unbilled_periods(&pool, TENANT, false, 50)
+        .await
+        .expect("list");
+    assert_eq!(
+        all[0].settled_by,
+        Some(id),
+        "with that invoice as its outcome"
+    );
+
+    storno(&pool, id, "ST-2026-000001", Some("Zählerstand falsch")).await;
+    let reopened = pg::list_unbilled_periods(&pool, TENANT, true, 50)
+        .await
+        .expect("list");
+    assert_eq!(reopened.len(), 1, "a Storno re-opens the period's watch");
+    assert_eq!(reopened[0].reason_code, "STORNIERT");
+    assert_eq!(reopened[0].due_on, date!(2026 - 03 - 14));
+}
+
+/// Per Lieferant, invoices owed, issued on time, issued late, overdue.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_deadline_summary_counts_each_state() {
+    let Some((pool, _pg)) = test_pool("deadline_summary").await else {
+        return;
+    };
+    let json = body();
+    // Written today, due long ago → late; due far ahead → on time.
+    let late = pg::NewBillingRecord {
+        due_on: Some(date!(2020 - 01 - 01)),
+        ..draft(dec!(100), "RE-2026-000001", &json)
+    };
+    let late_id = pg::insert_billing_record(&pool, &late).await.expect("late");
+    dispatch(&pool, late_id).await;
+    let on_time = pg::NewBillingRecord {
+        period_from: date!(2026 - 02 - 01),
+        period_to: date!(2026 - 02 - 28),
+        due_on: Some(date!(2099 - 01 - 01)),
+        ..draft(dec!(100), "RE-2026-000002", &json)
+    };
+    let on_time_id = pg::insert_billing_record(&pool, &on_time)
+        .await
+        .expect("on time");
+    dispatch(&pool, on_time_id).await;
+    // One open period overdue, one still owed.
+    pg::record_unbilled_period(
+        &pool,
+        &pg::NewUnbilledPeriod {
+            period_from: date!(2025 - 01 - 01),
+            period_to: date!(2025 - 01 - 31),
+            due_on: date!(2025 - 03 - 14),
+            ..unbilled("NO_METER_DATA")
+        },
+    )
+    .await
+    .expect("overdue");
+    pg::record_unbilled_period(
+        &pool,
+        &pg::NewUnbilledPeriod {
+            period_from: date!(2099 - 01 - 01),
+            period_to: date!(2099 - 01 - 31),
+            due_on: date!(2099 - 03 - 14),
+            ..unbilled("NO_METER_DATA")
+        },
+    )
+    .await
+    .expect("owed");
+
+    let rows = pg::deadline_summary(&pool, TENANT).await.expect("summary");
+    assert_eq!(rows.len(), 1);
+    let r = &rows[0];
+    assert_eq!(
+        (r.owed, r.issued_on_time, r.issued_late, r.overdue),
+        (1, 1, 1, 1)
+    );
+}
+
+// ── Rechnung nachrechnen ────────────────────────────────────────────────
+
+/// An issued record carries its seal and its token's hash; the
+/// token finds the record, an altered `rechnung_json` breaks the seal, and a
+/// revoked token finds nothing.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_issued_record_is_sealed_and_reachable_by_its_token() {
+    let Some((pool, _pg)) = test_pool("nachrechnen_seal").await else {
+        return;
+    };
+    let cfg: billingd::config::BillingdConfig = serde_json::from_value(serde_json::json!({
+        "database": { "url": "postgres://localhost/x" },
+        "tenant": TENANT,
+        "productd_url": "http://localhost:9080",
+        "edmd_url": "http://localhost:8380",
+        "marktd_url": "http://localhost:8080",
+        "nachrechnen": {
+            "token_key": "0123456789abcdef0123456789abcdef",
+            "public_url": "https://portal.example.de/nachrechnen"
+        }
+    }))
+    .expect("config parses");
+    let id = insert_draft(&pool, dec!(100)).await;
+    let mut tx = pool.begin().await.expect("begin");
+    pg::mark_dispatched_tx(&mut *tx, id).await.expect("issue");
+    billingd::nachrechnen::seal_record(&mut tx, &cfg, id)
+        .await
+        .expect("seal");
+    tx.commit().await.expect("commit");
+
+    let row = pg::fetch_billing_record(&pool, TENANT, id)
+        .await
+        .expect("read")
+        .expect("stored");
+    assert!(row.seal_sha256.is_some(), "the record is sealed at issue");
+    let link = billingd::nachrechnen::public_link(&cfg, id).expect("a link");
+    let token = link
+        .rsplit('/')
+        .next()
+        .expect("the token ends the link")
+        .to_owned();
+    let found =
+        pg::fetch_by_verify_token(&pool, TENANT, &billingd::nachrechnen::token_hash(&token))
+            .await
+            .expect("lookup")
+            .expect("the token finds its record");
+    assert_eq!(found.id, id);
+    assert_eq!(
+        billingd::nachrechnen::nachrechnen(&found)
+            .expect("recompute")
+            .verdict
+            .seal_holds,
+        Some(true)
+    );
+
+    // An issued document refuses the change through every ordinary path…
+    sqlx::query(
+        "UPDATE billing_records SET rechnung_json = rechnung_json || '{\"x\": 1}' WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .expect_err("an issued record's document is immutable");
+    // …so a change only arrives behind the trigger's back, and the seal sees it.
+    for sql in [
+        "ALTER TABLE billing_records DISABLE TRIGGER billing_records_immutable_after_issue",
+        "UPDATE billing_records SET rechnung_json = rechnung_json || '{\"x\": 1}' WHERE id = $1",
+        "ALTER TABLE billing_records ENABLE TRIGGER billing_records_immutable_after_issue",
+    ] {
+        let q = sqlx::query(sql);
+        let q = if sql.contains("$1") { q.bind(id) } else { q };
+        q.execute(&pool).await.expect("tamper as the table owner");
+    }
+    let tampered = pg::fetch_billing_record(&pool, TENANT, id)
+        .await
+        .expect("read")
+        .expect("stored");
+    let verdict = billingd::nachrechnen::nachrechnen(&tampered)
+        .expect("recompute")
+        .verdict;
+    assert_eq!(
+        verdict.seal_holds,
+        Some(false),
+        "an altered document breaks the seal"
+    );
+    assert!(!verdict.matches);
+
+    assert!(
+        pg::revoke_verify_token(&pool, TENANT, id, "sachbearbeiter@stadtwerk")
+            .await
+            .expect("revoke")
+    );
+    let by: Option<String> =
+        sqlx::query_scalar("SELECT verify_revoked_by FROM billing_records WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("read");
+    assert_eq!(
+        by.as_deref(),
+        Some("sachbearbeiter@stadtwerk"),
+        "the revocation names its principal"
+    );
+    assert!(
+        pg::fetch_by_verify_token(&pool, TENANT, &billingd::nachrechnen::token_hash(&token))
+            .await
+            .expect("lookup")
+            .is_none(),
+        "a revoked token answers like an unknown one"
+    );
+}
+
+/// No two live originals of one MaLo, Lieferant and product may bill the same
+/// day: a Schlussrechnung over days already billed is refused.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_overlapping_original_is_refused() {
+    let Some((pool, _pg)) = test_pool("overlap").await else {
+        return;
+    };
+    let json = body();
+    insert_draft(&pool, dec!(100)).await;
+    let err = pg::insert_billing_record(
+        &pool,
+        &pg::NewBillingRecord {
+            period_from: date!(2026 - 01 - 15),
+            period_to: date!(2026 - 02 - 10),
+            ..draft(dec!(50), "RE-2026-000002", &json)
+        },
+    )
+    .await
+    .expect_err("the days 15.–31.01. are billed already");
+    assert!(
+        matches!(err, pg::InsertError::PeriodOverlaps { .. }),
+        "{err}"
+    );
+    pg::insert_billing_record(
+        &pool,
+        &pg::NewBillingRecord {
+            period_from: date!(2026 - 02 - 01),
+            period_to: date!(2026 - 02 - 10),
+            ..draft(dec!(50), "RE-2026-000003", &json)
+        },
+    )
+    .await
+    .expect("the days after the last billed one are free");
 }

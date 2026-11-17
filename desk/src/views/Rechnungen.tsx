@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import {
   Button as AriaButton,
@@ -311,7 +312,17 @@ export function PruefpostenEntscheiden({ r, onDone }: { r: Pruefposten; onDone: 
           ))}
         </ul>
       )}
-      <p className="m-0 text-caption text-text-2">{gehaltenBand ? k.angehalten : k.ausgestellt}</p>
+      <p className="m-0 flex flex-wrap items-center gap-3 text-caption text-text-2">
+        <span className="flex-1">{gehaltenBand ? k.angehalten : k.ausgestellt}</span>
+        {/* billingd recomputes the invoice before anyone releases it. */}
+        <Link
+          to="/rechnung/$id"
+          params={{ id: r.id }}
+          className="focus-ring rounded-[4px] text-accent underline underline-offset-2"
+        >
+          {t.nachrechnen.oeffnen}
+        </Link>
+      </p>
       {verweigert ? (
         <Notice tone="refusal" title={k.pruefungVerweigert}>
           {verweigert}

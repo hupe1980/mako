@@ -185,6 +185,7 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
     //    Messprodukt „ESA, Marktlokation Wirkarbeit Lastgang ¼ h".
     let out = dispatch_command(
         &esa,
+        mako_engine::envelope::Akteur::System,
         "esa.werteanfrage.stellen",
         &serde_json::json!({
             "msb_mp_id": MSB_MP_ID,
@@ -213,6 +214,7 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
     // tells an Angebot from an Ablehnung — `DTM+273` is Muss on both.
     dispatch_command(
         &msb,
+        mako_engine::envelope::Akteur::System,
         "wim.wertebestellung.anbieten",
         &serde_json::json!({
             "malo_id": MALO_ID,
@@ -233,6 +235,7 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
     //    the ESA process is indexed under the order Belegnummer for the answer.
     dispatch_command(
         &esa,
+        mako_engine::envelope::Akteur::System,
         "esa.bestellung.beauftragen",
         &serde_json::json!({ "malo_id": MALO_ID }),
     )
@@ -250,6 +253,7 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
     //    and its Cluster — not a boolean — is what selects 19011 over 19012.
     dispatch_command(
         &msb,
+        mako_engine::envelope::Akteur::System,
         "wim.wertebestellung.bestellung-beantworten",
         &serde_json::json!({ "malo_id": MALO_ID, "antwort_code": "A11" }),
     )
@@ -273,6 +277,7 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
     //    consolidated onto the wertebestellung lifecycle, not a standalone flow).
     dispatch_command(
         &esa,
+        mako_engine::envelope::Akteur::System,
         "esa.stornierung.beauftragen",
         &serde_json::json!({ "malo_id": MALO_ID }),
     )
@@ -295,6 +300,7 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
     // `A04` — „Stornierung wird bestätigt", the Zustimmungscode of `E_0257`.
     dispatch_command(
         &msb,
+        mako_engine::envelope::Akteur::System,
         "wim.wertebestellung.stornierung-beantworten",
         &serde_json::json!({ "malo_id": MALO_ID, "antwort_code": "A04" }),
     )
@@ -339,9 +345,14 @@ async fn two_messprodukte_at_one_marktlokation_are_two_subscriptions() {
         })
     };
 
-    let first = dispatch_command(&esa, "esa.werteanfrage.stellen", &order("9991000003056"))
-        .await
-        .expect("Lastgang order");
+    let first = dispatch_command(
+        &esa,
+        mako_engine::envelope::Akteur::System,
+        "esa.werteanfrage.stellen",
+        &order("9991000003056"),
+    )
+    .await
+    .expect("Lastgang order");
     assert!(
         matches!(first, DispatchOutcome::Spawned { .. }),
         "{first:?}"
@@ -349,18 +360,28 @@ async fn two_messprodukte_at_one_marktlokation_are_two_subscriptions() {
 
     // A second Werteanfrage for the *same* product is the duplicate the guard
     // exists for.
-    let dup = dispatch_command(&esa, "esa.werteanfrage.stellen", &order("9991000003056"))
-        .await
-        .expect_err("same product must be refused as a duplicate");
+    let dup = dispatch_command(
+        &esa,
+        mako_engine::envelope::Akteur::System,
+        "esa.werteanfrage.stellen",
+        &order("9991000003056"),
+    )
+    .await
+    .expect_err("same product must be refused as a duplicate");
     assert!(
         format!("{dup:?}").contains("DuplicateProcess"),
         "expected a duplicate, got {dup:?}"
     );
 
     // A different product at the same location is a separate subscription.
-    let second = dispatch_command(&esa, "esa.werteanfrage.stellen", &order("9991000003147"))
-        .await
-        .expect("Energiemenge order must not collide with the Lastgang order");
+    let second = dispatch_command(
+        &esa,
+        mako_engine::envelope::Akteur::System,
+        "esa.werteanfrage.stellen",
+        &order("9991000003147"),
+    )
+    .await
+    .expect("Energiemenge order must not collide with the Lastgang order");
     assert!(
         matches!(second, DispatchOutcome::Spawned { .. }),
         "{second:?}"
@@ -419,6 +440,7 @@ async fn a_widerruf_stops_every_subscription_at_the_location() {
     for (messprodukt, abonnement) in PRODUKTE {
         dispatch_command(
             &esa,
+            mako_engine::envelope::Akteur::System,
             "esa.werteanfrage.stellen",
             &serde_json::json!({
                 "msb_mp_id": MSB_MP_ID,
@@ -434,6 +456,7 @@ async fn a_widerruf_stops_every_subscription_at_the_location() {
 
         dispatch_command(
             &msb,
+            mako_engine::envelope::Akteur::System,
             "wim.wertebestellung.anbieten",
             &serde_json::json!({
                 "malo_id": MALO_ID,
@@ -448,6 +471,7 @@ async fn a_widerruf_stops_every_subscription_at_the_location() {
 
         dispatch_command(
             &esa,
+            mako_engine::envelope::Akteur::System,
             "esa.bestellung.beauftragen",
             &serde_json::json!({ "malo_id": MALO_ID, "messprodukt": messprodukt }),
         )
@@ -457,6 +481,7 @@ async fn a_widerruf_stops_every_subscription_at_the_location() {
 
         dispatch_command(
             &msb,
+            mako_engine::envelope::Akteur::System,
             "wim.wertebestellung.bestellung-beantworten",
             &serde_json::json!({
                 "malo_id": MALO_ID,
@@ -472,6 +497,7 @@ async fn a_widerruf_stops_every_subscription_at_the_location() {
     // The Widerruf, exactly as `marktd` fires it: location only, no product.
     dispatch_command(
         &esa,
+        mako_engine::envelope::Akteur::System,
         "esa.abbestellung.beauftragen",
         &serde_json::json!({
             "malo_id": MALO_ID,

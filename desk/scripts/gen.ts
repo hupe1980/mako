@@ -13,17 +13,8 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { compile, type JSONSchema } from "json-schema-to-typescript";
-
-const desk = resolve(import.meta.dirname, "..");
-const repo = resolve(desk, "..");
-const out = resolve(desk, "src/data/gen");
-const check = process.argv.includes("--check");
-
-const BRANDS: Record<string, string> = {
-  "date-time": "Instant",
-  date: "BusinessDate",
-  decimal: "Decimal",
-};
+import { fingerabdruecke } from "../src/data/oberflaeche.ts";
+import { BRANDS, brand, type Json } from "./marken.ts";
 
 interface SnapshotTool {
   name: string;
@@ -31,21 +22,10 @@ interface SnapshotTool {
   outputSchema: JSONSchema | null;
 }
 
-type Json = { [key: string]: unknown };
-
-/** Replace a branded `format` with the brand's type, keeping `| null`. */
-function brand(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(brand);
-  if (node === null || typeof node !== "object") return node;
-  const obj = node as Json;
-  const tsType = typeof obj.format === "string" ? BRANDS[obj.format] : undefined;
-  if (tsType) {
-    const nullable = Array.isArray(obj.type) && obj.type.includes("null");
-    const { format: _f, type: _t, ...rest } = obj;
-    return { ...rest, tsType: nullable ? `${tsType} | null` : tsType };
-  }
-  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, brand(v)]));
-}
+const desk = resolve(import.meta.dirname, "..");
+const repo = resolve(desk, "..");
+const out = resolve(desk, "src/data/gen");
+const check = process.argv.includes("--check");
 
 /** Move a schema's `$defs` into `defs`, refusing two different shapes under one name. */
 function hoist(schema: JSONSchema, defs: Json, where: string): JSONSchema {
@@ -107,6 +87,9 @@ async function render(service: string, tools: SnapshotTool[]): Promise<string> {
     "",
     `/** Tools ${service} serves without an output schema: no view may read them. */`,
     `export const ${service}Untyped = ${JSON.stringify(untyped)} as const;`,
+    "",
+    `/** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */`,
+    `export const ${service}Oberflaeche: Record<string, string> = ${JSON.stringify(fingerabdruecke(tools))};`,
     "",
   ]
     .filter((line, i) => !(i === 1 && line === ""))

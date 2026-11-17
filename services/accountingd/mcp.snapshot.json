@@ -34,11 +34,70 @@
       "type": "object",
       "properties": {
         "malo_id": {
+          "description": "11-digit MaLo-ID.",
           "type": "string"
+        },
+        "lf_mp_id": {
+          "description": "The LF MP-ID the account is held under. Defaults to the tenant, as on\nthe REST route.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Saldostatus": {
+          "description": "Where an account's balance stands: `overdue` — the customer owes\n(`balance_ct > 0`); `credit` — a Guthaben (`balance_ct < 0`); `settled` —\nnothing is open.",
+          "type": "string",
+          "enum": [
+            "overdue",
+            "credit",
+            "settled"
+          ]
+        }
+      },
+      "required": [
+        "malo_id",
+        "lf_mp_id",
+        "balance_ct",
+        "balance_eur",
+        "status",
+        "abschlag_ct"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "lf_mp_id": {
+          "description": "The Lieferant's MP-ID the account is kept under.",
+          "type": "string"
+        },
+        "balance_ct": {
+          "description": "Open-items balance in cents: positive is owed, negative a Guthaben.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "balance_eur": {
+          "description": "`balance_ct` as a decimal EUR string, e.g. `\"-12.50\"`.",
+          "type": "string",
+          "format": "decimal"
+        },
+        "status": {
+          "description": "Where the balance stands.",
+          "$ref": "#/$defs/Saldostatus"
+        },
+        "abschlag_ct": {
+          "description": "The monthly Abschlag in cents.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    }
   },
   {
     "name": "get_parked_booking",
@@ -215,9 +274,106 @@
     },
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "description": "Maximum cases (default 100, at most 1000), newest Mahnung first.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
       "type": "object"
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Mahnfall": {
+          "description": "One open dunning case.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The dunning case.",
+              "type": "string"
+            },
+            "account_id": {
+              "description": "The customer account it was opened on.",
+              "type": "string"
+            },
+            "stufe": {
+              "description": "The Mahnstufe, 1–3.",
+              "type": "integer",
+              "format": "int16",
+              "minimum": -32768,
+              "maximum": 32767
+            },
+            "amount_due_ct": {
+              "description": "The amount the Mahnung demands, in cents.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "amount_due_eur": {
+              "description": "`amount_due_ct` as a decimal EUR string.",
+              "type": "string",
+              "format": "decimal"
+            },
+            "issued_at": {
+              "description": "When the Mahnung was issued.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "due_date": {
+              "description": "The payment date the Mahnung sets.",
+              "type": "string",
+              "format": "date"
+            },
+            "sperrauftrag_ce_id": {
+              "description": "The CloudEvent id of the Sperrauftrag a Mahnstufe 3 raised, if any.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "account_id",
+            "stufe",
+            "amount_due_ct",
+            "amount_due_eur",
+            "issued_at",
+            "due_date",
+            "sperrauftrag_ce_id"
+          ]
+        }
+      },
+      "required": [
+        "faelle",
+        "count",
+        "saturated"
+      ],
+      "type": "object",
+      "properties": {
+        "faelle": {
+          "description": "The open cases, newest Mahnung first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Mahnfall"
+          }
+        },
+        "count": {
+          "description": "How many cases `faelle` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "The page is full: more cases may be open than were listed.",
+          "type": "boolean"
+        }
+      }
+    }
   },
   {
     "name": "list_eeg_payouts",
@@ -289,15 +445,18 @@
       "type": "object",
       "properties": {
         "malo_id": {
+          "description": "11-digit MaLo-ID.",
           "type": "string"
         },
         "lf_mp_id": {
+          "description": "The LF MP-ID the account is held under. Defaults to the tenant.",
           "type": [
             "string",
             "null"
           ]
         },
         "limit": {
+          "description": "Maximum movements, newest first (default 100, at most 1000).",
           "type": [
             "integer",
             "null"
@@ -306,7 +465,98 @@
         }
       }
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Kontobewegung": {
+          "description": "One movement on the Kontokorrent.",
+          "type": "object",
+          "properties": {
+            "entry_id": {
+              "description": "The doubleentry entry id.",
+              "type": "string"
+            },
+            "entry_type": {
+              "description": "The Buchungsart, e.g. `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `ABSCHLAG`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "beleg": {
+              "description": "The Beleg the booking cites — a Rechnungsnummer, a bank reference.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "side": {
+              "description": "`D` (debit — increases the receivable) or `C` (credit).",
+              "type": "string"
+            },
+            "amount_ct": {
+              "description": "The movement in cents, always positive; `side` carries the sign.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "signed_ct": {
+              "description": "Signed contribution to the balance (debit +, credit −), in cents.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "running_ct": {
+              "description": "The running balance after this movement, in cents.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "booking_date": {
+              "description": "The booking date.",
+              "type": "string",
+              "format": "date"
+            }
+          },
+          "required": [
+            "entry_id",
+            "entry_type",
+            "beleg",
+            "side",
+            "amount_ct",
+            "signed_ct",
+            "running_ct",
+            "booking_date"
+          ]
+        }
+      },
+      "required": [
+        "malo_id",
+        "lf_mp_id",
+        "opening_ct",
+        "lines"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "lf_mp_id": {
+          "description": "The Lieferant's MP-ID the account is kept under.",
+          "type": "string"
+        },
+        "opening_ct": {
+          "description": "The signed balance the window opens at, in cents — what was booked\nbefore it and what `limit` cut off its front.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "lines": {
+          "description": "The movements, newest first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Kontobewegung"
+          }
+        }
+      }
+    }
   },
   {
     "name": "list_overdue",
@@ -317,6 +567,13 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "min_balance_eur": {
+          "description": "Minimum open balance in EUR, a decimal string (e.g. `\"1.99\"`); default 0.01.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "limit": {
           "description": "Maximum rows (default 100, capped at 1000), largest balance first.",
           "type": [
@@ -328,7 +585,91 @@
       },
       "type": "object"
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "UeberfaelligesKonto": {
+          "description": "One account with an overdue balance.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "The customer account.",
+              "type": "string"
+            },
+            "malo_id": {
+              "description": "11-digit Marktlokations-ID.",
+              "type": "string"
+            },
+            "lf_mp_id": {
+              "description": "The Lieferant's MP-ID the account is kept under.",
+              "type": "string"
+            },
+            "kunden_nr": {
+              "description": "The operator's customer number, where recorded.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "balance_ct": {
+              "description": "The open balance in cents.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "balance_eur": {
+              "description": "`balance_ct` as a decimal EUR string.",
+              "type": "string",
+              "format": "decimal"
+            },
+            "abschlag_ct": {
+              "description": "The monthly Abschlag in cents.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "updated_at": {
+              "description": "When the account's balance last changed.",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "account_id",
+            "malo_id",
+            "lf_mp_id",
+            "kunden_nr",
+            "balance_ct",
+            "balance_eur",
+            "abschlag_ct",
+            "updated_at"
+          ]
+        }
+      },
+      "required": [
+        "accounts",
+        "count",
+        "saturated"
+      ],
+      "type": "object",
+      "properties": {
+        "accounts": {
+          "description": "The accounts, largest balance first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UeberfaelligesKonto"
+          }
+        },
+        "count": {
+          "description": "How many accounts `accounts` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "At least `limit` accounts matched: more may be overdue than were listed.",
+          "type": "boolean"
+        }
+      }
+    }
   },
   {
     "name": "list_parked_bookings",
@@ -603,6 +944,8 @@
         "amount_ct",
         "reference"
       ],
+      "additionalProperties": false,
+      "type": "object",
       "properties": {
         "amount_ct": {
           "description": "Payment amount in 1/100 EUR cents (e.g. 12500 = 125.00 EUR).",
@@ -642,10 +985,125 @@
           ],
           "format": "double"
         }
-      },
-      "type": "object"
+      }
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Zuordnungskandidat": {
+          "description": "One account a payment may belong to.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "The customer account.",
+              "type": "string"
+            },
+            "malo_id": {
+              "description": "11-digit Marktlokations-ID.",
+              "type": "string"
+            },
+            "lf_mp_id": {
+              "description": "The Lieferant's MP-ID the account is kept under.",
+              "type": "string"
+            },
+            "open_balance_ct": {
+              "description": "The account's open balance in cents.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "open_balance_eur": {
+              "description": "`open_balance_ct` as a decimal EUR string.",
+              "type": "string",
+              "format": "decimal"
+            },
+            "matched_by": {
+              "description": "The evidence: an exact rung (`iban`, `end_to_end_id`,\n`remittance_token`) or `amount_proximity`.",
+              "type": "string"
+            },
+            "confidence": {
+              "description": "`EXACT` for an exact rung; `MEDIUM` or `LOW` for amount proximity.",
+              "type": "string"
+            },
+            "similarity_score": {
+              "description": "Amount closeness 0–100, only on the amount-proximity rung.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "residual_ct": {
+              "description": "What stays open after booking the payment, in cents (0 settles it).",
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "account_id",
+            "malo_id",
+            "lf_mp_id",
+            "open_balance_ct",
+            "open_balance_eur",
+            "matched_by",
+            "confidence",
+            "similarity_score",
+            "residual_ct"
+          ]
+        }
+      },
+      "required": [
+        "payment_amount_ct",
+        "payment_amount_eur",
+        "payment_reference",
+        "tolerance_pct",
+        "candidates_count",
+        "candidates",
+        "note"
+      ],
+      "type": "object",
+      "properties": {
+        "payment_amount_ct": {
+          "description": "The payment in cents.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "payment_amount_eur": {
+          "description": "`payment_amount_ct` as a decimal EUR string.",
+          "type": "string",
+          "format": "decimal"
+        },
+        "payment_reference": {
+          "description": "The Verwendungszweck the bank reported.",
+          "type": "string"
+        },
+        "tolerance_pct": {
+          "description": "The tolerance the amount-proximity rung ran with, in percent; absent\nwhen the reference identified the account.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "candidates_count": {
+          "description": "How many candidates `candidates` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "candidates": {
+          "description": "One exact candidate, or up to ten ranked by amount proximity.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Zuordnungskandidat"
+          }
+        },
+        "note": {
+          "description": "How to read the answer.",
+          "type": "string"
+        }
+      }
+    }
   },
   {
     "name": "trigger_jahresabschluss",

@@ -171,6 +171,16 @@ pub fn init_tracing(service_name: &str, log_level: &str, otel: Option<&OtelConfi
     init_tracing_with(service_name, log_level, LogFormat::default(), otel, None)
 }
 
+/// `RUST_LOG`, else `log_level` — with `rmcp` capped at `info` whatever
+/// either says. rmcp logs every MCP request and response whole at `debug`,
+/// tool arguments and answers included, and those carry personal data (a
+/// payer's IBAN, a customer's name) that no log line may hold.
+fn log_filter(log_level: &str) -> EnvFilter {
+    EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(log_level))
+        .add_directive("rmcp=info".parse().expect("a valid directive"))
+}
+
 /// [`init_tracing`], plus one daemon-supplied layer.
 ///
 /// `extra` is installed directly on the registry, ahead of the filter and the
@@ -191,7 +201,7 @@ pub fn init_tracing_with(
     // Read only by the OTLP exporter, which exists with the `otel` feature.
     #[cfg(not(feature = "otel"))]
     let _ = (service_name, otel);
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
+    let filter = log_filter(log_level);
 
     // Boxed because the three builders are three different types; the
     // subscriber stack below is then written once for all of them.
@@ -424,6 +434,38 @@ pub fn set_remote_parent(span: &tracing::Span, traceparent: &str) {
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+
+    /// rmcp's `debug` lines carry every tool argument (an IBAN); at any
+    /// configured level they stay out, while the service's own debug lines
+    /// still come through.
+    #[test]
+    fn rmcp_request_dumps_never_reach_the_log() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::SubscriberExt as _;
+        #[derive(Clone)]
+        struct Buf(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("buffer").extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buf = Buf(Arc::new(Mutex::new(Vec::new())));
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::registry()
+            .with(super::log_filter("trace"))
+            .with(tracing_subscriber::fmt::layer().with_writer(move || writer.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "rmcp::service", "received request DE89370400440532013000");
+            tracing::debug!(target: "accountingd", "own debug line");
+        });
+        let log = String::from_utf8(buf.0.lock().expect("buffer").clone()).expect("utf-8");
+        assert!(!log.contains("DE89370400440532013000"), "{log}");
+        assert!(log.contains("own debug line"), "{log}");
+    }
 
     /// JSON is the default, because a container's logs are read by a pipeline
     /// and not by a person — every field of an event survives it.

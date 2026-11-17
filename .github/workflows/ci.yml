@@ -307,6 +307,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - run: just desk-budgets
       - run: just desk-axe
+      - run: just desk-aria
       - run: just desk-vergleich
 
   makotest:

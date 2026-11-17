@@ -6,16 +6,50 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { lazy } from "react";
-import { AssistentView } from "../views/Assistent";
-import { DeadLettersView } from "../views/DeadLetters";
-import { EinrichtungView } from "../views/Einrichtung";
-import { FreigabenView } from "../views/Freigaben";
-import { FristenView } from "../views/Fristen";
+
+const LokationView = lazy(() =>
+  import("../views/Lokation").then((m) => ({ default: m.LokationView })),
+);
+
+const GegenparteienView = lazy(() =>
+  import("../views/Gegenpartei").then((m) => ({ default: m.GegenparteienView })),
+);
+
+const GegenparteiView = lazy(() =>
+  import("../views/Gegenpartei").then((m) => ({ default: m.GegenparteiView })),
+);
+
+const NachrechnenView = lazy(() =>
+  import("../views/Nachrechnen").then((m) => ({ default: m.NachrechnenView })),
+);
+
+const FreigabenView = lazy(() =>
+  import("../views/FreigabenListe").then((m) => ({ default: m.FreigabenView })),
+);
+
+const UeberblickView = lazy(() =>
+  import("../views/Ueberblick").then((m) => ({ default: m.UeberblickView })),
+);
+const ProzessView = lazy(() =>
+  import("../views/Prozess").then((m) => ({ default: m.ProzessView })),
+);
+const KundenView = lazy(() => import("../views/Kunden").then((m) => ({ default: m.KundenView })));
+const KundeView = lazy(() => import("../views/Kunde").then((m) => ({ default: m.KundeView })));
+const FristenView = lazy(() =>
+  import("../views/Fristen").then((m) => ({ default: m.FristenView })),
+);
+const EinrichtungView = lazy(() =>
+  import("../views/Einrichtung").then((m) => ({ default: m.EinrichtungView })),
+);
+const DeadLettersView = lazy(() =>
+  import("../views/DeadLetters").then((m) => ({ default: m.DeadLettersView })),
+);
+const AssistentView = lazy(() =>
+  import("../views/Assistent").then((m) => ({ default: m.AssistentView })),
+);
+
+import { QUELLE_IDS, type QuelleId } from "../inbox/model";
 import { HeuteView } from "../views/Heute";
-import { KundeView } from "../views/Kunde";
-import { KundenView } from "../views/Kunden";
-import { ProzessView } from "../views/Prozess";
-import { UeberblickView } from "../views/Ueberblick";
 import { ROLLEN, useRolle } from "./rollen";
 import { Shell } from "./Shell";
 
@@ -35,14 +69,20 @@ const index = createRoute({
 const prozess = createRoute({
   getParentRoute: () => root,
   path: "/prozess",
-  validateSearch: (search: Record<string, unknown>): { key?: string } =>
-    typeof search.key === "string" && search.key.trim() ? { key: search.key.trim() } : {},
+  validateSearch: (search: Record<string, unknown>): { key?: string; p?: string } => ({
+    ...(typeof search.key === "string" && search.key.trim() ? { key: search.key.trim() } : {}),
+    ...(typeof search.p === "string" && search.p ? { p: search.p } : {}),
+  }),
   component: ProzessView,
 });
 
 const heute = createRoute({
   getParentRoute: () => root,
   path: "/heute",
+  validateSearch: (search: Record<string, unknown>): { quelle?: QuelleId } =>
+    typeof search.quelle === "string" && (QUELLE_IDS as readonly string[]).includes(search.quelle)
+      ? { quelle: search.quelle as QuelleId }
+      : {},
   component: HeuteView,
 });
 
@@ -94,6 +134,32 @@ const einrichtung = createRoute({
   component: EinrichtungView,
 });
 
+const lokation = createRoute({
+  getParentRoute: () => root,
+  path: "/lokation/$id",
+  validateSearch: (search: Record<string, unknown>): { knoten?: string } =>
+    typeof search.knoten === "string" && search.knoten ? { knoten: search.knoten } : {},
+  component: LokationView,
+});
+
+const gegenparteien = createRoute({
+  getParentRoute: () => root,
+  path: "/gegenparteien",
+  component: GegenparteienView,
+});
+
+const gegenpartei = createRoute({
+  getParentRoute: () => root,
+  path: "/gegenpartei/$mpId/$rolle",
+  component: GegenparteiView,
+});
+
+const rechnung = createRoute({
+  getParentRoute: () => root,
+  path: "/rechnung/$id",
+  component: NachrechnenView,
+});
+
 const deadLetters = createRoute({
   getParentRoute: () => root,
   path: "/dead-letters",
@@ -129,6 +195,10 @@ const routeTree = root.addChildren(
         freigaben,
         fristen,
         deadLetters,
+        rechnung,
+        gegenpartei,
+        gegenparteien,
+        lokation,
         heute,
         prozess,
         kunden,
@@ -143,6 +213,10 @@ const routeTree = root.addChildren(
         freigaben,
         fristen,
         deadLetters,
+        rechnung,
+        gegenpartei,
+        gegenparteien,
+        lokation,
         heute,
         prozess,
         kunden,

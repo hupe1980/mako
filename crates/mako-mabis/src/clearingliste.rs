@@ -320,7 +320,7 @@ impl CommandPayload for ClearinglisteCommand {}
 ///     tenant_id,
 ///     WorkflowId::new("mabis-clearingliste", "FV2025-10-01"),
 /// );
-/// process.run(ClearinglisteCommand::ReceiveClearingliste { ... }, RunOptions::new()).await?;
+/// process.run(ClearinglisteCommand::ReceiveClearingliste { ... }, RunOptions::system()).await?;
 /// ```
 pub struct MabisClearinglisteWorkflow;
 

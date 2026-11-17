@@ -58,9 +58,12 @@ async fn a_message_event_stores_its_verlauf_and_answer_and_a_state_change_stores
     );
     let stream = StreamId::for_process(ctx.tenant_id, &process);
     let events = [
-        ctx.new_event(&Ev::AnfrageGesendet).expect("event"),
-        ctx.new_event(&Ev::AntwortEmpfangen).expect("event"),
-        ctx.new_event(&Ev::Aktiviert).expect("event"),
+        ctx.new_event(&Ev::AnfrageGesendet, mako_engine::envelope::Akteur::System)
+            .expect("event"),
+        ctx.new_event(&Ev::AntwortEmpfangen, mako_engine::envelope::Akteur::System)
+            .expect("event"),
+        ctx.new_event(&Ev::Aktiviert, mako_engine::envelope::Akteur::System)
+            .expect("event"),
     ];
     store
         .append(AppendBatch::new(&stream, ExpectedVersion::Any, &events))
@@ -92,7 +95,8 @@ fn an_envelope_without_verlauf_or_answer_reads() {
     let tenant = TenantId::new();
     let ctx = CommandContext::new(tenant, process, WorkflowId::new("verlauf", "FV2025-10-01"));
     let envelope = EventEnvelope::from_new(
-        ctx.new_event(&Ev::Aktiviert).expect("event"),
+        ctx.new_event(&Ev::Aktiviert, mako_engine::envelope::Akteur::System)
+            .expect("event"),
         StreamId::for_process(tenant, &process),
         1,
         time::OffsetDateTime::UNIX_EPOCH,

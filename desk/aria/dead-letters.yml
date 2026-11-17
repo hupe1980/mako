@@ -1,0 +1,7 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Dead Letters" [level=1]
+  - paragraph: Nachrichten, die kein Prozess annahm oder deren Zustellung endgültig scheiterte — die jüngste zuerst.
+  - paragraph: Keine Dead Letters.
+  - text: Jede Nachricht wurde angenommen oder zugestellt.

@@ -68,6 +68,12 @@ describe("the Desk", () => {
     );
     await open("/prozess?key=51238696012");
     expect(await screen.findByText("Kein Prozess für „51238696012“")).toBeTruthy();
+    // The refusal takes the focus, so a screen reader hears it and Tab goes on from it.
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toContain("Kein Prozess für „51238696012“"),
+    );
+    // The service's own text is served text, in the language it was written in.
+    expect(screen.getByText("process_not_found: none").getAttribute("lang")).toBe("en");
     // Only the tool calls: the runtime configuration is a GET without a body.
     const sent = (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls
       .filter(([, init]) => init?.body !== undefined)
@@ -76,40 +82,6 @@ describe("the Desk", () => {
     // An identifier leaves the URL as the string it was — never a number.
     expect(sent?.params.arguments.business_key).toBe("51238696012");
     expect(screen.getByText("process_not_found: none")).toBeTruthy();
-  });
-
-  it("lists every process under a key, the earliest Frist first", async () => {
-    const process = (id: string, due: string) => ({
-      stream_id: `process/t/${id}`,
-      workflow_name: `wf-${id}`,
-      process_id: id,
-      deadlines: [{ deadline_id: `d-${id}`, label: "response", art: "prozess", due_at: due }],
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string, init: RequestInit) => {
-        const m = JSON.parse(String(init.body));
-        const answer =
-          m.method === "tools/call"
-            ? {
-                structuredContent: {
-                  business_key: "51238696012",
-                  processes: [
-                    process("late", "2026-12-01T10:00:00Z"),
-                    process("soon", "2026-11-05T10:00:00Z"),
-                  ],
-                },
-              }
-            : {};
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: answer }), {
-          headers: { "content-type": "application/json", "mcp-session-id": "s" },
-        });
-      }),
-    );
-    await open("/prozess?key=51238696012");
-    expect(await screen.findByText("2 Prozesse")).toBeTruthy();
-    const titles = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
-    expect(titles.filter((t) => t?.startsWith("wf-"))).toEqual(["wf-soon", "wf-late"]);
   });
 
   it("shows a customer with each Lieferstelle in its own state", async () => {
@@ -278,10 +250,11 @@ describe("the Desk", () => {
     expect(calls.filter((c) => c === "list_open_processes")).toHaveLength(1);
     expect(calls.filter((c) => c === "kunden_zu_malos")).toHaveLength(1);
     expect(calls.filter((c) => c === "get_process")).toHaveLength(0);
-    // processd has more than the page: the source line says so.
-    expect(
-      within(screen.getByRole("list", { name: "Quellen" })).getByText("Anmeldungen: 3+"),
-    ).toBeTruthy();
+    // processd has more than the page: the Arbeitsvorrat says so.
+    const anmeldungen = within(screen.getByRole("list", { name: "Arbeitsvorrat" }))
+      .getAllByRole("listitem")
+      .find((li) => li.textContent?.startsWith("Anmeldungen"));
+    expect(anmeldungen?.textContent).toMatch(/3\+$/);
   });
 
   it("merges every source by Frist, files a Hinweis under its item and names a failed source", async () => {
@@ -301,7 +274,10 @@ describe("the Desk", () => {
             anker: [{ art: "malo", wert }],
           });
           return Response.json([
-            h("t-1", "41203768152", "Die Antwortfrist ist seit gestern abgelaufen."),
+            {
+              ...h("t-1", "41203768152", "Die Antwortfrist ist seit gestern abgelaufen."),
+              anker: [{ art: "process", wert: "p-alt" }],
+            },
             // Same MaLo, but about another process: not under p-alt.
             {
               ...h("t-3", "41203768152", "Ein anderer Prozess dieser MaLo."),
@@ -316,23 +292,31 @@ describe("the Desk", () => {
         if (url.startsWith("/svc/agentd/")) return Response.json({ faehigkeiten: [] });
         const m = JSON.parse(String(init?.body));
         let result: unknown = {};
-        if (m.method === "tools/call" && m.params.name === "list_overdue_processes") {
+        if (m.method === "tools/call" && m.params.name === "list_klaerfaelle") {
           result = {
             structuredContent: {
-              overdue: [
-                {
-                  process_id: "p-alt",
-                  pid: 55001,
-                  family: "gpke",
-                  state: "running",
-                  malo_id: "41203768152",
-                  deadline_at: "2020-01-01T10:00:00Z",
-                  deadline_source: "Antwort auf die Anmeldung",
-                },
-              ],
               count: 1,
               saturated: false,
-              limit: 500,
+              klaerfaelle: [
+                {
+                  id: "k-alt",
+                  message_ref: "UTILMD-ALT",
+                  process_id: "p-alt",
+                  pid: 55001,
+                  origins: ["frist_missed"],
+                  ursache_code: "Z29",
+                  ursache_liste: "E_0622",
+                  bedeutung: "Antwortfrist versäumt",
+                  aktion: "escalate_to_operator",
+                  hinweis: "escalate",
+                  befehl: null,
+                  due_at: "2020-01-01T10:00:00Z",
+                  due_source: "Antwort auf die Anmeldung",
+                  overdue: true,
+                  occurrences: 1,
+                  opened_at: "2019-12-30T10:00:00Z",
+                },
+              ],
             },
           };
         } else if (m.method === "tools/call" && m.params.name === "list_pending_approvals") {
@@ -351,9 +335,9 @@ describe("the Desk", () => {
     await open("/heute");
     const ueber = within(await screen.findByRole("list", { name: "Überfällig" }));
     // The task first, in the operator's words; the service's codes never raw.
-    expect(ueber.getByText("Antwortfrist überschritten · GPKE")).toBeTruthy();
-    expect(ueber.getByText(/PID 55001 · läuft/)).toBeTruthy();
-    expect(ueber.queryByText(/running|gpke/)).toBeNull();
+    expect(ueber.getByText("Z29 — Antwortfrist versäumt")).toBeTruthy();
+    expect(ueber.getByText(/PID 55001 · Frist versäumt · Selbst klären/)).toBeTruthy();
+    expect(ueber.queryByText(/frist_missed|escalate_to_operator/)).toBeNull();
     // The Fundstelle is the detail's, not the row's.
     expect(ueber.queryByText("Antwort auf die Anmeldung")).toBeNull();
     // The Hinweis on the overdue MaLo sits under that item …
@@ -372,8 +356,8 @@ describe("the Desk", () => {
     ).toBe(false);
     // A refused source names itself in the service's words; the rest still lists.
     expect(
-      await within(screen.getByRole("list", { name: "Quellen" })).findByText(
-        /Korrekturbedarf: read-mabis-run denied/,
+      await within(screen.getByRole("list", { name: "Arbeitsvorrat" })).findByText(
+        /read-mabis-run denied/,
       ),
     ).toBeTruthy();
     // The assistant is asked about the item in focus.
@@ -693,8 +677,12 @@ describe("the Desk", () => {
     expect(rows).toHaveLength(4);
     // The Frist says what it is for; its label stays the tooltip.
     expect(rows[3]).toContain("Frist des Prozesses");
-    expect(screen.getByText("Frist des Prozesses").getAttribute("title")).toBe("gpke-antwortfrist");
-    expect(screen.getByText("UTILMD-1")).toBeTruthy();
+    expect(
+      screen
+        .getAllByText("Frist des Prozesses")
+        .some((el) => el.getAttribute("title") === "gpke-antwortfrist"),
+    ).toBe(true);
+    expect(screen.getAllByText("UTILMD-1")).not.toHaveLength(0);
   });
 
   it("asks the assistant about the MaLo and marks each sentence by its check", async () => {
@@ -992,11 +980,24 @@ describe("the Desk", () => {
       if (url.startsWith("/svc/agentd/")) return Response.json([]);
       const m = JSON.parse(String(init?.body));
       const result =
-        m.method === "tools/call" && m.params.name === "list_pending_approvals"
-          ? { structuredContent: { freigaben: [freigabe], count: 1, saturated: false } }
-          : m.method === "tools/call"
-            ? { structuredContent: { process_id: "p-1", workflow_name: "w", eintraege: [] } }
-            : {};
+        m.method === "tools/call" && m.params.name === "rehearse_decision"
+          ? {
+              structuredContent: {
+                id: "q-1",
+                freigeben: true,
+                urteil: "ohne_nachricht",
+                command: null,
+                marktrolle: null,
+                payload: {},
+                body_sha256: null,
+                grund: null,
+              },
+            }
+          : m.method === "tools/call" && m.params.name === "list_pending_approvals"
+            ? { structuredContent: { freigaben: [freigabe], count: 1, saturated: false } }
+            : m.method === "tools/call"
+              ? { structuredContent: { process_id: "p-1", workflow_name: "w", eintraege: [] } }
+              : {};
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }), {
         headers: { "content-type": "application/json", "mcp-session-id": "s" },
       });
@@ -1132,6 +1133,14 @@ describe("the Desk", () => {
           begruendung: "Die MaLo nimmt nicht an der Marktkommunikation teil.",
           quelle: "processd/get_queue_entry",
           belegt: true,
+        },
+        // Only a proposal the gate passed is taken in unchanged.
+        pruefvermerk: {
+          urteil: "bestanden",
+          stufen: [],
+          grund: null,
+          body_sha256: null,
+          geprueft_um: "2031-01-01T09:03:00Z",
         },
         schritte: [],
         hilfreich: null,
@@ -1337,6 +1346,8 @@ describe("the Desk", () => {
       created_at: "2031-02-01T08:00:00Z",
     });
     return vi.fn(async (url: string, init?: RequestInit) => {
+      // The drift banner's read of a service's document is no decision.
+      if (url.endsWith("/api/v1/openapi.json")) return Response.json({});
       if (
         url.startsWith("/svc/invoicd/api/") ||
         url.startsWith("/svc/billingd/api/") ||
@@ -1442,8 +1453,8 @@ describe("the Desk", () => {
     expect(zeile.textContent).toContain("Rechnung NB-2031-0815");
     expect(
       fetch.mock.calls.filter(([u, i]) => {
-        if (!u.startsWith("/svc/marktd/")) return false;
-        const m = JSON.parse(String(i?.body));
+        if (!u.startsWith("/svc/marktd/") || !i?.body) return false;
+        const m = JSON.parse(String(i.body));
         return m.method === "tools/call" && m.params.name === "partner_namen";
       }),
     ).toHaveLength(1);
@@ -2247,6 +2258,65 @@ describe("the Desk", () => {
       },
       list_parked_bookings: {
         buchungen: [geparktFixture("rechnung:R-1", "R-1")],
+        count: 1,
+        saturated: false,
+      },
+      list_klaerfaelle: {
+        count: 1,
+        saturated: false,
+        klaerfaelle: [
+          {
+            id: "k-1",
+            message_ref: "UTILMD-K",
+            process_id: "p-kf",
+            pid: 55001,
+            origins: ["aperak"],
+            ursache_code: "Z29",
+            ursache_liste: "APERAK",
+            bedeutung: null,
+            aktion: "retry_with_correction",
+            hinweis: "",
+            befehl: null,
+            due_at: "2031-01-02T10:00:00Z",
+            due_source: null,
+            overdue: false,
+            occurrences: 1,
+            opened_at: "2031-01-01T10:00:00Z",
+          },
+        ],
+      },
+      list_dunning: {
+        faelle: [
+          {
+            id: "m-1",
+            account_id: "acc-1",
+            stufe: 2,
+            amount_due_ct: 4210,
+            amount_due_eur: "42.10",
+            issued_at: "2031-01-01T08:00:00Z",
+            due_date: "2031-01-15",
+            sperrauftrag_ce_id: null,
+          },
+        ],
+        count: 1,
+        saturated: false,
+      },
+      list_unbilled_periods: {
+        periods: [
+          {
+            malo_id: "51238696012",
+            lf_mp_id: "9900357000004",
+            period_from: "2030-01-01",
+            period_to: "2030-12-31",
+            final_invoice: false,
+            reason_code: "NO_METER_DATA",
+            message: "no reading",
+            due_on: "2031-01-21",
+            days_left: 3,
+            attempts: 1,
+            settled_by: null,
+          },
+        ],
         count: 1,
         saturated: false,
       },

@@ -1,7 +1,16 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "files": {
-    "includes": ["**", "!node_modules", "!dist", "!src/data/gen"]
+    "includes": [
+      "**",
+      "!node_modules",
+      "!dist",
+      "!src/data/gen",
+      "!src/data/api/schema.ts",
+      "!src/data/api/stand.ts",
+      "!openapi.json",
+      "!aria"
+    ]
   },
   "formatter": {
     "indentStyle": "space",
@@ -35,5 +44,6 @@
     "parser": {
       "tailwindDirectives": true
     }
-  }
+  },
+  "plugins": ["./lint/zahlen.grit", "./lint/html.grit"]
 }

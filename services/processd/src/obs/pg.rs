@@ -18,7 +18,7 @@ pub const TERMINAL_STATE_SQL: &str = "'completed','rejected','failed'";
 /// expects them. One constant so a column added to the table cannot reach one
 /// query and miss three.
 const PROJECTION_COLUMNS: &str = "process_id, pid, family, workflow_name, state, malo_id, \
-     partner_mp_id, mdm_role, deadline_at, deadline_source, deadline_risk, started_at, \
+     partner_mp_id, mdm_role, eingriff, deadline_at, deadline_source, deadline_risk, started_at, \
      last_event_at, erc_code, antwort_code, antwort_codeliste, initiator_is_affiliate, tenant";
 
 /// The single-row read, scoped to the tenant that owns the row.
@@ -53,8 +53,8 @@ const UPSERT_SQL: &str = r"INSERT INTO process_projections
       (process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
        mdm_role, deadline_at, deadline_source, deadline_risk, started_at, last_event_at,
        erc_code, antwort_code, antwort_codeliste, initiator_is_affiliate, tenant,
-       completed_at, updated_at)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+       eingriff, completed_at, updated_at)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
           CASE WHEN $5 IN ('completed','rejected','failed') THEN $13 ELSE NULL END,
           now())
   ON CONFLICT (process_id) DO UPDATE SET
@@ -75,6 +75,13 @@ const UPSERT_SQL: &str = r"INSERT INTO process_projections
       malo_id                = COALESCE(EXCLUDED.malo_id, process_projections.malo_id),
       partner_mp_id          = COALESCE(EXCLUDED.partner_mp_id, process_projections.partner_mp_id),
       mdm_role               = COALESCE(EXCLUDED.mdm_role, process_projections.mdm_role),
+      -- The most human actor wins and is never lowered (EINGRIFF_RANG order).
+      eingriff               = CASE
+                                   WHEN array_position(ARRAY['system','freigabe','freigabe-geaendert','person'], EXCLUDED.eingriff)
+                                        > COALESCE(array_position(ARRAY['system','freigabe','freigabe-geaendert','person'], process_projections.eingriff), 0)
+                                   THEN EXCLUDED.eingriff
+                                   ELSE process_projections.eingriff
+                               END,
       initiator_is_affiliate = EXCLUDED.initiator_is_affiliate OR process_projections.initiator_is_affiliate,
       workflow_name  = CASE WHEN EXCLUDED.workflow_name <> ''
                             THEN EXCLUDED.workflow_name
@@ -127,6 +134,22 @@ const KPI_SQL: &str = r"SELECT
   WHERE pid = $1
     AND (started_at AT TIME ZONE 'Europe/Berlin')::date >= $2
     AND (started_at AT TIME ZONE 'Europe/Berlin')::date <= $3
+    AND tenant = $4";
+
+/// Ended processes of one PID by their most human actor, bucketed by the
+/// Berlin day the process **ended** — not by `started_at`: the share is about
+/// how processes were finished, and an open one has no class yet.
+const EINGRIFF_SQL: &str = r"SELECT
+      COUNT(*) FILTER (WHERE eingriff = 'system')             AS ohne_eingriff,
+      COUNT(*) FILTER (WHERE eingriff = 'freigabe')           AS freigabe_unveraendert,
+      COUNT(*) FILTER (WHERE eingriff = 'freigabe-geaendert') AS freigabe_geaendert,
+      COUNT(*) FILTER (WHERE eingriff = 'person')             AS person
+  FROM process_projections
+  WHERE pid = $1
+    AND state IN ('completed','rejected','failed')
+    AND completed_at IS NOT NULL
+    AND (completed_at AT TIME ZONE 'Europe/Berlin')::date >= $2
+    AND (completed_at AT TIME ZONE 'Europe/Berlin')::date <= $3
     AND tenant = $4";
 
 /// Per-PID parity counts for one **calendar year**, bucketed by `started_at`.
@@ -241,6 +264,10 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             .bind(&p.antwort_codeliste)
             .bind(p.initiator_is_affiliate)
             .bind(&p.tenant)
+            .bind(
+                p.eingriff
+                    .map(mako_engine::envelope::Eingriffsklasse::as_str),
+            )
             .execute(&self.pool)
             .await
             .map_err(|e| ObsError::Database(e.to_string()))?;
@@ -325,6 +352,26 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         }
         let with_frist = count("total_with_frist");
         let breached = count("total_frist_breached");
+        let eingriff_row = sqlx::query(EINGRIFF_SQL)
+            .bind(i32::try_from(pid).unwrap_or(0))
+            .bind(from)
+            .bind(to)
+            .bind(require_tenant(tenant)?)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| ObsError::Database(e.to_string()))?;
+        let klasse = |name: &str| -> u64 {
+            eingriff_row
+                .try_get::<i64, _>(name)
+                .unwrap_or(0)
+                .unsigned_abs()
+        };
+        let eingriff = crate::obs::domain::EingriffReport::from_counts(
+            klasse("ohne_eingriff"),
+            klasse("freigabe_unveraendert"),
+            klasse("freigabe_geaendert"),
+            klasse("person"),
+        );
 
         Ok(KpiReport {
             pid,
@@ -345,6 +392,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             // can forget to.
             avg_cycle_time_hours: row.try_get("avg_cycle_time_hours").unwrap_or(None),
             p95_cycle_time_hours: row.try_get("p95_cycle_time_hours").unwrap_or(None),
+            eingriff,
         })
     }
 
@@ -492,6 +540,15 @@ fn row_to_projection(row: &sqlx::postgres::PgRow) -> Result<ProcessProjection, O
         malo_id: row.try_get("malo_id").map_err(db)?,
         partner_mp_id: row.try_get("partner_mp_id").map_err(db)?,
         mdm_role: row.try_get("mdm_role").map_err(db)?,
+        // A literal no class spells is a read failure, never `system`.
+        eingriff: match row.try_get::<Option<&str>, _>("eingriff").map_err(db)? {
+            None => None,
+            Some(s) => Some(
+                mako_engine::envelope::Eingriffsklasse::parse(s).ok_or_else(|| {
+                    ObsError::Database("stored eingriff is not a known class".to_owned())
+                })?,
+            ),
+        },
         deadline_at: row.try_get("deadline_at").map_err(db)?,
         deadline_source: row.try_get("deadline_source").map_err(db)?,
         deadline_risk: DeadlineRisk::from_str_or_unknown(

@@ -257,16 +257,22 @@ fn default_ueberschuss() -> String {
 }
 
 /// Stored plant record returned by GET endpoints.
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, schemars::JsonSchema, utoipa::ToSchema)]
 pub struct AnlageRow {
     pub tr_id: String,
     pub tenant: String,
     pub malo_id: String,
     pub melo_id: Option<String>,
     pub eeg_gesetz: i16,
+    #[schemars(with = "String", extend("format" = "date"))]
+    #[schema(value_type = String, format = Date)]
     pub inbetriebnahme: Date,
+    #[schemars(with = "String", extend("format" = "decimal"))]
+    #[schema(value_type = String, format = "decimal")]
     pub leistung_kwp: Decimal,
     pub erzeugungsart: String,
+    #[schemars(with = "String", extend("format" = "decimal"))]
+    #[schema(value_type = String, format = "decimal")]
     pub verguetungssatz_ct: Decimal,
     pub verguetungsform: String,
     /// The EEG Förderende, or `NULL` for a plant that has none.
@@ -276,15 +282,25 @@ pub struct AnlageRow {
     /// calendar year separately (Abs. 4), and both are counters against
     /// generation. A KWK plant therefore has no calendar Förderende and this is
     /// `NULL` for it — `kwk_max_kwh` is what ends its Zuschlag.
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub foerderendedatum: Option<Date>,
     pub settlement_model: String,
     pub direktvermarktung: bool,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub direktverm_aw_ct: Option<Decimal>,
     pub direktverm_mp_id: Option<String>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub mieter_zuschlag_ct: Option<Decimal>,
     pub ausschreibungs_zuschlag_id: Option<String>,
     pub ist_repowering: bool,
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub ursprungs_inbetriebnahme: Option<Date>,
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub repowering_datum: Option<Date>,
     pub parent_tr_id: Option<String>,
     pub kwk_anlagenart: Option<String>,
@@ -292,36 +308,64 @@ pub struct AnlageRow {
     /// § 7 Abs. 1 Satz 2 KWKG — whether the BMWK Feststellung is published.
     pub kwk_bmwk_feststellung: bool,
     /// § 6 Abs. 1 Satz 1 Nr. 1 lit. c aa KWKG — BImSchG-Genehmigung erteilt am.
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub kwk_bimschg_genehmigung: Option<Date>,
     /// § 6 Abs. 1 Satz 1 Nr. 1 lit. c bb KWKG — verbindliche Bestellung am.
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub kwk_verbindliche_bestellung: Option<Date>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub kwk_kostenanteil: Option<Decimal>,
     pub kwk_foerderdauer_h: Option<i32>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub kwk_strom_kwh_gesamt: Option<Decimal>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub kwk_kwh_jahr: Option<Decimal>,
     pub kwk_kwh_jahr_year: Option<i16>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub flex_leistung_kw: Option<Decimal>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub flex_praemie_ct_kwh: Option<Decimal>,
     pub status: String,
     // MaStR + Bankverbindung
     pub mastr_registriert: bool,
     pub mastr_nummer: Option<String>,
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub mastr_datum: Option<Date>,
     /// The operator behind the plant (`einspeiser.einspeiser_id`).
     pub einspeiser_id: String,
     pub notes: Option<String>,
     // Plant attributes
     pub inbetriebnahme_typ: Option<String>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub wind_guetegrad: Option<Decimal>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub wind_korrekturfaktor: Option<Decimal>,
     // §36h Abs. 2: JSONB Vec<GuetefaktorReeval> (year 6/11/16 re-evaluations)
+    /// A JSON array of `eeg_billing::wind::GuetefaktorReeval` objects; their fields are that crate's and are
+    /// not described here.
+    #[schemars(with = "Option<Vec<serde_json::Map<String, serde_json::Value>>>")]
+    #[schema(value_type = Option<Vec<Object>>)]
     pub wind_guetefaktor_reevaluations: Option<serde_json::Value>,
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub fernsteuerbarkeit_datum: Option<Date>,
     /// § 9 Abs. 2 Satz 1 Nr. 1 / Nr. 2 lit. a — ferngesteuerte Reduzierung.
     pub sect9_fernsteuerbarkeit: bool,
     /// § 9 Abs. 2 Satz 1 Nr. 2 lit. b / Nr. 3 — 60 % Wirkleistungsbegrenzung.
     pub sect9_begrenzung_60: bool,
     /// Wechselrichterleistung in VA, for the Abs. 2 Satz 4 Steckersolar carve-out.
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub wechselrichterleistung_va: Option<Decimal>,
     // Settlement lifecycle
     pub settlement_state: Option<String>,
@@ -329,51 +373,85 @@ pub struct AnlageRow {
     pub is_biogas_sect51b: bool,
     // Ausschreibung lifecycle (§36e/§37e/§39e Erlöschen des Zuschlags)
     /// §22 EEG 2023 — the awarded anzulegender Wert (ct/kWh).
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub zuschlagswert_ct: Option<Decimal>,
     /// Date of the BNetzA award notification.
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub zuschlag_datum: Option<Date>,
     /// The Gebotstermin of the Zuschlag (§ 100 Abs. 37 EEG 2023).
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub gebotstermin: Option<Date>,
     /// §39n EEG 2023 — Innovationsausschreibung.
     pub ist_innovationsausschreibung: bool,
     /// §22b EEG 2023 — Bürgerenergiegesellschaft (§3 Nr. 15).
     pub ist_buergerenergie: bool,
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub zuschlag_erloeschen_datum: Option<Date>,
     // §52 Abs. 1 Nr. 11 — the one §52 clock einsd owns end to end. Every other
     // breach lives in `eeg_pflichtverstoesse`.
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub mastr_violation_start: Option<Date>,
     /// § 19 Abs. 3b / 3c EEG 2023 — `KEINE` | `ABGRENZUNG` | `PAUSCHAL`. Anlage 1
     /// Nr. 2 Satz 3 moves a plant claiming either option onto the
     /// Jahresmarktwert whatever its vintage.
     pub speicher_option: String,
     // §21b Abs. 1 Satz 2 — the effective date of the last Veräußerungsform switch
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub last_veraeusserungsform_switch: Option<Date>,
     // §51a cumulative RAW negative-price quarter-hours (drives effektives_foerderende)
     pub negative_price_qh_gesamt: i64,
     // §24 Erweiterung capacity blocks (migration 0003, JSONB)
+    /// A JSON array of `eeg_billing::CapacityBlock` objects; their fields are that crate's and are
+    /// not described here.
+    #[schemars(with = "Option<Vec<serde_json::Map<String, serde_json::Value>>>")]
+    #[schema(value_type = Option<Vec<Object>>)]
     pub capacity_blocks: Option<serde_json::Value>,
     // §§42–44 EEG 2023 biomass fuel composition
     pub biomasse_hauptbrennstoff: Option<String>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub biomasse_guelle_anteil: Option<Decimal>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub biomasse_getreide_mais_anteil: Option<Decimal>,
     // §44b Biogas annual quota tracking
+    #[schemars(with = "String", extend("format" = "decimal"))]
+    #[schema(value_type = String, format = "decimal")]
     pub biogas_quota_kwh_ytd: Decimal,
     pub biogas_quota_ytd_year: Option<i16>,
     // §51 Abs. 2 Nr. 1 iMSys rollout datum
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub imesys_rollout_datum: Option<Date>,
     // §3 Nr. 37: Pilotwindenergieanlage — §51 carve-out under every Fassung
     pub ist_pilotwindanlage: bool,
     // §100: date the Solarspitzengesetz opt-in was declared (Textform to the NB)
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
     pub sect51_optin_erklaert_am: Option<Date>,
     // §21c notification tracking
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schemars(with = "Option<String>", extend("format" = "date-time"))]
+    #[schema(value_type = Option<String>, format = DateTime)]
     pub veraeusserungsform_notification_sent_at: Option<OffsetDateTime>,
     /// When the 180-day Förderende alert was emitted; NULL until it is.
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schemars(with = "Option<String>", extend("format" = "date-time"))]
+    #[schema(value_type = Option<String>, format = DateTime)]
     pub foerderung_alert_sent_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String", extend("format" = "date-time"))]
+    #[schema(value_type = String, format = DateTime)]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String", extend("format" = "date-time"))]
+    #[schema(value_type = String, format = DateTime)]
     pub updated_at: OffsetDateTime,
 }
 
@@ -3731,6 +3809,48 @@ pub async fn ausfallverguetung_nutzung(
     })
 }
 
+/// One settlement receipt as the history lists it: an original and the
+/// correction that superseded it are two rows for one month, told apart by
+/// `is_correction` / `correction_of` — without them the history reads as a
+/// double payment.
+#[derive(Debug, Serialize, sqlx::FromRow, schemars::JsonSchema, utoipa::ToSchema)]
+pub struct SettlementReceipt {
+    #[schemars(with = "String", extend("format" = "uuid"))]
+    #[schema(value_type = String, format = Uuid)]
+    pub id: Uuid,
+    pub tr_id: String,
+    pub billing_year: i16,
+    pub billing_month: i16,
+    pub settlement_model: String,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
+    pub einspeisemenge_kwh: Option<Decimal>,
+    #[schemars(with = "Option<String>", extend("format" = "decimal"))]
+    #[schema(value_type = Option<String>, format = "decimal")]
+    pub settlement_eur: Option<Decimal>,
+    /// `calculated`, `price_missing`, `no_data`, `error`, `foerderung_beendet`,
+    /// `jahreskontingent_erschoepft`, `sanctioned`, `kein_anspruch`, `unknown`
+    /// or `gehalten` — a stable code, worded by the reader's catalogue.
+    pub status: String,
+    /// Why a settlement that paid nothing did not — the developer text beside
+    /// `status`.
+    pub error_detail: Option<String>,
+    /// § 26 Abs. 1 EEG 2023: the payment's due date.
+    #[schemars(with = "Option<String>", extend("format" = "date"))]
+    #[schema(value_type = Option<String>, format = Date)]
+    pub faelligkeitsdatum: Option<Date>,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String", extend("format" = "date-time"))]
+    #[schema(value_type = String, format = DateTime)]
+    pub settled_at: OffsetDateTime,
+    pub gutschrift_nummer: Option<String>,
+    pub is_correction: bool,
+    #[schemars(with = "Option<String>", extend("format" = "uuid"))]
+    #[schema(value_type = Option<String>, format = Uuid)]
+    pub correction_of: Option<Uuid>,
+    pub correction_reason: Option<String>,
+}
+
 pub async fn list_settlement_receipts(
     pool: &PgPool,
     tenant: &str,
@@ -3738,15 +3858,15 @@ pub async fn list_settlement_receipts(
     year: Option<i16>,
     month: Option<i16>,
     limit: i64,
-) -> anyhow::Result<Vec<serde_json::Value>> {
+) -> anyhow::Result<Vec<SettlementReceipt>> {
     // `$3 IS NULL OR billing_year = $3` rather than a built-up WHERE clause:
     // the two columns are the leading pair of the receipts index and both
     // filters are optional, so one prepared statement serves all four
     // combinations without concatenating SQL.
-    let rows = sqlx::query(
+    sqlx::query_as::<_, SettlementReceipt>(
         r"SELECT id, tr_id, billing_year, billing_month, settlement_model,
-                 einspeisemenge_kwh, settlement_eur, status, settled_at, gutschrift_nummer,
-                 is_correction, correction_of, correction_reason
+                 einspeisemenge_kwh, settlement_eur, status, error_detail, faelligkeitsdatum,
+                 settled_at, gutschrift_nummer, is_correction, correction_of, correction_reason
           FROM settlement_receipts
           WHERE tr_id = $1 AND tenant = $2
             AND ($3::smallint IS NULL OR billing_year  = $3)
@@ -3761,31 +3881,7 @@ pub async fn list_settlement_receipts(
     .bind(limit)
     .fetch_all(pool)
     .await
-    .context("list_settlement_receipts")?;
-
-    Ok(rows
-        .iter()
-        .map(|r| {
-            serde_json::json!({
-                "id": r.try_get::<Uuid, _>("id").ok().map(|u| u.to_string()),
-                "tr_id": r.try_get::<String, _>("tr_id").ok(),
-                "billing_year": r.try_get::<i16, _>("billing_year").ok(),
-                "billing_month": r.try_get::<i16, _>("billing_month").ok(),
-                "settlement_model": r.try_get::<String, _>("settlement_model").ok(),
-                "einspeisemenge_kwh": r.try_get::<Option<Decimal>, _>("einspeisemenge_kwh").ok().flatten(),
-                "settlement_eur": r.try_get::<Option<Decimal>, _>("settlement_eur").ok().flatten(),
-                "status": r.try_get::<String, _>("status").ok(),
-                "settled_at": r.try_get::<OffsetDateTime, _>("settled_at").ok().map(|t| t.to_string()),
-                "gutschrift_nummer": r.try_get::<Option<String>, _>("gutschrift_nummer").ok().flatten(),
-                // Without these an original and the correction that superseded it
-                // are two rows for the same month with no way to tell which is
-                // which — the history reads as a double payment.
-                "is_correction": r.try_get::<bool, _>("is_correction").ok(),
-                "correction_of": r.try_get::<Option<Uuid>, _>("correction_of").ok().flatten().map(|u| u.to_string()),
-                "correction_reason": r.try_get::<Option<String>, _>("correction_reason").ok().flatten(),
-            })
-        })
-        .collect())
+    .context("list_settlement_receipts")
 }
 
 // ── EPEX monthly prices ───────────────────────────────────────────────────────

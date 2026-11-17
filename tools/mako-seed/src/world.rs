@@ -98,7 +98,6 @@ pub const GAS_KUNDE: (&str, &str) = ("Hannah", "Brandt");
 
 /// A Marktlokation in Gasnetz Nachbarstadt's grid that the Stadtwerk's
 /// Lieferant supplies — what the disputed NN-Rechnung bills.
-#[cfg(test)]
 pub fn nachbar_malo() -> String {
     malo_from_base("4300000317")
 }
@@ -297,6 +296,91 @@ pub fn nn_rechnung_31002(heute: Date, reference: &str) -> String {
         .replace("202611232300", &tagesbeginn(faellig))
 }
 
+/// The Stadtwerk's two Anmeldungen at Gasnetz Nachbarstadt that its
+/// Gegenpartei-Akte shows: one answered after its Frist, one refused.
+pub const NACHBAR_SPAET: &str = "0d6b7c1e-3f6a-4c7e-9a51-6c1f2b8e4a01";
+/// See [`NACHBAR_SPAET`].
+pub const NACHBAR_ABGELEHNT: &str = "0d6b7c1e-3f6a-4c7e-9a51-6c1f2b8e4a02";
+
+/// The refusal Gasnetz Nachbarstadt answered with: `E_3005` `A16`
+/// „identifizierte Marktlokation nimmt nicht an der Marktkommunikation teil".
+pub const NACHBAR_ABLEHNUNG: (&str, &str) = ("A16", "E_3005");
+
+/// How late Gasnetz Nachbarstadt answered the first Anmeldung: three hours
+/// past the end of its Frist.
+pub const NACHBAR_VERSPAETUNG_STUNDEN: i64 = 3;
+
+/// The CloudEvents makod would have sent processd for the two Anmeldungen
+/// (44001, LF → GNB), dated relative to `now`: each Anmeldung's APERAK
+/// acceptance, then its answer. They carry no `process.initiated`, so no
+/// decision module of processd acts on them; only its read model does.
+pub fn nachbar_ereignisse(now: time::OffsetDateTime) -> Vec<Value> {
+    use time::format_description::well_known::Rfc3339;
+    let heute = mako_fristen::berlin_date(now);
+    let um = |tage: i64| {
+        mako_fristen::berlin_midnight(heute - time::Duration::days(tage)) + time::Duration::hours(9)
+    };
+    let event =
+        |id: String, ce_type: &str, process: &str, at: time::OffsetDateTime, extra: Value| {
+            let mut data = serde_json::json!({
+                "pid": 44_001,
+                "partner_mp_id": GASNETZ_NACHBARSTADT,
+                "malo_id": nachbar_malo(),
+            });
+            if let (Some(d), Value::Object(e)) = (data.as_object_mut(), extra) {
+                d.extend(e);
+            }
+            serde_json::json!({
+                "specversion": "1.0",
+                "id": id,
+                "source": "/mako-seed",
+                "type": ce_type,
+                "subject": process,
+                "time": at.format(&Rfc3339).unwrap_or_default(),
+                "makopid": 44_001,
+                "makoworkflow": "geli-gas-lf-anmeldung",
+                "marktrole": "LF",
+                "datacontenttype": "application/json",
+                "data": data,
+            })
+        };
+    let spaet_start = um(20);
+    let frist =
+        mako_fristen::antwort::antwortfrist(44_001, spaet_start).map_or(spaet_start, |f| f.due_at);
+    let abgelehnt_start = um(10);
+    let (code, liste) = NACHBAR_ABLEHNUNG;
+    vec![
+        event(
+            format!("{NACHBAR_SPAET}-aperak"),
+            "de.mako.aperak.accepted",
+            NACHBAR_SPAET,
+            spaet_start,
+            Value::Null,
+        ),
+        event(
+            format!("{NACHBAR_SPAET}-antwort"),
+            "de.mako.process.completed",
+            NACHBAR_SPAET,
+            frist + time::Duration::hours(NACHBAR_VERSPAETUNG_STUNDEN),
+            serde_json::json!({ "accepted": true }),
+        ),
+        event(
+            format!("{NACHBAR_ABGELEHNT}-aperak"),
+            "de.mako.aperak.accepted",
+            NACHBAR_ABGELEHNT,
+            abgelehnt_start,
+            Value::Null,
+        ),
+        event(
+            format!("{NACHBAR_ABGELEHNT}-antwort"),
+            "de.mako.process.completed",
+            NACHBAR_ABGELEHNT,
+            abgelehnt_start + time::Duration::hours(2),
+            serde_json::json!({ "accepted": false, "antwortcode": code, "codeliste": liste }),
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +539,38 @@ mod tests {
         ] {
             assert!(!body(name).is_null(), "{name}");
         }
+    }
+
+    /// The late answer lands after its Frist and the refusal inside it, both
+    /// under the neighbouring GNB, and none of the events opens a process a
+    /// decision module would act on.
+    #[test]
+    fn the_neighbours_answers_are_one_late_and_one_refusal() {
+        let now = time::macros::datetime!(2026-11-17 12:00 UTC);
+        let events = nachbar_ereignisse(now);
+        assert_eq!(events.len(), 4);
+        assert!(
+            events
+                .iter()
+                .all(|e| e["type"] != "de.mako.process.initiated")
+        );
+        assert!(
+            events
+                .iter()
+                .all(|e| e["data"]["partner_mp_id"] == GASNETZ_NACHBARSTADT)
+        );
+        let t = |e: &Value| {
+            time::OffsetDateTime::parse(
+                e["time"].as_str().unwrap_or_default(),
+                &time::format_description::well_known::Rfc3339,
+            )
+            .expect("RFC 3339")
+        };
+        let frist = mako_fristen::antwort::antwortfrist(44_001, t(&events[0]))
+            .expect("44001 has an Antwortfrist")
+            .due_at;
+        assert!(t(&events[1]) > frist, "answered after the Frist");
+        assert_eq!(events[3]["data"]["antwortcode"], "A16");
+        assert!(t(&events[3]) < t(&events[2]) + time::Duration::days(1));
     }
 }

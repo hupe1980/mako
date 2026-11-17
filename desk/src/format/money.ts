@@ -44,3 +44,8 @@ export function formatCent(ct: number): string {
     `${sign}${digits.slice(0, -2)}.${digits.slice(-2)}` as Intl.StringNumericLiteral,
   );
 }
+
+/** A kWh value a service stated as a decimal string, as the number a chart plots — for drawing only, never for a sum. */
+export function alsMesswert(v: string): number {
+  return Number.parseFloat(v);
+}

@@ -411,11 +411,57 @@ const freigaben = [
   },
 ];
 
+// processd's read model of the two processes under KEY, as `get_process`
+// states them for the Prozess page.
+const projektionen: Record<string, Record<string, unknown>> = {
+  "43991093-7780-467a-a6e6-38701f9587ef": {
+    pid: 55001,
+    family: "gpke",
+    workflow_name: "gpke-supplier-change",
+    state: "running",
+    started_at: "2026-11-03T10:12:00Z",
+    last_event_at: "2026-11-03T10:12:01Z",
+    deadline_at: "2026-11-05T10:00:00Z",
+    deadline_source: "BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritte 5/6",
+  },
+  "2f6c1e4a-0b5d-4c1e-9a77-3d2b8f1c6e10": {
+    pid: 17134,
+    family: "gpke",
+    workflow_name: "gpke-anfrage-bestellung",
+    state: "initiated",
+    started_at: "2026-11-02T14:30:00Z",
+    last_event_at: "2026-11-02T14:30:00Z",
+    deadline_at: "2026-11-07T10:00:00Z",
+    deadline_source: null,
+  },
+};
+
 function processdAnswer(message: {
   method: string;
-  params?: { name?: string; arguments?: { malos?: string[] } };
+  params?: { name?: string; arguments?: { malos?: string[]; process_id?: string } };
 }) {
   if (message.method !== "tools/call") return {};
+  if (message.params?.name === "get_process") {
+    const id = message.params.arguments?.process_id ?? "";
+    const p = projektionen[id];
+    if (!p) return { isError: true, content: [{ type: "text", text: "process_not_found: none" }] };
+    return {
+      content: [],
+      structuredContent: {
+        process_id: id,
+        malo_id: KEY,
+        partner_mp_id: "9900357000004",
+        mdm_role: null,
+        deadline_risk: "ok",
+        erc_code: null,
+        antwort_code: null,
+        antwort_codeliste: null,
+        bedeutung: null,
+        initiator_is_affiliate: true,
+        ...p,
+      },
+    };
+  }
   if (message.params?.name === "list_overdue_processes") {
     return {
       content: [],
@@ -452,6 +498,12 @@ async function recordedProcessd(context: BrowserContext) {
   await context.route("**/svc/processd/mcp", async (route) => {
     const message = JSON.parse(route.request().postData() ?? "{}");
     if (message.id === undefined) return route.fulfill({ status: 202 });
+    if (
+      ["get_counterparty_record", "list_counterparties", "rehearse_decision"].includes(
+        message.params?.name,
+      )
+    )
+      return route.fallback();
     const result = processdAnswer(message);
     await route.fulfill({
       contentType: "application/json",
@@ -548,6 +600,8 @@ async function recordedRechnungen(context: BrowserContext) {
       if (message.id === undefined) return route.fulfill({ status: 202 });
       const structured =
         message.method === "tools/call" ? answers[message.params?.name as string] : undefined;
+      // A tool these scenes do not record is the stage's (buehne.ts / antworten.ts).
+      if (message.method === "tools/call" && !structured) return route.fallback();
       await route.fulfill({
         contentType: "application/json",
         headers: { "mcp-session-id": "screenshots" },
@@ -643,6 +697,23 @@ async function recordedAgentd(context: BrowserContext) {
         "Kein Prüfschritt der Vorprüfung schlägt an; die Anmeldung kann freigegeben werden.",
       quelle: "processd/get_queue_entry",
       belegt: true,
+    },
+    // The gate passed it, so it can be taken in unchanged.
+    pruefvermerk: {
+      urteil: "bestanden",
+      stufen: [
+        {
+          stufe: "entscheidung",
+          urteil: "bestanden",
+          code: null,
+          regel: "E_0623",
+          segment: null,
+          text: null,
+        },
+      ],
+      grund: null,
+      body_sha256: null,
+      geprueft_um: "2026-11-04T08:10:00Z",
     },
     schritte: [
       { quelle: "processd/get_queue_entry", fertig: true },
@@ -757,7 +828,9 @@ try {
     await page.addInitScript(() => localStorage.setItem("mako-desk.rolle", "netz"));
 
     await page.goto(`${base}prozess?key=${KEY}`);
-    await page.getByText("2 Prozesse").waitFor();
+    await page.getByRole("navigation", { name: `2 Prozesse unter ${KEY}` }).waitFor();
+    await page.getByRole("region", { name: "Wartet auf deine Entscheidung" }).waitFor();
+    await page.getByRole("list", { name: "Nachweise" }).waitFor();
     await shot(page, "prozesse", theme);
 
     // A question about the MaLo while the assistant reads: the numbered
@@ -861,16 +934,35 @@ try {
     // The Lieferant starts from Heute and from the customer.
     await page.addInitScript(() => localStorage.setItem("mako-desk.rolle", "lieferant"));
     await page.goto(`${base}heute`);
-    await page
-      .getByRole("list", { name: "Quellen" })
-      .getByText(/Rechnungsdispute: 1/)
-      .waitFor();
+    await page.getByRole("list", { name: "Arbeitsvorrat" }).getByText("Rechnungsdispute").waitFor();
     await page
       .getByText(/heute ab/)
       .first()
       .waitFor();
-    await page.getByText("Max Mustermann").waitFor();
+    await page.getByText("Max Mustermann").first().waitFor();
     await shot(page, "heute", theme);
+
+    // The Lokation page, on the services' REST API: Versorgung, Messkonzept,
+    // Messwerte and Konto.
+    await page.goto(`${base}lokation/${KEY}`);
+    await page.getByRole("img", { name: "Messkonzept" }).waitFor();
+    await page.getByRole("list", { name: "Messwerte je Tag" }).waitFor();
+    await page.getByRole("list", { name: /Kontoauszug/ }).waitFor();
+    await page.waitForTimeout(400);
+    await shot(page, "lokation", theme);
+
+    // An invoice recomputed: the verdict first, then every line with its sources.
+    await page.goto(`${base}rechnung/b-1`);
+    await page.getByRole("list", { name: "Berechnet aus" }).waitFor();
+    await shot(page, "nachrechnen", theme);
+
+    // A Gegenpartei's record, exportable as evidence.
+    await page.goto(`${base}gegenpartei/9800357000005/NB`);
+    await page.getByRole("list", { name: "Kennzahlen" }).waitFor();
+    await shot(page, "gegenpartei", theme);
+    // Back to Heute, where the Lieferant's scenes go on.
+    await page.goto(`${base}heute`);
+    await page.getByRole("list", { name: "Arbeitsvorrat" }).getByText("Rechnungsdispute").waitFor();
 
     // A disputed invoice decided where it stands: its finding, the proposal
     // resting on it, and the two decisions the Rechnungseingang offers.

@@ -5,7 +5,7 @@ template = "home.html"
 
 [extra]
 translated_from = "templates/index.html"
-source_sha256 = "b85bfefb77986e48533e5437ac9fe1bf5e94ce74ec4abaf83f7c2f972afd5440"
+source_sha256 = "c6ac9f2bac286a8b0b84ae04a07540f7f9d1026f6ea57e0aaaf04c97eedc527d"
 
 eyebrow = "Rust · MIT oder Apache-2.0 · BDEW EDI@Energy"
 hero_title = "Marktkommunikation für Strom und Gas,<br>von rohem EDIFACT bis zur Produktion — KI-first, in Rust."

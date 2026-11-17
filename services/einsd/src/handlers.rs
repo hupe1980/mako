@@ -21,8 +21,8 @@ use crate::{
     config::EinsdConfig,
     pg::{
         AnlageUpsertRequest, AnlagenQuery, decommission_anlage, fetch_anlage, fetch_epex_price,
-        list_anlagen, list_expiring, list_settlement_receipts, list_unsettled,
-        lookup_verguetungssatz, upsert_anlage, upsert_epex_price, zusammenlegen,
+        list_anlagen, list_unsettled, lookup_verguetungssatz, upsert_anlage, upsert_epex_price,
+        zusammenlegen,
     },
 };
 
@@ -665,25 +665,6 @@ pub async fn put_anlage(
     }
 }
 
-/// `GET /api/v1/anlagen/{tr_id}`
-pub async fn get_anlage(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
-    Path(tr_id): Path<String>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
-        return ApiError::forbidden(e.to_string()).into_response();
-    }
-
-    match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
-        Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => anlage_not_found(&tr_id),
-        Err(e) => ApiError::internal(e).into_response(),
-    }
-}
-
 /// `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform`
 ///
 /// The three facts `processd` needs about a Marktlokation and the UTILMD cannot
@@ -852,36 +833,6 @@ pub async fn delete_anlage(
     }
 }
 
-// ── 180-day expiry alert ──────────────────────────────────────────────────────
-
-/// `GET /api/v1/anlagen/foerderung-auslaufend`
-///
-/// Returns plants whose `foerderendedatum` is within 180 days of today.
-/// Used by the background alert worker and ERP dashboards.
-pub async fn get_foerderung_auslaufend(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
-    Query(q): Query<HorizonQuery>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
-        return ApiError::forbidden(e.to_string()).into_response();
-    }
-
-    let days = q.days.unwrap_or(180);
-    match list_expiring(&pool, &cfg.tenant, days).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct HorizonQuery {
-    /// Look-ahead window in days (default: 180).
-    pub days: Option<i32>,
-}
-
 // ── Settlement ────────────────────────────────────────────────────────────────
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}`.
@@ -964,58 +915,6 @@ pub async fn post_settle(
         Ok(None) => anlage_not_found(&tr_id),
         Err(e) => crate::settle::settle_error(e).into_response(),
     }
-}
-
-/// `GET /api/v1/anlagen/{tr_id}/settlements`
-pub async fn get_settlements(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
-    Path(tr_id): Path<String>,
-    Query(q): Query<SettlementsQuery>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "read-settlement", &cfg.tenant) {
-        return ApiError::forbidden(e.to_string()).into_response();
-    }
-
-    if let Some(month) = q.month
-        && !(1..=12).contains(&month)
-    {
-        return ApiError::bad_request("month must be 1–12").into_response();
-    }
-
-    match list_settlement_receipts(
-        &pool,
-        &cfg.tenant,
-        &tr_id,
-        q.year,
-        q.month,
-        q.limit.unwrap_or(24).min(200),
-    )
-    .await
-    {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
-    }
-}
-
-/// `deny_unknown_fields` on purpose. This struct accepted `limit` alone while
-/// the documented URL carries `year` and `month`, so a caller asking for one
-/// Abrechnungsmonat got the whole history back with a 200 and no way to tell —
-/// the filter was applied by nobody and reported by nobody. Both parameters are
-/// implemented below; refusing the ones that are not keeps the next filter from
-/// failing the same silent way.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SettlementsQuery {
-    /// Abrechnungsjahr, e.g. `2026`.
-    pub year: Option<i16>,
-    /// Abrechnungsmonat, 1–12. A `year` may be given without a month; a month
-    /// without a year narrows every year to that month, which is what a
-    /// year-on-year comparison asks for.
-    pub month: Option<i16>,
-    pub limit: Option<i64>,
 }
 
 // ── EPEX monthly prices ───────────────────────────────────────────────────────

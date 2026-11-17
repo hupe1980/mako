@@ -129,7 +129,7 @@ impl MockLfn {
                     bilanzkreis: Some("11XBK-LF-------9".to_owned()),
                     kundendaten: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))
@@ -176,7 +176,7 @@ impl MockLfn {
             .dispatch(&raw as &dyn Any, &self.fv)
             .expect("LFN: adapt NB response to LfAnmeldungCommand");
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("LFN: execute HandleAntwort");
     }
@@ -284,7 +284,7 @@ impl MockNb {
         };
 
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("NB: execute ReceiveUtilmd 55004");
     }
@@ -309,7 +309,7 @@ impl MockNb {
                     obligations,
                     lfa_lieferende: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))

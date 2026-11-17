@@ -14,6 +14,7 @@
 //! | *Which window does PID 55001 carry?* | [`antwort`] |
 //! | *Which messages does receiving it oblige me to send?* | [`meldung`] |
 //! | *When must the CONTRL / APERAK go out?* | [`contrl_due_at`], [`aperak_strom_due_at`], [`aperak_gas_folgeprozess_due_at`], [`aperak_gas_initialprozess_due_at`] |
+//! | *By when is this invoice owed, and its credit paid out?* | [`vorlauf::abrechnung_faellig`], [`vorlauf::guthaben_faellig`] — § 40c Abs. 2 and 3 EnWG |
 //! | *May this invoice still go out other than as an E-Rechnung?* | [`e_rechnung`] — § 27 Abs. 38 UStG for paper, another electronic format and EDI |
 //! | *Is this invoice's Rechnungsempfänger one mako may tax as domestic?* | [`empfaengerland`] — `DE` only; another Member State or a third country is refused |
 //!

@@ -1,0 +1,17 @@
+// An amount, a Frist and a count arrive as strings a service wrote — `Decimal`
+// money among them — and only src/format/ turns them into text. `Number(` or
+// `parseFloat(` on one rounds through binary floating point: 0,1 + 0,2 is
+// 0,30000000000000004, and a Cent is lost or invented on screen. The editor
+// says so as it is typed; `cargo xtask check-desk` holds the same rule in CI.
+language js
+
+or {
+  `Number($x)`,
+  `parseFloat($x)`,
+  `Number.parseFloat($x)`
+} as $call where {
+  $filename <: not r".*src/format/.*",
+  $filename <: not r".*\.test\.tsx?$",
+  $filename <: not r".*/scripts/.*",
+  register_diagnostic(span=$call, message="No Number( or parseFloat( outside src/format/: an amount is a Decimal string, shown through src/format/money.ts.")
+}

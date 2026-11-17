@@ -25,24 +25,14 @@ use mako_engine::pid_router::PidRouter;
 /// PIDs the reference credits to a workflow that the `PidRouter` deliberately
 /// does not register.
 ///
-/// Three reasons, each stated beside its entry: mako *generates* the PID and
-/// never receives it, the PID is withdrawn, or its process has no module in
-/// `makod`.
+/// Two reasons, each stated beside its entry: mako *generates* the PID and
+/// never receives it, or its process has no module in `makod`.
 const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
     // The MSBA's ORDRSP answering a Weiterverpflichtung (`E_0203`). mako holds
     // the MSBA side; the NB side — sending 17002 and awaiting the answer — is
     // not implemented, so these never arrive inbound.
     (19_003, "outbound-only: MSBA response to ORDERS 17002"),
     (19_004, "outbound-only: MSBA response to ORDERS 17002"),
-    // **44170 does not exist under FV2026-10-01.** PID-Übersicht 4.0 publishes
-    // the Gas Verpflichtungsanfrage as 44168 → 44169 and no Ablehnungs-PID; the
-    // 44170 of PID 3.3 was withdrawn. `E_2006` still publishes the Ablehnungs-
-    // Codeliste `G_0071`, so the codes exist with no carrier — mako escalates
-    // rather than emitting a Prüfidentifikator the market rejects.
-    (
-        44_170,
-        "withdrawn with FV2026-10-01; no Ablehnungs-PID exists for 44168",
-    ),
     // The one PID the Anwendungsübersicht credits to *AWH NBW* alone. It is
     // imported, profiled and validates — and `makod` registers no NBW module
     // at all (it has no dependency on `mako-nbw`, which is a domain crate

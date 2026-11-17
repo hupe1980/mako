@@ -79,6 +79,171 @@ impl Antwortcode {
     }
 }
 
+/// Who caused an event — stamped on every envelope, with no default.
+///
+/// The fact every figure about intervention counts over: an event appended
+/// without it cannot exist, so a process's history always says whether a
+/// rule, an inbound message or a timer acted, or a person. No variant lets an
+/// agent act alone — an agent only proposes, and a person approves.
+///
+/// The principal is personal data: it stays in the event store and leaves
+/// only as its [`Eingriffsklasse`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "art", rename_all = "snake_case")]
+pub enum Akteur {
+    /// An inbound message, a fired deadline or a module's own follow-up.
+    System,
+    /// A person acting directly — a command sent from the Desk or the API.
+    Person {
+        /// The authenticated principal (pseudonymous: the OIDC `sub` or a
+        /// configured name).
+        principal: String,
+    },
+    /// A person approving a proposal, relayed by the service that holds the
+    /// proposal.
+    Freigabe {
+        /// The approving principal.
+        principal: String,
+        /// Where the approved proposal came from.
+        vorschlag: Vorschlag,
+        /// Whether the approved body equals the proposed one.
+        unveraendert: bool,
+        /// The authenticated service that relayed the approval — set by the
+        /// door from the caller's own identity, never from what the caller
+        /// asserts.
+        dienst: String,
+    },
+}
+
+/// What a service asserts when it relays a person's approval
+/// (`Mako-Akteur`): the approval alone. The relaying service is the door's to
+/// name ([`Freigabeauftrag::durch`]), so an assertion cannot carry it, and
+/// an unknown field is refused rather than dropped.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Freigabeauftrag {
+    /// The approving principal.
+    pub principal: String,
+    /// Where the approved proposal came from.
+    pub vorschlag: Vorschlag,
+    /// Whether the approved body equals the proposed one.
+    pub unveraendert: bool,
+}
+
+/// The longest principal or proposal name an assertion may carry.
+pub const MAX_NAME_LEN: usize = 256;
+
+impl Freigabeauftrag {
+    /// The actor of an approval `dienst` relayed.
+    ///
+    /// # Errors
+    ///
+    /// An empty or over-long ([`MAX_NAME_LEN`]) principal or proposal name.
+    pub fn durch(self, dienst: &str) -> Result<Akteur, &'static str> {
+        let name = match &self.vorschlag {
+            Vorschlag::Regel { name } => name,
+            Vorschlag::Agent { skill } => skill,
+        };
+        for value in [&self.principal, name] {
+            if value.trim().is_empty() {
+                return Err("an approval names its principal and its proposal");
+            }
+            if value.len() > MAX_NAME_LEN {
+                return Err("a principal or proposal name is longer than 256 bytes");
+            }
+        }
+        Ok(Akteur::Freigabe {
+            principal: self.principal,
+            vorschlag: self.vorschlag,
+            unveraendert: self.unveraendert,
+            dienst: dienst.to_owned(),
+        })
+    }
+}
+
+impl Akteur {
+    /// The class an outbound message and the KPI report carry — never the
+    /// principal.
+    #[must_use]
+    pub fn klasse(&self) -> Eingriffsklasse {
+        match self {
+            Self::System => Eingriffsklasse::System,
+            Self::Person { .. } => Eingriffsklasse::Person,
+            Self::Freigabe {
+                unveraendert: true, ..
+            } => Eingriffsklasse::Freigabe,
+            Self::Freigabe {
+                unveraendert: false,
+                ..
+            } => Eingriffsklasse::FreigabeGeaendert,
+        }
+    }
+}
+
+/// The origin of a proposal a person approved.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "art", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Vorschlag {
+    /// A tabulated rule (an Entscheidungsbaum answer, a cause table row).
+    Regel {
+        /// The rule's name.
+        name: String,
+    },
+    /// An agent's draft.
+    Agent {
+        /// The skill that drafted it.
+        skill: String,
+    },
+}
+
+/// An actor's class, ordered from least to most human: a process is counted
+/// by the greatest class among its events.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum Eingriffsklasse {
+    /// No person acted.
+    #[serde(rename = "system")]
+    System,
+    /// A person approved a proposal unchanged.
+    #[serde(rename = "freigabe")]
+    Freigabe,
+    /// A person approved a proposal after changing it.
+    #[serde(rename = "freigabe-geaendert")]
+    FreigabeGeaendert,
+    /// A person acted directly.
+    #[serde(rename = "person")]
+    Person,
+}
+
+impl Eingriffsklasse {
+    /// Every class, least human first.
+    pub const ALL: [Self; 4] = [
+        Self::System,
+        Self::Freigabe,
+        Self::FreigabeGeaendert,
+        Self::Person,
+    ];
+
+    /// The wire name — the CloudEvent `makoakteur` extension value and the
+    /// metric's `eingriff` label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Freigabe => "freigabe",
+            Self::FreigabeGeaendert => "freigabe-geaendert",
+            Self::Person => "person",
+        }
+    }
+
+    /// The class a wire name names; `None` for any other string.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == s)
+    }
+}
+
 /// A pending event ready to be appended to a stream.
 ///
 /// The caller constructs a `NewEvent` for each domain event produced by a
@@ -93,7 +258,7 @@ impl Antwortcode {
 ///
 /// ```rust,ignore
 /// // Inside a MessageAdapter or test:
-/// let new_event = ctx.new_event(&SupplierChangeEvent::Initiated { .. })?;
+/// let new_event = ctx.new_event(&SupplierChangeEvent::Initiated { .. }, Akteur::System)?;
 /// store.append(&stream_id, ExpectedVersion::Any, &[new_event]).await?;
 /// ```
 ///
@@ -129,6 +294,8 @@ pub struct NewEvent {
     pub verlauf: Option<Verlauf>,
     /// The answer the message gives, if it is an answer carrying a code.
     pub antwort: Option<Antwortcode>,
+    /// Who caused the event.
+    pub akteur: Akteur,
 }
 
 impl NewEvent {
@@ -154,6 +321,7 @@ impl NewEvent {
         event_type: impl Into<Box<str>>,
         schema_version: u32,
         payload: Value,
+        akteur: Akteur,
     ) -> Self {
         Self {
             correlation_id,
@@ -167,6 +335,7 @@ impl NewEvent {
             payload,
             verlauf: None,
             antwort: None,
+            akteur,
         }
     }
 
@@ -264,6 +433,9 @@ pub struct EventEnvelope {
     /// event that is no answer, or one whose message carries no code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub antwort: Option<Antwortcode>,
+
+    /// Who caused the event. Required: an envelope without it does not load.
+    pub akteur: Akteur,
 }
 
 impl EventEnvelope {
@@ -322,6 +494,7 @@ impl EventEnvelope {
             payload: new.payload,
             verlauf: new.verlauf,
             antwort: new.antwort,
+            akteur: new.akteur,
         }
     }
 }

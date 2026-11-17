@@ -1454,6 +1454,7 @@ mod tests {
         assert_eq!(command["payload"]["obis_code"], SUMMENZEITREIHE_OBIS_BEZUG);
         let outcome = dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             command["command"].as_str().expect("a command name"),
             &command["payload"],
         )

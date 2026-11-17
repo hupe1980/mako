@@ -163,7 +163,7 @@ async fn nomination_to_fnb_accepted_happy_path() {
     let proc = make_process();
 
     // Step 1: send nomination (PID 70030 = physical point)
-    proc.run(send_nomination(70030), RunOptions::new())
+    proc.run(send_nomination(70030), RunOptions::system())
         .await
         .unwrap();
     let state = proc.state().await.unwrap();
@@ -175,7 +175,7 @@ async fn nomination_to_fnb_accepted_happy_path() {
     // Step 2: FNB confirms in full
     proc.run(
         receive_nomres(NomresAcceptance::Accepted),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -191,12 +191,12 @@ async fn nomination_to_fnb_accepted_happy_path() {
 async fn nomination_to_mgv_accepted_happy_path() {
     let proc = make_process();
 
-    proc.run(send_nomination(70031), RunOptions::new())
+    proc.run(send_nomination(70031), RunOptions::system())
         .await
         .unwrap();
     proc.run(
         receive_nomres(NomresAcceptance::Accepted),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -209,12 +209,12 @@ async fn nomination_to_mgv_accepted_happy_path() {
 async fn nomination_partially_accepted() {
     let proc = make_process();
 
-    proc.run(send_nomination(70030), RunOptions::new())
+    proc.run(send_nomination(70030), RunOptions::system())
         .await
         .unwrap();
     proc.run(
         receive_nomres(NomresAcceptance::PartiallyAccepted),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -230,12 +230,12 @@ async fn nomination_partially_accepted() {
 async fn nomination_rejected_by_fnb() {
     let proc = make_process();
 
-    proc.run(send_nomination(70030), RunOptions::new())
+    proc.run(send_nomination(70030), RunOptions::system())
         .await
         .unwrap();
     proc.run(
         receive_nomres_rejected("Kapazitätslimit überschritten"),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -253,7 +253,7 @@ async fn nomination_rejected_by_fnb() {
 async fn nomres_deadline_expires() {
     let proc = make_process();
 
-    proc.run(send_nomination(70030), RunOptions::new())
+    proc.run(send_nomination(70030), RunOptions::system())
         .await
         .unwrap();
     proc.run(
@@ -261,7 +261,7 @@ async fn nomres_deadline_expires() {
             deadline_id: DeadlineId::new(),
             label: NOMRES_DEADLINE_LABEL.to_owned(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -277,12 +277,12 @@ async fn nomres_deadline_expires() {
 async fn late_deadline_after_accepted_is_absorbed() {
     let proc = make_process();
 
-    proc.run(send_nomination(70030), RunOptions::new())
+    proc.run(send_nomination(70030), RunOptions::system())
         .await
         .unwrap();
     proc.run(
         receive_nomres(NomresAcceptance::Accepted),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -293,7 +293,7 @@ async fn late_deadline_after_accepted_is_absorbed() {
             deadline_id: DeadlineId::new(),
             label: NOMRES_DEADLINE_LABEL.to_owned(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -308,7 +308,7 @@ async fn late_deadline_after_accepted_is_absorbed() {
 #[tokio::test]
 async fn send_nomination_with_invalid_pid_rejected() {
     let proc = make_process();
-    let result = proc.run(send_nomination(12345), RunOptions::new()).await;
+    let result = proc.run(send_nomination(12345), RunOptions::system()).await;
     assert!(result.is_err(), "invalid PID must be rejected");
 }
 
@@ -316,10 +316,10 @@ async fn send_nomination_with_invalid_pid_rejected() {
 #[tokio::test]
 async fn duplicate_send_nomination_rejected() {
     let proc = make_process();
-    proc.run(send_nomination(70030), RunOptions::new())
+    proc.run(send_nomination(70030), RunOptions::system())
         .await
         .unwrap();
-    let result = proc.run(send_nomination(70030), RunOptions::new()).await;
+    let result = proc.run(send_nomination(70030), RunOptions::system()).await;
     assert!(result.is_err(), "second SendNomination must be rejected");
 }
 
@@ -330,7 +330,7 @@ async fn receive_nomres_before_nomination_rejected() {
     let result = proc
         .run(
             receive_nomres(NomresAcceptance::Accepted),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
     assert!(
@@ -355,14 +355,14 @@ async fn a_reduced_confirmation_is_recorded_as_a_curtailment() {
     let proc = make_process();
     proc.run(
         send_nomination_of(70030, Some(Decimal::from(24_000))),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
     // The counterparty confirms — but only 18 000 of the 24 000 nominated.
     proc.run(
         receive_nomres_of(NomresAcceptance::Accepted, Some(Decimal::from(18_000))),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -387,13 +387,13 @@ async fn a_full_confirmation_is_not_mistaken_for_a_curtailment() {
     let proc = make_process();
     proc.run(
         send_nomination_of(70030, Some(Decimal::from(24_000))),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
     proc.run(
         receive_nomres_of(NomresAcceptance::Accepted, Some(Decimal::from(24_000))),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -419,13 +419,13 @@ async fn an_over_confirmation_is_not_treated_as_a_curtailment() {
     let proc = make_process();
     proc.run(
         send_nomination_of(70030, Some(Decimal::from(24_000))),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
     proc.run(
         receive_nomres_of(NomresAcceptance::Accepted, Some(Decimal::from(30_000))),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -442,12 +442,12 @@ async fn an_over_confirmation_is_not_treated_as_a_curtailment() {
 #[tokio::test]
 async fn an_unquantified_confirmation_keeps_its_stated_acceptance() {
     let proc = make_process();
-    proc.run(send_nomination(70030), RunOptions::new())
+    proc.run(send_nomination(70030), RunOptions::system())
         .await
         .unwrap();
     proc.run(
         receive_nomres(NomresAcceptance::Accepted),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -494,7 +494,7 @@ async fn the_answering_side_confirms_a_received_nomination() {
     use mako_engine::workflow::Workflow as _;
     let process = make_process();
     process
-        .run(receive_nomint(70_030), RunOptions::new())
+        .run(receive_nomint(70_030), RunOptions::system())
         .await
         .expect("recorded");
     let state = process.state().await.expect("state");
@@ -545,7 +545,7 @@ async fn the_answer_states_the_curtailed_positions() {
     use mako_engine::workflow::Workflow as _;
     let process = make_process();
     process
-        .run(receive_nomint(70_030), RunOptions::new())
+        .run(receive_nomint(70_030), RunOptions::system())
         .await
         .unwrap();
     let open = process.state().await.unwrap();
@@ -580,7 +580,7 @@ async fn the_answer_states_the_curtailed_positions() {
 #[tokio::test]
 async fn neither_side_can_play_the_other() {
     let sent = make_process();
-    sent.run(send_nomination(70_030), RunOptions::new())
+    sent.run(send_nomination(70_030), RunOptions::system())
         .await
         .unwrap();
     assert!(
@@ -591,7 +591,7 @@ async fn neither_side_can_play_the_other() {
                 acceptance: NomresAcceptance::Accepted,
                 confirmed: None,
             },
-            RunOptions::new()
+            RunOptions::system()
         )
         .await
         .is_err(),
@@ -600,14 +600,14 @@ async fn neither_side_can_play_the_other() {
 
     let received = make_process();
     received
-        .run(receive_nomint(70_030), RunOptions::new())
+        .run(receive_nomint(70_030), RunOptions::system())
         .await
         .unwrap();
     assert!(
         received
             .run(
                 receive_nomres(NomresAcceptance::Accepted),
-                RunOptions::new()
+                RunOptions::system()
             )
             .await
             .is_err(),
@@ -627,7 +627,7 @@ async fn a_curtailment_notifies_the_shortfall() {
     process
         .run(
             send_nomination_of(70_030, Some(Decimal::from(24_000))),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .unwrap();
@@ -657,7 +657,7 @@ async fn a_refusal_and_a_missed_window_are_both_notified() {
 
     let process = make_process();
     process
-        .run(send_nomination(70_030), RunOptions::new())
+        .run(send_nomination(70_030), RunOptions::system())
         .await
         .unwrap();
     let open = process.state().await.unwrap();

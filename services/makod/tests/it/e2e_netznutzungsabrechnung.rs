@@ -109,7 +109,7 @@ impl MockNb {
                     bestellung_ref: None,
                     rechnungstyp: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("ReceiveInvoic");
@@ -122,7 +122,7 @@ impl MockNb {
                 InvoicCommand::SettleInvoice {
                     message_ref: mako_engine::types::MessageRef::new("REMADV-OK"),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("SettleInvoice");
@@ -146,7 +146,7 @@ impl MockNb {
                         remadv_pid: 33_003,
                     }),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("DisputeInvoice");
@@ -333,7 +333,7 @@ async fn e2e_gpke_abrechnung_invalid_pid_rejected() {
                 bestellung_ref: None,
                 rechnungstyp: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 
@@ -374,7 +374,7 @@ async fn e2e_gpke_abrechnung_duplicate_receive_rejected() {
                 bestellung_ref: None,
                 rechnungstyp: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 
@@ -408,7 +408,7 @@ async fn e2e_gpke_abrechnung_timeout_is_a_frist_breach() {
                 deadline_id,
                 label: ABRECHNUNG_WINDOW_LABEL.into(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("TimeoutExpired must be accepted from ValidationPassed");
@@ -444,7 +444,7 @@ async fn e2e_gpke_abrechnung_late_timeout_absorbed_on_settled() {
                 deadline_id,
                 label: ABRECHNUNG_WINDOW_LABEL.into(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("TimeoutExpired on Settled must be absorbed without error");
@@ -474,7 +474,7 @@ async fn e2e_gpke_abrechnung_late_timeout_absorbed_on_disputed() {
                 deadline_id,
                 label: ABRECHNUNG_WINDOW_LABEL.into(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("TimeoutExpired on Disputed must be absorbed without error");

@@ -252,7 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 validation_errors: validation_errors.clone(),
                 received_at: time::OffsetDateTime::now_utc(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
 
@@ -343,7 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 positive: true,
                 reason: None,
             },
-            RunOptions::new().context(aperak_ctx),
+            RunOptions::system().context(aperak_ctx),
         )
         .await?;
 
@@ -400,7 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 bemerkung: None,
                 abweichender_termin: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     for env in &antwort_envs {
@@ -418,7 +418,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DeviceChangeCommand::Complete {
                 device_id: DeviceId::new("ZHR-99999999"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     for env in &complete_envs {
@@ -503,7 +503,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 validation_errors: vec![],
                 received_at: time::OffsetDateTime::now_utc(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .unwrap_err();

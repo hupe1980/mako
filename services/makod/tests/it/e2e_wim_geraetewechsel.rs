@@ -201,7 +201,7 @@ impl MockNb {
         };
 
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("NB: execute ReceiveUtilmd 55042");
     }
@@ -221,7 +221,7 @@ impl MockNb {
                     positive,
                     reason: reason.map(str::to_owned),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))
@@ -245,7 +245,7 @@ impl MockNb {
                     bemerkung: None,
                     abweichender_termin: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))
@@ -264,7 +264,7 @@ impl MockNb {
                 DeviceChangeCommand::Complete {
                     device_id: DeviceId::new(DEVICE_ID),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("NB: execute Complete");
@@ -484,7 +484,7 @@ async fn e2e_wim_geraetewechsel_ahb_validation_failure() {
                 ],
                 received_at: time::OffsetDateTime::now_utc(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("ReceiveUtilmd with invalid message must not panic");

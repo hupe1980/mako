@@ -360,6 +360,39 @@ mod tests {
         assert!(extract(v, Some(&tampered)).await.is_err());
     }
 
+    /// A configured service key is that service's principal in the demo as in
+    /// production, so a policy that admits one service never has to admit the
+    /// dev principal; any other opaque key is still the dev principal.
+    #[tokio::test]
+    async fn a_configured_service_key_is_its_service_in_the_demo() {
+        let mut c = cfg(OidcMode::Demo, "");
+        c.service_keys = vec![crate::oidc::ServiceKeyConfig {
+            name: "portald".to_owned(),
+            key: "dev-portald-key".to_owned(),
+            roles: Vec::new(),
+            sparte: Vec::new(),
+        }];
+        let v = OidcConfig::build_verifier(
+            Some(&c),
+            &reqwest::Client::new(),
+            TENANT,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("demo mode takes service keys");
+        assert_eq!(
+            extract(v.clone(), Some("dev-portald-key"))
+                .await
+                .unwrap()
+                .sub(),
+            "portald"
+        );
+        assert_eq!(
+            extract(v, Some("dev-marktd-key")).await.unwrap().sub(),
+            "dev-admin"
+        );
+    }
+
     fn cfg(mode: OidcMode, issuer: &str) -> OidcConfig {
         OidcConfig {
             mode,

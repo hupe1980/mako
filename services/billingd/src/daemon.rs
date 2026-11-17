@@ -238,6 +238,30 @@ impl Daemon for Billingd {
                 "/api/v1/billing/review-queue",
                 get(handlers::get_review_queue),
             )
+            // § 40c Abs. 2 EnWG watch: periods the run could not bill, and the
+            // per-Lieferant standing against the deadline.
+            .route(
+                "/api/v1/billing/unbilled",
+                get(handlers::get_unbilled_periods),
+            )
+            .route(
+                "/api/v1/billing/deadline-summary",
+                get(handlers::get_deadline_summary),
+            )
+            // Rechnung nachrechnen: the operator view, the masked view the
+            // public page reads by token, and revoking that token.
+            .route(
+                "/api/v1/billing/{id}/nachrechnung",
+                get(handlers::get_nachrechnung),
+            )
+            .route(
+                "/api/v1/billing/nachrechnen",
+                post(handlers::post_public_nachrechnung),
+            )
+            .route(
+                "/api/v1/billing/{id}/verify-token/revoke",
+                post(handlers::post_revoke_verify_token),
+            )
             .route("/api/v1/billing/{id}/release", post(handlers::post_release))
             .route(
                 "/api/v1/billing/{id}/reviewed",

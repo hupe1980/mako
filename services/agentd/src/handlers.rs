@@ -788,7 +788,9 @@ impl BewertungRequest {
 
 /// `POST /api/v1/runs/{run}/bewertung` — record whether an answer or a
 /// Hinweis helped, or what became of a proposal, under the caller's own name. A later verdict by the same
-/// person replaces theirs; the judged run is never changed.
+/// person replaces theirs; the judged run is never changed. A Freigabe
+/// proposal's fate is read off processd's decided entry; the `vorschlag` sent
+/// here is kept only as the verdict's rationale (`Plane::bewerten`).
 pub async fn bewerten(
     State(state): State<Arc<AppState>>,
     claims: Claims,

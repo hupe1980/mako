@@ -111,7 +111,7 @@ impl MockMsb {
                     execution_time_until: execution_time_until.map(str::to_owned),
                     produkt_code: None, // test: no product eligibility check
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("ReceiveKonfiguration");
@@ -127,7 +127,7 @@ impl MockMsb {
                     location_id: test_location_id(),
                     execution_time_from: "2025-01-15T06:00:00Z".to_owned(),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("ReceiveInitialZustand");
@@ -140,7 +140,7 @@ impl MockMsb {
                 SteuerungsauftragCommand::SendEndantwortPositiv {
                     reference_id: reference_id.to_owned(),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("SendEndantwortPositiv");
@@ -153,7 +153,7 @@ impl MockMsb {
                 SteuerungsauftragCommand::SendEndantwortNegativ {
                     reason: reason.map(str::to_owned),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("SendEndantwortNegativ");
@@ -346,7 +346,7 @@ async fn e2e_wim_steuerungsauftrag_duplicate_receive_rejected() {
                 execution_time_until: None,
                 produkt_code: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 
@@ -380,7 +380,7 @@ async fn e2e_wim_steuerungsauftrag_deadline_is_a_frist_breach() {
                 deadline_id,
                 label: STEUERUNGSAUFTRAG_DEADLINE_LABEL.into(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("TimeoutExpired must be accepted from Received");
@@ -419,7 +419,7 @@ async fn e2e_wim_steuerungsauftrag_late_deadline_absorbed_on_completed() {
                 deadline_id,
                 label: STEUERUNGSAUFTRAG_DEADLINE_LABEL.into(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("TimeoutExpired on Completed must be absorbed without error");
@@ -451,7 +451,7 @@ async fn e2e_wim_steuerungsauftrag_late_deadline_absorbed_on_rejected() {
                 deadline_id,
                 label: STEUERUNGSAUFTRAG_DEADLINE_LABEL.into(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("TimeoutExpired on Rejected must be absorbed without error");

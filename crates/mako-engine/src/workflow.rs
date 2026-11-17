@@ -33,7 +33,7 @@
 
 use crate::{
     deadline::Deadline,
-    envelope::{EventEnvelope, NewEvent},
+    envelope::{Akteur, EventEnvelope, NewEvent},
     error::{EngineError, WorkflowError},
     event_store::{AppendBatch, AppendResult, AtomicAppend, ExpectedVersion},
     ids::{CausationId, ConversationId, CorrelationId, ProcessId, TenantId},
@@ -560,7 +560,7 @@ impl CommandContext {
     ///
     /// ```rust,ignore
     /// let ctx = CommandContext::from_envelope(&utilmd_envelope, workflow_id);
-    /// process.run(DispatchAperak { positive: true, reason: None }, RunOptions::new().context(ctx)).await?;
+    /// process.run(DispatchAperak { positive: true, reason: None }, RunOptions::system().context(ctx)).await?;
     /// ```
     #[must_use]
     pub fn from_envelope(env: &EventEnvelope, workflow_id: WorkflowId) -> Self {
@@ -584,7 +584,7 @@ impl CommandContext {
     ///
     /// ```rust,ignore
     /// let ctx = CommandContext::from_deadline(&overdue_deadline, workflow_id);
-    /// process.run_timeout(&overdue_deadline, RunOptions::new().context(ctx)).await?;
+    /// process.run_timeout(&overdue_deadline, RunOptions::system().context(ctx)).await?;
     /// ```
     #[must_use]
     pub fn from_deadline(deadline: &crate::deadline::Deadline, workflow_id: WorkflowId) -> Self {
@@ -606,10 +606,14 @@ impl CommandContext {
     ///
     /// ```rust,ignore
     /// // Inside a MessageAdapter or test:
-    /// let new_event = ctx.new_event(&SupplierChangeEvent::Activated)?;
+    /// let new_event = ctx.new_event(&SupplierChangeEvent::Activated, Akteur::System)?;
     /// store.append(AppendBatch::new(&stream_id, ExpectedVersion::Any, &[new_event])).await?;
     /// ```
-    pub fn new_event<E: EventPayload>(&self, event: &E) -> Result<NewEvent, EngineError> {
+    pub fn new_event<E: EventPayload>(
+        &self,
+        event: &E,
+        akteur: Akteur,
+    ) -> Result<NewEvent, EngineError> {
         let payload =
             serde_json::to_value(event).map_err(|e| EngineError::Serialization(e.to_string()))?;
         Ok(NewEvent {
@@ -624,6 +628,7 @@ impl CommandContext {
             payload,
             verlauf: event.verlauf(),
             antwort: event.antwort(),
+            akteur,
         })
     }
 }
@@ -651,12 +656,14 @@ impl EventEnvelope {
     /// let aperak_new = utilmd_envelope.new_caused_event(
     ///     workflow_id,
     ///     &SupplierChangeEvent::AperakDispatched { positive: true, reason: None },
+    ///     Akteur::System,
     /// )?;
     /// ```
     pub fn new_caused_event<E: EventPayload>(
         &self,
         workflow_id: WorkflowId,
         event: &E,
+        akteur: Akteur,
     ) -> Result<NewEvent, EngineError> {
         let payload =
             serde_json::to_value(event).map_err(|e| EngineError::Serialization(e.to_string()))?;
@@ -672,6 +679,7 @@ impl EventEnvelope {
             payload,
             verlauf: event.verlauf(),
             antwort: event.antwort(),
+            akteur,
         })
     }
 }
@@ -717,6 +725,8 @@ pub(crate) struct AppendExtras<'a> {
     /// Enqueued when the output records events and enqueues no message of
     /// its type.
     pub acknowledgement: Option<&'a PendingOutbox>,
+    /// Stamped on every event.
+    pub akteur: &'a Akteur,
 }
 
 pub(crate) async fn decide_and_append<W, S>(
@@ -732,17 +742,22 @@ where
 {
     // `fold_stream` feeds one owned envelope at a time, so the payload moves
     // into `W::upcast` without a clone.
-    let (state, current_sequence) = store
+    let (state, current_sequence, eingriff) = store
         .fold_stream(
             stream_id,
             0,
-            (W::State::default(), 0u64),
-            |(acc, _), env| {
+            (
+                W::State::default(),
+                0u64,
+                crate::envelope::Eingriffsklasse::System,
+            ),
+            |(acc, _, eingriff), env| {
                 let seq = env.sequence_number;
+                let eingriff = eingriff.max(env.akteur.klasse());
                 let payload = W::upcast(&env.event_type, env.schema_version, env.payload)?;
                 let event: W::Event = serde_json::from_value(payload)
                     .map_err(|e| EngineError::Deserialization(e.to_string()))?;
-                Ok((W::apply(acc, &event), seq))
+                Ok((W::apply(acc, &event), seq, eingriff))
             },
         )
         .await?;
@@ -771,7 +786,7 @@ where
     let new_events = output
         .events
         .iter()
-        .map(|event| ctx.new_event(event))
+        .map(|event| ctx.new_event(event, extras.akteur.clone()))
         .collect::<Result<Vec<NewEvent>, EngineError>>()?;
     if let Some(ack) = extras.acknowledgement
         && !output
@@ -785,6 +800,12 @@ where
         for pending in &mut output.outbox {
             pending.occurred_at.get_or_insert(received_at);
         }
+    }
+    // The process's most human actor so far, this command's included: the
+    // class every message of this write reports.
+    let eingriff = eingriff.max(extras.akteur.klasse());
+    for pending in &mut output.outbox {
+        pending.eingriff = Some(eingriff);
     }
     let mut supplied: Vec<Deadline> = extras.deadlines.to_vec();
     supplied.extend(

@@ -764,7 +764,11 @@ contract fact. `GET /api/v1/vertraege/billing-candidates` lists every active
 supply component with its cadence and supply window, and billingd's billing-run
 worker consumes it.
 
-The feed accepts `BESTAETIGT` and `AKTIV` components.
+The feed accepts `BESTAETIGT` and `AKTIV` components, and — flagged
+`beendet` — a `BEENDET` one for twelve weeks after its `lieferende`, also
+under a contract already `ABGELAUFEN`: the period that ends with the supply is
+owed an Abschlussrechnung (§ 40c Abs. 2 Satz 1 EnWG), and billingd decides
+whether it already exists.
 
 ## § 41e EnWG Aggregatorverträge
 

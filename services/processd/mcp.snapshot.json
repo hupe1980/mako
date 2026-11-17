@@ -91,6 +91,14 @@
             "null"
           ],
           "default": null
+        },
+        "body_sha256": {
+          "description": "The `body_sha256` `rehearse_decision` reported for the body you were\nshown; the decision is refused when the body it would send is another.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       }
     },
@@ -157,6 +165,370 @@
     }
   },
   {
+    "name": "get_counterparty_record",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "mp_id",
+        "rolle"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "mp_id": {
+          "description": "The counterparty's MP-ID.",
+          "type": "string"
+        },
+        "rolle": {
+          "description": "The counterparty's Marktrolle: `NB`, `LF`, `MSB` or `BIKO`.",
+          "type": "string"
+        },
+        "von": {
+          "description": "First Berlin calendar day, ISO; default the first of the month three\nmonths back.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bis": {
+          "description": "Last Berlin calendar day, ISO; default today.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Verspaetung": {
+          "description": "Minutes past the Frist over the late answers.",
+          "type": "object",
+          "properties": {
+            "median_minuten": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "max_minuten": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          "required": [
+            "median_minuten",
+            "max_minuten"
+          ]
+        },
+        "Ablehnung": {
+          "description": "One refusal code and how often the partner answered with it.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The Antwortcode, or the APERAK's ERC code where the business answer\ncarried none.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "codeliste": {
+              "description": "The tree or Codeliste the code was named in; `APERAK` for an ERC code.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bedeutung": {
+              "description": "The BDEW's wording for the code in that list; `None` when the list\npublishes none — never a guess from another list.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "anzahl": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "code",
+            "codeliste",
+            "bedeutung",
+            "anzahl"
+          ]
+        },
+        "Ausserhalb": {
+          "description": "The processes of the MP-ID counted apart, whichever role it held.",
+          "type": "object",
+          "properties": {
+            "ohne_frist": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "schuldner_unbestimmt": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "ohne_frist",
+            "schuldner_unbestimmt"
+          ]
+        },
+        "AkteProzess": {
+          "description": "One process behind the figures — a row of the export.",
+          "type": "object",
+          "properties": {
+            "process_id": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kategorie": {
+              "$ref": "#/$defs/Kategorie"
+            },
+            "gestartet_um": {
+              "description": "RFC 3339 UTC.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "frist": {
+              "description": "The business Antwortfrist, RFC 3339 UTC.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "beantwortet_um": {
+              "description": "When the answer arrived, RFC 3339 UTC; `None` while unanswered.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "verspaetung_minuten": {
+              "description": "Minutes past the Frist, for a late answer.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "antwort_code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "antwort_codeliste": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "abgelehnt": {
+              "description": "The process ended `rejected`.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "process_id",
+            "pid",
+            "kategorie",
+            "gestartet_um",
+            "frist",
+            "beantwortet_um",
+            "verspaetung_minuten",
+            "antwort_code",
+            "antwort_codeliste",
+            "abgelehnt"
+          ]
+        },
+        "Kategorie": {
+          "description": "Where one process lands in the Akte.",
+          "oneOf": [
+            {
+              "description": "Answered (`completed`/`rejected`) at or before `deadline_at`.",
+              "type": "string",
+              "const": "fristgerecht"
+            },
+            {
+              "description": "Answered after `deadline_at`.",
+              "type": "string",
+              "const": "verspaetet"
+            },
+            {
+              "description": "Not answered and `deadline_at` has passed.",
+              "type": "string",
+              "const": "unbeantwortet"
+            },
+            {
+              "description": "Not answered and `deadline_at` is still ahead.",
+              "type": "string",
+              "const": "offen"
+            },
+            {
+              "description": "Ended `failed`: no answer arrived and none will.",
+              "type": "string",
+              "const": "abgebrochen"
+            },
+            {
+              "description": "No Antwortfrist: counted apart, never as on time.",
+              "type": "string",
+              "const": "ohne_frist"
+            },
+            {
+              "description": "Whose answer it is cannot be told: counted apart.",
+              "type": "string",
+              "const": "schuldner_unbestimmt"
+            }
+          ]
+        },
+        "Definition": {
+          "description": "One term of the figures and how it is computed.",
+          "type": "object",
+          "properties": {
+            "begriff": {
+              "type": "string"
+            },
+            "definition": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "begriff",
+            "definition"
+          ]
+        }
+      },
+      "required": [
+        "mp_id",
+        "rolle",
+        "von",
+        "bis",
+        "erstellt_um",
+        "gezaehlt",
+        "fristgerecht",
+        "verspaetet",
+        "unbeantwortet",
+        "offen",
+        "abgebrochen",
+        "verspaetung",
+        "quote_fristgerecht",
+        "ablehnungen",
+        "ausserhalb",
+        "prozesse",
+        "definitionen"
+      ],
+      "type": "object",
+      "properties": {
+        "mp_id": {
+          "type": "string"
+        },
+        "rolle": {
+          "description": "The counterparty's Marktrolle (`NB`, `LF`, `MSB`, `BIKO`).",
+          "type": "string"
+        },
+        "von": {
+          "description": "First Berlin calendar day of the period, ISO.",
+          "type": "string",
+          "format": "date"
+        },
+        "bis": {
+          "description": "Last Berlin calendar day of the period, ISO.",
+          "type": "string",
+          "format": "date"
+        },
+        "erstellt_um": {
+          "description": "When the figures were computed, RFC 3339 UTC.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "gezaehlt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "fristgerecht": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "verspaetet": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unbeantwortet": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "offen": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "abgebrochen": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "verspaetung": {
+          "$ref": "#/$defs/Verspaetung"
+        },
+        "quote_fristgerecht": {
+          "description": "Share of answered processes answered on time, in percent; `None` below\n[`MIN_FUER_QUOTE`] answered processes.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "ablehnungen": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ablehnung"
+          }
+        },
+        "ausserhalb": {
+          "$ref": "#/$defs/Ausserhalb"
+        },
+        "prozesse": {
+          "description": "Every process a figure counts, then those counted apart.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AkteProzess"
+          }
+        },
+        "definitionen": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Definition"
+          }
+        }
+      }
+    }
+  },
+  {
     "name": "get_decision",
     "annotations": {
       "readOnlyHint": true,
@@ -207,6 +579,96 @@
     },
     "outputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "EingriffReport": {
+          "description": "Ended processes by their most human actor: the share that ran\nwithout a person, per PID.",
+          "type": "object",
+          "properties": {
+            "beendet": {
+              "description": "Processes that ended in the period and name an actor — the denominator.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "ohne_eingriff": {
+              "description": "No event was caused by a person.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "freigabe_unveraendert": {
+              "description": "A person approved a proposal unchanged.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "freigabe_geaendert": {
+              "description": "A person approved a proposal after changing it.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "person": {
+              "description": "A person acted directly.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "anteile": {
+              "description": "The four shares, served only from [`MIN_FUER_ANTEIL`] ended processes.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EingriffAnteile"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "definition": {
+              "description": "[`EINGRIFF_DEFINITION`].",
+              "type": "string"
+            }
+          },
+          "required": [
+            "beendet",
+            "ohne_eingriff",
+            "freigabe_unveraendert",
+            "freigabe_geaendert",
+            "person",
+            "anteile",
+            "definition"
+          ]
+        },
+        "EingriffAnteile": {
+          "description": "The four classes as shares of [`EingriffReport::beendet`], each in `0..=1`.",
+          "type": "object",
+          "properties": {
+            "ohne_eingriff": {
+              "type": "number",
+              "format": "double"
+            },
+            "freigabe_unveraendert": {
+              "type": "number",
+              "format": "double"
+            },
+            "freigabe_geaendert": {
+              "type": "number",
+              "format": "double"
+            },
+            "person": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "ohne_eingriff",
+            "freigabe_unveraendert",
+            "freigabe_geaendert",
+            "person"
+          ]
+        }
+      },
       "required": [
         "pid",
         "period_from",
@@ -221,8 +683,10 @@
         "frist_compliance_rate",
         "avg_cycle_time_hours",
         "p95_cycle_time_hours",
+        "eingriff",
         "note"
       ],
+      "type": "object",
       "properties": {
         "pid": {
           "description": "BDEW Prüfidentifikator.",
@@ -303,11 +767,14 @@
           ],
           "format": "double"
         },
+        "eingriff": {
+          "description": "How the processes that ended in the month were handled, by their most\nhuman actor — counts always, shares only from 20 ended processes, and\nthe definition the figure is read by.",
+          "$ref": "#/$defs/EingriffReport"
+        },
         "note": {
           "type": "string"
         }
-      },
-      "type": "object"
+      }
     }
   },
   {
@@ -762,7 +1229,8 @@
         "expires_at",
         "created_at",
         "decided_by",
-        "decided_at"
+        "decided_at",
+        "gesendet_sha256"
       ],
       "type": "object",
       "properties": {
@@ -883,6 +1351,13 @@
             "null"
           ],
           "format": "date-time"
+        },
+        "gesendet_sha256": {
+          "description": "The SHA-256 of the RFC 8785 canonical `{command, body}` the decision\ndispatched — the hash `rehearse_decision` states as `body_sha256`, so a\nproposal checked for that body went out unchanged exactly when they are\nequal. `None` while pending and for a decision with no message.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     }
@@ -998,6 +1473,131 @@
     "outputSchema": null
   },
   {
+    "name": "list_counterparties",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "von": {
+          "description": "First Berlin calendar day, ISO.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bis": {
+          "description": "Last Berlin calendar day, ISO.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "CounterpartySummary": {
+          "description": "One line of `list_counterparties`.",
+          "type": "object",
+          "properties": {
+            "mp_id": {
+              "type": "string"
+            },
+            "rolle": {
+              "type": "string"
+            },
+            "gezaehlt": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "verspaetet": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "unbeantwortet": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "offen": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "ablehnungen": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "mp_id",
+            "rolle",
+            "gezaehlt",
+            "verspaetet",
+            "unbeantwortet",
+            "offen",
+            "ablehnungen"
+          ]
+        },
+        "Definition": {
+          "description": "One term of the figures and how it is computed.",
+          "type": "object",
+          "properties": {
+            "begriff": {
+              "type": "string"
+            },
+            "definition": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "begriff",
+            "definition"
+          ]
+        }
+      },
+      "required": [
+        "von",
+        "bis",
+        "gegenparteien",
+        "definitionen"
+      ],
+      "type": "object",
+      "properties": {
+        "von": {
+          "type": "string",
+          "format": "date"
+        },
+        "bis": {
+          "type": "string",
+          "format": "date"
+        },
+        "gegenparteien": {
+          "description": "Most late and unanswered first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CounterpartySummary"
+          }
+        },
+        "definitionen": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Definition"
+          }
+        }
+      }
+    }
+  },
+  {
     "name": "list_decisions",
     "annotations": {
       "readOnlyHint": true,
@@ -1018,6 +1618,196 @@
       "type": "object"
     },
     "outputSchema": null
+  },
+  {
+    "name": "list_klaerfaelle",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "description": "At most this many cases (default 50, at most 200).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Klaerfall": {
+          "description": "One case as the Desk's Heute and an integrator read it.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "message_ref": {
+              "description": "The message the case concerns, or `process:<id>`.",
+              "type": "string"
+            },
+            "partner_mp_id": {
+              "description": "The MP-ID whose signal opened the case; `None` for a case on a process.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "process_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pid": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "origins": {
+              "description": "The origins of every signal attached, the first one first.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "ursache_code": {
+              "description": "The cause's code and the list that defines it.",
+              "type": "string"
+            },
+            "ursache_liste": {
+              "type": "string"
+            },
+            "bedeutung": {
+              "description": "The BDEW's own wording of the cause, where the list publishes one\n(an Antwortcode in its Entscheidungsbaum); `None` otherwise — never a\nparaphrase.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "aktion": {
+              "description": "The tabulated action and what it says to do.",
+              "$ref": "#/$defs/Aktion"
+            },
+            "hinweis": {
+              "type": "string"
+            },
+            "befehl": {
+              "description": "The `mako_markt::commands` command that corrects the case, where one is\na function of the cause. No ERC code, dead-letter reason or refusal\nnames one today: the correction re-issues the process's own command, so\nthis is `None` until a table supplies it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "due_at": {
+              "description": "The business Antwortfrist the case races (`mako_fristen::antwort`, via\nthe read model), RFC 3339; `None` is „keine Frist\", never a default.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "due_source": {
+              "description": "The Fundstelle of `due_at`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "overdue": {
+              "description": "`due_at` has passed.",
+              "type": "boolean"
+            },
+            "occurrences": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "opened_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "message_ref",
+            "partner_mp_id",
+            "process_id",
+            "pid",
+            "origins",
+            "ursache_code",
+            "ursache_liste",
+            "bedeutung",
+            "aktion",
+            "hinweis",
+            "befehl",
+            "due_at",
+            "due_source",
+            "overdue",
+            "occurrences",
+            "opened_at"
+          ]
+        },
+        "Aktion": {
+          "description": "What a case proposes, from the cause table of its origin.",
+          "oneOf": [
+            {
+              "description": "Correct the message and send it again.",
+              "type": "string",
+              "const": "retry_with_correction"
+            },
+            {
+              "description": "A person has to look.",
+              "type": "string",
+              "const": "escalate_to_operator"
+            },
+            {
+              "description": "The counterparty decided; the process ends.",
+              "type": "string",
+              "const": "abort_process"
+            },
+            {
+              "description": "Wait for a conflicting process, then retry.",
+              "type": "string",
+              "const": "wait_and_retry"
+            }
+          ]
+        }
+      },
+      "required": [
+        "count",
+        "saturated",
+        "klaerfaelle"
+      ],
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "At least `limit` cases matched.",
+          "type": "boolean"
+        },
+        "klaerfaelle": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Klaerfall"
+          }
+        }
+      }
+    }
   },
   {
     "name": "list_open_processes",
@@ -1307,6 +2097,24 @@
             "null"
           ],
           "default": null
+        },
+        "process_id": {
+          "description": "Only the entries of this process (its UUID) — every Freigabe a\nProzess holds, however long the queue.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "offset": {
+          "description": "Skip this many entries first — the next page starts at the previous\n`offset` plus its `count` (default 0).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
         }
       },
       "type": "object"
@@ -1435,6 +2243,13 @@
                 "null"
               ],
               "format": "date-time"
+            },
+            "gesendet_sha256": {
+              "description": "The SHA-256 of the RFC 8785 canonical `{command, body}` the decision\ndispatched — the hash `rehearse_decision` states as `body_sha256`, so a\nproposal checked for that body went out unchanged exactly when they are\nequal. `None` while pending and for a decision with no message.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -1456,7 +2271,8 @@
             "expires_at",
             "created_at",
             "decided_by",
-            "decided_at"
+            "decided_at",
+            "gesendet_sha256"
           ]
         },
         "FreigabeArt": {
@@ -1682,6 +2498,156 @@
     "outputSchema": null
   },
   {
+    "name": "rehearse_decision",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id",
+        "freigeben"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The queue entry's UUID.",
+          "type": "string"
+        },
+        "freigeben": {
+          "description": "`true` to rehearse approving, `false` to rehearse rejecting.",
+          "type": "boolean"
+        },
+        "antwort_code": {
+          "description": "The Antwortcode the decision would state; none for a held answer\napproved as frozen.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "antwort_tree": {
+          "description": "The Entscheidungsbaum the code is stated from, where the caller names\none; it must be the entry's.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "EntscheidungsUrteil": {
+          "description": "What the decision route says about a rehearsed decision.",
+          "oneOf": [
+            {
+              "description": "The decision passes; `command` and `payload` are what makod would get.",
+              "type": "string",
+              "const": "besteht"
+            },
+            {
+              "description": "The decision is refused; `grund` says why.",
+              "type": "string",
+              "const": "abgelehnt"
+            },
+            {
+              "description": "The decision passes and sends no market message — the entry stores no\ncommand for it.",
+              "type": "string",
+              "const": "ohne_nachricht"
+            }
+          ]
+        },
+        "EntscheidungsGrund": {
+          "description": "Why a decision is refused: a stable code, the refusal's sentence, and the\nEntscheidungsbaum where the refusal is about a code.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "`not_pending`, `unknown_command`, `answer_frozen`, `missing_fields`,\n`wrong_tree`, `code_outside_tree`, `fact_not_taken` or `invalid_fact`.",
+              "type": "string"
+            },
+            "text": {
+              "description": "The refusal the decision route answers with.",
+              "type": "string"
+            },
+            "ebd": {
+              "description": "The Entscheidungsbaum the stated code was checked in.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "text",
+            "ebd"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "freigeben",
+        "urteil",
+        "command",
+        "marktrolle",
+        "payload",
+        "body_sha256",
+        "grund"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The queue entry.",
+          "type": "string"
+        },
+        "freigeben": {
+          "description": "`true` for approve, `false` for reject.",
+          "type": "boolean"
+        },
+        "urteil": {
+          "$ref": "#/$defs/EntscheidungsUrteil"
+        },
+        "command": {
+          "description": "The makod command the decision dispatches.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "marktrolle": {
+          "description": "The Marktrolle it is dispatched under.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": {
+          "description": "The body makod would receive — the frozen answer with what the\ndecision states filled in; absent on a refusal."
+        },
+        "body_sha256": {
+          "description": "SHA-256 of the command and `payload` in RFC 8785 form\n([`crate::pg::approval::vorschlag_sha256`]) — what an approval states\nas `body_sha256` to say it approves exactly this body.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grund": {
+          "description": "Present exactly when `urteil` is `abgelehnt`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntscheidungsGrund"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
     "name": "reject_queue_entry",
     "annotations": {
       "readOnlyHint": false,
@@ -1768,6 +2734,14 @@
         },
         "enfg": {
           "description": "The Grundlage nach EnFG on a Strom 55014: `ZG0`, `ZG1` or\n`ZF9+<Grund der Privilegierung ZU5…ZV3>`, where the entry lists `enfg`\namong the facts it still needs.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "body_sha256": {
+          "description": "The `body_sha256` `rehearse_decision` reported for the body you were\nshown; the decision is refused when the body it would send is another.",
           "type": [
             "string",
             "null"

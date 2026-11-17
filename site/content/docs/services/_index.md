@@ -74,7 +74,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 77 workflows over 498 Prüfidentifikatoren, AS4/REST/iMS |
+| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 77 workflows over 499 Prüfidentifikatoren, AS4/REST/iMS |
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, durable fan-out, MMMA monthly import worker |
 | [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP (target ≥95%), LF answers to NB-initiated GPKE processes, MSB REQOTE answers, §14a check; per-PID KPIs and § 7a Abs. 5 EnWG parity; the NB Sperrauftrag queue (IFTSTA 21039); role-gated builds |
 
@@ -89,7 +89,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, quality scoring and validation, virtual meters, tiered storage; 16-tool MCP server |
+| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, quality scoring and validation, virtual meters, tiered storage; 17-tool MCP server |
 | [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 20-tool MCP server |
 
 ## Retail Billing (LF)

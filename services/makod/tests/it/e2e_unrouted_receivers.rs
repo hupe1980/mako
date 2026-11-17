@@ -187,7 +187,7 @@ async fn a_55194_resumes_the_msb_gas_anfrage_it_answers() {
                 zeitspanne_von: time::macros::date!(2026 - 09 - 01),
                 zeitspanne_bis: time::macros::date!(2026 - 09 - 30),
             },
-            RunOptions::new().correlations(&[korrelation]),
+            RunOptions::system().correlations(&[korrelation]),
         )
         .await
         .expect("the MSB Gas sends its 17104");
@@ -310,7 +310,7 @@ async fn an_nb_gas_deployment_receives_the_anforderung_allokationsliste() {
                 antwortcode: "Z34".to_owned(),
                 message_ref: MessageRef::new("ABL-1"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
     assert!(out.is_ok(), "{out:?}");
@@ -357,6 +357,7 @@ async fn a_uenb_rueckmeldung_reaches_the_nb_and_is_answered_out_of_e_0618() {
         let state = commands_state(&store, OWN_MP, "NB");
         let answered = makod::commands_api::dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "gpke.abrechnungsdaten.bearbeitungsstand",
             &serde_json::json!({
                 "malo_id": malo.as_str(),

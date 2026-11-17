@@ -24,6 +24,12 @@
 //! | `get_aw_reduktionen` | What is cutting a plant's anzulegender Wert on a given day (§§53b–54) |
 //! | `explain_settlement` | The stored receipt's positions, each with its legal basis |
 //!
+//! `get_plant`, `list_expiring`, `list_settlements`, `list_unsettled_plants`,
+//! `list_plants_without_mastr` and `explain_settlement` are shared reads
+//! (`crate::reads`): each calls the function its documented REST route calls,
+//! declares that answer type as its output schema, and clears the route's
+//! Cedar action. `mcp.snapshot.json` and `openapi.json` pin the two contracts.
+//!
 //! Money and energy cross this surface as exact decimals ([`DecimalArg`]), not
 //! `f64`: a rate that reaches a legally binding Gutschrift must not have passed
 //! through binary floating point on the way.
@@ -287,6 +293,16 @@ pub struct ExplainSettlementParams {
     pub billing_month: i16,
 }
 
+// ── Output types ──────────────────────────────────────────────────────────────
+//
+// The shared reads' answers live in `crate::reads`, beside the REST routes that
+// serve the same types.
+
+pub use crate::reads::{
+    Abrechnungen, AbrechnungsErklaerung, Abrechnungsposition, AnlageOhneMastr, AnlagenOhneMastr,
+    AuslaufendeAnlagen, UnabgerechneteAnlagen,
+};
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -350,77 +366,51 @@ impl EinsdMcpHandler {
 
     #[tool(
         description = "Get a single EEG/KWKG plant by TechnischeRessource ID (tr_id). Returns all fields including settlement model, Vergütungssatz, Förderendedatum, and KWKG data.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::pg::AnlageRow>()
     )]
     async fn get_plant(
         &self,
         Parameters(params): Parameters<GetPlantParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::fetch_anlage;
-        match fetch_anlage(&self.state.pool, &self.state.tenant, &params.tr_id).await {
-            Ok(Some(p)) => ContentBlock::json(serde_json::to_value(p).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(None) => Err(McpError::invalid_params(
-                format!("plant {} not found", params.tr_id),
-                None,
-            )),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        mako_service::mcp::answer(
+            crate::reads::get_plant(&self.state.pool, &self.state.tenant, &params.tr_id).await,
+        )
     }
 
     #[tool(
         description = "List plants whose EEG/KWKG Foerderung ends within the given days (default 180). Use to trigger early notification and plan Post-EEG transitions.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<AuslaufendeAnlagen>()
     )]
     async fn list_expiring(
         &self,
         Parameters(params): Parameters<ListExpiringParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_expiring;
-        let days = i32::try_from(params.days.unwrap_or(180)).unwrap_or(180);
-        match list_expiring(&self.state.pool, &self.state.tenant, days).await {
-            Ok(plants) => ContentBlock::json(serde_json::json!({
-                "horizon_days": days,
-                "count": plants.len(),
-                "plants": plants,
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        let days = params.days.map(|d| i32::try_from(d).unwrap_or(i32::MAX));
+        mako_service::mcp::answer(
+            crate::reads::list_expiring(&self.state.pool, &self.state.tenant, days).await,
+        )
     }
 
     #[tool(
-        description = "Monthly settlement history for a plant, optionally narrowed to one Abrechnungsjahr and/or Abrechnungsmonat. Returns settlement amount, model, kWh, status, and CloudEvent ID for each settled month.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "Monthly settlement history for a plant, optionally narrowed to one Abrechnungsjahr and/or Abrechnungsmonat. Returns settlement amount, model, kWh, status (with error_detail when nothing was paid), due date and Gutschrift number for each receipt; corrections are marked.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<Abrechnungen>()
     )]
     async fn list_settlements(
         &self,
         Parameters(params): Parameters<ListSettlementsParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_settlement_receipts;
-        let limit = i64::from(params.limit.unwrap_or(24).min(200));
-        if let Some(month) = params.month
-            && !(1..=12).contains(&month)
-        {
-            return Err(McpError::invalid_params("month must be 1-12", None));
-        }
-        match list_settlement_receipts(
-            &self.state.pool,
-            &self.state.tenant,
-            &params.tr_id,
-            params.year,
-            params.month,
-            limit,
+        let q = crate::reads::SettlementsQuery {
+            year: params.year,
+            month: params.month,
+            limit: params.limit.map(i64::from),
+        };
+        mako_service::mcp::answer(
+            crate::reads::list_settlements(&self.state.pool, &self.state.tenant, &params.tr_id, &q)
+                .await,
         )
-        .await
-        {
-            Ok(r) => ContentBlock::json(serde_json::to_value(r).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
     }
 
     #[tool(
@@ -505,31 +495,22 @@ impl EinsdMcpHandler {
     #[tool(
         description = "List active plants NOT yet settled for the given billing month. \
         Use to preview before POST /api/v1/settle/{year}/{month} batch run.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<UnabgerechneteAnlagen>()
     )]
     async fn list_unsettled_plants(
         &self,
         Parameters(params): Parameters<ListUnsettledParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_unsettled;
-        match list_unsettled(
-            &self.state.pool,
-            &self.state.tenant,
-            params.billing_year,
-            params.billing_month,
+        mako_service::mcp::answer(
+            crate::reads::list_unsettled_plants(
+                &self.state.pool,
+                &self.state.tenant,
+                params.billing_year,
+                params.billing_month,
+            )
+            .await,
         )
-        .await
-        {
-            Ok(plants) => ContentBlock::json(serde_json::json!({
-                "billing_year": params.billing_year,
-                "billing_month": params.billing_month,
-                "unsettled_count": plants.len(),
-                "plants": plants,
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
     }
 
     // ── EPEX price ────────────────────────────────────────────────────────────
@@ -856,68 +837,13 @@ impl EinsdMcpHandler {
 
     #[tool(
         description = "List plants not registered in MaStR (Marktstammdatenregister). §52 Abs. 1 Nr. 11 EEG 2023 charges 10 €/kW/month for them; a plant under the pre-2023 regime instead loses its Vergütung entirely and owes no Pflichtzahlung, so its monthly_penalty_eur is null and it is excluded from the total.",
-        annotations(read_only_hint = true, open_world_hint = false)
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<AnlagenOhneMastr>()
     )]
     async fn list_plants_without_mastr(&self) -> Result<CallToolResult, McpError> {
-        use sqlx::Row;
-        let rows = sqlx::query(
-            r"SELECT tr_id, malo_id, erzeugungsart, leistung_kwp, eeg_gesetz, foerderendedatum
-              FROM eeg_anlagen
-              WHERE tenant = $1
-                AND mastr_registriert = false
-                AND status = 'aktiv'
-                AND (foerderendedatum IS NULL OR foerderendedatum >= heute())
-              ORDER BY leistung_kwp DESC",
+        mako_service::mcp::answer(
+            crate::reads::list_plants_without_mastr(&self.state.pool, &self.state.tenant).await,
         )
-        .bind(&self.state.tenant)
-        .fetch_all(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let plants: Vec<serde_json::Value> = rows
-            .iter()
-            .map(|r| {
-                let leistung: rust_decimal::Decimal = r
-                    .try_get("leistung_kwp")
-                    .unwrap_or_default();
-                let eeg_gesetz: i16 = r.try_get("eeg_gesetz").unwrap_or(2023);
-                // §52 Abs. 2 charges 10 €/kW/month only under the EEG 2023
-                // regime. For an older plant §100 keeps the pre-2023 rule, where
-                // the breach reduces the Vergütung to zero and no Pflichtzahlung
-                // exists — reporting 10 €/kW for those, and summing it into a
-                // portfolio total, invented money nobody owes.
-                let eeg_2023 = eeg_gesetz >= 2023;
-                serde_json::json!({
-                    "tr_id": r.try_get::<String, _>("tr_id").unwrap_or_default(),
-                    "malo_id": r.try_get::<String, _>("malo_id").unwrap_or_default(),
-                    "erzeugungsart": r.try_get::<String, _>("erzeugungsart").unwrap_or_default(),
-                    "leistung_kwp": leistung.to_string(),
-                    "eeg_gesetz": eeg_gesetz,
-                    "monthly_penalty_eur": eeg_2023.then(|| (leistung * rust_decimal::Decimal::from(10)).to_string()),
-                    "regime": if eeg_2023 {
-                        "§52 Abs. 1 Nr. 11 i.V.m. Abs. 2 EEG 2023: 10 €/kW/Monat"
-                    } else {
-                        "EEG ≤2021 via §100: Vergütung auf null — keine Pflichtzahlung"
-                    },
-                })
-            })
-            .collect();
-
-        // Only the plants that actually owe a Pflichtzahlung are in the total.
-        let total_penalty: rust_decimal::Decimal = plants
-            .iter()
-            .filter_map(|p| p["monthly_penalty_eur"].as_str())
-            .filter_map(|s| s.parse::<rust_decimal::Decimal>().ok())
-            .sum();
-
-        ContentBlock::json(serde_json::json!({
-            "count": plants.len(),
-            "total_monthly_penalty_eur": total_penalty.to_string(),
-            "plants": plants,
-            "regulatory_note": "Register all plants at https://www.marktstammdatenregister.de. POST /api/v1/anlagen/{tr_id}/mastr-registrierung after successful registration.",
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     /// List active plants that have **no §21 Abs. 1 Satz 1 Nr. 1 claim**: the
@@ -1303,71 +1229,24 @@ compliance reporting.",
              computed, which reductions applied, and what is the full position trace. Returns all \
              SettlePosition entries (description, legal_basis, kWh, rate_ct_kwh, EUR) for the \
              settlement receipt. Essential for operator audits, BNetzA inspections, and dispute \
-             resolution.",
-        annotations(read_only_hint = true, open_world_hint = false)
+             resolution. A month with no receipt is refused as settlement_not_found.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<AbrechnungsErklaerung>()
     )]
     async fn explain_settlement(
         &self,
         Parameters(params): Parameters<ExplainSettlementParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Fetch the stored positions from settlement_receipts
-        let row = sqlx::query(
-            "SELECT id, billing_year, billing_month, settlement_model, \
-              einspeisemenge_kwh, settlement_eur, status, positions_json, \
-              pflichtzahlung_eur, verlaengerungsanspruch_qh, \
-              billing_days_fraction, settled_at \
-             FROM settlement_receipts \
-             WHERE tr_id = $1 AND tenant = $2 \
-               AND billing_year = $3 AND billing_month = $4 \
-             ORDER BY settled_at DESC LIMIT 1",
-        )
-        .bind(&params.tr_id)
-        .bind(&self.state.tenant)
-        .bind(params.billing_year)
-        .bind(params.billing_month)
-        .fetch_optional(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let Some(row) = row else {
-            return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                "No settlement found for plant {} in {}/{:02}.",
-                params.tr_id, params.billing_year, params.billing_month
-            ))]));
-        };
-
-        use sqlx::Row as _;
-        let positions: serde_json::Value = row
-            .try_get::<Option<serde_json::Value>, _>("positions_json")
-            .unwrap_or(None)
-            .unwrap_or(serde_json::Value::Array(vec![]));
-
-        let result = serde_json::json!({
-            "tr_id": params.tr_id,
-            "billing_year": params.billing_year,
-            "billing_month": params.billing_month,
-            "settlement_model": row.try_get::<String, _>("settlement_model").unwrap_or_default(),
-            "status": row.try_get::<String, _>("status").unwrap_or_default(),
-            "einspeisemenge_kwh": row.try_get::<Option<rust_decimal::Decimal>, _>("einspeisemenge_kwh").unwrap_or(None),
-            "settlement_eur": row.try_get::<Option<rust_decimal::Decimal>, _>("settlement_eur").unwrap_or(None),
-            "pflichtzahlung_eur": row.try_get::<Option<rust_decimal::Decimal>, _>("pflichtzahlung_eur").unwrap_or(None),
-            "verlaengerungsanspruch_qh": row.try_get::<i64, _>("verlaengerungsanspruch_qh").unwrap_or(0),
-            "billing_days_fraction": row.try_get::<Option<rust_decimal::Decimal>, _>("billing_days_fraction").unwrap_or(None),
-            "settled_at": row.try_get::<Option<time::OffsetDateTime>, _>("settled_at").ok().flatten().map(|t| t.to_string()),
-            "positions": positions,
-            "interpretation": format!(
-                "Settlement for {}/{:02}: {} positions listed above. \
-                 Each position shows the legal paragraph, kWh quantity, rate, and EUR amount. \
-                 The 'settlement_eur' is the sum of all position EUR values. \
-                 A pflichtzahlung_eur > 0 means a separate §52 EEG penalty is owed to the NB.",
-                params.billing_year, params.billing_month,
-                positions.as_array().map(|a| a.len()).unwrap_or(0)
+        mako_service::mcp::answer(
+            crate::reads::explain_settlement(
+                &self.state.pool,
+                &self.state.tenant,
+                &params.tr_id,
+                params.billing_year,
+                params.billing_month,
             )
-        });
-
-        ContentBlock::json(result)
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None))
+            .await,
+        )
     }
 }
 
@@ -1770,9 +1649,11 @@ pub const MUTATING_TOOLS: &[&str] = &[
 /// What a JSON-RPC frame asks for, as far as authorization is concerned.
 enum McpCall {
     /// Not a `tools/call` — `initialize`, `tools/list`, a prompt — or a
-    /// read-only tool. The blanket `use-mcp` gate is the whole check.
+    /// read-only tool with no REST twin. The blanket `use-mcp` gate is the
+    /// whole check.
     ReadOnly,
-    /// A `tools/call` for a mutating tool, and the action it needs.
+    /// A `tools/call` for a mutating tool or a shared read, and the action
+    /// its REST twin needs.
     Tool(&'static str),
     /// A `tools/call` naming a mutating tool with no entry in
     /// [`mutating_tool_action`].
@@ -1793,6 +1674,11 @@ fn classify(body: &[u8]) -> McpCall {
     else {
         return McpCall::ReadOnly;
     };
+    // A shared read clears its REST twin's action (`reads::tool_action`), so
+    // the tool admits exactly the callers the route does.
+    if let Some(action) = crate::reads::tool_action(name) {
+        return McpCall::Tool(action);
+    }
     match mutating_tool_action(name) {
         Some(action) => McpCall::Tool(action),
         None if MUTATING_TOOLS.contains(&name) => McpCall::UnmappedMutation(name.to_owned()),
@@ -1853,4 +1739,352 @@ pub fn router(state: Arc<EinsdMcpState>, _shutdown: CancellationToken) -> Router
     Router::new()
         .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use rust_decimal::dec;
+    use serde::Serialize;
+    use time::macros::{date, datetime};
+
+    use super::*;
+    use crate::pg::{AnlageRow, SettlementReceipt};
+
+    /// The served tool contract is the committed `mcp.snapshot.json`
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it); the Desk generates its types from it.
+    #[test]
+    fn the_tool_contract_matches_the_snapshot() {
+        let tools: Vec<serde_json::Value> = EinsdMcpHandler::tool_router()
+            .list_all()
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .expect("tools serialize");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
+            panic!("{e}");
+        }
+    }
+
+    /// `answer` satisfies the output schema `tool` declares.
+    fn holds(tool: &str, answer: &impl Serialize) -> serde_json::Value {
+        let value = serde_json::to_value(answer).expect("serializes");
+        mako_service::mcp::conformance::assert_structured_output(
+            &EinsdMcpHandler::tool_router().list_all(),
+            tool,
+            &value,
+        );
+        value
+    }
+
+    /// A rooftop plant with every optional field set where it can be, so the
+    /// nullable and the set branch of each field are both exercised across
+    /// the two samples.
+    fn anlage(tr_id: &str, gesetzt: bool) -> AnlageRow {
+        let d = gesetzt.then_some(date!(2026 - 01 - 15));
+        let x = gesetzt.then_some(dec!(1.5));
+        let t = gesetzt.then_some(datetime!(2026-01-15 10:00 UTC));
+        AnlageRow {
+            tr_id: tr_id.to_owned(),
+            tenant: "9900357000004".to_owned(),
+            malo_id: "51238696012".to_owned(),
+            melo_id: gesetzt.then(|| "DE0001234567890123456789012345678".to_owned()),
+            eeg_gesetz: 2023,
+            inbetriebnahme: date!(2024 - 03 - 01),
+            leistung_kwp: dec!(9.8),
+            erzeugungsart: "SOLAR".to_owned(),
+            verguetungssatz_ct: dec!(8.11),
+            verguetungsform: "UEBERSCHUSS".to_owned(),
+            foerderendedatum: Some(date!(2044 - 12 - 31)),
+            settlement_model: "VERGUETUNG".to_owned(),
+            direktvermarktung: false,
+            direktverm_aw_ct: x,
+            direktverm_mp_id: None,
+            mieter_zuschlag_ct: x,
+            ausschreibungs_zuschlag_id: None,
+            ist_repowering: false,
+            ursprungs_inbetriebnahme: d,
+            repowering_datum: d,
+            parent_tr_id: None,
+            kwk_anlagenart: None,
+            kwk_verwendung: None,
+            kwk_bmwk_feststellung: false,
+            kwk_bimschg_genehmigung: d,
+            kwk_verbindliche_bestellung: d,
+            kwk_kostenanteil: x,
+            kwk_foerderdauer_h: gesetzt.then_some(30_000),
+            kwk_strom_kwh_gesamt: x,
+            kwk_kwh_jahr: x,
+            kwk_kwh_jahr_year: gesetzt.then_some(2026),
+            flex_leistung_kw: x,
+            flex_praemie_ct_kwh: x,
+            status: "aktiv".to_owned(),
+            mastr_registriert: gesetzt,
+            mastr_nummer: gesetzt.then(|| "SEE912345678901".to_owned()),
+            mastr_datum: d,
+            einspeiser_id: "e-1".to_owned(),
+            notes: None,
+            inbetriebnahme_typ: None,
+            wind_guetegrad: x,
+            wind_korrekturfaktor: x,
+            wind_guetefaktor_reevaluations: gesetzt.then(|| serde_json::json!([])),
+            fernsteuerbarkeit_datum: d,
+            sect9_fernsteuerbarkeit: false,
+            sect9_begrenzung_60: true,
+            wechselrichterleistung_va: x,
+            settlement_state: gesetzt.then(|| "Active".to_owned()),
+            is_biogas_sect51b: false,
+            zuschlagswert_ct: x,
+            zuschlag_datum: d,
+            gebotstermin: d,
+            ist_innovationsausschreibung: false,
+            ist_buergerenergie: false,
+            zuschlag_erloeschen_datum: d,
+            mastr_violation_start: d,
+            speicher_option: "KEINE".to_owned(),
+            last_veraeusserungsform_switch: d,
+            negative_price_qh_gesamt: 0,
+            capacity_blocks: None,
+            biomasse_hauptbrennstoff: None,
+            biomasse_guelle_anteil: x,
+            biomasse_getreide_mais_anteil: x,
+            biogas_quota_kwh_ytd: dec!(0),
+            biogas_quota_ytd_year: None,
+            imesys_rollout_datum: d,
+            ist_pilotwindanlage: false,
+            sect51_optin_erklaert_am: d,
+            veraeusserungsform_notification_sent_at: t,
+            foerderung_alert_sent_at: t,
+            created_at: datetime!(2024-03-01 09:00 UTC),
+            updated_at: datetime!(2026-01-15 10:00 UTC),
+        }
+    }
+
+    #[test]
+    fn get_plant_answers_its_declared_schema() {
+        let v = holds("get_plant", &anlage("TR-1", true));
+        assert_eq!(v["inbetriebnahme"], "2024-03-01", "a date is YYYY-MM-DD");
+        assert_eq!(v["leistung_kwp"], "9.8", "a decimal is a string");
+        holds("get_plant", &anlage("TR-2", false));
+    }
+
+    #[test]
+    fn list_expiring_answers_its_declared_schema() {
+        holds(
+            "list_expiring",
+            &AuslaufendeAnlagen {
+                horizon_days: 180,
+                count: 2,
+                plants: vec![anlage("TR-1", true), anlage("TR-2", false)],
+            },
+        );
+    }
+
+    #[test]
+    fn list_unsettled_plants_answers_its_declared_schema() {
+        holds(
+            "list_unsettled_plants",
+            &UnabgerechneteAnlagen {
+                billing_year: 2026,
+                billing_month: 10,
+                unsettled_count: 1,
+                plants: vec![anlage("TR-1", false)],
+            },
+        );
+    }
+
+    #[test]
+    fn list_settlements_answers_its_declared_schema() {
+        let original = SettlementReceipt {
+            id: uuid::Uuid::nil(),
+            tr_id: "TR-1".to_owned(),
+            billing_year: 2026,
+            billing_month: 9,
+            settlement_model: "VERGUETUNG".to_owned(),
+            einspeisemenge_kwh: Some(dec!(812.400)),
+            settlement_eur: Some(dec!(65.88564)),
+            status: "calculated".to_owned(),
+            error_detail: None,
+            faelligkeitsdatum: Some(date!(2026 - 10 - 15)),
+            settled_at: datetime!(2026-10-02 08:00 UTC),
+            gutschrift_nummer: Some("GS-EEG-TR-1-2026-09".to_owned()),
+            is_correction: false,
+            correction_of: None,
+            correction_reason: None,
+        };
+        let abgelehnt = SettlementReceipt {
+            id: uuid::Uuid::max(),
+            tr_id: "TR-1".to_owned(),
+            settlement_model: "VERGUETUNG".to_owned(),
+            einspeisemenge_kwh: None,
+            settlement_eur: None,
+            status: "no_data".to_owned(),
+            error_detail: Some("edmd has no Einspeisemenge for 2026-09".to_owned()),
+            faelligkeitsdatum: None,
+            gutschrift_nummer: None,
+            is_correction: true,
+            correction_of: Some(uuid::Uuid::nil()),
+            correction_reason: Some("MSCONS-Korrektur".to_owned()),
+            ..original
+        };
+        let original = SettlementReceipt {
+            id: uuid::Uuid::nil(),
+            tr_id: "TR-1".to_owned(),
+            billing_year: 2026,
+            billing_month: 9,
+            settlement_model: "VERGUETUNG".to_owned(),
+            einspeisemenge_kwh: Some(dec!(812.400)),
+            settlement_eur: Some(dec!(65.88564)),
+            status: "calculated".to_owned(),
+            error_detail: None,
+            faelligkeitsdatum: Some(date!(2026 - 10 - 15)),
+            settled_at: datetime!(2026-10-02 08:00 UTC),
+            gutschrift_nummer: Some("GS-EEG-TR-1-2026-09".to_owned()),
+            is_correction: false,
+            correction_of: None,
+            correction_reason: None,
+        };
+        let v = holds(
+            "list_settlements",
+            &Abrechnungen {
+                tr_id: "TR-1".to_owned(),
+                count: 2,
+                saturated: false,
+                settlements: vec![abgelehnt, original],
+            },
+        );
+        assert_eq!(v["settlements"][0]["settled_at"], "2026-10-02T08:00:00Z");
+    }
+
+    #[test]
+    fn list_plants_without_mastr_answers_its_declared_schema() {
+        holds(
+            "list_plants_without_mastr",
+            &AnlagenOhneMastr {
+                count: 2,
+                total_monthly_penalty_eur: dec!(98.0),
+                plants: vec![
+                    AnlageOhneMastr {
+                        tr_id: "TR-1".to_owned(),
+                        malo_id: "51238696012".to_owned(),
+                        erzeugungsart: "SOLAR".to_owned(),
+                        leistung_kwp: dec!(9.8),
+                        eeg_gesetz: 2023,
+                        monthly_penalty_eur: Some(dec!(98.0)),
+                        regime: "§52 Abs. 1 Nr. 11 i.V.m. Abs. 2 EEG 2023: 10 €/kW/Monat"
+                            .to_owned(),
+                    },
+                    AnlageOhneMastr {
+                        tr_id: "TR-2".to_owned(),
+                        malo_id: "51238696012".to_owned(),
+                        erzeugungsart: "WIND_ONSHORE".to_owned(),
+                        leistung_kwp: dec!(3000),
+                        eeg_gesetz: 2017,
+                        monthly_penalty_eur: None,
+                        regime: "EEG ≤2021 via §100: Vergütung auf null — keine Pflichtzahlung"
+                            .to_owned(),
+                    },
+                ],
+                regulatory_note: "Register all plants.".to_owned(),
+            },
+        );
+    }
+
+    #[test]
+    fn explain_settlement_answers_its_declared_schema() {
+        // The stored `positions_json` shape parses into the typed position.
+        let positions: Vec<Abrechnungsposition> = serde_json::from_value(serde_json::json!([{
+            "description": "Einspeisevergütung",
+            "legal_basis": "§21 EEG 2023",
+            "kwh": "812.400",
+            "rate_ct_kwh": "8.11",
+            "eur": "65.88564"
+        }]))
+        .expect("the stored position shape parses");
+        holds(
+            "explain_settlement",
+            &AbrechnungsErklaerung {
+                tr_id: "TR-1".to_owned(),
+                billing_year: 2026,
+                billing_month: 9,
+                settlement_model: "VERGUETUNG".to_owned(),
+                status: "calculated".to_owned(),
+                einspeisemenge_kwh: Some(dec!(812.400)),
+                settlement_eur: Some(dec!(65.88564)),
+                pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
+                billing_days_fraction: Some(dec!(1)),
+                settled_at: "2026-10-02T08:00:00Z".to_owned(),
+                positions,
+                interpretation: "Settlement for 2026/09".to_owned(),
+            },
+        );
+    }
+
+    /// Each shared read's tool and its REST twin: the tool's output schema
+    /// (schemars) and the route's documented `200` (utoipa) are one shape.
+    #[test]
+    fn every_shared_read_answers_its_rest_twins_shape() {
+        let doc = serde_json::to_value(crate::reads::openapi_document()).expect("serializes");
+        let tools = EinsdMcpHandler::tool_router().list_all();
+        for (tool, path) in [
+            ("get_plant", "/api/v1/anlagen/{tr_id}"),
+            ("list_expiring", "/api/v1/anlagen/foerderung-auslaufend"),
+            ("list_plants_without_mastr", "/api/v1/anlagen/ohne-mastr"),
+            ("list_settlements", "/api/v1/anlagen/{tr_id}/settlements"),
+            (
+                "explain_settlement",
+                "/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/erklaerung",
+            ),
+            (
+                "list_unsettled_plants",
+                "/api/v1/anlagen/unabgerechnet/{year}/{month}",
+            ),
+        ] {
+            mako_service::mcp::conformance::assert_rest_twin(&tools, tool, &doc, path);
+            assert!(
+                crate::reads::tool_action(tool).is_some(),
+                "{tool} is a shared read and authorizes with its REST twin's action"
+            );
+        }
+    }
+
+    /// The document `GET /api/v1/openapi.json` serves is the committed
+    /// `openapi.json` (`BLESS_MCP_SNAPSHOT=1` rewrites it).
+    #[test]
+    fn the_openapi_document_matches_the_committed_one() {
+        let doc = serde_json::to_value(crate::reads::openapi_document()).expect("serializes");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("openapi.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare_json(&doc, &path) {
+            panic!("{e}");
+        }
+    }
+
+    /// A shared read's `tools/call` clears the Cedar action its REST route
+    /// checks, not just the blanket `use-mcp`; a tool with no twin does not.
+    #[test]
+    fn a_shared_read_tool_authorizes_with_its_rest_action() {
+        let call = |name: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": name, "arguments": {} }
+            }))
+            .expect("serializes")
+        };
+        for (tool, action) in [
+            ("get_plant", "read-anlage"),
+            ("list_expiring", "read-anlage"),
+            ("list_plants_without_mastr", "read-anlage"),
+            ("list_settlements", "read-settlement"),
+            ("explain_settlement", "read-settlement"),
+            ("list_unsettled_plants", "read-settlement"),
+            ("trigger_settle", "run-settlement"),
+        ] {
+            match classify(&call(tool)) {
+                McpCall::Tool(a) => assert_eq!(a, action, "{tool}"),
+                _ => panic!("{tool} must clear {action}"),
+            }
+        }
+        assert!(matches!(classify(&call("list_plants")), McpCall::ReadOnly));
+    }
 }

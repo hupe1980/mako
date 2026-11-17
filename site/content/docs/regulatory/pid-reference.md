@@ -463,7 +463,7 @@ opened the process.
 | 44183 | Ende MSB von NB (Information über Stilllegung) | WiM Gas | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 44168 | Verpflichtungsanfrage / Aufforderung | WiM Gas | NB → gMSB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 44169 | Bestätigung Verpflichtungsanfrage | WiM Gas | gMSB → NB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 44170 | Ablehnung Verpflichtungsanfrage | WiM Gas | gMSB → NB | — | — | ✅ | ✅ | ⚠️ | — (**withdrawn**: PID 4.0 publishes 44168 → 44169 only, so the Gas Verpflichtungsanfrage has no Ablehnungs-PID) |
+| 44170 | Ablehnung Verpflichtungsanfrage | WiM Gas | gMSB → NB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 44175 | Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44176 | Antwort auf Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | 44175 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44180 | Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
@@ -770,7 +770,7 @@ BDEW PID overview. They are handled by the `redispatch-xml` crate.
 
 | Document type | XSD version | Crate |
 |---|---|---|
-| `ActivationDocument` | 1.1f | `redispatch-xml` |
+| `ActivationDocument` | 1.1f (AWT 1.1g from 01.04.2027) | `redispatch-xml` |
 | `PlannedResourceScheduleDocument` | 1.0f | `redispatch-xml` |
 | `AcknowledgementDocument` | 1.0g | `redispatch-xml` |
 | `Stammdaten` | 1.4b | `redispatch-xml` |

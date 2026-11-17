@@ -48,6 +48,7 @@
 //! | `--webhook-secret` | `EDMD_WEBHOOK_SECRET` | *(optional)* |
 //! | `--inbound-secret` | `EDMD_INBOUND_SECRET` | *(optional)* |
 
+pub mod api;
 pub mod bundesland_cache;
 pub mod config;
 pub mod confirmation;
@@ -57,6 +58,7 @@ pub mod kafka_ingest;
 pub mod mcp_server;
 mod mscons_ingest;
 pub(crate) mod outbox;
+pub mod reads;
 pub mod server;
 pub mod smgw;
 /// BSI TR-03109 SMGW domain model — rehomed from `metering` 0.17. See the module docs.

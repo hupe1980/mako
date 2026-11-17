@@ -3,7 +3,14 @@
 // only for the Rollen that read it, so a hidden one costs no request.
 
 import { useQuery } from "@tanstack/react-query";
-import { family, readingReason, readingStatus, sparte, zustand } from "../app/codes";
+import {
+  abrechnungsGrund,
+  klaerfallAktion,
+  klaerfallHerkunft,
+  readingReason,
+  readingStatus,
+  sparte,
+} from "../app/codes";
 import { nichtErreichbar } from "../app/dienste";
 import { disclosed } from "../app/disclosure";
 import { ROLLEN, type Rolle, useRolle } from "../app/rollen";
@@ -23,19 +30,21 @@ import type { Eintrag, QuelleId, Stand } from "./model";
 export const QUELLEN: Record<Rolle, QuelleId[]> = {
   // A 31009 MSB-Rechnung reaches NB, LF and ESA alike (PID-Übersicht 4.0),
   // so each holds its received invoices at an open Prüfschritt.
-  netz: ["freigaben", "ueberfaellig", "gehalten", "korrekturbedarf"],
+  netz: ["freigaben", "klaerfaelle", "gehalten", "korrekturbedarf"],
   lieferant: [
     "anmeldungen",
     "freigaben",
-    "ueberfaellig",
+    "klaerfaelle",
     "dispute",
     "gehalten",
     "pruefposten",
     "geparkt",
     "nicht_uebermittelt",
+    "abrechnungen",
+    "mahnungen",
   ],
-  messstelle: ["freigaben", "ueberfaellig", "ableseauftraege"],
-  energieservice: ["freigaben", "ueberfaellig", "gehalten"],
+  messstelle: ["freigaben", "klaerfaelle", "ableseauftraege"],
+  energieservice: ["freigaben", "klaerfaelle", "gehalten"],
 };
 
 /** The sources' words, in the Sprache in force. */
@@ -88,6 +97,7 @@ function useFreigaben(aktiv: boolean): Stand {
     detail: `PID ${f.pid} · ${f.art === "gehalten" ? wort().antwortFestgehalten : wort().antwortOffen}`,
     grund: f.grund,
     frist: f.expires_at,
+    seit: f.created_at,
     bezug: [f.process_id, ...(f.malo_id ? [f.malo_id] : [])],
     anker: { freigabe: f.id },
     ziel: { to: "/freigaben", search: { id: f.id } },
@@ -96,28 +106,43 @@ function useFreigaben(aktiv: boolean): Stand {
   return stand("freigaben", wort().freigaben, q, eintraege, q.data?.saturated ?? false);
 }
 
-function useUeberfaellig(aktiv: boolean): Stand {
+/**
+ * processd's Klärfälle — every message refused, dead-lettered or left past
+ * its Frist, one case per cause — the earliest due first. A case reads as its
+ * cause in the words of the list that defines it (processd's `bedeutung`, else
+ * the catalogue's) and what to do about it; the due date is processd's.
+ */
+function useKlaerfaelle(aktiv: boolean): Stand {
   const { rolle } = useRolle();
   const q = useQuery({
-    queryKey: [rolle, "processd", "list_overdue_processes"],
-    queryFn: () => call("processd", "list_overdue_processes", {}),
+    queryKey: [rolle, "processd", "list_klaerfaelle"],
+    queryFn: () => call("processd", "list_klaerfaelle", { limit: SEITE }),
     enabled: aktiv,
     refetchInterval: TAKT,
   });
-  const eintraege: Eintrag[] = (q.data?.overdue ?? []).map((p) => ({
-    id: `prozess:${p.process_id}`,
-    quelle: "ueberfaellig",
-    titel: p.malo_id ?? p.process_id,
+  const eintraege: Eintrag[] = (q.data?.klaerfaelle ?? []).map((k) => ({
+    id: `klaerfall:${k.id}`,
+    quelle: "klaerfaelle",
+    titel: k.message_ref,
     kennung: true,
-    detail: `PID ${p.pid} · ${zustand(p.state)}`,
-    // The task, in the operator's words; the Fundstelle is the detail's, in Fristen.
-    grund: wort().fristOverdue(family(p.family)),
-    frist: p.deadline_at ?? null,
-    bezug: [p.process_id, ...(p.malo_id ? [p.malo_id] : [])],
-    anker: p.malo_id ? { malo: p.malo_id } : { process: p.process_id },
-    ziel: { to: "/fristen", search: { id: p.process_id } },
+    detail: [
+      k.pid ? `PID ${k.pid}` : null,
+      k.origins.map(klaerfallHerkunft).join(", "),
+      klaerfallAktion(k.aktion),
+      k.occurrences > 1 ? wort().mal(formatCount(k.occurrences)) : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    grund: k.bedeutung
+      ? `${k.ursache_code} — ${k.bedeutung}`
+      : wort().ursacheOhneWortlaut(k.ursache_code, k.ursache_liste),
+    frist: k.due_at,
+    seit: k.opened_at,
+    bezug: k.process_id ? [k.process_id] : [],
+    anker: k.process_id ? { process: k.process_id } : null,
+    ziel: k.process_id ? { to: "/prozess", search: { key: k.process_id } } : null,
   }));
-  return stand("ueberfaellig", wort().ueberfaellig, q, eintraege, q.data?.saturated ?? false);
+  return stand("klaerfaelle", wort().klaerfaelle, q, eintraege, q.data?.saturated ?? false);
 }
 
 /**
@@ -142,6 +167,7 @@ function useAnmeldungen(aktiv: boolean): Stand {
       detail: `PID ${p.pid}`,
       grund: wort().anmeldungWartet,
       frist: p.deadline_at ?? null,
+      seit: p.started_at,
       bezug: [p.process_id, ...(p.malo_id ? [p.malo_id] : [])],
       anker: p.malo_id ? { malo: p.malo_id } : { process: p.process_id },
       ziel: { to: "/prozess", search: { key: id } },
@@ -269,6 +295,7 @@ function useDispute(aktiv: boolean): Stand {
       .join(" · "),
     grund: d.befunde[0]?.bezeichnung ?? wort().disputGrund,
     frist: d.frist ?? null,
+    seit: d.received_at,
     bezug: [d.process_id],
     anker: { disput: d.id },
     ziel: { to: "/prozess", search: { key: d.process_id } },
@@ -351,6 +378,7 @@ function usePruefposten(aktiv: boolean): Stand {
     bezug: [r.malo_id],
     anker: { malo: r.malo_id },
     ziel: null,
+    seit: r.created_at,
     pruefposten: r,
   }));
   return stand("pruefposten", wort().pruefposten, q, eintraege, q.data?.saturated ?? false);
@@ -385,9 +413,76 @@ function useGeparkt(aktiv: boolean): Stand {
     bezug: [b.malo_id],
     anker: { buchung: b.key },
     ziel: null,
+    seit: b.seit,
     geparkt: b,
   }));
   return stand("geparkt", wort().geparkt, q, eintraege, q.data?.saturated ?? false);
+}
+
+/**
+ * Billing periods billingd owes and has not billed, the earliest due date
+ * first as billingd orders them. The due date is a business date and the
+ * days left are billingd's count, shown as stated — the Desk computes neither.
+ */
+function useAbrechnungen(aktiv: boolean): Stand {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "billingd", "list_unbilled_periods"],
+    queryFn: () => call("billingd", "list_unbilled_periods", { limit: SEITE }),
+    enabled: aktiv,
+    refetchInterval: TAKT,
+  });
+  const eintraege: Eintrag[] = (q.data?.periods ?? []).map((p) => ({
+    id: `abrechnung:${p.malo_id}:${p.period_from}`,
+    quelle: "abrechnungen",
+    titel: p.malo_id,
+    kennung: true,
+    detail: [
+      `${formatBusinessDate(p.period_from)} – ${formatBusinessDate(p.period_to)}`,
+      p.final_invoice ? wort().schlussrechnung : null,
+      wort().faelligAm(formatBusinessDate(p.due_on)),
+      wort().tageOffen(p.days_left, formatCount(Math.abs(p.days_left))),
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    grund: abrechnungsGrund(p.reason_code),
+    frist: null,
+    bezug: [p.malo_id],
+    anker: { malo: p.malo_id },
+    ziel: { to: "/prozess", search: { key: p.malo_id } },
+  }));
+  return stand("abrechnungen", wort().abrechnungen, q, eintraege, q.data?.saturated ?? false);
+}
+
+/**
+ * accountingd's open Mahnfälle — each account's current Mahnstufe, the amount
+ * due and the date it is due by, as accountingd states them; the Desk orders
+ * nothing and computes no Frist.
+ */
+function useMahnungen(aktiv: boolean): Stand {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "accountingd", "list_dunning"],
+    queryFn: () => call("accountingd", "list_dunning", { limit: SEITE }),
+    enabled: aktiv,
+    refetchInterval: 60_000,
+  });
+  const eintraege: Eintrag[] = (q.data?.faelle ?? []).map((m) => ({
+    id: `mahnung:${m.id}`,
+    quelle: "mahnungen",
+    titel: m.account_id,
+    kennung: true,
+    detail: [wort().faelligAm(formatBusinessDate(m.due_date)), formatEuro(m.amount_due_eur)].join(
+      " · ",
+    ),
+    grund: wort().mahnstufe(formatCount(m.stufe)),
+    frist: null,
+    seit: m.issued_at,
+    bezug: [m.account_id],
+    anker: null,
+    ziel: null,
+  }));
+  return stand("mahnungen", wort().mahnungen, q, eintraege, q.data?.saturated ?? false);
 }
 
 /** The agent's open Hinweise, for every Rolle; agentd absent is no failure of Heute. */
@@ -500,7 +595,7 @@ export function useQuellen(rolle: Rolle, nur?: readonly QuelleId[]): Stand[] {
   const alle = [
     useAnmeldungen(liest.has("anmeldungen")),
     useFreigaben(liest.has("freigaben")),
-    useUeberfaellig(liest.has("ueberfaellig")),
+    useKlaerfaelle(liest.has("klaerfaelle")),
     useNichtUebermittelt(liest.has("nicht_uebermittelt")),
     useKorrekturbedarf(liest.has("korrekturbedarf")),
     useAbleseauftraege(liest.has("ableseauftraege")),
@@ -508,6 +603,8 @@ export function useQuellen(rolle: Rolle, nur?: readonly QuelleId[]): Stand[] {
     useGehalten(liest.has("gehalten")),
     usePruefposten(liest.has("pruefposten")),
     useGeparkt(liest.has("geparkt")),
+    useAbrechnungen(liest.has("abrechnungen")),
+    useMahnungen(liest.has("mahnungen")),
   ];
   return [...liest].flatMap((id) => alle.filter((s) => s.quelle === id));
 }

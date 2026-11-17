@@ -106,9 +106,11 @@ and policy to each other in both directions.
 | `POST /webhook` | — (marktd HMAC signature + timestamp) | marktd |
 | `GET /api/v1/decisions` | `read-decisions` | any caller of the tenant |
 | `GET /api/v1/queue` | `read-queue` | any caller of the tenant |
+| `GET /api/v1/klaerfaelle` | `read-case` | `NB`, `LF`, `MSB` or `ADMIN`; cases kept to the caller's Marktrollen |
 | `GET /api/v1/eog` | `read-eog` | any caller of the tenant |
 | `GET /api/v1/neuanlage` | `read-neuanlage` | any caller of the tenant |
 | `POST /api/v1/queue/{id}/approve` · `/reject` | `decide-queue` | `NB`, `LF` or `MSB` |
+| `GET /api/v1/counterparties` · `/{mp_id}/{rolle}` | `read-counterparty` | `NB`, `LF` or `MSB`; rows kept to the caller's Marktrollen |
 | `PUT /api/v1/neuanlage/{id}/identifikation` | `identify-neuanlage` | `NB` |
 | `POST /api/v1/start-supply[-gas]` · `end-supply[-gas]` | `initiate-supply` | `LF` |
 | `GET /obs/processes` · `/obs/processes/{id}` | `read-process` | any caller of the tenant |
@@ -609,6 +611,20 @@ POST /api/v1/queue/{id}/approve   → dispatch the approve command via makod, ma
 POST /api/v1/queue/{id}/reject    → dispatch the reject command via makod, mark Rejected
 ```
 
+Each entry also stores its proposal: `vorschlag_quelle` (the enqueuing rule,
+`{"art":"regel","name":"nb-module"}`) and `vorschlag_sha256`, the SHA-256 of
+the RFC 8785 canonical `{command, body}` an approval would send with no
+operator input — null for an escalation. A decision is dispatched to makod
+with `Mako-Akteur: {"principal": <decided_by>, "vorschlag": …, "unveraendert":
+…}`; `unveraendert` is true exactly when the dispatched command and body hash
+to `vorschlag_sha256`. This is the one definition of „Freigabe unverändert"
+the KPI report counts. makod accepts the header because processd's key holds
+Cedar `ActOnBehalf` (`[authz] act_on_behalf = ["processd"]`), which also makes
+every command processd sends on its own the system's act. The claim also
+stores `gesendet_sha256`, the same hash of what the decision dispatched, which
+`get_queue_entry` returns: agentd reads a proposal's fate off it, against the
+`body_sha256` its Prüfvermerk was taken for.
+
 The handlers **claim** the entry (`status = 'Pending'` guard) before
 dispatching and release the claim if the body is incomplete or the dispatch
 fails, so a decided entry never re-sends and two operators cannot send both
@@ -790,7 +806,8 @@ Antwortfrist sweep.
 | `state` | `initiated` \| `running` \| `antwortfrist_abgelaufen` \| `completed` \| `rejected` \| `failed`. A `de.mako.process.completed` is `rejected` when its `data.accepted` is `false` or `data.outcome` is `"rejected"` — the type carries the Bestätigung and the Ablehnung alike — and `completed` otherwise; `de.mako.aperak.rejected` is `rejected` too |
 | `malo_id` | 11-digit Marktlokations-ID |
 | `partner_mp_id` | MP-ID of the counterparty |
-| `mdm_role` | Canonical Marktrolle (`LF`, `NB`, …) |
+| `mdm_role` | The operator's own Marktrolle in the process (`LF`, `NB`, `MSB`, `BIKO`), the `marktrole` marktd derives from the workflow name — not the counterparty's |
+| `eingriff` | The most human actor any event named (`makoakteur`): `system` < `freigabe` < `freigabe-geaendert` < `person`; never lowered |
 | `started_at` / `last_event_at` | First and most recent event seen for this process |
 | `deadline_at` | The **business Antwortfrist**. `null` = no published window for this PID |
 | `deadline_source` | The Festlegung `deadline_at` came from |
@@ -872,11 +889,47 @@ curl -s "http://processd:8580/obs/kpis?pid=55001&period=2026-07" -H "Authorizati
 curl -s "http://processd:8580/obs/overdue" -H "Authorization: Bearer $TOKEN"
 ```
 
+A KPI report also carries `eingriff`: the processes of the PID that **ended**
+in the period (by the Berlin day of their ending, not `started_at`), each
+counted once by its most human actor — `ohne_eingriff`, `freigabe_unveraendert`,
+`freigabe_geaendert`, `person`, summing to `beendet` — with `anteile` only from
+20 ended processes and the `definition` the figure is read by.
+
 `state` accepts exactly the six stored spellings; anything else is a `400` naming
 them. In a KPI report, check `total_with_frist` before quoting
 `frist_compliance_rate`: a small denominator means the bucket is mostly
 *unmeasured*. A `null` rate means nothing measurable in the bucket — not `0`, and
 not perfect performance.
+
+### Gegenpartei-Akte
+
+What one counterparty owed us in a period, and how it answered — the evidence
+a complaint, a Schlichtung or a damages claim needs, process by process.
+
+```bash
+curl -s "http://processd:8580/api/v1/counterparties?von=2026-08-01&bis=2026-10-31" -H "Authorization: Bearer $TOKEN"
+curl -s "http://processd:8580/api/v1/counterparties/9800468000003/NB?von=2026-08-01&bis=2026-10-31&format=csv" \
+  -H "Authorization: Bearer $TOKEN" > akte.csv
+```
+
+- **Whose answer.** `deadline_at` is the PID's Antwortfrist whichever side
+  started the process, and `mdm_role` is our own role in it (marktd reads it
+  off the workflow name). A process counts in the partner's Akte only where
+  `mako_fristen::antwort`'s `answered_by` names a role other than ours; one
+  whose debtor cannot be told (no role, or one side of our own role — `LFA`,
+  `MSBA`, …) and one without a Frist are counted apart in `ausserhalb`; one we
+  owe is not in it.
+- **Answered** is `completed` or `rejected` at `completed_at`; late is
+  `completed_at > deadline_at`, to the minute, rounded up. A `failed` process
+  is `abgebrochen`, never answered. The period is Berlin calendar days on
+  `started_at`, at most 366.
+- **Refusals** are grouped by Antwortcode and the list that named it, with the
+  BDEW wording from `mako_pruefung::codes::lies`; an APERAK-refused process
+  carries its ERC code under `APERAK`.
+- Below 20 answered processes no share is stated, only counts. Every answer
+  carries its `definitionen` and lists in `prozesse` every process a figure
+  counts; the CSV is those rows, its code cells quoted (RFC 4180) and a
+  leading `= + - @`, tab or CR neutralised.
 
 ### Rebuilding from marktd's replay log
 
@@ -1188,6 +1241,30 @@ audience = "api://mako-processd"
 
 ---
 
+## Klärfälle {#klaerfaelle}
+
+One case per message mako could not bring to its end, opened from CloudEvents
+processd already receives (`src/klaerfall.rs`):
+
+| Origin | Signal | Cause (code table) | Key |
+|---|---|---|---|
+| `aperak` | `de.mako.aperak.rejected` | ERC code → `mako_engine::erc::recommended_action` | the rejected message |
+| `dead_letter` | `de.mako.dead-letter.recorded` | reason → `mako_engine::dead_letter::action_for_label` | the message, else the dead letter |
+| `refusal` | `de.mako.process.completed` with `outcome = rejected` and an Antwortcode | the code in its tree, worded by `mako_pruefung::codes::lies` | the process |
+| `frist_missed` | `de.mako.antwortfrist.abgelaufen` | the lapse | the process |
+
+The key is the message and the MP-ID that sent the signal (`partner_mp_id`):
+an APERAK from another partner citing the same reference opens that partner's
+own case and never attaches to this one. A further signal for the same key,
+from any origin, attaches (`occurrences`, `origins`); the first cause stands. `due_at` is the process's business
+Antwortfrist from the read model, or null — „keine Frist", never a default.
+Only codes are stored: a counterparty's free text never reaches a case, and
+`bedeutung` is the BDEW's own wording. No field is model output; `befehl` is
+null until a table names the correcting command. `GET /api/v1/klaerfaelle`
+(Cedar `read-case`) and MCP `list_klaerfaelle` list the open ones the caller
+may read: a case whose process mako ran in one of the caller's Marktrollen, and
+a case on no process to `ADMIN` alone — an LF reads no case of the NB side.
+
 ## MCP tools
 
 `/mcp` (Streamable HTTP) takes an OIDC token or an `[mcp]` API key. The
@@ -1196,7 +1273,22 @@ action; a tool with no mapped action is refused `403`. `approve_queue_entry` /
 `reject_queue_entry` stamp the verified caller as `decided_by` (an
 unattributable decision is refused) and call processd's own
 `POST /api/v1/queue/{id}/approve` / `/reject` over the loopback, so the REST
-handler's `decide-queue` check runs as well.
+handler's `decide-queue` check runs as well. A decision is posted as
+`application/json` and nothing else — a cross-site form cannot send it — and
+one that states `body_sha256` (from `rehearse_decision`) is refused `412
+stale_body` when the body it would dispatch is another.
+
+Every check runs before the entry is claimed, so a refused decision leaves it
+pending and marks nothing: processd's own (the frozen answer, the facts the
+command needs, the Antwortcode against the entry's Entscheidungsbaum, the body
+shown), then makod's pre-send check on exactly the message the decision
+dispatches (`POST /api/v1/probe/{command}`). A refusal is `422
+pruefung_abgelehnt` with makod's sentence, `stufe` and the profile `regeln`; a
+body makod did not rehearse is `422 nicht_geprueft` with makod's `code`. So
+no body the gate has not passed is approved — whoever proposed it, with agentd
+switched off as well. makod grants the rehearsal with `ActOnBehalf`
+(`[authz] act_on_behalf`). The MCP tools return the route's refusal body as
+the tool error.
 
 | Tool | Cedar action | Description |
 |------|------|-------------|
@@ -1206,16 +1298,20 @@ handler's `decide-queue` check runs as well.
 | `get_stp_rate` | `read-decisions` | Typed `{ stp_rate, window_days, target, compliant }`: the Anmeldung STP rate over N days against processd's own 95 % operating target, `null` when nothing was decided |
 | `get_stp_breakdown_by_erc` | `read-decisions` | Refusals per Entscheidungsbaum and Antwortcode, each with the BDEW wording |
 | `list_affiliate_decisions` | `read-decisions` | Decisions involving affiliated suppliers (Gleichbehandlung evidence) |
-| `list_pending_approvals` | `read-queue` | Typed `{ freigaben, count, saturated }`, earliest `expires_at` first; filters `status`, `limit` (≤ 200), `marktrolle`. Each `Freigabe`: `art` (`gehalten` with its frozen `antwort`, or `eskaliert`) and per action the codes its tree allows (`codes_freigeben`, `codes_ablehnen`) |
+| `list_pending_approvals` | `read-queue` | Typed `{ freigaben, count, saturated }`, earliest `expires_at` first; filters `status`, `limit` (≤ 200), `marktrolle`, `process_id` (one process's Freigaben), paged by `offset`. Each `Freigabe`: `art` (`gehalten` with its frozen `antwort`, or `eskaliert`) and per action the codes its tree allows (`codes_freigeben`, `codes_ablehnen`) |
 | `get_queue_entry` | `read-queue` | One `Freigabe` by UUID |
 | `approve_queue_entry` | `decide-queue` | Dispatch the entry's answer; takes `antwort_code` / `antwort_tree` / `antwort_codeliste` / `bemerkung` for an escalation, and the E/G facts the entry lists as missing |
 | `reject_queue_entry` | `decide-queue` | Dispatch the refusal with the operator's `antwort_code`, or `bemerkung` as the Begründung |
+| `rehearse_decision` | `read-queue` | A decision rehearsed with the route's own checks: `urteil` `besteht` with the makod `command`, `payload` and `body_sha256`, `abgelehnt` with `grund` (`code`, text, tree), or `ohne_nachricht`; claims and sends nothing |
+| `get_counterparty_record` | `read-counterparty` | Typed `CounterpartyRecord`: one counterparty's Akte in one role over a Berlin period, kept to the caller's Marktrollen |
+| `list_counterparties` | `read-counterparty` | Every counterparty and role that owed answers in a period, most late and unanswered first, kept to the caller's Marktrollen |
 | `get_process` | `read-process` | Full process projection — state, deadline, `deadline_source`, ERC code, the counterparty's Antwortcode with its list and `bedeutung` |
 | `list_processes_by_family` | `read-process` | One family, optionally one state; both are enumerated in the schema and an unknown value is refused |
 | `list_open_processes` | `read-process` | Open processes with given PIDs, earliest Frist first, a keyset page at a time (`nach` / `weiter`) |
 | `count_open_processes` | `read-process` | The same filter counted: open in total, Fristen ending before the Berlin day does, and the earliest of them |
 | `list_overdue_processes` | `read-overdue` | Past the business Antwortfrist, most urgent first; reports `saturated` |
-| `get_kpi_report` | `read-kpi` | Typed per-PID KPIs for a `YYYY-MM` month, both clocks separately |
+| `get_kpi_report` | `read-kpi` | Typed per-PID KPIs for a `YYYY-MM` month, both clocks separately, and `eingriff` — the ended processes by their most human actor, with its `definition` |
+| `list_klaerfaelle` | `read-case` | Typed `{ klaerfaelle, count, saturated }`: the open Klärfälle, the earliest `due_at` first. See [Klärfälle](#klaerfaelle) |
 | `get_parity_report` | `read-kpi` | § 7a Abs. 5 parity; `gap_pp` = affiliate − third_party |
 | `get_process_stp_rate` | `read-kpi` | Typed: completions over the processes that **ended** in the window, `null` when none did |
 | `list_sperr_orders` | `read-sperr-order` | The Sperrauftrag queue (NB build) |
@@ -1240,6 +1336,7 @@ key's `roles`).
 | `processd_approval_queue_pending` | gauge | Processes waiting for an operator decision |
 | `processd_approval_queue_overdue` | gauge | Pending entries past `expires_at` — the answer deadline has been missed |
 | `processd_eog_open` | gauge | Ersatz-/Grundversorgung cases not yet closed (§ 36/§ 38 EnWG) |
+| `mako_process_beendet_total{pid,eingriff}` | counter | Processes that ended, once each, by their most human actor (`system`, `freigabe`, `freigabe-geaendert`, `person`) — the share that ran without a person is `eingriff="system"` over all |
 
 `GET /obs/metrics` serves the read model's gauges, computed from the store on
 each scrape: `processd_obs_process_projections_total`,
@@ -1314,9 +1411,9 @@ about the MSBA's Messstellenbetriebsvertrag in `vertragd`
 `vertragd` derives `naechstmoeglich` from the notice period, capped by § 309
 Nr. 9 lit. c BGB.
 
-**Verpflichtungsanfrage (55168), `E_0240`.** One transmitted after the 5. WT
-before the Zuordnungsende its `SG4 DTM+76` names is refused `E17` (Kap. 2.4.2
-Nr. 3); a late 44168 escalates, having no Ablehnungs-PID. Otherwise Kap. 2.4.2
+**Verpflichtungsanfrage (55168 / 44168), `E_0240` / `E_2006`.** One transmitted
+after the 5. WT before the Zuordnungsende its `SG4 DTM+76` names is refused
+`E17` (Kap. 2.4.2 Nr. 3), on 55170 resp. 44170. Otherwise Kap. 2.4.2
 Nr. 4 leaves the answer „nach eigenem Ermessen" to the gMSB, so it escalates
 with its 1-Werktag window.
 Escalated decisions still write an `anmeldung_decisions` row.

@@ -35,7 +35,7 @@ Port: **`:9580`**
 | `GET /api/v1/runs/{run}/antwort` | The answer sentence by sentence, each with its cited call and `belegt` (Belegprüfung); the run's `schritte` (also while running); a `vorschlag` on a Freigabe; the reader's `hilfreich`. Read under `api:run.read`; a run a person started only by that person (`403` `not_the_starter`) |
 | `GET /api/v1/runs/{run}/schritte` | The run's reads as Server-Sent Events while it works, then its conclusion — see [Following and stopping a run](#following-and-stopping-a-run). Read as the answer is |
 | `POST /api/v1/runs/{run}/stopp` | The starter stops their run: no body or `{}`, `202` with `recorded` (`false` when a stop already stands); `409` `already_concluded` once the run has concluded. `api:run.start`, and only for the person who started the run |
-| `POST /api/v1/runs/{run}/bewertung` | `{hilfreich, begruendung?}` or `{vorschlag: sent\|edited\|dismissed}`, recorded as an assessment beside the concluded run under the caller's name; a later one replaces it. `204`, `409` while running. `api:run.assess` |
+| `POST /api/v1/runs/{run}/bewertung` | `{hilfreich, begruendung?}` or `{vorschlag: sent\|edited\|dismissed}`: the caller's assessment of a concluded run; a later one replaces it. A Freigabe proposal's fate comes from processd's decided entry, the reported `vorschlag` is kept as the rationale. `204`; `409` while running or undecided. `api:run.assess` |
 | `POST /api/v1/runs` | Start a specialist by hand (OIDC JWT **and** Cedar `api:run.start`; honours `Idempotency-Key`). Admits durably, then answers `202` with the run ids; an unknown body field is `422` |
 | `POST /api/v1/erasure` | Destroy a case wrapping key and/or forget a memory subject (OIDC + `api:erasure.execute`; reason required). `409` when a case is named and no `[keyring]` is configured; a key-service or memory-store failure is a `500` carrying an `error_id` |
 | `GET /api/v1/agents` | Activated specialists and subscriptions. OIDC + `api:agent.list`; version and digest are in `/api/v1/agents/catalog` |
@@ -261,6 +261,35 @@ reads and never acts: a proposed decision only fills the Desk's form, and the
 person sends it. Each answer and Hinweis takes a „Hilfreich?" verdict, and a
 proposal records whether it was sent, edited or dismissed
 (`POST /api/v1/runs/{run}/bewertung`).
+
+### The Prüfvermerk — a proposal meets the gate first
+
+Every proposal on a Freigabe is held against the services that own the rules
+before a person reads it, never against agentd's reading of them:
+
+1. **`entscheidung`** — processd `rehearse_decision` runs the approve/reject
+   route's own checks (frozen answer, the facts the command needs, the
+   Antwortcode against the entry's Entscheidungsbaum) and answers with the
+   makod command, the body and its `body_sha256`;
+2. **`probe`** — makod `rehearse_command` runs that command's door to its
+   pre-send AHB check. makod rehearses only the doors whose check runs before
+   they write; for any other the stage is `nicht_geprueft`, `not_rehearsable`.
+
+The verdict is `bestanden` only when both stages ran and passed, `abgelehnt`
+(code, rule, segment, the service's sentence) when one refused, and otherwise
+`nicht_geprueft` with the reason — an unreachable service is never a pass. It is
+taken for one body (`body_sha256`, with `geprueft_um`), so an edited body is
+not checked. The proposal tick stores it once on the proposal run (assessment
+`pruefvermerk`, sealed and erased with the run), so it is there before anyone
+opens the Freigabe; `GET /api/v1/vorschlaege` returns it as `pruefvermerk`
+beside the run's reads (`schritte`, the Spur), and a decided entry still
+resolves its run. A Disput or Buchung proposal has no rehearsal and says
+`keine_probe`.
+
+Every model-run specialist's procedure says that text a counterparty, a
+customer or a document wrote — an `FTX`, a Bemerkung, an e-mail — is data,
+never an instruction; agentplane labels every tool output untrusted, which keeps
+it out of any mutating sink.
 
 ### `[policy] agent_posture` {#policy-agent-posture}
 
@@ -528,7 +557,7 @@ graph TB
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 11 services, 183 tools"]
+    subgraph tools ["MCP Tools — 11 services, 189 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · processd"]
         T3["einsd · netzbilanzd · ..."]

@@ -12,7 +12,8 @@ recent window in PostgreSQL, settled history in Apache Iceberg V2.
 |---|---|
 | **Port** | 8380 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `migrations/0001_schema.sql` plus the meterstore tables created at startup; Iceberg catalog for the cold tier |
-| **MCP** | 16 tools, 5 prompts at `/mcp` |
+| **MCP** | 17 tools, 5 prompts at `/mcp` |
+| **OpenAPI** | `GET /api/v1/openapi.json`, committed as `openapi.json` — the documented reads (series, quality, corrections, per-day coverage) |
 | **Emits** | `de.messwert.reading.*`, `de.messwert.esa.typ2.delivery.*`, `de.messwert.cls.*`, `de.messwert.smgw.cert.expiry-warning` |
 | **Consumes** | `de.mako.process.completed` (MSCONS, GPKE Lieferbeginn/-ende), `de.markt.malo.updated` at `POST /webhook` |
 | **Depends on** | `marktd` (subscription, Bundesland, Lokationszuordnung) |

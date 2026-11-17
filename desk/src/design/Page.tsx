@@ -26,7 +26,7 @@ export function Page({
   return (
     <div
       data-page={width}
-      className={`flex w-full flex-col gap-6 px-(--page-gutter) pt-6 pb-24 lg:px-(--page-gutter-wide) lg:pt-8 ${
+      className={`flex w-full flex-col gap-5 px-(--page-gutter) pt-6 pb-12 lg:px-(--page-gutter-wide) lg:pt-7 ${
         width === "reading" ? "max-w-[calc(var(--page-reading)+2*var(--page-gutter-wide))]" : ""
       }`}
     >

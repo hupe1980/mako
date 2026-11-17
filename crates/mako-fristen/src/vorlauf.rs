@@ -1121,6 +1121,92 @@ pub fn widerrufsfrist(
     }
 }
 
+// ── § 40c EnWG — when an invoice is owed, and its credit paid out ────────────
+//
+// When an energy invoice is owed to the customer, and when its credit is due.
+//
+// § 40c Abs. 2 EnWG: „Energielieferanten sind verpflichtet, dem Letztverbraucher
+// die Rechnung spätestens sechs Wochen nach Beendigung des abzurechnenden
+// Zeitraums und eine Abschlussrechnung spätestens sechs Wochen nach Beendigung
+// des Lieferverhältnisses zur Verfügung zu stellen. Erfolgt eine Abrechnung nach
+// § 40b Absatz 1 monatlich, beträgt die Frist für diese Abrechnung drei Wochen."
+//
+// § 40c Abs. 3 EnWG: „Ergibt sich aus der Abrechnung ein Guthaben für den
+// Letztverbraucher, ist dieses von dem Energielieferanten vollständig mit der
+// nächsten Abschlagszahlung zu verrechnen oder binnen zwei Wochen auszuzahlen.
+// Guthaben, die aus einer Abschlussrechnung folgen, sind binnen zwei Wochen
+// auszuzahlen."
+//
+// Both are German calendar dates: the input is the last day of the billed
+// period or of supply, and the answer is the last day the duty is met on.
+
+/// Which § 40c Abs. 2 EnWG deadline a billing period falls under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Abrechnungsart {
+    /// An Abrechnung in the cadence the Lieferant chose or the customer asked
+    /// for — six weeks after the end of the billed period (Satz 1).
+    Turnus,
+    /// A monthly Abrechnung under § 40b Abs. 1 — three weeks (Satz 2). It
+    /// follows the agreed cadence, never the length of one period.
+    Monatlich,
+    /// The Abschlussrechnung (Schlussrechnung) — six weeks after the end of the
+    /// Lieferverhältnis (Satz 1), whatever the cadence was.
+    Schlussrechnung,
+}
+
+impl Abrechnungsart {
+    /// The kind for a contract's § 40b cadence (`MONATLICH`, `JAEHRLICH`, …)
+    /// and whether the invoice closes the supply.
+    #[must_use]
+    pub fn aus_zyklus(zyklus: &str, schlussrechnung: bool) -> Self {
+        if schlussrechnung {
+            Self::Schlussrechnung
+        } else if zyklus.eq_ignore_ascii_case("MONATLICH") {
+            Self::Monatlich
+        } else {
+            Self::Turnus
+        }
+    }
+
+    /// Weeks between the anchor day and the deadline.
+    #[must_use]
+    pub const fn wochen(self) -> i64 {
+        match self {
+            Self::Monatlich => 3,
+            Self::Turnus | Self::Schlussrechnung => 6,
+        }
+    }
+
+    /// The provision the deadline rests on.
+    #[must_use]
+    pub const fn rechtsgrundlage(self) -> &'static str {
+        match self {
+            Self::Monatlich => "§ 40c Abs. 2 Satz 2 EnWG",
+            Self::Turnus | Self::Schlussrechnung => "§ 40c Abs. 2 Satz 1 EnWG",
+        }
+    }
+}
+
+/// The last day an invoice for a period may reach the customer.
+///
+/// `letzter_tag` is the last day of the billed period — for a
+/// [`Abrechnungsart::Schlussrechnung`] the last day of supply (`lieferende`).
+#[must_use]
+pub fn abrechnung_faellig(letzter_tag: Date, art: Abrechnungsart) -> Date {
+    letzter_tag.saturating_add(time::Duration::weeks(art.wochen()))
+}
+
+/// The last day a credit from an invoice issued on `rechnungsdatum` may be paid
+/// out (§ 40c Abs. 3 EnWG, two weeks). The statute names no anchor for „binnen
+/// zwei Wochen"; mako counts them from the Rechnungsdatum, the earliest reading,
+/// so a payout is never reported on time that a later anchor would excuse. From a Schlussrechnung it must be paid
+/// out by then; otherwise offsetting it in full against the next Abschlag
+/// discharges the duty as well.
+#[must_use]
+pub fn guthaben_faellig(rechnungsdatum: Date) -> Date {
+    rechnungsdatum.saturating_add(time::Duration::weeks(2))
+}
+
 #[cfg(test)]
 mod widerrufsfrist_tests {
     use super::*;
@@ -1581,5 +1667,59 @@ mod tests {
             // preceding Werktag — the count is what round-trips, not the date.
             assert_eq!(crate::add_werktage(back, n, CAL), forward);
         }
+    }
+}
+
+#[cfg(test)]
+mod abrechnung_tests {
+    use super::*;
+    use time::macros::date;
+
+    #[test]
+    fn a_period_ending_31_march_is_owed_by_12_may() {
+        assert_eq!(
+            abrechnung_faellig(date!(2026 - 03 - 31), Abrechnungsart::Turnus),
+            date!(2026 - 05 - 12)
+        );
+    }
+
+    #[test]
+    fn monthly_billing_is_owed_after_three_weeks() {
+        assert_eq!(
+            abrechnung_faellig(date!(2026 - 03 - 31), Abrechnungsart::Monatlich),
+            date!(2026 - 04 - 21)
+        );
+    }
+
+    #[test]
+    fn a_schlussrechnung_is_owed_six_weeks_after_lieferende() {
+        assert_eq!(
+            abrechnung_faellig(date!(2026 - 03 - 15), Abrechnungsart::Schlussrechnung),
+            date!(2026 - 04 - 26)
+        );
+    }
+
+    #[test]
+    fn a_monthly_contract_ending_still_gets_six_weeks_for_its_schlussrechnung() {
+        assert_eq!(
+            Abrechnungsart::aus_zyklus("MONATLICH", true),
+            Abrechnungsart::Schlussrechnung
+        );
+        assert_eq!(
+            Abrechnungsart::aus_zyklus("monatlich", false),
+            Abrechnungsart::Monatlich
+        );
+        assert_eq!(
+            Abrechnungsart::aus_zyklus("JAEHRLICH", false),
+            Abrechnungsart::Turnus
+        );
+    }
+
+    #[test]
+    fn a_credit_dated_1_april_is_due_15_april() {
+        assert_eq!(
+            guthaben_faellig(date!(2026 - 04 - 01)),
+            date!(2026 - 04 - 15)
+        );
     }
 }

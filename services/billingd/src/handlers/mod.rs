@@ -403,6 +403,11 @@ pub(crate) async fn issue_record(
     mark_dispatched_tx(&mut *tx, record_id)
         .await
         .map_err(BillingError::Internal)?;
+    // Rechnung nachrechnen: the seal over the document as issued, and the
+    // verify token's hash, in the transaction that issues it.
+    crate::nachrechnen::seal_record(&mut *tx, cfg, record_id)
+        .await
+        .map_err(BillingError::Internal)?;
     Ok(())
 }
 

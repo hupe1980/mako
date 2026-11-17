@@ -4,6 +4,8 @@
 // No decision asks for confirmation, in its view or in ⌘K; the hold is the way
 // back.
 
+import type { Versand } from "../data/versand";
+
 /** How long a decision waits before it is sent. */
 export const HOLD_MS = 5_000;
 
@@ -16,7 +18,9 @@ export interface Hold {
 }
 
 interface Entry extends Hold {
-  readonly send: (keepalive: boolean) => Promise<unknown>;
+  readonly send: (v: Versand) => Promise<unknown>;
+  /** The decision's Idempotency-Key: one per hold, a new one after an undo. */
+  readonly schluessel: string;
   readonly undo: () => void;
   readonly timer: ReturnType<typeof setTimeout>;
 }
@@ -47,8 +51,9 @@ export class HoldQueue {
     if (superseded) this.drop(superseded);
     const id = this.nextId++;
     const timer = setTimeout(() => this.release(id, false), this.ms);
+    const schluessel = crypto.randomUUID();
     // A new array on every change: it is the snapshot React compares.
-    this.entries = [...this.entries, { id, key, label, send, undo, timer }];
+    this.entries = [...this.entries, { id, key, label, send, undo, timer, schluessel }];
     this.emit();
     return id;
   }
@@ -80,9 +85,15 @@ export class HoldQueue {
     const entry = this.entries.find((e) => e.id === id);
     if (!entry) return;
     this.drop(entry);
+    // Sent as the page closes, its answer may never be read here: it is noted
+    // until it is, and the next load asks the service (`Unbestaetigt.tsx`).
+    if (keepalive) merken({ key: entry.key, label: entry.label, schluessel: entry.schluessel });
     // The caller's `send` reports its own failure in place; the queue only
     // keeps a rejection from going unhandled.
-    entry.send(keepalive).catch(() => undefined);
+    entry
+      .send({ keepalive, schluessel: entry.schluessel })
+      .then(() => keepalive && vergessen(entry.schluessel))
+      .catch(() => keepalive && vergessen(entry.schluessel));
   }
 
   private drop(entry: Entry): void {
@@ -94,4 +105,41 @@ export class HoldQueue {
   private emit(): void {
     for (const l of this.listeners) l();
   }
+}
+
+/** A decision sent as the page closed, whose answer the page did not read. */
+export interface Unbestaetigt {
+  /** The hold's key: `freigabe/<id>`, `disput/<id>`, … (`aktionen.ts` `schluessel`). */
+  key: string;
+  label: string;
+  schluessel: string;
+}
+
+const SPEICHER = "mako-desk.unbestaetigt";
+
+/** The decisions still unconfirmed from an earlier page, oldest first. */
+export function unbestaetigt(): Unbestaetigt[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(SPEICHER) ?? "[]");
+    return Array.isArray(v) ? (v as Unbestaetigt[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function schreiben(liste: Unbestaetigt[]): void {
+  try {
+    localStorage.setItem(SPEICHER, JSON.stringify(liste));
+  } catch {
+    // Storage refused (a private window): the decision is still sent.
+  }
+}
+
+function merken(u: Unbestaetigt): void {
+  schreiben([...unbestaetigt().filter((x) => x.schluessel !== u.schluessel), u]);
+}
+
+/** Forget one: its answer was read, or the person has seen what became of it. */
+export function vergessen(schluessel: string): void {
+  schreiben(unbestaetigt().filter((x) => x.schluessel !== schluessel));
 }

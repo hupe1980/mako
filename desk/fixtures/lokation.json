@@ -1,0 +1,1500 @@
+{
+  "/svc/marktd/api/v1/malos/51238696012": {
+    "malo_id": "51238696012",
+    "sparte": "STROM",
+    "netzebene": "NSP",
+    "bilanzierungsmethode": "SLP",
+    "energierichtung": "AUSSP",
+    "lokationsbuendel_objektcode": "9991000000044",
+    "rollenzuordnung": [],
+    "data": {},
+    "version": 3
+  },
+  "/svc/marktd/api/v1/versorgung/51238696012/history": {
+    "items": [
+      {
+        "id": 3,
+        "malo_id": "51238696012",
+        "lieferstatus": "Beliefert",
+        "nb_mp_id": "9900357000004",
+        "valid_from": "2026-06-30T22:00:00Z",
+        "version": 3,
+        "zuordnungen": [
+          {
+            "lf_mp_id": "9905550000010",
+            "prozent": "100",
+            "status": "Aktiv"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "malo_id": "51238696012",
+        "lieferstatus": "Grundversorgung",
+        "nb_mp_id": "9900357000004",
+        "valid_from": "2026-03-31T22:00:00Z",
+        "version": 2,
+        "zuordnungen": [
+          {
+            "lf_mp_id": "9905550000027",
+            "prozent": "100",
+            "status": "Aktiv"
+          }
+        ]
+      },
+      {
+        "id": 1,
+        "malo_id": "51238696012",
+        "lieferstatus": "Beliefert",
+        "nb_mp_id": "9900357000004",
+        "valid_from": "2025-12-31T23:00:00Z",
+        "version": 1,
+        "zuordnungen": [
+          {
+            "lf_mp_id": "9905550000034",
+            "prozent": "100",
+            "status": "Aktiv"
+          }
+        ]
+      }
+    ],
+    "page": 0,
+    "size": 50,
+    "total": 3
+  },
+  "/svc/marktd/api/v1/malos/51238696012/lokationsbuendel": {
+    "malo_id": "51238696012",
+    "stichtag": "2026-11-04",
+    "energierichtung": "AUSSP",
+    "lokationsbuendelcodes": ["9991000000044"],
+    "objekte": [
+      {
+        "id": "51238696012",
+        "typ": "MALO"
+      },
+      {
+        "id": "DE00012345678900000000000000001",
+        "typ": "MELO"
+      },
+      {
+        "id": "DE00012345678900000000000000002",
+        "typ": "MELO"
+      },
+      {
+        "id": "E1234567890",
+        "typ": "NELO"
+      },
+      {
+        "id": "C1234567890",
+        "typ": "TR"
+      }
+    ],
+    "zaehler": [
+      {
+        "melo_id": "DE00012345678900000000000000001",
+        "zaehler_id": "1ESY1160001234"
+      },
+      {
+        "melo_id": "DE00012345678900000000000000002",
+        "zaehler_id": "1ESY1160005678"
+      }
+    ],
+    "zuordnungen": [
+      {
+        "von_id": "51238696012",
+        "von_typ": "MALO",
+        "nach_id": "DE00012345678900000000000000001",
+        "nach_typ": "MELO"
+      },
+      {
+        "von_id": "51238696012",
+        "von_typ": "MALO",
+        "nach_id": "DE00012345678900000000000000002",
+        "nach_typ": "MELO"
+      },
+      {
+        "von_id": "DE00012345678900000000000000001",
+        "von_typ": "MELO",
+        "nach_id": "E1234567890",
+        "nach_typ": "NELO"
+      },
+      {
+        "von_id": "DE00012345678900000000000000002",
+        "von_typ": "MELO",
+        "nach_id": "C1234567890",
+        "nach_typ": "TR"
+      }
+    ]
+  },
+  "/svc/edmd/api/v1/coverage/51238696012": {
+    "malo_id": "51238696012",
+    "sparte": "STROM",
+    "von": "2026-10-06",
+    "bis": "2026-11-04",
+    "gemessen": 26,
+    "ersatzwert": 2,
+    "korrigiert": 1,
+    "fehlt": 1,
+    "tage": [
+      {
+        "tag": "2026-10-06",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-07",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-08",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-09",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-10",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-11",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-12",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-13",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-14",
+        "zustand": "ersatzwert"
+      },
+      {
+        "tag": "2026-10-15",
+        "zustand": "ersatzwert"
+      },
+      {
+        "tag": "2026-10-16",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-17",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-18",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-19",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-20",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-21",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-22",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-23",
+        "zustand": "korrigiert"
+      },
+      {
+        "tag": "2026-10-24",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-25",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-26",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-27",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-28",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-29",
+        "zustand": "fehlt"
+      },
+      {
+        "tag": "2026-10-30",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-10-31",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-11-01",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-11-02",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-11-03",
+        "zustand": "gemessen"
+      },
+      {
+        "tag": "2026-11-04",
+        "zustand": "gemessen"
+      }
+    ]
+  },
+  "/svc/edmd/api/v1/timeseries/51238696012": {
+    "malo_id": "51238696012",
+    "from": "2026-10-27T23:00:00Z",
+    "to": "2026-11-03T23:00:00Z",
+    "count": 168,
+    "readings": [
+      {
+        "dtm_from": "2026-10-27T23:00:00Z",
+        "dtm_to": "2026-10-28T00:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-28T00:00:00Z",
+        "dtm_to": "2026-10-28T01:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-28T01:00:00Z",
+        "dtm_to": "2026-10-28T02:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-28T02:00:00Z",
+        "dtm_to": "2026-10-28T03:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-28T03:00:00Z",
+        "dtm_to": "2026-10-28T04:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-28T04:00:00Z",
+        "dtm_to": "2026-10-28T05:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-28T05:00:00Z",
+        "dtm_to": "2026-10-28T06:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-10-28T06:00:00Z",
+        "dtm_to": "2026-10-28T07:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-10-28T07:00:00Z",
+        "dtm_to": "2026-10-28T08:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-10-28T08:00:00Z",
+        "dtm_to": "2026-10-28T09:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-10-28T09:00:00Z",
+        "dtm_to": "2026-10-28T10:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-10-28T10:00:00Z",
+        "dtm_to": "2026-10-28T11:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.430"
+      },
+      {
+        "dtm_from": "2026-10-28T11:00:00Z",
+        "dtm_to": "2026-10-28T12:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-10-28T12:00:00Z",
+        "dtm_to": "2026-10-28T13:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-10-28T13:00:00Z",
+        "dtm_to": "2026-10-28T14:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-10-28T14:00:00Z",
+        "dtm_to": "2026-10-28T15:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-10-28T15:00:00Z",
+        "dtm_to": "2026-10-28T16:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-10-28T16:00:00Z",
+        "dtm_to": "2026-10-28T17:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-28T17:00:00Z",
+        "dtm_to": "2026-10-28T18:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-28T18:00:00Z",
+        "dtm_to": "2026-10-28T19:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-28T19:00:00Z",
+        "dtm_to": "2026-10-28T20:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-28T20:00:00Z",
+        "dtm_to": "2026-10-28T21:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-28T21:00:00Z",
+        "dtm_to": "2026-10-28T22:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-28T22:00:00Z",
+        "dtm_to": "2026-10-28T23:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-28T23:00:00Z",
+        "dtm_to": "2026-10-29T00:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-29T00:00:00Z",
+        "dtm_to": "2026-10-29T01:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-29T01:00:00Z",
+        "dtm_to": "2026-10-29T02:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-29T02:00:00Z",
+        "dtm_to": "2026-10-29T03:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-29T03:00:00Z",
+        "dtm_to": "2026-10-29T04:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-29T04:00:00Z",
+        "dtm_to": "2026-10-29T05:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-29T05:00:00Z",
+        "dtm_to": "2026-10-29T06:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-10-29T06:00:00Z",
+        "dtm_to": "2026-10-29T07:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-10-29T07:00:00Z",
+        "dtm_to": "2026-10-29T08:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-10-29T08:00:00Z",
+        "dtm_to": "2026-10-29T09:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-10-29T09:00:00Z",
+        "dtm_to": "2026-10-29T10:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-10-29T10:00:00Z",
+        "dtm_to": "2026-10-29T11:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.430"
+      },
+      {
+        "dtm_from": "2026-10-29T11:00:00Z",
+        "dtm_to": "2026-10-29T12:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-10-29T12:00:00Z",
+        "dtm_to": "2026-10-29T13:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-10-29T13:00:00Z",
+        "dtm_to": "2026-10-29T14:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-10-29T14:00:00Z",
+        "dtm_to": "2026-10-29T15:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-10-29T15:00:00Z",
+        "dtm_to": "2026-10-29T16:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-10-29T16:00:00Z",
+        "dtm_to": "2026-10-29T17:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-29T17:00:00Z",
+        "dtm_to": "2026-10-29T18:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-29T18:00:00Z",
+        "dtm_to": "2026-10-29T19:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-29T19:00:00Z",
+        "dtm_to": "2026-10-29T20:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-29T20:00:00Z",
+        "dtm_to": "2026-10-29T21:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-29T21:00:00Z",
+        "dtm_to": "2026-10-29T22:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-29T22:00:00Z",
+        "dtm_to": "2026-10-29T23:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-29T23:00:00Z",
+        "dtm_to": "2026-10-30T00:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-30T00:00:00Z",
+        "dtm_to": "2026-10-30T01:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-30T01:00:00Z",
+        "dtm_to": "2026-10-30T02:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-30T02:00:00Z",
+        "dtm_to": "2026-10-30T03:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-30T03:00:00Z",
+        "dtm_to": "2026-10-30T04:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-30T04:00:00Z",
+        "dtm_to": "2026-10-30T05:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-30T05:00:00Z",
+        "dtm_to": "2026-10-30T06:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-10-30T06:00:00Z",
+        "dtm_to": "2026-10-30T07:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-10-30T07:00:00Z",
+        "dtm_to": "2026-10-30T08:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-10-30T08:00:00Z",
+        "dtm_to": "2026-10-30T09:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-10-30T09:00:00Z",
+        "dtm_to": "2026-10-30T10:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-10-30T10:00:00Z",
+        "dtm_to": "2026-10-30T11:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.430"
+      },
+      {
+        "dtm_from": "2026-10-30T11:00:00Z",
+        "dtm_to": "2026-10-30T12:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-10-30T12:00:00Z",
+        "dtm_to": "2026-10-30T13:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-10-30T13:00:00Z",
+        "dtm_to": "2026-10-30T14:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-10-30T14:00:00Z",
+        "dtm_to": "2026-10-30T15:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-10-30T15:00:00Z",
+        "dtm_to": "2026-10-30T16:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-10-30T16:00:00Z",
+        "dtm_to": "2026-10-30T17:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-30T17:00:00Z",
+        "dtm_to": "2026-10-30T18:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-30T18:00:00Z",
+        "dtm_to": "2026-10-30T19:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-30T19:00:00Z",
+        "dtm_to": "2026-10-30T20:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-30T20:00:00Z",
+        "dtm_to": "2026-10-30T21:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-30T21:00:00Z",
+        "dtm_to": "2026-10-30T22:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-30T22:00:00Z",
+        "dtm_to": "2026-10-30T23:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-30T23:00:00Z",
+        "dtm_to": "2026-10-31T00:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-31T00:00:00Z",
+        "dtm_to": "2026-10-31T01:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-31T01:00:00Z",
+        "dtm_to": "2026-10-31T02:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-31T02:00:00Z",
+        "dtm_to": "2026-10-31T03:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-31T03:00:00Z",
+        "dtm_to": "2026-10-31T04:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-31T04:00:00Z",
+        "dtm_to": "2026-10-31T05:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-31T05:00:00Z",
+        "dtm_to": "2026-10-31T06:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-10-31T06:00:00Z",
+        "dtm_to": "2026-10-31T07:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-10-31T07:00:00Z",
+        "dtm_to": "2026-10-31T08:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-10-31T08:00:00Z",
+        "dtm_to": "2026-10-31T09:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-10-31T09:00:00Z",
+        "dtm_to": "2026-10-31T10:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-10-31T10:00:00Z",
+        "dtm_to": "2026-10-31T11:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.430"
+      },
+      {
+        "dtm_from": "2026-10-31T11:00:00Z",
+        "dtm_to": "2026-10-31T12:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-10-31T12:00:00Z",
+        "dtm_to": "2026-10-31T13:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-10-31T13:00:00Z",
+        "dtm_to": "2026-10-31T14:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-10-31T14:00:00Z",
+        "dtm_to": "2026-10-31T15:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-10-31T15:00:00Z",
+        "dtm_to": "2026-10-31T16:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-10-31T16:00:00Z",
+        "dtm_to": "2026-10-31T17:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-31T17:00:00Z",
+        "dtm_to": "2026-10-31T18:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-31T18:00:00Z",
+        "dtm_to": "2026-10-31T19:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-31T19:00:00Z",
+        "dtm_to": "2026-10-31T20:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-10-31T20:00:00Z",
+        "dtm_to": "2026-10-31T21:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-31T21:00:00Z",
+        "dtm_to": "2026-10-31T22:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-31T22:00:00Z",
+        "dtm_to": "2026-10-31T23:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-10-31T23:00:00Z",
+        "dtm_to": "2026-11-01T00:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-01T00:00:00Z",
+        "dtm_to": "2026-11-01T01:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-01T01:00:00Z",
+        "dtm_to": "2026-11-01T02:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-01T02:00:00Z",
+        "dtm_to": "2026-11-01T03:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-01T03:00:00Z",
+        "dtm_to": "2026-11-01T04:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-01T04:00:00Z",
+        "dtm_to": "2026-11-01T05:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-01T05:00:00Z",
+        "dtm_to": "2026-11-01T06:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-11-01T06:00:00Z",
+        "dtm_to": "2026-11-01T07:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-11-01T07:00:00Z",
+        "dtm_to": "2026-11-01T08:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-11-01T08:00:00Z",
+        "dtm_to": "2026-11-01T09:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-11-01T09:00:00Z",
+        "dtm_to": "2026-11-01T10:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-11-01T10:00:00Z",
+        "dtm_to": "2026-11-01T11:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.430"
+      },
+      {
+        "dtm_from": "2026-11-01T11:00:00Z",
+        "dtm_to": "2026-11-01T12:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-11-01T12:00:00Z",
+        "dtm_to": "2026-11-01T13:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-11-01T13:00:00Z",
+        "dtm_to": "2026-11-01T14:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-11-01T14:00:00Z",
+        "dtm_to": "2026-11-01T15:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-11-01T15:00:00Z",
+        "dtm_to": "2026-11-01T16:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-11-01T16:00:00Z",
+        "dtm_to": "2026-11-01T17:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-01T17:00:00Z",
+        "dtm_to": "2026-11-01T18:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-01T18:00:00Z",
+        "dtm_to": "2026-11-01T19:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-01T19:00:00Z",
+        "dtm_to": "2026-11-01T20:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-01T20:00:00Z",
+        "dtm_to": "2026-11-01T21:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-01T21:00:00Z",
+        "dtm_to": "2026-11-01T22:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-01T22:00:00Z",
+        "dtm_to": "2026-11-01T23:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-01T23:00:00Z",
+        "dtm_to": "2026-11-02T00:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-02T00:00:00Z",
+        "dtm_to": "2026-11-02T01:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-02T01:00:00Z",
+        "dtm_to": "2026-11-02T02:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-02T02:00:00Z",
+        "dtm_to": "2026-11-02T03:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-02T03:00:00Z",
+        "dtm_to": "2026-11-02T04:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-02T04:00:00Z",
+        "dtm_to": "2026-11-02T05:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-02T05:00:00Z",
+        "dtm_to": "2026-11-02T06:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-11-02T06:00:00Z",
+        "dtm_to": "2026-11-02T07:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-11-02T07:00:00Z",
+        "dtm_to": "2026-11-02T08:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-11-02T08:00:00Z",
+        "dtm_to": "2026-11-02T09:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-11-02T09:00:00Z",
+        "dtm_to": "2026-11-02T10:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-11-02T10:00:00Z",
+        "dtm_to": "2026-11-02T11:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.430"
+      },
+      {
+        "dtm_from": "2026-11-02T11:00:00Z",
+        "dtm_to": "2026-11-02T12:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-11-02T12:00:00Z",
+        "dtm_to": "2026-11-02T13:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-11-02T13:00:00Z",
+        "dtm_to": "2026-11-02T14:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-11-02T14:00:00Z",
+        "dtm_to": "2026-11-02T15:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-11-02T15:00:00Z",
+        "dtm_to": "2026-11-02T16:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-11-02T16:00:00Z",
+        "dtm_to": "2026-11-02T17:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-02T17:00:00Z",
+        "dtm_to": "2026-11-02T18:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-02T18:00:00Z",
+        "dtm_to": "2026-11-02T19:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-02T19:00:00Z",
+        "dtm_to": "2026-11-02T20:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-02T20:00:00Z",
+        "dtm_to": "2026-11-02T21:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-02T21:00:00Z",
+        "dtm_to": "2026-11-02T22:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-02T22:00:00Z",
+        "dtm_to": "2026-11-02T23:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-02T23:00:00Z",
+        "dtm_to": "2026-11-03T00:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-03T00:00:00Z",
+        "dtm_to": "2026-11-03T01:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-03T01:00:00Z",
+        "dtm_to": "2026-11-03T02:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-03T02:00:00Z",
+        "dtm_to": "2026-11-03T03:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-03T03:00:00Z",
+        "dtm_to": "2026-11-03T04:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-03T04:00:00Z",
+        "dtm_to": "2026-11-03T05:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-03T05:00:00Z",
+        "dtm_to": "2026-11-03T06:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-11-03T06:00:00Z",
+        "dtm_to": "2026-11-03T07:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-11-03T07:00:00Z",
+        "dtm_to": "2026-11-03T08:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-11-03T08:00:00Z",
+        "dtm_to": "2026-11-03T09:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-11-03T09:00:00Z",
+        "dtm_to": "2026-11-03T10:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-11-03T10:00:00Z",
+        "dtm_to": "2026-11-03T11:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.430"
+      },
+      {
+        "dtm_from": "2026-11-03T11:00:00Z",
+        "dtm_to": "2026-11-03T12:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.421"
+      },
+      {
+        "dtm_from": "2026-11-03T12:00:00Z",
+        "dtm_to": "2026-11-03T13:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.397"
+      },
+      {
+        "dtm_from": "2026-11-03T13:00:00Z",
+        "dtm_to": "2026-11-03T14:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.357"
+      },
+      {
+        "dtm_from": "2026-11-03T14:00:00Z",
+        "dtm_to": "2026-11-03T15:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.305"
+      },
+      {
+        "dtm_from": "2026-11-03T15:00:00Z",
+        "dtm_to": "2026-11-03T16:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.245"
+      },
+      {
+        "dtm_from": "2026-11-03T16:00:00Z",
+        "dtm_to": "2026-11-03T17:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-03T17:00:00Z",
+        "dtm_to": "2026-11-03T18:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-03T18:00:00Z",
+        "dtm_to": "2026-11-03T19:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-03T19:00:00Z",
+        "dtm_to": "2026-11-03T20:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.300"
+      },
+      {
+        "dtm_from": "2026-11-03T20:00:00Z",
+        "dtm_to": "2026-11-03T21:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-03T21:00:00Z",
+        "dtm_to": "2026-11-03T22:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      },
+      {
+        "dtm_from": "2026-11-03T22:00:00Z",
+        "dtm_to": "2026-11-03T23:00:00Z",
+        "obis_code": "1-1:1.29.0",
+        "quality": "MEASURED",
+        "quantity_kwh": "0.180"
+      }
+    ]
+  },
+  "/svc/accountingd/api/v1/accounts/51238696012/balance": {
+    "malo_id": "51238696012",
+    "lf_mp_id": "9905550000010",
+    "balance_ct": 4210,
+    "balance_eur": "42.10",
+    "abschlag_ct": 8900,
+    "status": "overdue"
+  },
+  "/svc/accountingd/api/v1/accounts/51238696012/ledger": {
+    "malo_id": "51238696012",
+    "lf_mp_id": "9905550000010",
+    "opening_ct": 0,
+    "lines": [
+      {
+        "entry_id": "e-4",
+        "booking_date": "2026-11-01",
+        "entry_type": "ABSCHLAG",
+        "beleg": "AB-2026-11",
+        "side": "debit",
+        "amount_ct": 8900,
+        "signed_ct": 8900,
+        "running_ct": 4210
+      },
+      {
+        "entry_id": "e-3",
+        "booking_date": "2026-10-15",
+        "entry_type": "ZAHLUNG",
+        "beleg": "SEPA 2026-10-15",
+        "side": "credit",
+        "amount_ct": 8900,
+        "signed_ct": -8900,
+        "running_ct": -4690
+      },
+      {
+        "entry_id": "e-2",
+        "booking_date": "2026-10-02",
+        "entry_type": "RECHNUNG",
+        "beleg": "R-2026-0042",
+        "side": "debit",
+        "amount_ct": 4210,
+        "signed_ct": 4210,
+        "running_ct": 4210
+      },
+      {
+        "entry_id": "e-1",
+        "booking_date": "2026-10-01",
+        "entry_type": "ABSCHLAG",
+        "beleg": "AB-2026-10",
+        "side": "debit",
+        "amount_ct": 8900,
+        "signed_ct": 8900,
+        "running_ct": 0
+      }
+    ]
+  }
+}

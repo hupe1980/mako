@@ -24,8 +24,9 @@ otel = [
 
 ## `service::build_for_test` — a daemon's router built the way `run` builds
 ## it, with no port and no database. For startup tests; never in a production
-## build.
-testing = []
+## build. With `mcp`, `mcp::conformance` — the round trips and the check that
+## a typed tool's answer satisfies its declared output schema.
+testing = ["dep:jsonschema"]
 
 ## Enables Cedar ABAC enforcement via `CedarEnforcer`.
 ## Wire in via `CedarEnforcer::from_policy_str(...)` and `Extension<Arc<CedarEnforcer>>`.
@@ -121,6 +122,10 @@ rmcp                      = { workspace = true, optional = true }
 # Optional governor dep — only compiled when feature=rate-limit is enabled
 governor                  = { version = "0.6", optional = true }
 
+# Optional jsonschema dep — only compiled when feature=testing is enabled:
+# `mcp::conformance::assert_structured_output` validates a typed tool's answer.
+jsonschema                = { workspace = true, optional = true }
+
 [dev-dependencies]
 # Test-only: names the BO4E type the metrics test sends through the gate.
 rubo4e        = { workspace = true }
@@ -134,6 +139,9 @@ tokio         = { version = "1", features = ["rt-multi-thread", "macros", "io-ut
 # Real-PostgreSQL integration tests for the transactional outbox.
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true }
+# Test-only: `conformance::assert_rest_twin` is exercised on a documented route.
+utoipa        = { workspace = true }
+utoipa-axum   = { workspace = true }
 
 [lints]
 workspace = true

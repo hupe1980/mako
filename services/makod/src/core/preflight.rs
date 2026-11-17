@@ -132,6 +132,8 @@ pub struct PreflightInput<'a> {
     pub cedar_policies: Option<String>,
     /// `--cedar-permit-all`.
     pub cedar_permit_all: bool,
+    /// `[authz] act_on_behalf` — the principals granted `ActOnBehalf`.
+    pub act_on_behalf: &'a [String],
     /// `--oidc-issuer`.
     pub oidc_issuer: Option<&'a str>,
     /// `--oidc-audience`.
@@ -159,6 +161,18 @@ pub struct Preflight {
     pub cedar_policies: Option<String>,
     /// Which built-in baseline the authorizer runs with.
     pub cedar_default_policy: DefaultPolicy,
+}
+
+/// Whether an action constraint covers `MaKo::Action::"ActOnBehalf"`.
+fn grants_act_on_behalf(constraint: &cedar_policy::ActionConstraint) -> bool {
+    let is_it = |uid: &cedar_policy::EntityUid| {
+        uid.type_name().to_string() == "MaKo::Action" && uid.id().unescaped() == "ActOnBehalf"
+    };
+    match constraint {
+        cedar_policy::ActionConstraint::Any => true,
+        cedar_policy::ActionConstraint::Eq(uid) => is_it(uid),
+        cedar_policy::ActionConstraint::In(uids) => uids.iter().any(is_it),
+    }
 }
 
 /// Validate the configuration and resolve it into ready-to-use values.
@@ -322,6 +336,65 @@ pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
             "authz.cedar_policy_dir",
             format!("Cedar policy set is invalid: {e}"),
         ));
+    }
+
+    // ── ActOnBehalf: only a named service ────────────────────────────────────
+    //
+    // `ActOnBehalf` lets a caller name another as a command's actor, so a
+    // command it relays is recorded as a person's approval. Granted to an
+    // OIDC subject or to every principal, any person's token could record an
+    // approval in someone else's name — so the grant goes to a named service
+    // key (`--auth-key NAME=…`) and to nothing broader.
+    let key_names: Vec<&str> = input
+        .auth_keys
+        .iter()
+        .filter_map(|k| k.split_once('=').map(|(n, _)| n.trim()))
+        .collect();
+    for name in input.act_on_behalf {
+        if !key_names.contains(&name.as_str()) {
+            out.push(zugriff(
+                "authz.act_on_behalf",
+                format!(
+                    "[authz] act_on_behalf grants {name:?}, which is not a service key \
+                     (--auth-key NAME=TOKEN names {}). ActOnBehalf records a relayed command \
+                     as a person's approval; only a service makod issued a key to may hold it.",
+                    if key_names.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        key_names.join(", ")
+                    }
+                ),
+            ));
+        }
+    }
+    if let Some(text) = input.cedar_policies.as_deref()
+        && let Ok(set) = text.parse::<cedar_policy::PolicySet>()
+    {
+        for policy in set.policies() {
+            if policy.effect() == cedar_policy::Effect::Permit
+                && grants_act_on_behalf(&policy.action_constraint())
+                && !matches!(
+                    policy.principal_constraint(),
+                    cedar_policy::PrincipalConstraint::Eq(_)
+                )
+            {
+                out.push(zugriff(
+                    "authz.cedar_policy_dir",
+                    format!(
+                        "Cedar policy {} grants ActOnBehalf to more than one named principal \
+                         ({}). Grant it only as `principal == MaKo::Principal::\"<service>\"` \
+                         — through [authz] act_on_behalf — so no person's token can record an \
+                         approval in another's name.",
+                        policy.id(),
+                        policy
+                            .to_string()
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    ),
+                ));
+            }
+        }
     }
 
     // ── AS4 clients ──────────────────────────────────────────────────────────
@@ -796,6 +869,7 @@ mod tests {
             // The baseline, because these fixtures are about the other doors.
             // The authorization posture has its own tests below.
             cedar_permit_all: true,
+            act_on_behalf: &[],
             oidc_issuer: None,
             oidc_audience: None,
         }
@@ -1359,6 +1433,53 @@ mod tests {
             err.contains("--cedar-policy-dir"),
             "the refusal must name what to configure: {err}"
         );
+    }
+
+    /// ActOnBehalf granted by a policy whose principal is unconstrained —
+    /// every caller, every OIDC subject — is a blocking finding; the grant
+    /// to one named service is not.
+    #[test]
+    fn act_on_behalf_granted_to_every_principal_is_a_blocking_finding() {
+        let keys = vec!["processd=token".to_owned()];
+        let broad = PreflightInput {
+            auth_keys: &keys,
+            cedar_permit_all: false,
+            cedar_policies: Some(
+                "permit(principal, action == MaKo::Action::\"ActOnBehalf\", resource);".to_owned(),
+            ),
+            ..base()
+        };
+        let err = rejection(&broad);
+        assert!(err.contains("ActOnBehalf"), "{err}");
+        let named = PreflightInput {
+            auth_keys: &keys,
+            cedar_permit_all: false,
+            cedar_policies: crate::cedar_authz::with_act_on_behalf(
+                Some(
+                    "permit(principal, action == MaKo::Action::\"IngestEdifact\", resource);"
+                        .to_owned(),
+                ),
+                &["processd".to_owned()],
+            ),
+            act_on_behalf: &["processd".to_owned()],
+            ..base()
+        };
+        preflight(&named).expect("one named service may hold it");
+    }
+
+    /// `[authz] act_on_behalf` names a principal that is no service key — an
+    /// OIDC subject, a typo — and the boot refuses.
+    #[test]
+    fn act_on_behalf_for_a_principal_without_a_service_key_is_refused() {
+        let keys = vec!["processd=token".to_owned()];
+        let input = PreflightInput {
+            auth_keys: &keys,
+            act_on_behalf: &["erika.mustermann".to_owned()],
+            ..base()
+        };
+        let err = rejection(&input);
+        assert!(err.contains("not a service key"), "{err}");
+        assert!(err.contains("erika.mustermann"), "{err}");
     }
 
     #[test]

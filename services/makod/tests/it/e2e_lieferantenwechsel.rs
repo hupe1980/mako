@@ -165,7 +165,7 @@ impl MockLfn {
                         stammdaten: mako_engine::payload::Stammdaten::default(),
                     })),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))
@@ -230,7 +230,7 @@ impl MockLfn {
                     bilanzkreis: Some("11XBK-LF-------9".to_owned()),
                     kundendaten: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))
@@ -284,7 +284,7 @@ impl MockLfn {
             .dispatch(&raw as &dyn Any, &self.fv)
             .expect("LFN: adapt NB response to LfAnmeldungCommand");
         self.nb_leg
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("LFN: execute HandleAntwort (nb_leg)")
             .events
@@ -300,7 +300,7 @@ impl MockLfn {
             .dispatch(&raw as &dyn Any, &self.fv)
             .expect("LFN: adapt LFA response to LfAnmeldungCommand");
         self.lfa_leg
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("LFN: execute HandleAntwort (lfa_leg)");
     }
@@ -399,7 +399,7 @@ impl MockNb {
             _ => panic!("expected SupplierChangeCommand::ReceiveUtilmd"),
         };
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("NB: execute ReceiveUtilmd");
     }
@@ -421,7 +421,7 @@ impl MockNb {
                     obligations,
                     lfa_lieferende: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))
@@ -566,7 +566,7 @@ impl MockLfa {
             _ => panic!("expected KuendigungCommand::ReceiveKuendigung"),
         };
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("LFA: execute ReceiveUtilmd (55016)");
     }
@@ -589,7 +589,7 @@ impl MockLfa {
                     // sits in is what selects 55017 over 55018.
                     antwort: mako_gpke::LfAntwort::zustimmung("A09", "E_0614"),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .map(|ran| (ran.events, ran.outbox))

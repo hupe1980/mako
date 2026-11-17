@@ -61,8 +61,9 @@
 //!
 //! `BNetzA` **BK6-23-241** (Beschluss 07.05.2026), Anlage `BilAReM` Kap. 6.3
 //! (Abrufprozesse) and Kap. 6.4 (Abstimmung der Ausfallarbeit); EDI@Energy
-//! *`ActivationDocument`* FB 1.1f and *`AcknowledgementDocument`* FB 1.0g for the
-//! wire format and the acknowledgement Frist.
+//! *`ActivationDocument`* FB 1.1f (Anwendungstabelle 1.1g from 01.04.2027) and
+//! *`AcknowledgementDocument`* FB 1.0g for the wire format and the
+//! acknowledgement Frist.
 
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{

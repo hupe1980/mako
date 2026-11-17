@@ -16,10 +16,13 @@
 //!
 //! Two things keep a rehearsal from writing:
 //!
-//! - only a door whose pre-send check runs before anything is written is
-//!   rehearsable ([`REHEARSABLE`]); any other command is refused, naming why;
-//! - `spawn_process` refuses inside a rehearsal scope, so a door that
-//!   reached its spawn would fail before the write rather than after it.
+//! - only a door that stops before anything is written is rehearsable
+//!   ([`REHEARSABLE`]): an Anmeldung at its pre-send check, an answer where
+//!   it would run the process it resumes; any other command is refused,
+//!   naming why;
+//! - `spawn_process` refuses inside a rehearsal scope, and a command reaching
+//!   a process run finds no actor, so a door that got past its stop would
+//!   fail before the write rather than after it.
 
 use std::cell::RefCell;
 
@@ -34,9 +37,9 @@ tokio::task_local! {
     static PROBE: RefCell<Option<(mako_engine::version::FormatVersion, Vec<PendingOutbox>)>>;
 }
 
-/// The commands a rehearsal can run: each door renders its UTILMD and holds it
-/// against its profile before it writes anything, so stopping at that check
-/// leaves nothing behind.
+/// The commands a rehearsal can run: each door stops before it writes
+/// anything — an Anmeldung at its own pre-send check, an answer that resumes
+/// a running process where the run would write (`rehearse_resume`).
 ///
 /// | Command | Prüfidentifikator |
 /// |---|---|
@@ -46,14 +49,53 @@ tokio::task_local! {
 /// | `geli.lieferbeginn.anmelden` | 44001 Anmeldung NN (LF → GNB) |
 /// | `geli.lieferende.anmelden` | 44004 Abmeldung NN (LF → GNB) |
 /// | `geli.kuendigung.anmelden` | 44016 Kündigung (LFN → LFA) |
-pub const REHEARSABLE: &[&str] = &[
-    "gpke.lieferbeginn.anmelden",
-    "gpke.lieferende.anmelden",
-    "gpke.kuendigung.anmelden",
-    "geli.lieferbeginn.anmelden",
-    "geli.lieferende.anmelden",
-    "geli.kuendigung.anmelden",
-];
+/// | every [`mako_markt::commands::FREIGABE_ANTWORTEN`] | the answers a Freigabe dispatches |
+pub const REHEARSABLE: &[&str] = {
+    use mako_markt::commands as c;
+    &[
+        "gpke.lieferbeginn.anmelden",
+        "gpke.lieferende.anmelden",
+        "gpke.kuendigung.anmelden",
+        "geli.lieferbeginn.anmelden",
+        "geli.lieferende.anmelden",
+        "geli.kuendigung.anmelden",
+        c::GPKE_LIEFERBEGINN_BESTAETIGEN,
+        c::GPKE_LIEFERBEGINN_ABLEHNEN,
+        c::GPKE_LIEFERENDE_BESTAETIGEN,
+        c::GPKE_LIEFERENDE_ABLEHNEN,
+        c::GELI_LIEFERBEGINN_BESTAETIGEN,
+        c::GELI_LIEFERBEGINN_ABLEHNEN,
+        c::GELI_LIEFERENDE_BESTAETIGEN,
+        c::GELI_LIEFERENDE_ABLEHNEN,
+        c::GPKE_NB_LIEFERENDE_BESTAETIGEN,
+        c::GPKE_NB_LIEFERENDE_ABLEHNEN,
+        c::GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
+        c::GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+        c::GPKE_KUENDIGUNG_BESTAETIGEN,
+        c::GPKE_KUENDIGUNG_ABLEHNEN,
+        c::GPKE_ZUORDNUNG_LF_BESTAETIGEN,
+        c::GPKE_ZUORDNUNG_LF_ABLEHNEN,
+        c::GPKE_EOG_BESTAETIGEN,
+        c::GPKE_EOG_ABLEHNEN,
+        c::GELI_NB_LIEFERENDE_BESTAETIGEN,
+        c::GELI_NB_LIEFERENDE_ABLEHNEN,
+        c::GELI_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
+        c::GELI_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+        c::GELI_KUENDIGUNG_BESTAETIGEN,
+        c::GELI_KUENDIGUNG_ABLEHNEN,
+        c::GELI_EOG_BESTAETIGEN,
+        c::GELI_EOG_ABLEHNEN,
+        c::WIM_GERAETEWECHSEL_BESTAETIGEN,
+        c::WIM_GERAETEWECHSEL_ABLEHNEN,
+        c::WIM_STEUERUNGSAUFTRAG_BESTAETIGEN,
+        c::WIM_STEUERUNGSAUFTRAG_ABLEHNEN,
+        c::WIM_PREISANFRAGE_ANGEBOT_SENDEN,
+        c::WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN,
+        c::WIM_WERTEBESTELLUNG_BESTELLUNG_BEANTWORTEN,
+        c::WIM_WERTEBESTELLUNG_ABBESTELLUNG_BEANTWORTEN,
+        c::WIM_WERTEBESTELLUNG_STORNIERUNG_BEANTWORTEN,
+    ]
+};
 
 /// Whether the current task runs inside a rehearsal.
 pub(super) fn active() -> bool {
@@ -353,7 +395,11 @@ pub async fn rehearse(
                 },
             )
         }
-        (Err(DispatchError::Engine(e)), _) => Err(ProbeRefusal::Engine(e.to_string())),
+        // The workflow refusing the command is the door's refusal — the real
+        // run answers it `409 invalid_state` — not a failure underneath it.
+        (Err(DispatchError::Engine(e)), _) if e.as_workflow_error().is_none() => {
+            Err(ProbeRefusal::Engine(e.to_string()))
+        }
         (Err(e), _) => Ok(probe(
             Urteil::Abgelehnt,
             Some(Stufe::Tuer),

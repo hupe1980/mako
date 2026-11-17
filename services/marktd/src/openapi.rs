@@ -6,7 +6,6 @@ use utoipa::OpenApi;
 #[openapi(
     info(
         title = "marktd — Master Data Manager",
-        version = "1.0",
         description = "REST API for the `marktd` master-data daemon (Marktlokation, Messlokation, Verträge, Partner, Subscriptions, Process Correlation, VersorgungsStatus, PRICAT).",
     ),
     tags(
@@ -59,11 +58,35 @@ use utoipa::OpenApi;
 )]
 pub struct ApiDoc;
 
+type S = std::sync::Arc<crate::state::AppState>;
+
+/// The routes mounted through `utoipa-axum`'s `OpenApiRouter` — a route there
+/// cannot exist without its document entry — and the document: [`ApiDoc`]'s
+/// listed paths plus theirs. These are the shared reads of [`crate::reads`],
+/// whose MCP tools declare the same response type.
+pub fn documented() -> (axum::Router<S>, utoipa::openapi::OpenApi) {
+    use crate::handlers::{lokationsbuendel, versorgung};
+    use utoipa_axum::{router::OpenApiRouter, routes};
+    OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .routes(routes!(versorgung::get_versorgungsstatus))
+        .routes(routes!(versorgung::get_versorgungsstatus_history))
+        .routes(routes!(lokationsbuendel::get_lokationsbuendel))
+        .routes(routes!(lokationsbuendel::list_lokationsbuendelstrukturen))
+        .split_for_parts()
+}
+
+/// The document `GET /api/v1/openapi.json` serves, as JSON.
+#[must_use]
+pub fn document() -> serde_json::Value {
+    serde_json::to_value(documented().1).unwrap_or_default()
+}
+
 /// Mounts `GET /api/v1/openapi.json`, the OpenAPI 3.1 document built once — the
 /// same path `makod` serves, so an integrator points a client generator, or any
 /// Swagger UI / Redoc, at any service without looking the path up per daemon.
-pub fn openapi_router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
-    let doc = ApiDoc::openapi();
+pub fn openapi_router<St: Clone + Send + Sync + 'static>(
+    doc: utoipa::openapi::OpenApi,
+) -> axum::Router<St> {
     axum::Router::new().route(
         "/api/v1/openapi.json",
         axum::routing::get(move || {
@@ -84,7 +107,7 @@ mod tests {
     /// unverified archive at build time, so the service serves the document alone.
     #[tokio::test]
     async fn the_openapi_document_is_served_and_no_ui_is_mounted() {
-        let app: axum::Router = super::openapi_router();
+        let app: axum::Router = super::openapi_router(super::documented().1);
         let res = app
             .clone()
             .oneshot(
@@ -112,5 +135,28 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ui.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    /// The committed `openapi.json` is the document marktd serves
+    /// (`BLESS_MCP_SNAPSHOT=1` rewrites it); integrators and the Desk generate
+    /// their clients from the committed file.
+    #[test]
+    fn the_openapi_document_matches_the_committed_one() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("openapi.json");
+        if let Err(e) = mako_service::mcp_snapshot::compare_json(&super::document(), &path) {
+            panic!("{e}");
+        }
+    }
+
+    /// The documented `GET /api/v1/versorgung/{malo_id}` and the undocumented
+    /// `PUT` on the same path merge into one route rather than panicking at
+    /// boot.
+    #[test]
+    fn the_documented_get_merges_beside_the_put_on_its_path() {
+        let (documented, _) = super::documented();
+        let _app: axum::Router<super::S> = documented.merge(axum::Router::new().route(
+            "/api/v1/versorgung/{malo_id}",
+            axum::routing::put(|| async {}),
+        ));
     }
 }

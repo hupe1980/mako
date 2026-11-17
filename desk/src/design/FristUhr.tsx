@@ -20,11 +20,14 @@ export function FristUhr({
   due,
   now,
   compact = false,
+  gross = false,
 }: {
   due: Instant;
   now?: number;
   /** In a list that already says the Frist has lapsed: „vor 2 Tagen", not „abgelaufen vor …". */
   compact?: boolean;
+  /** The page's one headline Frist, top right of a record. */
+  gross?: boolean;
 }) {
   const t = useT();
   const ticking = useNow();
@@ -36,9 +39,9 @@ export function FristUhr({
           dateTime={due}
           // biome-ignore lint/a11y/noNoninteractiveTabindex: the tooltip with the exact instant must be reachable by keyboard
           tabIndex={0}
-          className={`focus-ring inline-flex h-6 items-center gap-1 rounded-full px-2 text-body font-semibold whitespace-nowrap ${LOOK[urgency]}`}
+          className={`focus-ring inline-flex items-center gap-1 rounded-full font-semibold whitespace-nowrap ${gross ? "h-9 px-3 text-title1" : "h-6 px-2 text-body"} ${LOOK[urgency]}`}
         >
-          <Icon name={urgency === "lapsed" ? "warn" : "clock"} size={14} />
+          <Icon name={urgency === "lapsed" ? "warn" : "clock"} size={gross ? 20 : 14} />
           <span className="sr-only">{t.fristUhr[urgency]}: </span>
           {text}
         </time>

@@ -42,6 +42,14 @@ pub enum Projected {
     Ignored,
     /// The row for this process was written.
     Upserted,
+    /// The row was written and this event ended the process — reached once
+    /// per process, however often the ending is redelivered.
+    Beendet {
+        /// The process's PID.
+        pid: u32,
+        /// Its most human actor, `None` where no event named one.
+        eingriff: Option<mako_engine::envelope::Eingriffsklasse>,
+    },
 }
 
 /// Project one CloudEvent into `process_projections`.
@@ -111,6 +119,11 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
         .map(str::to_owned);
 
     let mdm_role = event["marktrole"].as_str().map(str::to_owned);
+    // The class the event states (`makoakteur`) — never a principal, which
+    // makod keeps in its event store.
+    let akteur = event["makoakteur"]
+        .as_str()
+        .and_then(mako_engine::envelope::Eingriffsklasse::parse);
 
     let family = derive_family(
         &workflow_name,
@@ -128,6 +141,11 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
     // "no row": treating it as one re-anchors the deadline on this event.
     let existing = state.repo.get(process_id, &state.tenant).await?;
     let started_at = existing.as_ref().map_or(event_time, |e| e.started_at);
+    // The most human actor seen so far: a later system event never undoes a
+    // person's touch. The upsert keeps the greater one too, against a
+    // concurrent delivery.
+    let eingriff = existing.as_ref().and_then(|e| e.eingriff).max(akteur);
+    let was_terminal = existing.as_ref().is_some_and(|e| e.state.is_terminal());
     let existing_deadline = existing.as_ref().and_then(|e| e.deadline_at);
     let existing_source = existing.as_ref().and_then(|e| e.deadline_source.clone());
 
@@ -176,6 +194,7 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
         malo_id,
         partner_mp_id,
         mdm_role,
+        eingriff,
         deadline_at,
         deadline_source,
         deadline_risk,
@@ -200,6 +219,9 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
         "processd obs: upserted process projection"
     );
 
+    if state_val.is_terminal() && !was_terminal {
+        return Ok(Projected::Beendet { pid, eingriff });
+    }
     Ok(Projected::Upserted)
 }
 
@@ -391,7 +413,7 @@ fn derive_family(
         37008..=37014 => "geli-gas", // PARTIN Gas Kommunikationsdaten
         31011 => "geli-gas",         // INVOIC AWH Sperrprozesse Gas (GNB→LFG)
         // ── WiM Gas — Messstellenbetrieb Gas (AWH WiM Gas 2.0) ───────────────
-        44039..=44053 | 44168 | 44169 | 44183 => "wim-gas",
+        44039..=44053 | 44168..=44170 | 44183 => "wim-gas",
         31004 => "invoic-storno", // INVOIC Stornorechnung — Sparte-neutral, cross-process (AHB Kap. 3.1.2)
         // ── GaBi Gas — Bilanzierung Gas (BK7-24-01-008) ──────────────────────────
         31007 | 31008 | 31010 => "gabi-gas", // INVOIC MMM-Rechnung / Kapazitätsrechnung

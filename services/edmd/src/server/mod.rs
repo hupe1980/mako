@@ -268,6 +268,8 @@ pub fn router(state: HandlerState) -> Router {
         // runner's (`mako_service::run`), which probes the pool for real. This
         // is edmd's own domain gauge, mounted beside them.
         .route("/edmd/metrics", get(metrics))
+        // The documented reads and `/api/v1/openapi.json` (`crate::api`).
+        .merge(crate::api::router())
         .with_state(state)
 }
 

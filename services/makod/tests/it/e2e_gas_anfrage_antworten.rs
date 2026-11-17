@@ -206,9 +206,14 @@ impl Deployment {
     }
 
     async fn answer(&self, body: serde_json::Value) -> Result<(), DispatchError> {
-        dispatch_command(&self.state, COMMAND, &body)
-            .await
-            .map(|_| ())
+        dispatch_command(
+            &self.state,
+            mako_engine::envelope::Akteur::System,
+            COMMAND,
+            &body,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// The one UTILMD written, gated, with its Prüfidentifikator.

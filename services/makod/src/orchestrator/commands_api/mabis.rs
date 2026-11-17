@@ -364,6 +364,7 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
         workflow_name: "".into(),
         format_version: None,
         trace_context: mako_engine::trace_ctx::current().map(Into::into),
+        akteur: befehls_akteur()?.klasse(),
     };
     state
         .store
@@ -897,11 +898,12 @@ mod summenzeitreihe_reference_tests {
             "pruefidentifikator": 13003,
             "intervals": [{ "from": "202512312300+00", "to": "202512312315+00", "quantity_kwh": "1.5" }],
         });
-        let DispatchOutcome::Spawned { process_id } =
-            dispatch_mabis_summenzeitreihe_uebermitteln(&state, &payload)
-                .await
-                .expect("dispatched")
-        else {
+        let DispatchOutcome::Spawned { process_id } = super::als(
+            mako_engine::envelope::Akteur::System,
+            dispatch_mabis_summenzeitreihe_uebermitteln(&state, &payload),
+        )
+        .await
+        .expect("dispatched") else {
             panic!("a Summenzeitreihe spawns its filing");
         };
         let named = filed_message_ref(

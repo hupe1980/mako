@@ -19,6 +19,7 @@ import { eintrag, katalog, useT } from "../i18n";
 import { Fragen } from "./Fragen";
 import { Hinweise } from "./Hinweise";
 import { monogram } from "./kundenSuche";
+import { KontoPanel } from "./Lokation";
 
 type Tone = "calm" | "info" | "done" | "critical" | "muted";
 
@@ -193,6 +194,12 @@ export function KundeView() {
           <Stellen stellen={kunde.data.lieferstellen} gesamt={kunde.data.lieferstellen_gesamt} />
         </Panel>
       )}
+      {/* The Konto of each Lieferstelle, as accountingd keeps it. */}
+      {kunde.data?.lieferstellen.map((s) => (
+        <section key={s.malo_id} aria-label={t.kundeAnsicht.kontoVon(s.malo_id)}>
+          <KontoPanel malo={s.malo_id} />
+        </section>
+      ))}
       {kunde.data && <Hinweise nurFuer={kunde.data.lieferstellen.map((s) => s.malo_id)} />}
       {kunde.data && <Fragen anker={{ kunde: id }} />}
       <p className="m-0 flex items-center gap-1.5 text-caption text-text-2">

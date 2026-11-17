@@ -67,6 +67,52 @@ where
     )
 }
 
+/// The MCP answer of a shared read — one function behind a REST route and an
+/// MCP tool — that returned `answer`.
+///
+/// `Ok` is the structured content the tool's `output_schema` declares. A
+/// refusal the REST route answers with a 4xx is a tool error result naming
+/// its stable `code` (`not_found` and the like when the error carries none)
+/// and message, which an agent reads and can act on; a 5xx is a protocol
+/// error carrying no detail beyond the status, as the REST route renders an
+/// `error_id` rather than the error's text.
+///
+/// # Errors
+///
+/// A 5xx, or an answer that does not serialize.
+pub fn answer<T: serde::Serialize>(
+    answer: Result<T, crate::ApiError>,
+) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+    use rmcp::model::{CallToolResult, ContentBlock};
+    match answer {
+        Ok(value) => serde_json::to_value(value)
+            .map(CallToolResult::structured)
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None)),
+        Err(e) if e.status().is_server_error() => {
+            tracing::error!(error = %e, "mcp: shared read failed");
+            Err(rmcp::ErrorData::internal_error(
+                e.status().to_string(),
+                None,
+            ))
+        }
+        Err(e) => {
+            let code = e.code().map_or_else(
+                || {
+                    e.status()
+                        .canonical_reason()
+                        .unwrap_or("refused")
+                        .to_lowercase()
+                        .replace(' ', "_")
+                },
+                ToOwned::to_owned,
+            );
+            Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "{code}: {e}"
+            ))]))
+        }
+    }
+}
+
 /// Round trips a test drives against a served `/mcp` endpoint.
 #[cfg(feature = "testing")]
 pub mod conformance {
@@ -256,6 +302,183 @@ pub mod conformance {
         on_2026_07_28(&mcp, tool).await;
         on_2025_11_25(&mcp, tool).await;
         outside_the_declared_set(&mcp).await;
+    }
+
+    /// Assert that `tool` declares an output schema and that `answer` — the
+    /// structured content it returns — satisfies it.
+    ///
+    /// The Desk's types are generated from the declared schema, so an answer
+    /// that does not satisfy it (a `Decimal` the schema calls a number, a field
+    /// renamed in `serialize` only) is a wire the Desk misreads.
+    ///
+    /// # Panics
+    ///
+    /// When the tool is not among `tools`, declares no output schema, the
+    /// schema does not compile, or `answer` violates it — naming each
+    /// violation.
+    pub fn assert_structured_output(tools: &[rmcp::model::Tool], tool: &str, answer: &Value) {
+        let declared = tools
+            .iter()
+            .find(|t| t.name == tool)
+            .unwrap_or_else(|| panic!("{tool} is not served"));
+        let schema = Value::Object(
+            declared
+                .output_schema
+                .as_deref()
+                .unwrap_or_else(|| panic!("{tool} declares no output schema"))
+                .clone(),
+        );
+        let validator = jsonschema::validator_for(&schema)
+            .unwrap_or_else(|e| panic!("{tool}'s output schema does not compile: {e}"));
+        let violations: Vec<String> = validator
+            .iter_errors(answer)
+            .map(|e| format!("{} at {}", e, e.instance_path()))
+            .collect();
+        assert!(
+            violations.is_empty(),
+            "{tool}'s answer violates its output schema:\n{}\nanswer: {answer:#}",
+            violations.join("\n")
+        );
+    }
+
+    /// Assert that `tool`'s declared output schema and the `200` response of
+    /// its REST twin `GET path` in `openapi` describe the same shape — or
+    /// `POST path` where the route has no `GET`: a read whose input is
+    /// personal data (an IBAN) is posted as a body so no access log records
+    /// it.
+    ///
+    /// Both are generated from one Rust type — schemars for MCP, utoipa for
+    /// REST — so this holds the two derives to each other: the property names,
+    /// which are required, each property's type and nullability, a string's
+    /// `format` (`date`, `date-time`, `decimal` — what the Desk brands) and an
+    /// enum's values, recursively through `$ref`s, array items and nullable
+    /// unions. An integer's width and a description are not compared: the two
+    /// generators spell them differently for the same type.
+    ///
+    /// # Panics
+    ///
+    /// When the tool or the route is missing, either declares no schema, or
+    /// the two shapes differ — printing both.
+    pub fn assert_rest_twin(tools: &[rmcp::model::Tool], tool: &str, openapi: &Value, path: &str) {
+        let declared = tools
+            .iter()
+            .find(|t| t.name == tool)
+            .unwrap_or_else(|| panic!("{tool} is not served"));
+        let mcp = Value::Object(
+            declared
+                .output_schema
+                .as_deref()
+                .unwrap_or_else(|| panic!("{tool} declares no output schema"))
+                .clone(),
+        );
+        let route = &openapi["paths"][path];
+        let method = if route["get"].is_null() {
+            "post"
+        } else {
+            "get"
+        };
+        let rest = &route[method]["responses"]["200"]["content"]["application/json"]["schema"];
+        assert!(
+            !rest.is_null(),
+            "{method} {path} documents no application/json 200 response"
+        );
+        let from_mcp = shape(&mcp, &mcp);
+        let from_rest = shape(rest, openapi);
+        assert_eq!(
+            from_mcp, from_rest,
+            "{tool}'s output schema and {method} {path}'s response differ\nMCP:  {from_mcp:#}\nREST: {from_rest:#}"
+        );
+    }
+
+    /// The comparable shape of `schema`, `$ref`s resolved against `root`.
+    fn shape(schema: &Value, root: &Value) -> Value {
+        let mut nullable = false;
+        let resolved = unwrap_nullable(schema, root, &mut nullable);
+        let mut out = serde_json::Map::new();
+        let types: Vec<&str> = match &resolved["type"] {
+            Value::String(t) => vec![t.as_str()],
+            Value::Array(ts) => ts.iter().filter_map(Value::as_str).collect(),
+            _ => vec![],
+        };
+        if types.contains(&"null") {
+            nullable = true;
+        }
+        let ty = types.into_iter().find(|t| *t != "null");
+        out.insert("nullable".into(), Value::Bool(nullable));
+        if let Some(ty) = ty {
+            out.insert("type".into(), Value::String(ty.into()));
+            if ty == "string"
+                && let Some(f) = resolved.get("format")
+            {
+                out.insert("format".into(), f.clone());
+            }
+        }
+        if let Some(values) = resolved.get("enum").and_then(Value::as_array) {
+            let mut values: Vec<String> = values
+                .iter()
+                .filter(|v| !v.is_null())
+                .map(Value::to_string)
+                .collect();
+            values.sort();
+            out.insert("enum".into(), json!(values));
+        }
+        if let Some(props) = resolved.get("properties").and_then(Value::as_object) {
+            let props: serde_json::Map<String, Value> = props
+                .iter()
+                .map(|(k, v)| (k.clone(), shape(v, root)))
+                .collect();
+            // schemars lists a nullable property as required, utoipa does not;
+            // both mean "present or null", so only a non-nullable one counts.
+            let mut required: Vec<&str> = resolved["required"]
+                .as_array()
+                .map(|r| r.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            required.retain(|k| {
+                props
+                    .get(*k)
+                    .is_none_or(|p| p["nullable"] == Value::Bool(false))
+            });
+            required.sort_unstable();
+            out.insert("properties".into(), Value::Object(props));
+            out.insert("required".into(), json!(required));
+        }
+        if let Some(items) = resolved.get("items") {
+            out.insert("items".into(), shape(items, root));
+        }
+        Value::Object(out)
+    }
+
+    /// `schema` with its `$ref` resolved and a `null` arm of an `anyOf` /
+    /// `oneOf` (or a one-arm `allOf`) folded into `nullable`.
+    fn unwrap_nullable(schema: &Value, root: &Value, nullable: &mut bool) -> Value {
+        if let Some(r) = schema.get("$ref").and_then(Value::as_str) {
+            let target = root
+                .pointer(r.trim_start_matches('#'))
+                .unwrap_or_else(|| panic!("unresolved $ref {r}"));
+            return unwrap_nullable(target, root, nullable);
+        }
+        for key in ["anyOf", "oneOf", "allOf"] {
+            if let Some(arms) = schema.get(key).and_then(Value::as_array) {
+                let real: Vec<&Value> = arms
+                    .iter()
+                    .filter(|a| a.get("type").and_then(Value::as_str) != Some("null"))
+                    .collect();
+                if real.len() < arms.len() {
+                    *nullable = true;
+                }
+                if let [only] = real.as_slice() {
+                    return unwrap_nullable(only, root, nullable);
+                }
+                // A unit enum whose variants carry doc comments: schemars
+                // writes one `const` arm per variant, utoipa one `enum` list.
+                let consts: Option<Vec<Value>> =
+                    real.iter().map(|a| a.get("const").cloned()).collect();
+                if let Some(values) = consts.filter(|v| !v.is_empty()) {
+                    return json!({ "type": "string", "enum": values });
+                }
+            }
+        }
+        schema.clone()
     }
 
     /// `server/discover`, list and call without a session; `Mcp-Name` read;
@@ -543,5 +766,110 @@ mod tests {
             .request_2025("resources/read", json!({ "uri": "missing://x" }))
             .await;
         assert_eq!(old.error_code(), Some(-32002), "{old:?}");
+    }
+
+    /// A `Decimal` the schema calls a string and a missing required field are
+    /// both violations the structured-output check names.
+    #[test]
+    fn a_structured_answer_is_held_to_its_declared_schema() {
+        #[derive(schemars::JsonSchema)]
+        #[expect(dead_code, reason = "only its schema is read")]
+        struct Betrag {
+            betrag: String,
+            tage: u32,
+        }
+        let tools = [rmcp::model::Tool::new(
+            "betrag",
+            "a typed answer",
+            std::sync::Arc::new(serde_json::Map::new()),
+        )
+        .with_output_schema::<Betrag>()];
+        super::conformance::assert_structured_output(
+            &tools,
+            "betrag",
+            &json!({ "betrag": "12.50", "tage": 3 }),
+        );
+        let wrong = std::panic::catch_unwind(|| {
+            super::conformance::assert_structured_output(
+                &tools,
+                "betrag",
+                &json!({ "betrag": 12.5 }),
+            );
+        });
+        assert!(
+            wrong.is_err(),
+            "a number for a string and a missing field are refused"
+        );
+    }
+
+    mod rest_twin {
+        use serde::Serialize;
+
+        /// One read's answer, derived for both doors.
+        #[derive(Serialize, schemars::JsonSchema, utoipa::ToSchema)]
+        pub struct Stand {
+            pub malo_id: String,
+            #[schemars(extend("format" = "date"))]
+            #[schema(format = Date)]
+            pub stichtag: String,
+            pub ende: Option<String>,
+            pub tage: Vec<Tag>,
+        }
+
+        #[derive(Serialize, schemars::JsonSchema, utoipa::ToSchema)]
+        pub struct Tag {
+            pub zustand: Zustand,
+        }
+
+        #[derive(Serialize, schemars::JsonSchema, utoipa::ToSchema)]
+        #[serde(rename_all = "snake_case")]
+        #[expect(dead_code, reason = "only its schema is read")]
+        pub enum Zustand {
+            /// Every slot of the day measured.
+            Gemessen,
+            /// A slot of the day without a value.
+            Fehlt,
+        }
+
+        /// The same answer with the date's format left off the REST side.
+        #[derive(Serialize, schemars::JsonSchema, utoipa::ToSchema)]
+        pub struct OhneFormat {
+            pub malo_id: String,
+            pub stichtag: String,
+            pub ende: Option<String>,
+            pub tage: Vec<Tag>,
+        }
+
+        #[utoipa::path(get, path = "/api/v1/stand", responses((status = 200, body = Stand)))]
+        pub async fn stand() {}
+
+        #[utoipa::path(get, path = "/api/v1/ohne", responses((status = 200, body = OhneFormat)))]
+        pub async fn ohne() {}
+    }
+
+    /// The MCP output schema (schemars) and the REST response (utoipa) of one
+    /// type are the same shape; a format only one side carries is a difference.
+    #[test]
+    fn a_rest_twin_is_held_to_the_tool_output_schema() {
+        use utoipa_axum::{router::OpenApiRouter, routes};
+        let (_, doc) = OpenApiRouter::<()>::new()
+            .routes(routes!(rest_twin::stand))
+            .routes(routes!(rest_twin::ohne))
+            .split_for_parts();
+        let doc = serde_json::to_value(doc).expect("the document serializes");
+        let tools = [rmcp::model::Tool::new(
+            "stand",
+            "a typed read",
+            std::sync::Arc::new(serde_json::Map::new()),
+        )
+        .with_output_schema::<rest_twin::Stand>()];
+        super::conformance::assert_rest_twin(&tools, "stand", &doc, "/api/v1/stand");
+        let differs = std::panic::catch_unwind(|| {
+            super::conformance::assert_rest_twin(&tools, "stand", &doc, "/api/v1/ohne");
+        });
+        assert!(
+            differs.is_err(),
+            "a date format only MCP declares is refused"
+        );
     }
 }

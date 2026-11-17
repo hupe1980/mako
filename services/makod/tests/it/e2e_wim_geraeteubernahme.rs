@@ -166,7 +166,7 @@ impl MockMsba {
 
     async fn receive_bestellung(&self, wire: &[u8]) {
         self.process
-            .run(self.adapt(wire, true), RunOptions::new())
+            .run(self.adapt(wire, true), RunOptions::system())
             .await
             .expect("execute ReceiveOrders 17001");
     }
@@ -190,7 +190,7 @@ impl MockMsba {
                         ..AntwortAngaben::default()
                     },
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .unwrap_or_else(|e| panic!("execute DispatchAntwort {code}: {e}"));
@@ -270,7 +270,7 @@ async fn wim_geraeteubernahme_refuses_a_foreign_code() {
                 bemerkung: None,
                 angaben: AntwortAngaben::default(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect_err("ZB4 is not published in E_0247");
@@ -282,7 +282,7 @@ async fn wim_geraeteubernahme_validation_failure_rejects() {
     let msba = MockMsba::new(Sparte::Strom);
 
     msba.process
-        .run(msba.adapt(ORDERS_17001_BYTES, false), RunOptions::new())
+        .run(msba.adapt(ORDERS_17001_BYTES, false), RunOptions::system())
         .await
         .expect("execute");
 

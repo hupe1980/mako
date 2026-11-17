@@ -4,4 +4,5 @@
 
 mod authorization_guard;
 mod demo_config;
+mod nachrechnen_page;
 mod upstream_failure;

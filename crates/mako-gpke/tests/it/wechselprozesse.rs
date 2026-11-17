@@ -196,7 +196,7 @@ async fn end_to_end_lieferbeginn_strom_pipeline() {
     // EDIFACT interchange header (UNB DE0020 reference number) so that all events
     // produced by this command share the same root trace as the inbound message.
     // This is the canonical pattern for all AS4-triggered commands — do NOT use
-    // `process.run(command, RunOptions::new())` (which generates fresh IDs) for messages received
+    // `process.run(command, RunOptions::system())` (which generates fresh IDs) for messages received
     // from the EDIFACT network.
     //
     // Here we use a deterministic UUID so the test can assert on it.
@@ -207,7 +207,7 @@ async fn end_to_end_lieferbeginn_strom_pipeline() {
         .with_correlation(interchange_correlation);
 
     let envelopes = process
-        .run(command, RunOptions::new().context(cmd_ctx))
+        .run(command, RunOptions::system().context(cmd_ctx))
         .await
         .expect("execute must succeed for a valid PID-55001 command");
 
@@ -300,7 +300,7 @@ async fn wrong_pid_returns_workflow_error() {
                 kunde_namensformat: None,
                 fallgruppe: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 
@@ -330,7 +330,7 @@ async fn send_antwort_from_wrong_state_returns_error() {
                 obligations: vec![],
                 lfa_lieferende: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 

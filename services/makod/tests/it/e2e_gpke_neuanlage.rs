@@ -186,7 +186,7 @@ impl MockNb {
         };
 
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("NB: execute ReceiveAnmeldung");
     }
@@ -200,7 +200,7 @@ impl MockNb {
                     marktlokation: None,
                     tranche: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("NB: execute SendAntwort");
@@ -209,7 +209,7 @@ impl MockNb {
     /// ERP action: activate the new Marktlokation in the grid.
     async fn aktivieren(&self) {
         self.process
-            .run(NeuanlageCommand::Aktivieren, RunOptions::new())
+            .run(NeuanlageCommand::Aktivieren, RunOptions::system())
             .await
             .expect("NB: execute Aktivieren");
     }
@@ -344,7 +344,7 @@ async fn e2e_neuanlage_validation_failure_rejects() {
     };
 
     nb.process
-        .run(cmd, RunOptions::new())
+        .run(cmd, RunOptions::system())
         .await
         .expect("execute validation failure");
 
@@ -457,9 +457,14 @@ impl NeuanlageDoor {
         &self,
         body: serde_json::Value,
     ) -> Result<(), makod::commands_api::DispatchError> {
-        makod::commands_api::dispatch_command(&self.state, "gpke.neuanlage.bestaetigen", &body)
-            .await
-            .map(|_| ())
+        makod::commands_api::dispatch_command(
+            &self.state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.neuanlage.bestaetigen",
+            &body,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// The UTILMD answers written, rendered.
@@ -644,8 +649,13 @@ impl LfNeuanlage {
         &self,
         body: &serde_json::Value,
     ) -> Result<String, makod::commands_api::DispatchError> {
-        match makod::commands_api::dispatch_command(&self.state, "gpke.neuanlage.anmelden", body)
-            .await?
+        match makod::commands_api::dispatch_command(
+            &self.state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.neuanlage.anmelden",
+            body,
+        )
+        .await?
         {
             makod::commands_api::DispatchOutcome::Spawned { process_id } => {
                 Ok(process_id.to_string())

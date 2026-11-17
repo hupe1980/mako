@@ -485,6 +485,27 @@ Material that does not build is logged and the running clients stay.
 | Processing stops for a revoked or invalid certificate | 8, S. 8 | `asx-rs` chain, validity and CRL check |
 | `EBMS:0101`, `EBMS:0102`, `EBMS:0103` | 9, S. 10 | `asx-rs` answers each |
 
+### What the general Regelungen zum Übertragungsweg 1.11 binds
+
+Nothing in makod. Version 1.11 (anzuwenden ab 01.04.2027, BNetzA Mitteilung
+Nr. 58) is the document for E-Mail, AS2, SFTP and REST, and every change it
+makes over 1.10 (Kap. 18, Änd-ID 12498–12503, S. 41–43) is in one of those
+channels:
+
+| Änd-ID | Kap., S. | Change | In makod |
+|---|---|---|---|
+| 12498 | 7, S. 13 | AS2-Steckbrief Version 4 | No AS2 channel |
+| 12499 | 7.4, S. 14 | AS2 over https on port 443 becomes a MUSS | No AS2 channel |
+| 12500–12502 | 10.2, S. 19–20 | REST: one TLS server certificate per MP-ID; the client certificate needs the TLS-Clientauthentifizierung EKU and may be the server certificate or the S/MIME certificate of Kap. 5 | No REST (`/data`, `/comtest`) channel, and no S/MIME certificate anywhere |
+| 12503 | 13, S. 31 | BSI TR-02102-4 (SSH) Stand 27.01.2026 | No SFTP channel |
+
+AS4 takes its certificates from Regelungen zum Übertragungsweg für AS4 2.6 —
+the SM-PKI Zertifikatstripel of signing, encryption and TLS certificate
+(Kap. 1.3, S. 3) — and the API-Webdienste from Regelungen zum Übertragungsweg
+für API-Webdienste 1.2 (Kap. 3.2, S. 4; Kap. 4, S. 4–6). Neither refers to the general
+document, so the S/MIME-for-mTLS option of Kap. 10.2 reaches no makod
+connection.
+
 ### Certificate requests with OpenSSL
 
 Production certificates are EMT.MAK certificates of an SM-PKI CA. The requests

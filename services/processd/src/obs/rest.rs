@@ -37,6 +37,7 @@ pub fn router(state: ObsState) -> Router {
             get(get_gleichbehandlung_report),
         )
         .route("/obs/metrics", get(metrics))
+        .merge(crate::obs::counterparty::routes())
         .with_state(state)
 }
 

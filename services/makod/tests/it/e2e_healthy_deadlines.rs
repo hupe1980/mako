@@ -144,7 +144,7 @@ async fn a_healthy_gas_anmeldung_survives_every_deadline() {
     process
         .run(
             gas_anmeldung(),
-            RunOptions::new().deadlines(&[answer_window]),
+            RunOptions::system().deadlines(&[answer_window]),
         )
         .await
         .expect("a valid 44001 spawns");
@@ -160,7 +160,7 @@ async fn a_healthy_gas_anmeldung_survives_every_deadline() {
                 obligations: vec![],
                 stammdaten: mako_engine::payload::Stammdaten::default(),
             },
-            RunOptions::new().attempts(3),
+            RunOptions::system().attempts(3),
         )
         .await
         .expect("the GNB answers");
@@ -182,7 +182,7 @@ async fn a_healthy_gas_anmeldung_survives_every_deadline() {
     process
         .run(
             GasSupplierChangeCommand::Activate,
-            RunOptions::new().attempts(3),
+            RunOptions::system().attempts(3),
         )
         .await
         .expect("an answered Anmeldung activates");
@@ -203,7 +203,7 @@ async fn a_processable_gas_anmeldung_registers_no_aperak_window() {
         WorkflowId::new(mako_geli_gas::WORKFLOW_NAME, FV),
     );
     process
-        .run(gas_anmeldung(), RunOptions::new().deadlines(&[]))
+        .run(gas_anmeldung(), RunOptions::system().deadlines(&[]))
         .await
         .expect("a valid 44001 spawns");
     let labels: Vec<String> = store
@@ -254,7 +254,7 @@ async fn healthy_beginn_msb(pid: u32, strom: bool) {
         WorkflowId::new(mako_wim::WORKFLOW_NAME, FV),
     );
     process
-        .run(msb_anmeldung(pid), RunOptions::new().deadlines(&[]))
+        .run(msb_anmeldung(pid), RunOptions::system().deadlines(&[]))
         .await
         .expect("a valid Anmeldung MSB spawns");
     if strom {
@@ -265,7 +265,7 @@ async fn healthy_beginn_msb(pid: u32, strom: bool) {
                     positive: true,
                     reason: None,
                 },
-                RunOptions::new().attempts(3),
+                RunOptions::system().attempts(3),
             )
             .await
             .expect("the APERAK goes out");
@@ -278,7 +278,7 @@ async fn healthy_beginn_msb(pid: u32, strom: bool) {
                 bemerkung: None,
                 abweichender_termin: None,
             },
-            RunOptions::new().attempts(3),
+            RunOptions::system().attempts(3),
         )
         .await
         .expect("the NB confirms in time");
@@ -307,14 +307,14 @@ async fn healthy_beginn_msb(pid: u32, strom: bool) {
                 message_ref: MessageRef::new("WIM-GV-0001"),
                 received_at: GESAMTVORGANG_AT,
             },
-            RunOptions::new().attempts(3),
+            RunOptions::system().attempts(3),
         )
         .await
         .expect("the Gesamtvorgang arrives");
     process
         .run(
             DeviceChangeCommand::DispatchZuordnung { zugeordnet: true },
-            RunOptions::new().attempts(3),
+            RunOptions::system().attempts(3),
         )
         .await
         .expect("the NB assigns the MSBN");
@@ -380,7 +380,7 @@ async fn an_unowned_label_closes_no_clearing_window() {
                 biko_id: mako_engine::types::BikoId::new("10YDE-VE-------2"),
                 message_ref: MessageRef::new("MSCONS-1"),
             },
-            RunOptions::new().attempts(3),
+            RunOptions::system().attempts(3),
         )
         .await
         .expect("the Summenzeitreihe opens the settlement");

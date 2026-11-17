@@ -1,0 +1,8 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Prozesse" [level=1]
+  - paragraph: Prozesse über ihren Geschäftsschlüssel öffnen — MaLo-ID, MeLo-ID, Vorgangsnummer.
+  - searchbox "Geschäftsschlüssel"
+  - paragraph: Welcher Prozess?
+  - text: Geschäftsschlüssel eingeben und ↵ drücken — oder von überall ⌘K .

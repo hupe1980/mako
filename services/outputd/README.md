@@ -17,6 +17,8 @@ they arrived. What a document says stays with the issuing service (`billingd`,
 
 Document kinds: `INVOICE`, `MAHNUNG`, `PREISANPASSUNG`, `GEBUEHRENBESCHEID`,
 `VERTRAGSZUSAMMENFASSUNG`, `VERTRAGSBESTAETIGUNG`, `WIDERRUFSBESTAETIGUNG`.
+An `INVOICE` prints billingd's Rechnung-nachrechnen link with its QR code when
+the issuer sends one (`nachrechnen_url`).
 
 ## Run
 

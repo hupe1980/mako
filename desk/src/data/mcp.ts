@@ -12,18 +12,21 @@
 import type { AccountingdTools } from "./gen/accountingd";
 import type { BillingdTools } from "./gen/billingd";
 import type { EdmdTools } from "./gen/edmd";
+import type { EinsdTools } from "./gen/einsd";
 import type { InvoicdTools } from "./gen/invoicd";
 import type { MakodTools } from "./gen/makod";
 import type { MarktdTools } from "./gen/marktd";
 import type { NetzbilanzdTools } from "./gen/netzbilanzd";
 import type { ProcessdTools } from "./gen/processd";
 import type { VertragdTools } from "./gen/vertragd";
+import type { Werkzeug } from "./oberflaeche";
 
 /** Every service the Desk reads, with its typed tools. */
 export interface ServiceTools {
   accountingd: AccountingdTools;
   billingd: BillingdTools;
   edmd: EdmdTools;
+  einsd: EinsdTools;
   invoicd: InvoicdTools;
   makod: MakodTools;
   marktd: MarktdTools;
@@ -161,6 +164,14 @@ async function once<S extends Service, T extends ToolName<S>>(
     throw new Error(`${service}.${tool} answered without structured content`);
   }
   return call.structuredContent as ToolOutput<S, T>;
+}
+
+/** The tools `service` serves, as it lists them now; null when it lists none. */
+export async function werkzeuge(service: Service): Promise<Werkzeug[] | null> {
+  const id = await session(service);
+  const { result } = await request(service, "tools/list", {}, id);
+  const tools = (result as { tools?: unknown } | undefined)?.tools;
+  return Array.isArray(tools) ? (tools as Werkzeug[]) : null;
 }
 
 /**

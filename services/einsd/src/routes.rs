@@ -53,29 +53,23 @@ pub fn build_router(deps: RouterDeps) -> Router {
         // ── Readiness and operator policy: GET /admin/einrichtung (Cedar
         // `read-config`) and GET /api/v1/policy (Cedar `read-policy`), read-only
         .merge(mako_service::einrichtung::router(einrichtung))
+        // ── The documented reads, each also an MCP tool answering the same type,
+        // and `GET /api/v1/openapi.json` (`reads`): the plant, Förderende,
+        // MaStR and settlement-receipt reads
+        .merge(crate::reads::router())
         // ── Anlage CRUD ────────────────────────────────────────────────────────
         .route(
             "/api/v1/anlagen",
             post(crate::handlers::post_anlage).get(crate::handlers::get_anlagen),
         )
         .route(
-            "/api/v1/anlagen/foerderung-auslaufend",
-            get(crate::handlers::get_foerderung_auslaufend),
-        )
-        .route(
             "/api/v1/anlagen/{tr_id}",
-            get(crate::handlers::get_anlage)
-                .put(crate::handlers::put_anlage)
-                .delete(crate::handlers::delete_anlage),
+            put(crate::handlers::put_anlage).delete(crate::handlers::delete_anlage),
         )
         // ── Settlement ─────────────────────────────────────────────────────────
         .route(
             "/api/v1/anlagen/{tr_id}/settle/{year}/{month}",
             post(crate::handlers::post_settle),
-        )
-        .route(
-            "/api/v1/anlagen/{tr_id}/settlements",
-            get(crate::handlers::get_settlements),
         )
         // ── Repowering (§3 Nr. 30 i.V.m. §25 EEG 2023) ─────────────────────────
         .route(

@@ -21,6 +21,18 @@ export const readingStatus = (code: string): string =>
 export const readingReason = (code: string): string =>
   eintrag(katalog().values.readingReason, code);
 
+/** Why billingd has not billed a period, by its `reason_code`. */
+export const abrechnungsGrund = (code: string): string =>
+  eintrag(katalog().values.abrechnungsGrund, code);
+
+/** What a Klärfall asks for, by processd's `aktion`. */
+export const klaerfallAktion = (code: string): string =>
+  eintrag(katalog().values.klaerfallAktion, code);
+
+/** Where a Klärfall came from, by processd's `origins`. */
+export const klaerfallHerkunft = (code: string): string =>
+  eintrag(katalog().values.klaerfallHerkunft, code);
+
 /** How an assistant's run ended, as agentd states it. */
 export const runStatus = (code: string): string => eintrag(katalog().values.run, code);
 

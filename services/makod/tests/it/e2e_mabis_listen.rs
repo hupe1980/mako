@@ -239,7 +239,7 @@ async fn an_lf_szr_reaches_the_lf_and_is_answered_from_e_0007() {
                 grund: None,
                 message_ref: mako_engine::types::MessageRef::new("PM-1"),
             },
-            mako_engine::process::RunOptions::new(),
+            mako_engine::process::RunOptions::system(),
         )
         .await
         .expect("A06 is E_0007's Zustimmung");
@@ -313,7 +313,7 @@ async fn an_lf_aaszr_reaches_the_lf_and_is_answered_from_e_0093() {
                 grund: None,
                 message_ref: mako_engine::types::MessageRef::new("PM-AASZR"),
             },
-            mako_engine::process::RunOptions::new(),
+            mako_engine::process::RunOptions::system(),
         )
         .await
         .expect("A06 is E_0093's Zustimmung");
@@ -340,6 +340,7 @@ async fn a_lieferantenclearingliste_reaches_the_lf_and_is_answered_by_55066() {
 
         let answered = makod::commands_api::dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "mabis.liste.korrigieren",
             &serde_json::json!({
                 "malo_id": MABIS_ZP,
@@ -405,6 +406,7 @@ async fn an_nb_sends_a_55065_and_waits_for_the_korrekturliste() {
     let (state, _) = state_for(NB_MP, "NB").await;
     let outcome = makod::commands_api::dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "mabis.liste.senden",
         &liste(55_065, "LCL-2026-09-1"),
     )
@@ -513,9 +515,14 @@ fn korrekturliste_der_lf(listennummer: &str, grund: Option<&str>) -> edi_energy:
 #[tokio::test]
 async fn a_55066_resumes_the_nbs_list_and_closes_it() {
     let (state, dispatcher) = state_for(NB_MP, "NB").await;
-    makod::commands_api::dispatch_command(&state, "mabis.liste.senden", &liste(55_065, "LCL-A"))
-        .await
-        .expect("the NB sends the list");
+    makod::commands_api::dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "mabis.liste.senden",
+        &liste(55_065, "LCL-A"),
+    )
+    .await
+    .expect("the NB sends the list");
 
     let antwort = korrekturliste_der_lf("LCL-A", Some("A07"));
     let outcome = dispatcher
@@ -563,9 +570,14 @@ async fn a_55066_resumes_the_nbs_list_and_closes_it() {
 #[tokio::test]
 async fn a_code_outside_e_0047_is_refused() {
     let (state, dispatcher) = state_for(NB_MP, "NB").await;
-    makod::commands_api::dispatch_command(&state, "mabis.liste.senden", &liste(55_065, "LCL-B"))
-        .await
-        .expect("the NB sends the list");
+    makod::commands_api::dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "mabis.liste.senden",
+        &liste(55_065, "LCL-B"),
+    )
+    .await
+    .expect("the NB sends the list");
 
     // `A08` exists in no Clearinglisten tree.
     let antwort = korrekturliste_der_lf("LCL-B", Some("A08"));
@@ -636,7 +648,7 @@ async fn aktiviere(
                 validation_passed: true,
                 validation_errors: vec![],
             },
-            RunOptions::new().correlations(&[korrelation]),
+            RunOptions::system().correlations(&[korrelation]),
         )
         .await
         .expect("the activation is recorded");

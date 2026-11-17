@@ -30,6 +30,9 @@ eeg-billing  = { path = "../../crates/eeg-billing", features = ["serde", "bo4e"]
 mako-markt   = { workspace = true }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
+# The documented REST reads (`reads`): `/api/v1/openapi.json`.
+utoipa       = { workspace = true }
+utoipa-axum  = { workspace = true }
 axum         = { version = "0.8" }
 sqlx         = { workspace = true, features = ["rust_decimal"] }
 tokio        = { version = "1", features = ["full"] }

@@ -1,0 +1,60 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - navigation "Pfad":
+    - link "Prozesse":
+      - /url: /prozess?key=51238696012
+    - text: "51238696012"
+  - heading "Marktlokation 51238696012 Beliefert" [level=1]
+  - list "Eckdaten":
+    - listitem: Strom
+    - listitem: NSP
+    - listitem: SLP
+    - listitem: Ausspeisung
+    - listitem: "9991000000044"
+  - region "Versorgung":
+    - heading "Versorgung" [level=2]
+    - list "Versorgung":
+      - listitem: Beliefert 01.01.2026 – 01.04.2026 Lieferant 9905550000034
+      - listitem: Grundversorgung 01.04.2026 – 01.07.2026 Lieferant 9905550000027
+      - listitem: Beliefert seit 01.07.2026 Lieferant 9905550000010
+  - region "Messkonzept":
+    - heading "Messkonzept" [level=2]
+    - text: Stand 04.11.2026 · 9991000000044
+    - img "Messkonzept": Marktlokation 51238696012 Messlokation …00000000000001 Zähler 1ESY1160001234 Messlokation …00000000000002 Zähler 1ESY1160005678 Netzlokation E1234567890 Technische Ressource C1234567890
+  - region "Messwerte":
+    - heading "Messwerte" [level=2]
+    - text: letzte 30 Tage
+    - list "Messwerte je Tag":
+      - listitem "06.10. · gemessen": 06.10. gemessen
+      - listitem "07.10. · gemessen": 07.10. gemessen
+      - listitem "08.10. · gemessen": 08.10. gemessen
+      - listitem "09.10. · gemessen": 09.10. gemessen
+      - listitem "10.10. · gemessen": 10.10. gemessen
+      - listitem "11.10. · gemessen": 11.10. gemessen
+      - listitem "12.10. · gemessen": 12.10. gemessen
+      - listitem "13.10. · gemessen": 13.10. gemessen
+      - listitem "14.10. · Ersatzwert": 14.10. Ersatzwert
+      - listitem "15.10. · Ersatzwert": 15.10. Ersatzwert
+      - listitem "16.10. · gemessen": 16.10. gemessen
+      - listitem "17.10. · gemessen": 17.10. gemessen
+      - listitem "18.10. · gemessen": 18.10. gemessen
+      - listitem "19.10. · gemessen": 19.10. gemessen
+      - listitem "20.10. · gemessen": 20.10. gemessen
+      - listitem "21.10. · gemessen": 21.10. gemessen
+      - listitem "22.10. · gemessen": 22.10. gemessen
+      - listitem "23.10. · korrigiert": 23.10. korrigiert
+      - listitem "24.10. · gemessen": 24.10. gemessen
+      - listitem "25.10. · gemessen": 25.10. gemessen
+      - listitem "26.10. · gemessen": 26.10. gemessen
+      - listitem "27.10. · gemessen": 27.10. gemessen
+      - listitem "28.10. · gemessen": 28.10. gemessen
+      - listitem "29.10. · fehlt": 29.10. fehlt
+      - listitem "30.10. · gemessen": 30.10. gemessen
+      - listitem "31.10. · gemessen": 31.10. gemessen
+      - listitem "01.11. · gemessen": 01.11. gemessen
+      - listitem "02.11. · gemessen": 02.11. gemessen
+      - listitem "03.11. · gemessen": 03.11. gemessen
+      - listitem "04.11. · gemessen": 04.11. gemessen
+    - paragraph: "gemessen: 26 Ersatzwert: 2 korrigiert: 1 fehlt: 1"
+    - img "Lastgang der letzten 7 Tage"

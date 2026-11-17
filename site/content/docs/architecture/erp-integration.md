@@ -340,6 +340,7 @@ dead-lettered after 8 attempts); any other `4xx` dead-letters at once. Track the
 | `makocausationid` | string | mako domain event UUID that caused this notification |
 | `makopid` | integer | Prüfidentifikator |
 | `makofailreason` | string | Only present on `de.mako.process.failed` |
+| `makoakteur` | string | The process's most human actor up to the causing event: `system`, `freigabe`, `freigabe-geaendert` or `person` — the class only, never the principal |
 
 **`data` field:**
 

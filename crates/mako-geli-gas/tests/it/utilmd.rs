@@ -177,7 +177,7 @@ async fn end_to_end_lieferbeginn_gas_pipeline() {
     );
 
     let envelopes = process
-        .run(command, RunOptions::new())
+        .run(command, RunOptions::system())
         .await
         .expect("execute must succeed for a valid PID-44001 command");
 
@@ -241,7 +241,7 @@ async fn wrong_pid_returns_workflow_error() {
                 fallgruppe: None,
                 gasqualitaet: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 

@@ -21,9 +21,11 @@ pub async fn run(estate: &Estate) -> anyhow::Result<()> {
         ("Klärfall", klaerfall(estate).await),
         ("EEG", eeg(estate).await),
         ("order-to-cash", o2c(estate).await),
+        ("Rechnung nachrechnen", nachrechnen(estate).await),
         ("online order", bestellung(estate).await),
         ("Gas", gas(estate).await),
         ("invoice dispute", disput(estate).await),
+        ("Gegenpartei-Akte", gegenpartei(estate).await),
         ("the Desk's sources", desk(estate).await),
     ] {
         match result {
@@ -65,6 +67,46 @@ fn same_amount(found: &Value, want: &str) -> bool {
         _ => return false,
     };
     norm(&found) == norm(want)
+}
+
+/// Gasnetz Nachbarstadt's Akte as the NB the Stadtwerk's Lieferant
+/// addressed: the late answer with its delay, and the refusal with its code
+/// and the BDEW's wording.
+async fn gegenpartei(estate: &Estate) -> anyhow::Result<()> {
+    let heute = mako_fristen::heute();
+    let path = format!(
+        "/api/v1/counterparties/{}/NB?von={}&bis={heute}",
+        world::GASNETZ_NACHBARSTADT,
+        heute - time::Duration::days(40),
+    );
+    let akte = estate
+        .get("processd", &path)
+        .await?
+        .ok("GET counterparty record")?;
+    ensure!(
+        akte["verspaetet"].as_u64() >= Some(1),
+        "no late answer in the neighbour's Akte: {akte}"
+    );
+    let minuten = akte["verspaetung"]["max_minuten"]
+        .as_i64()
+        .unwrap_or_default();
+    ensure!(
+        minuten >= world::NACHBAR_VERSPAETUNG_STUNDEN * 60,
+        "the late answer is {minuten} minutes late, not three hours: {akte}"
+    );
+    let (code, _) = world::NACHBAR_ABLEHNUNG;
+    let refused = akte["ablehnungen"]
+        .as_array()
+        .and_then(|a| a.iter().find(|x| x["code"] == code).cloned())
+        .ok_or_else(|| anyhow::anyhow!("no {code} refusal in the neighbour's Akte: {akte}"))?;
+    ensure!(
+        refused["bedeutung"].as_str().is_some_and(|b| !b.is_empty()),
+        "the {code} refusal carries no wording: {refused}"
+    );
+    pass(&format!(
+        "Gasnetz Nachbarstadt answered one Anmeldung {minuten} minutes late and refused one {code}"
+    ));
+    Ok(())
 }
 
 /// Nordlicht's 55001 is decided `Accept` by processd — the Prüfschritte of
@@ -216,6 +258,46 @@ async fn eeg(estate: &Estate) -> anyhow::Result<()> {
 /// 250 kWh 20.00 — netto 111.33, USt 19 % 21.15, brutto 132.48; issued as a
 /// PDF document, booked as an Offener Posten of 13 248 ct, closed by a payment
 /// matched by the MaLo in its Verwendungszweck.
+/// Erika Mustermann's invoice recomputes „Stimmt überein" on portald's
+/// public page, reached by the link her invoice carries — the customer's
+/// path, with no sign-in.
+async fn nachrechnen(estate: &Estate) -> anyhow::Result<()> {
+    let malo = world::ERIKA_MALO;
+    let invoice = invoice_for(estate, malo)
+        .await?
+        .with_context(|| format!("no invoice for {malo}"))?;
+    let id = invoice["id"].as_str().context("invoice id")?;
+    let view = estate
+        .get("billingd", &format!("/api/v1/billing/{id}/nachrechnung"))
+        .await?
+        .ok("GET nachrechnung")?;
+    let link = view["public_link"]
+        .as_str()
+        .context("the invoice carries no Nachrechnen link — is billingd's [nachrechnen] set?")?;
+    // The link names the host a customer's browser reaches; the seeder takes
+    // the token from it and asks portald where the seeder reaches it.
+    let token = link
+        .rsplit('/')
+        .next()
+        .filter(|t| !t.is_empty())
+        .context("a link without a token")?;
+    let page = estate
+        .get("portald", &format!("/nachrechnen/{token}"))
+        .await?
+        .ok("GET /nachrechnen/{token}")?;
+    let html = page.as_str().unwrap_or_default();
+    ensure!(
+        html.contains("Stimmt überein"),
+        "portald's page does not say „Stimmt überein\""
+    );
+    ensure!(
+        !html.contains(malo),
+        "the public page shows the MaLo-ID unmasked"
+    );
+    pass("portald /nachrechnen: Erika Mustermann's invoice „Stimmt überein\", the MaLo-ID masked");
+    Ok(())
+}
+
 async fn o2c(estate: &Estate) -> anyhow::Result<()> {
     let malo = world::ERIKA_MALO;
     let invoice = invoice_for(estate, malo)

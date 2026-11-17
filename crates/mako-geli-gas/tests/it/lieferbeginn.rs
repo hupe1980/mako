@@ -76,7 +76,7 @@ async fn happy_path_full_lifecycle() {
     let p = make_process();
 
     // Step 1: Receive valid UTILMD G → Initiated + ValidationPassed
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveUtilmd with valid message must succeed");
 
@@ -96,7 +96,7 @@ async fn happy_path_full_lifecycle() {
             obligations: vec![],
             stammdaten: mako_engine::payload::Stammdaten::default(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("SendAntwort accepted must succeed from ValidationPassed");
@@ -108,7 +108,7 @@ async fn happy_path_full_lifecycle() {
     );
 
     // Step 3: Activate → Active
-    p.run(GasSupplierChangeCommand::Activate, RunOptions::new())
+    p.run(GasSupplierChangeCommand::Activate, RunOptions::system())
         .await
         .expect("Activate must succeed from AntwortGesendet(LieferbeginnGas)");
 
@@ -126,7 +126,7 @@ async fn happy_path_full_lifecycle() {
 async fn validation_failure_rejects_process() {
     let p = make_process();
 
-    p.run(receive_utilmd_cmd(false), RunOptions::new())
+    p.run(receive_utilmd_cmd(false), RunOptions::system())
         .await
         .expect("ReceiveUtilmd with invalid message must still succeed as command");
 
@@ -144,7 +144,7 @@ async fn validation_failure_rejects_process() {
 async fn negative_antwort_rejects_process() {
     let p = make_process();
 
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .unwrap();
 
@@ -157,7 +157,7 @@ async fn negative_antwort_rejects_process() {
             obligations: vec![],
             stammdaten: mako_engine::payload::Stammdaten::default(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Negative SendAntwort must succeed from ValidationPassed");
@@ -194,7 +194,7 @@ async fn unsupported_pid_is_rejected() {
                 fallgruppe: None,
                 gasqualitaet: None,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 
@@ -213,7 +213,7 @@ async fn unsupported_pid_is_rejected() {
 async fn only_the_answer_window_decides_a_timeout() {
     let p = make_process();
 
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .unwrap();
 
@@ -222,7 +222,7 @@ async fn only_the_answer_window_decides_a_timeout() {
             deadline_id: DeadlineId::new(),
             label: "geli-gas-response-10-werktage".into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("a foreign label is accepted as a no-op");
@@ -237,7 +237,7 @@ async fn only_the_answer_window_decides_a_timeout() {
             deadline_id: DeadlineId::new(),
             label: mako_geli_gas::LIEFERBEGINN_RESPONSE_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired on ValidationPassed must succeed");
@@ -254,7 +254,7 @@ async fn only_the_answer_window_decides_a_timeout() {
 async fn deadline_on_rejected_is_absorbed() {
     let p = make_process();
 
-    p.run(receive_utilmd_cmd(false), RunOptions::new())
+    p.run(receive_utilmd_cmd(false), RunOptions::system())
         .await
         .unwrap();
 
@@ -264,7 +264,7 @@ async fn deadline_on_rejected_is_absorbed() {
             deadline_id,
             label: "geli-gas-response-10-werktage".into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired on already-Rejected must be absorbed");
@@ -281,7 +281,7 @@ async fn deadline_on_rejected_is_absorbed() {
 async fn deadline_on_active_is_absorbed() {
     let p = make_process();
 
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .unwrap();
     p.run(
@@ -293,11 +293,11 @@ async fn deadline_on_active_is_absorbed() {
             obligations: vec![],
             stammdaten: mako_engine::payload::Stammdaten::default(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
-    p.run(GasSupplierChangeCommand::Activate, RunOptions::new())
+    p.run(GasSupplierChangeCommand::Activate, RunOptions::system())
         .await
         .unwrap();
 
@@ -307,7 +307,7 @@ async fn deadline_on_active_is_absorbed() {
             deadline_id,
             label: "geli-gas-response-10-werktage".into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired on Active must be absorbed");
@@ -339,7 +339,7 @@ async fn send_antwort_from_new_is_rejected() {
                 obligations: vec![],
                 stammdaten: mako_engine::payload::Stammdaten::default(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 
@@ -358,7 +358,7 @@ async fn projection_tracks_full_lifecycle() {
         WorkflowId::new("geli-gas-supplier-change", "FV2025-10-01"),
     );
 
-    p.run(receive_utilmd_cmd(true), RunOptions::new())
+    p.run(receive_utilmd_cmd(true), RunOptions::system())
         .await
         .unwrap();
     p.run(
@@ -370,11 +370,11 @@ async fn projection_tracks_full_lifecycle() {
             obligations: vec![],
             stammdaten: mako_engine::payload::Stammdaten::default(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
-    p.run(GasSupplierChangeCommand::Activate, RunOptions::new())
+    p.run(GasSupplierChangeCommand::Activate, RunOptions::system())
         .await
         .unwrap();
 
@@ -412,7 +412,7 @@ async fn projection_tracks_rejected_process() {
         WorkflowId::new("geli-gas-supplier-change", "FV2025-10-01"),
     );
 
-    p.run(receive_utilmd_cmd(false), RunOptions::new())
+    p.run(receive_utilmd_cmd(false), RunOptions::system())
         .await
         .unwrap();
 

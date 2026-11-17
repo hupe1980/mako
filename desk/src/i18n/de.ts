@@ -94,6 +94,12 @@ export const de = {
     },
   },
   verlauf: {
+    akteur: {
+      system: "automatisch",
+      freigabe: "freigegeben, Vorschlag unverändert",
+      "freigabe-geaendert": "freigegeben, Vorschlag geändert",
+      person: "von einer Person",
+    },
     titel: "Verlauf",
     legende: "← Eingang · Ausgang →",
     fehler: "Der Verlauf ließ sich nicht lesen",
@@ -434,6 +440,12 @@ export const de = {
     untertitel: (rolle: string) =>
       `${rolle} — jede Zahl so, wie ihr Dienst sie meldet; ein Klick öffnet die Liste.`,
     fristen: "Fristen überschritten",
+    ohneEingriff: (pid: string) => `Ohne Eingriff · PID ${pid}`,
+    vonBeendet: (n: string, von: string) => `${n} von ${von}`,
+    abrechnungsfristen: "Abrechnungen überfällig",
+    abrechnungsfristenVon: (lf: string) => `Abrechnungen überfällig · ${lf}`,
+    fristenStand: (geschuldet: string, puenktlich: string, spaet: string) =>
+      `${geschuldet} geschuldet, ${puenktlich} pünktlich, ${spaet} verspätet abgerechnet`,
     anmeldungen: "Anmeldungen offen",
     deadLetters: "Dead Letters",
     pruefung: "Rechnungsprüfung",
@@ -703,6 +715,12 @@ export const de = {
     quelle: (name: string, stand: string) => `${name}: ${stand}`,
     quelleLaedt: "lädt …",
     assistentFehlt: "Assistent: nicht erreichbar",
+    arbeitsvorrat: "Arbeitsvorrat",
+    aeltesteVom: (tag: string) => `älteste vom ${tag}`,
+    nichtsOffen: "nichts offen",
+    mehrAlsSeite: "mehr als eine Seite — die älteste steht in der Liste",
+    alleQuellen: "Alle Quellen zeigen",
+    nurQuelle: (name: string) => `Nur: ${name}`,
     assistent: "Assistent",
     bereitetVor: "Der Assistent bereitet einen Vorschlag vor …",
     vorschlag: (aktion: string) => `Vorschlag: ${aktion}`,
@@ -715,6 +733,11 @@ export const de = {
     warum: "Warum?",
   },
   freigabenAnsicht: {
+    keineDarstellung:
+      "Die Marktkommunikation kann diese Nachricht nicht vorab darstellen — übernimm den Vorschlag nicht unverändert, entscheide selbst.",
+    darstellungLaeuft: "Die Nachricht des Vorschlags wird dargestellt …",
+    andererKoerper:
+      "Der Vorschlag wurde für einen anderen Inhalt geprüft als den, der jetzt gesendet würde.",
     titel: "Freigaben",
     untertitel: (dienst: string) =>
       `Was die ${dienst} einer Person zur Entscheidung vorlegt — die nächste Frist zuerst.`,
@@ -762,6 +785,7 @@ export const de = {
     mehr: "Mehr als 20 Treffer — weiter tippen, um einzugrenzen.",
   },
   kundeAnsicht: {
+    kontoVon: (malo: string) => `Konto der Lieferstelle ${malo}`,
     kundentyp: {
       B2C: "Privatkunde",
       B2B_SLP: "Gewerbe (SLP)",
@@ -810,6 +834,38 @@ export const de = {
     keiner: (key: string) => `Kein Prozess für „${key}“`,
     devStart: "startet sie mit dem Desk.",
     unerwartet: "Die Antwort war unerwartet",
+    pfad: "Pfad",
+    eckdaten: "Eckdaten",
+    naechsteFrist: "Nächste Frist",
+    unter: (n: number, text: string, key: string) =>
+      `${n === 1 ? "1 Prozess" : `${text} Prozesse`} unter ${key}`,
+    schritte: "Schritte",
+    schrittArt: { aperak: "APERAK", contrl: "CONTRL", prozess: "Antwort" },
+    schrittStand: { erledigt: "erledigt", jetzt: "aktuell", offen: "offen" },
+    abgeschlossen: "abgeschlossen",
+    entscheidung: "Wartet auf deine Entscheidung",
+    entscheiden: "Entscheiden",
+    uebernehmen: "Übernehmen",
+    bearbeiten: "Bearbeiten",
+    geprueft: "Geprüft: Entscheidungsbaum und Vorabprüfung bestanden.",
+    abgelehntWeil: (grund: string) =>
+      `Von der Prüfung abgelehnt — ${grund}. Bearbeite die Entscheidung selbst.`,
+    nichtGeprueft: (grund: string | null) =>
+      `Nicht geprüft${grund ? ` (${grund})` : ""} — bearbeite die Entscheidung selbst.`,
+    ohneGrund: "ohne Grund",
+    nachweise: "Nachweise",
+    belegt: "belegt",
+    stehtAus: "steht aus",
+    aperakFehler: (code: string) => `APERAK mit Fehlercode ${code}`,
+    details: "Details",
+    familie: "Prozessfamilie",
+    marktpartner: "Gegenpartei",
+    begonnen: "Begonnen",
+    letztes: "Letztes Ereignis",
+    antwortfrist: "Antwortfrist",
+    stand: "Stand",
+    standJetzt: "Stand jetzt",
+    standZu: (wann: string) => `Stand zu ${wann}`,
   },
   aktionen: {
     art: {
@@ -897,6 +953,172 @@ export const de = {
     messstelle: "Messstelle",
     energieservice: "Energieservice",
   },
+  lokation: {
+    qualitaet: (note: string, abdeckung: string, luecken: string) =>
+      `Qualität ${note} · ${abdeckung} % abgedeckt · ${luecken} Lücken`,
+    note: { A: "sehr gut", B: "gut", C: "ausreichend", D: "mangelhaft", F: "ungenügend" },
+    korrekturen: "Korrekturen",
+    korrektur: (ab: string, alt: string, neu: string, grund: string) =>
+      `${ab}: ${alt} kWh → ${neu} kWh — ${grund}`,
+    titel: (id: string) => `Marktlokation ${id}`,
+    abgelehnt: "Der Dienst hat die Anfrage abgelehnt",
+    versorgung: "Versorgung",
+    keineVersorgung: "Für diese Marktlokation ist keine Versorgung erfasst.",
+    seitBis: (von: string, bis: string | null) => (bis ? `${von} – ${bis}` : `seit ${von}`),
+    lieferant: (mp: string) => `Lieferant ${mp}`,
+    angekuendigt: "angekündigt",
+    lieferstatus: {
+      Beliefert: "Beliefert",
+      Unbeliefert: "Unbeliefert",
+      Grundversorgung: "Grundversorgung",
+      Ersatzversorgung: "Ersatzversorgung",
+      Ruhend: "Ruhend",
+      Stillgelegt: "Stillgelegt",
+    },
+    messkonzept: "Messkonzept",
+    standZu: (tag: string) => `Stand ${tag}`,
+    widerspruch:
+      "Die Zuordnungen nennen mehr als einen Lokationsbündelcode — das Bündel widerspricht sich.",
+    objekttyp: {
+      MALO: "Marktlokation",
+      MELO: "Messlokation",
+      NELO: "Netzlokation",
+      TR: "Technische Ressource",
+      SR: "Steuerbare Ressource",
+    },
+    zaehler: (id: string) => `Zähler ${id}`,
+    messwerte: "Messwerte",
+    letzteTage: (n: string) => `letzte ${n} Tage`,
+    abdeckung: "Messwerte je Tag",
+    tageszustand: {
+      gemessen: "gemessen",
+      ersatzwert: "Ersatzwert",
+      korrigiert: "korrigiert",
+      fehlt: "fehlt",
+    },
+    tage: (was: string, n: string) => `${was}: ${n}`,
+    lastgang: "Lastgang der letzten 7 Tage",
+    keineMesswerte: "Für die letzten 7 Tage liegen keine Messwerte vor.",
+    energierichtung: { AUSSP: "Ausspeisung", EINSP: "Einspeisung" },
+    konto: "Konto",
+    kontoauszug: "Kontoauszug, die jüngste Buchung zuerst",
+    saldo: { overdue: "offen", credit: "Guthaben", settled: "ausgeglichen" },
+    abschlag: (betrag: string) => `Abschlag ${betrag}`,
+    buchung: "Buchung",
+    oeffnen: "Marktlokation öffnen",
+  },
+  gegenpartei: {
+    liste: "Gegenparteien",
+    listeZeitraum: (von: string, bis: string) =>
+      `Wie jede Gegenpartei vom ${von} bis ${bis} geantwortet hat.`,
+    gegenpartei: "Gegenpartei",
+    rolle: "Rolle",
+    gezaehlt: "Prozesse",
+    alsRolle: (rolle: string) => `als ${rolle}`,
+    zeitraum: (mp: string, von: string, bis: string) => `${mp} · ${von} – ${bis}`,
+    begriffe: "Begriffe",
+    exportieren: "Als Nachweis exportieren",
+    keine: "Für diese Gegenpartei gibt es keine Akte",
+    kennzahlen: "Kennzahlen",
+    vonGezaehlt: (n: string, von: string) => `${n} von ${von}`,
+    fristgerecht: "fristgerecht beantwortet",
+    quote: (n: string) => `fristgerecht, aus ${n} Prozessen`,
+    median: "Verspätung im Median",
+    minuten: (n: string) => `${n} min`,
+    ablehnungen: "Ablehnungen",
+    keineAblehnung: "Keine Ablehnung im Zeitraum.",
+    ohneWortlaut: "Die Liste veröffentlicht keinen Wortlaut dazu.",
+    mal: (n: string) => `${n}×`,
+    prozesse: "Prozesse dieser Gegenpartei",
+    pid: "PID",
+    kategorie: "Ergebnis",
+    frist: "Frist",
+    beantwortet: "Beantwortet",
+    verspaetung: "Verspätung",
+    antwort: "Antwortcode",
+    ausserhalb: (ohneFrist: string, unbestimmt: string) =>
+      `Nicht gezählt: ${ohneFrist} ohne Frist, ${unbestimmt} ohne bestimmbaren Schuldner der Antwort.`,
+    kategorien: {
+      fristgerecht: "fristgerecht",
+      verspaetet: "verspätet",
+      unbeantwortet: "unbeantwortet",
+      offen: "noch offen",
+      abgebrochen: "abgebrochen",
+      ohne_frist: "ohne Frist",
+      schuldner_unbestimmt: "Schuldner unbestimmt",
+    },
+    vonProzess: "Gegenpartei öffnen",
+  },
+  nachrechnen: {
+    kundenLink: "Link für die Kundin oder den Kunden",
+    kopieren: "Link kopieren",
+    kopiert: "Kopiert",
+    titel: "Nachrechnen",
+    untertitel: (nr: string, malo: string, zeitraum: string) =>
+      `Rechnung ${nr} · MaLo ${malo} · ${zeitraum}`,
+    stimmt: "Stimmt überein",
+    weichtAb: "Weicht ab",
+    storniert: "Storniert",
+    stimmtText:
+      "Jede Position und jede Summe wurde aus den Angaben der Rechnung neu berechnet und stimmt auf den Cent.",
+    weichtAbIn: (positionen: string[]) =>
+      positionen.length === 1
+        ? `Position ${positionen[0]} rechnet sich nicht auf den angegebenen Betrag.`
+        : `Die Positionen ${positionen.join(", ")} rechnen sich nicht auf die angegebenen Beträge.`,
+    weichtAbSonst: "Eine Summe rechnet sich nicht auf den angegebenen Betrag.",
+    siegelGilt: "Das Siegel der ausgestellten Rechnung ist gültig.",
+    siegelGebrochen: "Das Siegel der ausgestellten Rechnung passt nicht mehr zum Dokument.",
+    summe: {
+      NETTO: "Netto",
+      STEUER: "Umsatzsteuer",
+      STEUERBASIS: "Steuerbasis",
+      GESAMTSTEUER: "Umsatzsteuer gesamt",
+      BRUTTO: "Brutto",
+      ZU_ZAHLEN: "Zu zahlen",
+    },
+    berechnetAus: "Berechnet aus",
+    menge: "Menge",
+    preis: "Preis",
+    geschaetzt: "geschätzt",
+    zeileStimmt: "stimmt",
+    zeileWeichtAb: "weicht ab",
+    vorauszahlungen: "Abschläge abgezogen",
+    nichtNachrechenbar: "Diese Rechnung lässt sich nicht nachrechnen",
+    oeffnen: "Nachrechnen",
+  },
+  freigabeVorschau: {
+    titel: "Was gesendet wird",
+    urteil: {
+      besteht: "Die Prozessüberwachung nimmt diese Entscheidung so an.",
+      abgelehnt: "Die Prozessüberwachung nähme diese Entscheidung nicht an",
+      ohne_nachricht: "Diese Entscheidung sendet keine Marktnachricht.",
+    },
+    ohneDarstellung:
+      "Die Marktkommunikation kann diese Nachricht nicht vorab darstellen — das ist der Inhalt, den sie bekäme:",
+  },
+  unbestaetigt: {
+    titel: "Beim letzten Mal gesendet",
+    fragt: "fragt nach …",
+    unbekannt: "der Dienst sagt nicht, was daraus wurde — sieh in der Liste nach",
+    inDerListe: "ob sie ankam, zeigt ihre Liste",
+    status: (status: string, von: string | null) =>
+      status === "Approved"
+        ? `freigegeben${von ? ` von ${von}` : ""}`
+        : status === "Rejected"
+          ? `abgelehnt${von ? ` von ${von}` : ""}`
+          : status === "Expired"
+            ? "abgelaufen, ohne Entscheidung"
+            : "kam nicht an — sie wartet noch auf deine Entscheidung",
+    verstanden: "Verstanden",
+  },
+  drift: {
+    keineEntscheidung: (dienst: string) =>
+      `Entscheiden geht erst wieder, wenn der Desk zur ${dienst} passt.`,
+    text: (dienste: string, n: number) =>
+      n === 1
+        ? `${dienste} bietet andere Werkzeuge an, als der Desk kennt — Ansichten aus diesem Dienst können fehlschlagen. Aktualisiere den Desk.`
+        : `${dienste} bieten andere Werkzeuge an, als der Desk kennt — Ansichten aus diesen Diensten können fehlschlagen. Aktualisiere den Desk.`,
+  },
   dienstNamen: {
     makod: "Marktkommunikation",
     marktd: "Marktstammdaten",
@@ -962,6 +1184,25 @@ export const de = {
     dispute: "Rechnungsdispute",
     pruefposten: "Rechnungsprüfung",
     geparkt: "Geparkte Buchungen",
+    abrechnungen: "Offene Abrechnungen",
+    mahnungen: "Mahnungen fällig",
+    mahnstufe: (n: string) => `Mahnstufe ${n}`,
+    klaerfaelle: "Klärfälle",
+    mal: (n: string) => `${n}×`,
+    ursacheOhneWortlaut: (code: string, liste: string) =>
+      `${code} aus ${liste} — die Liste veröffentlicht keinen Wortlaut dazu`,
+    schlussrechnung: "Schlussrechnung",
+    faelligAm: (tag: string) => `fällig am ${tag}`,
+    tageOffen: (n: number, text: string) =>
+      n > 1
+        ? `noch ${text} Tage`
+        : n === 1
+          ? "noch 1 Tag"
+          : n === 0
+            ? "heute fällig"
+            : n === -1
+              ? "seit 1 Tag überfällig"
+              : `seit ${text} Tagen überfällig`,
     prozess: (id: string) => `Prozess ${id}`,
     fristOverdue: (familie: string) => `Antwortfrist überschritten · ${familie}`,
     antwortFestgehalten: "Antwort festgehalten",
@@ -1040,6 +1281,34 @@ export const de = {
       BEAUFTRAGT: "beauftragt",
       FEHLGESCHLAGEN: "fehlgeschlagen",
     } as Record<string, string>,
+    klaerfallAktion: {
+      retry_with_correction: "Korrigieren und neu senden",
+      escalate_to_operator: "Selbst klären",
+      abort_process: "Prozess abbrechen",
+      wait_and_retry: "Abwarten, es wird erneut versucht",
+    },
+    klaerfallHerkunft: {
+      aperak: "APERAK",
+      dead_letter: "Dead Letter",
+      refusal: "Ablehnung",
+      frist_missed: "Frist versäumt",
+    },
+    abrechnungsGrund: {
+      NO_METER_DATA:
+        "Für den Zeitraum fehlen Messwerte — fordere sie beim Messstellenbetreiber an.",
+      INCOMPLETE_METER_DATA: "Die Messwerte sind lückenhaft — prüf die fehlenden Tage.",
+      RATE_REFUSED: "Der Tarif für den Zeitraum ließ sich nicht anwenden — prüf das Produkt.",
+      REGULATORY_RATES: "Ein gesetzlicher Satz für den Zeitraum fehlt — pflege ihn nach.",
+      ABSCHLAEGE_UNBEKANNT:
+        "Die gezahlten Abschläge sind nicht bekannt — gleich das Kundenkonto ab.",
+      STORNIERT: "Die Rechnung wurde storniert und ist neu zu erstellen.",
+      UPSTREAM_UNAVAILABLE:
+        "Ein Dienst, den die Abrechnung braucht, war nicht erreichbar — sie versucht es wieder.",
+      INTERNAL:
+        "Die Abrechnung ist an einem internen Fehler gescheitert — melde ihn mit der Fehler-ID.",
+      VALIDATION_BLOCKED: "Die Prüfung der Rechnung hat sie angehalten — sieh dir die Befunde an.",
+      NO_ACTIVE_PRODUCT: "Für die Marktlokation ist kein Produkt aktiv — ordne eines zu.",
+    },
     readingReason: {
       JAHRESABLESUNG: "Jahresablesung",
       ZWISCHENABLESUNG: "Zwischenablesung",
@@ -1064,6 +1333,12 @@ export const de = {
   },
   /** A service's stable refusal code, said as a sentence; the service's own text sits under „Details“. */
   codes: {
+    pruefung_abgelehnt:
+      "Die Prüfung hat diese Entscheidung abgelehnt — so ginge eine Nachricht hinaus, die gegen eine Regel verstößt. Ändere die Entscheidung.",
+    nicht_geprueft:
+      "Diese Entscheidung ließ sich nicht prüfen, deshalb wird sie nicht gesendet. Versuch es gleich noch einmal.",
+    json_required:
+      "Die Entscheidung kam nicht als JSON an und wurde nicht angenommen. Lade die Seite neu.",
     process_not_found:
       "Unter diesem Schlüssel ist kein Prozess bekannt. Prüf die Schreibweise — oder die Nachricht ist noch nicht eingegangen.",
     malo_not_found: "Diese MaLo ist nicht bekannt.",

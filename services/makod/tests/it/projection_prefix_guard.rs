@@ -42,6 +42,7 @@ async fn store_with_one_process() -> (SlateDbStore, StreamId) {
                 "ProjectionPrefixGuardProbe",
                 1,
                 serde_json::json!({}),
+                mako_engine::envelope::Akteur::System,
             )],
         ))
         .await

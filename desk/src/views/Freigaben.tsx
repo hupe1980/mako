@@ -1,10 +1,7 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter, useSearch } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Button as AriaButton,
-  GridList,
-  GridListItem,
   Label,
   Radio,
   RadioGroup,
@@ -14,39 +11,36 @@ import {
 import {
   aktion,
   type Entscheidbar,
-  fokussieren,
   perTaste,
   schluessel,
   useFehlschlag,
   useHalten,
 } from "../app/aktionen";
 import { DIENST, nichtErreichbar } from "../app/dienste";
-import { Entscheidungsstand } from "../app/Entscheidungsstand";
 import { FaktFelder } from "../app/FaktFelder";
-import { NAECHSTE, UEBERNEHMEN, VORIGE } from "../app/keys";
+import { useImDrift } from "../app/imDrift";
+import { UEBERNEHMEN } from "../app/keys";
 import { ROLLEN, useRolle } from "../app/rollen";
-import type { Vorschlag } from "../data/agent";
+import type { Pruefvermerk, Vorschlag } from "../data/agent";
 import { Abgelehnt, SchonEntschieden } from "../data/freigabe";
 import type { Freigabe } from "../data/gen/processd";
-import { call, ServiceUnavailable } from "../data/mcp";
+import { call } from "../data/mcp";
 import { useVerweigert, Verweigert } from "../data/verweigert";
-import { FristUhr } from "../design/FristUhr";
 import { Icon } from "../design/Icon";
-import { Page } from "../design/Page";
-import { EmptyState, Notice, Panel } from "../design/Panel";
+import { Notice, Panel } from "../design/Panel";
+import { SourceChip } from "../design/SourceChip";
 import type { Instant } from "../format/brands";
-import { formatCount } from "../format/count";
 import { formatInstant } from "../format/date";
-import { eintrag, useT } from "../i18n";
+import { type Katalog, useT } from "../i18n";
 import { useVorschlaege } from "../inbox/quellen";
+import { useDarstellbar, useEntscheidungsprobe } from "./entscheidungsprobe";
 import { Fragen, VorschlagKarte } from "./Fragen";
 import { Gehalten } from "./Rechnungen";
-import { Verlauf } from "./Verlauf";
 
-const ROW =
+export const ROW =
   "focus-ring flex cursor-default items-center gap-3 border-b border-separator px-4 py-3 outline-none last:border-b-0 data-[focused]:bg-fill data-[hovered]:bg-fill data-[selected]:bg-fill-strong";
 
-function useFreigaben() {
+export function useFreigaben() {
   const { rolle } = useRolle();
   const marktrolle = ROLLEN[rolle].marktrolle;
   return useQuery({
@@ -59,6 +53,50 @@ function useFreigaben() {
 /** The count the sidebar shows beside „Freigaben" — processd's, not a page's. */
 export function useFreigabenZahl(): number | undefined {
   return useFreigaben().data?.count;
+}
+
+// The rendering brings makod's message table; it loads with the first choice.
+const FreigabeVorschau = lazy(() =>
+  import("./FreigabeVorschau").then((m) => ({ default: m.FreigabeVorschau })),
+);
+
+/**
+ * processd's refusal of a decision: the catalogue's sentence for its code,
+ * the rules and the stage it names, the service's own text under „Details".
+ */
+export function EntscheidungAbgelehnt({ fehler }: { fehler: Abgelehnt }) {
+  const t = useT();
+  const satz = fehler.code ? t.codes[fehler.code as keyof typeof t.codes] : undefined;
+  return (
+    <>
+      {satz ?? fehler.message}
+      {fehler.regeln.length > 0 && (
+        <span className="mt-1 flex flex-wrap gap-1.5">
+          {fehler.regeln.map((r) => (
+            <SourceChip key={r} quelle={{ dokument: r }} />
+          ))}
+        </span>
+      )}
+      {satz && (
+        <details className="mt-1">
+          <summary className="cursor-default text-caption">{t.refusal.details}</summary>
+          <span lang="en" className="block font-mono text-callout">
+            {[fehler.stufe, fehler.grund, fehler.message].filter(Boolean).join(" · ")}
+          </span>
+        </details>
+      )}
+    </>
+  );
+}
+
+/** Why a proposal cannot be taken in unchanged, in the gate's terms. */
+function pruefSatz(pv: Pruefvermerk | null, t: Katalog): string {
+  const k = t.prozessAnsicht;
+  if (!pv) return k.nichtGeprueft(null);
+  const abgelehnt = pv.stufen.find((s) => s.urteil === "abgelehnt");
+  return pv.urteil === "abgelehnt"
+    ? k.abgelehntWeil([abgelehnt?.regel, abgelehnt?.text].filter(Boolean).join(": ") || k.ohneGrund)
+    : k.nichtGeprueft(pv.grund);
 }
 
 /** Where a proposal came from, so sending it can say whether it was changed. */
@@ -93,6 +131,8 @@ export function Entscheiden({
   // processd's policy refused this person a decision once: the reason stands
   // where the controls were, for every Freigabe, for the rest of the session.
   const verweigert = useVerweigert({ dienst: "processd", aktion: "entscheiden" });
+  // processd in drift: its decision might not be the one the form shows.
+  const drift = useImDrift("processd");
   // The proposal agentd computed when the Freigabe was queued — read, never
   // asked for: nobody waits on a model here.
   const wartend = useVorschlaege({ freigabe: [f.id] }).freigabe.get(f.id);
@@ -110,6 +150,16 @@ export function Entscheiden({
   const ding: Entscheidbar = { art: "freigabe", f };
   const gewaehlteAktion = gewaehlt ? aktion(ding, gewaehlt) : undefined;
   const vollstaendig = Boolean(gewaehlteAktion?.bereit({ code, text: bemerkung, fakten }));
+  // What the choice would send, as processd rehearses it; its hash goes with the decision.
+  const probe = useEntscheidungsprobe(f, gewaehlt, code, codes);
+  const koerper = probe.data?.body_sha256 ?? null;
+  // The gate's verdict on the waiting proposal: only a passed one is taken in
+  // unchanged — and only for the body it was checked for.
+  const pv = wartend?.pruefvermerk ?? null;
+  // Unchanged only where the gate passed it and the services can render what
+  // it sends (M84 SR-035): a body nobody can show is never approved as is.
+  const darstellbar = useDarstellbar(f, wartend?.vorschlag ?? null);
+  const darfUebernehmen = pv?.urteil === "bestanden" && darstellbar === "ja";
 
   // The request and its hold are the action registry's, the ones ⌘K uses too.
   const halte = useHalten();
@@ -120,7 +170,7 @@ export function Entscheiden({
     halte(
       ding,
       gewaehlteAktion,
-      { code, text: bemerkung, fakten },
+      { code, text: bemerkung, fakten, koerper },
       {
         herkunft,
         gesendet: onDone,
@@ -135,7 +185,7 @@ export function Entscheiden({
   useEffect(() => {
     if (verweigert || gehalten) return;
     const onKey = (e: KeyboardEvent) => {
-      if (UEBERNEHMEN.match?.(e) && wartet) {
+      if (UEBERNEHMEN.match?.(e) && wartet && darfUebernehmen) {
         e.preventDefault();
         uebernehmen(wartet.v, wartet.run);
         return;
@@ -162,10 +212,19 @@ export function Entscheiden({
   // `U` on the Heute row opened this form: take the proposal once it is read.
   const genommen = useRef(false);
   useEffect(() => {
-    if (!sofort || genommen.current || !wartet) return;
+    if (!sofort || genommen.current || !wartet || !darfUebernehmen) return;
     genommen.current = true;
     uebernehmen(wartet.v, wartet.run);
   });
+
+  if (drift) {
+    return (
+      <Panel className="flex flex-col gap-4 p-5">
+        <h3 className="m-0 text-body font-semibold">{k.entscheidung}</h3>
+        <Notice tone="refusal" title={t.drift.keineEntscheidung(DIENST.processd)} />
+      </Panel>
+    );
+  }
 
   if (verweigert) {
     return (
@@ -190,7 +249,16 @@ export function Entscheiden({
             v={wartet.v}
             run={wartet.run}
             disclosure={wartend.disclosure}
-            onUebernehmen={uebernehmen}
+            onUebernehmen={darfUebernehmen ? uebernehmen : undefined}
+            hinweis={
+              darfUebernehmen
+                ? undefined
+                : pv?.urteil === "bestanden" && darstellbar === "nein"
+                  ? k.keineDarstellung
+                  : pv?.urteil === "bestanden"
+                    ? k.darstellungLaeuft
+                    : pruefSatz(pv, t)
+            }
           />
         )}
         {!wartet && wartend?.status === "running" && (
@@ -285,9 +353,22 @@ export function Entscheiden({
                 </Notice>
               ) : (
                 <Notice tone="refusal" title={k.nichtAngenommen(DIENST.processd)}>
-                  {fehler instanceof Abgelehnt ? fehler.message : nichtErreichbar("processd")}
+                  {fehler instanceof Abgelehnt ? (
+                    <EntscheidungAbgelehnt fehler={fehler} />
+                  ) : (
+                    nichtErreichbar("processd")
+                  )}
                 </Notice>
               ))}
+
+            {probe.data && (
+              <Suspense fallback={<div className="skeleton h-24" />}>
+                <FreigabeVorschau probe={probe.data} />
+              </Suspense>
+            )}
+            {herkunft && pv?.body_sha256 && koerper && pv.body_sha256 !== koerper && (
+              <p className="m-0 text-caption text-soon">{k.andererKoerper}</p>
+            )}
 
             <div className="flex flex-wrap items-center justify-end gap-3">
               {gewaehlteAktion && (
@@ -306,188 +387,5 @@ export function Entscheiden({
       </Panel>
       <Fragen anker={{ freigabe: f.id }} onVorschlag={uebernehmen} />
     </>
-  );
-}
-
-function Detail({ f }: { f: Freigabe }) {
-  const t = useT();
-  const k = t.freigabenAnsicht;
-  const client = useQueryClient();
-  const router = useRouter();
-  const [erledigt, setErledigt] = useState(false);
-  if (erledigt) {
-    return (
-      <Panel>
-        <EmptyState title={k.entschieden}>
-          {k.entschiedenText(DIENST.processd, DIENST.makod)}
-        </EmptyState>
-      </Panel>
-    );
-  }
-  return (
-    <div className="flex flex-col gap-4">
-      <Panel className="flex flex-col gap-3 p-5">
-        <div className="flex items-start gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="m-0 text-caption font-semibold text-text-2">
-              {eintrag(k.art, f.art)} · PID <span>{f.pid}</span>
-            </p>
-            <h2 className="m-0 mt-1 text-title2 font-semibold">{f.grund}</h2>
-          </div>
-          <span className="flex flex-col items-end gap-1 text-caption text-text-2">
-            {k.entscheidenBis}
-            <span className="flex items-center gap-2">
-              <Entscheidungsstand ding={{ art: "freigabe", f }} fehlschlag={false} />
-              <FristUhr due={f.expires_at} />
-            </span>
-          </span>
-        </div>
-        {f.malo_id && (
-          <AriaButton
-            onPress={() => router.navigate({ to: "/prozess", search: { key: f.malo_id ?? "" } })}
-            className="focus-ring inline-flex h-7 w-fit items-center gap-1 rounded-full border border-separator px-3 text-body text-text data-[hovered]:bg-fill"
-          >
-            MaLo <span>{f.malo_id}</span>
-            <Icon name="chevron" size={12} />
-          </AriaButton>
-        )}
-      </Panel>
-      <Entscheiden
-        f={f}
-        onDone={() => {
-          setErledigt(true);
-          void client.invalidateQueries({ queryKey: ["processd", "list_pending_approvals"] });
-          void client.invalidateQueries();
-        }}
-      />
-      <Panel className="overflow-hidden">
-        <Verlauf processId={f.process_id} deadlines={[]} />
-      </Panel>
-    </div>
-  );
-}
-
-/**
- * Freigaben: the decisions processd held for a person — the earliest Frist
- * first, as processd orders them. Each opens with its facts, the codes its
- * Entscheidungsbaum allows, the process's Verlauf and the assistant; a
- * decision is held for undo before it is sent, the market message included.
- */
-export function FreigabenView() {
-  const t = useT();
-  const k = t.freigabenAnsicht;
-  const router = useRouter();
-  const { id } = useSearch({ from: "/freigaben" });
-  const list = useFreigaben();
-  const rows = list.data?.freigaben ?? [];
-  const selected = rows.find((f) => f.id === id) ?? rows[0];
-  const vorschlaege = useVorschlaege({ freigabe: rows.slice(0, 100).map((f) => f.id) }).freigabe;
-
-  // The selected Freigabe is what ⌘K opens on.
-  useEffect(() => {
-    fokussieren(
-      selected
-        ? {
-            titel: selected.malo_id ?? k.prozess(selected.process_id),
-            kennung: true,
-            grund: selected.grund,
-            frist: selected.expires_at,
-            ding: { art: "freigabe", f: selected },
-          }
-        : null,
-    );
-  });
-  useEffect(() => () => fokussieren(null), []);
-
-  // J and K walk the queue in processd's order.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const step = NAECHSTE.match?.(e) ? 1 : VORIGE.match?.(e) ? -1 : 0;
-      if (!step || rows.length === 0) return;
-      e.preventDefault();
-      const at = Math.max(
-        0,
-        rows.findIndex((f) => f.id === selected?.id),
-      );
-      const next = rows[Math.min(rows.length - 1, Math.max(0, at + step))];
-      if (next) router.navigate({ to: "/freigaben", search: { id: next.id } });
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [rows, selected?.id, router]);
-
-  return (
-    <Page width="work" title={k.titel} subtitle={k.untertitel(DIENST.processd)}>
-      {list.isError && (
-        <Notice
-          tone="failure"
-          title={
-            list.error instanceof ServiceUnavailable
-              ? nichtErreichbar(list.error.service)
-              : k.fehler
-          }
-        >
-          {list.error.message}
-        </Notice>
-      )}
-      {list.isPending && <div className="skeleton h-40" />}
-      {list.data && rows.length === 0 && (
-        <Panel>
-          <EmptyState title={k.leer}>{k.leerText(DIENST.processd)}</EmptyState>
-        </Panel>
-      )}
-      {selected && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-          <section
-            aria-label={k.offene}
-            className="flex flex-col gap-2 lg:sticky lg:top-20 lg:self-start"
-          >
-            <Panel className="overflow-hidden">
-              <GridList
-                aria-label={k.offene}
-                selectionMode="single"
-                disallowEmptySelection
-                selectedKeys={[selected.id]}
-                onSelectionChange={(keys) => {
-                  const next = [...keys][0];
-                  if (next) router.navigate({ to: "/freigaben", search: { id: String(next) } });
-                }}
-                className="outline-none"
-              >
-                {rows.map((f) => (
-                  <GridListItem key={f.id} id={f.id} textValue={f.grund} className={ROW}>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-body text-text">{f.grund}</span>
-                      <span className="block text-caption text-text-2">
-                        {eintrag(k.art, f.art)} · PID <span>{f.pid}</span>
-                        {f.malo_id && (
-                          <>
-                            {" · "}
-                            <span>{f.malo_id}</span>
-                          </>
-                        )}
-                      </span>
-                    </span>
-                    {vorschlaege.get(f.id)?.vorschlag && (
-                      <span title={k.vorschlagBereitTitel} className="text-ai">
-                        <Icon name="sparkle" size={14} />
-                        <span className="sr-only">{k.vorschlagBereit}</span>
-                      </span>
-                    )}
-                    <FristUhr due={f.expires_at} />
-                  </GridListItem>
-                ))}
-              </GridList>
-            </Panel>
-            {list.data?.saturated && (
-              <p className="m-0 px-1 text-caption text-text-2">
-                {k.ersten(formatCount(rows.length))}
-              </p>
-            )}
-          </section>
-          <Detail key={selected.id} f={selected} />
-        </div>
-      )}
-    </Page>
   );
 }

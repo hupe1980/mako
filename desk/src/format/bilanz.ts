@@ -18,6 +18,21 @@ export function formatAnteil(teil: number, ganz: number): string {
   return prozent().format(teil / ganz);
 }
 
+/** A share a service computed (0–1) as a percentage, „86 %". */
+export function formatQuote(anteil: number): string {
+  return prozent().format(anteil);
+}
+
+/** A share a service stated in percent (0–100), „92 %". */
+export function formatProzent(prozent: number): string {
+  return prozentZahl().format(prozent);
+}
+
+const prozentZahl = perSprache(
+  (locale) =>
+    new Intl.NumberFormat(locale, { maximumFractionDigits: 0, style: "unit", unit: "percent" }),
+);
+
 /** „1 Bewertung", „7 Bewertungen". */
 export function formatBewertungen(n: number): string {
   return katalog().bilanz.bewertungen(n, formatCount(n));

@@ -29,7 +29,7 @@ export function ListRow({
       textValue={textValue}
       className="group focus-ring relative flex cursor-default items-center gap-3 border-b border-separator px-4 py-3 outline-none last:border-b-0 data-[hovered]:bg-fill data-[selected]:bg-[color-mix(in_srgb,var(--accent)_12%,transparent)] data-[focus-visible]:-outline-offset-2"
     >
-      {/* The selection mark: a bar in the Rolle's accent, so selected is
+      {/* The selection mark: a bar in the accent, so selected is
           never told by colour of the fill alone. */}
       <span
         aria-hidden="true"

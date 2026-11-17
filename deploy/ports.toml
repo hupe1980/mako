@@ -22,6 +22,9 @@ agentd      = 9580
 vertragd    = 9780
 outputd     = 9880
 
-# Local processes outside mako that a demo config calls.
+# Local addresses outside a service's own port that a demo config names: a
+# process mako calls, and the demo's one published edge (the Desk, and the
+# public „Rechnung nachrechnen" page a letter links to).
 [external]
 ollama = 11434
+edge   = 8000

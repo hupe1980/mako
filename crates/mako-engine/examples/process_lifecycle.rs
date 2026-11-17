@@ -198,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ActivationCommand::Register {
                 name: "Messstelle 12345".to_owned(),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await?;
     for env in &envs {
@@ -207,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Activate — after this we have 2 events, SNAP_INTERVAL = 2 → snapshot fires.
     let envs = process
-        .run(ActivationCommand::Activate, RunOptions::new())
+        .run(ActivationCommand::Activate, RunOptions::system())
         .await?;
     for env in &envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
@@ -263,7 +263,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ActivationCommand::Deactivate {
                 reason: "Planned maintenance".to_owned(),
             },
-            RunOptions::new().context(cmd_ctx),
+            RunOptions::system().context(cmd_ctx),
         )
         .await?;
     for env in &envs {
@@ -286,11 +286,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ActivationCommand::Register {
             name: "P2-Messstelle".to_owned(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await?;
     let envs = p2
-        .run(ActivationCommand::Activate, RunOptions::new().attempts(3))
+        .run(
+            ActivationCommand::Activate,
+            RunOptions::system().attempts(3),
+        )
         .await?;
     println!(
         "  ✓ run succeeded (attempts=3): {} at seq {}",
@@ -304,7 +307,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Activate on an already-Inactive process → InvalidState workflow error.
     let err: EngineError = resumed
-        .run(ActivationCommand::Activate, RunOptions::new())
+        .run(ActivationCommand::Activate, RunOptions::system())
         .await
         .unwrap_err();
 

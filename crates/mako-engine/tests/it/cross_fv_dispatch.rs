@@ -220,7 +220,10 @@ async fn process_handles_cross_fv_command_sequence() {
         .dispatch(&msg_current as &dyn std::any::Any, &fv_current)
         .unwrap();
 
-    let envelopes1 = process.run(cmd_current, RunOptions::new()).await.unwrap();
+    let envelopes1 = process
+        .run(cmd_current, RunOptions::system())
+        .await
+        .unwrap();
     assert_eq!(
         envelopes1.len(),
         1,
@@ -234,7 +237,7 @@ async fn process_handles_cross_fv_command_sequence() {
         .dispatch(&msg_future as &dyn std::any::Any, &fv_future)
         .unwrap();
 
-    let envelopes2 = process.run(cmd_future, RunOptions::new()).await.unwrap();
+    let envelopes2 = process.run(cmd_future, RunOptions::system()).await.unwrap();
     assert_eq!(
         envelopes2.len(),
         1,

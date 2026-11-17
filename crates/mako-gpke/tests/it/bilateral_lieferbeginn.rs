@@ -226,7 +226,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
     assert_eq!(pending.payload["malo"].as_str().unwrap(), MALO_ID);
 
     // Also persist via Process::run so state advances.
-    lfn.run(initiate_cmd, RunOptions::new())
+    lfn.run(initiate_cmd, RunOptions::system())
         .await
         .expect("LFN execute Initiate");
 
@@ -299,7 +299,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
             kunde_namensformat: None,
             fallgruppe: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("NB ReceiveUtilmd must succeed");
@@ -374,7 +374,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
     assert_eq!(utilmd_55002_ob.recipient.as_ref(), LFN_ID);
 
     // Persist the state change.
-    nb.run(send_antwort, RunOptions::new())
+    nb.run(send_antwort, RunOptions::system())
         .await
         .expect("NB execute SendAntwort");
 
@@ -442,7 +442,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
             response_ref: MessageRef::new(antwort_ref),
             antwort: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("LFN HandleAntwort must succeed");
@@ -499,7 +499,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
                 stammdaten: mako_engine::payload::Stammdaten::default(),
             })),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("LFN Initiate");
@@ -533,7 +533,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
             kunde_namensformat: None,
             fallgruppe: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("NB ReceiveUtilmd");
@@ -561,7 +561,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
     assert_eq!(nb_out.outbox[1].payload["pid"], 55003);
     assert_eq!(nb_out.outbox[1].payload["outcome"], "rejected");
 
-    nb.run(reject_cmd, RunOptions::new())
+    nb.run(reject_cmd, RunOptions::system())
         .await
         .expect("NB execute SendAntwort(rejected)");
 
@@ -582,7 +582,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
             response_ref: MessageRef::new("MSG-NB-REJ-001"),
             antwort: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("LFN HandleAntwort(rejected)");
@@ -629,7 +629,7 @@ async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
                 stammdaten: mako_engine::payload::Stammdaten::default(),
             })),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -663,7 +663,7 @@ async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
             kunde_namensformat: None,
             fallgruppe: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -708,7 +708,7 @@ async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
             deadline_id: nb_dl_id,
             label: GPKE_PROCESS_RESPONSE_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();
@@ -718,7 +718,7 @@ async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
             deadline_id: lfn_dl_id,
             label: NB_RESPONSE_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .unwrap();

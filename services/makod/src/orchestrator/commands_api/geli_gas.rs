@@ -1652,7 +1652,7 @@ async fn auf_abmeldungsanfragen(
         if let Err(e) = process
             .run(
                 command.clone(),
-                RunOptions::new().snapshot(&state.snapshot_store, state.snapshot_interval),
+                RunOptions::system().snapshot(&state.snapshot_store, state.snapshot_interval),
             )
             .await
         {

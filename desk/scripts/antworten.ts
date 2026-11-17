@@ -63,7 +63,69 @@ const ANTWORTEN: Record<string, unknown> = {
   kunden_zu_malos: { kunden: [] },
   partner_namen: { partner: [] },
 };
-const VERLAUF = { process_id: "p-1", workflow_name: "gpke-supplier-change", eintraege: [] };
+// The process the Freigabe is held on, as makod and processd state it.
+const PROZESS = {
+  "makod/get_process": {
+    business_key: "51238696012",
+    processes: [
+      {
+        stream_id: "process/buehne/p-1",
+        workflow_name: "gpke-supplier-change",
+        process_id: "p-1",
+        deadlines: [
+          {
+            deadline_id: "d-1",
+            label: "gpke-antwortfrist",
+            art: "prozess",
+            due_at: "2026-11-05T10:00:00Z",
+          },
+        ],
+      },
+    ],
+  },
+  "processd/get_process": {
+    process_id: "p-1",
+    pid: 55001,
+    family: "gpke",
+    workflow_name: "gpke-supplier-change",
+    state: "running",
+    malo_id: "51238696012",
+    partner_mp_id: null,
+    mdm_role: null,
+    deadline_at: "2026-11-05T10:00:00Z",
+    deadline_source: null,
+    deadline_risk: "ok",
+    started_at: "2026-11-04T08:00:00Z",
+    last_event_at: "2026-11-04T08:00:00Z",
+    erc_code: null,
+    antwort_code: null,
+    antwort_codeliste: null,
+    bedeutung: null,
+    initiator_is_affiliate: true,
+  },
+};
+// The Lokation page's REST reads and the MCP answers of the Nachrechnen and
+// Gegenpartei views, recorded in the shapes the services declare.
+const REST = fixture("lokation.json") as Record<string, unknown>;
+const ANSICHTEN = fixture("ansichten.json") as Record<string, unknown>;
+
+const VERLAUF = {
+  process_id: "p-1",
+  workflow_name: "gpke-supplier-change",
+  eintraege: [
+    {
+      sequence: 1,
+      recorded_at: "2026-11-04T08:00:00Z",
+      event_type: "SupplierChangeInitiated",
+      richtung: "eingang",
+      pid: 55001,
+      message_ref: "UTILMD-2026-11-04-0001",
+      antwortcode: null,
+      codeliste: null,
+      bedeutung: null,
+    },
+  ],
+};
 
 const katalog = readFileSync(resolve(import.meta.dirname, "katalog.fixture.json"), "utf8");
 
@@ -104,7 +166,12 @@ export function beantworten(anfrage: Anfrage, run: string): Antwort {
     const m = JSON.parse(anfrage.body ?? "{}");
     if (m.id === undefined) return { status: 202 };
     const name = m.method === "tools/call" ? (m.params?.name as string) : null;
-    const result = name ? { content: [], structuredContent: ANTWORTEN[name] ?? VERLAUF } : {};
+    const dienst = pathname.split("/")[2] ?? "";
+    const antwort =
+      (PROZESS as Record<string, unknown>)[`${dienst}/${name}`] ??
+      (name ? (ANTWORTEN[name] ?? ANSICHTEN[name]) : undefined) ??
+      VERLAUF;
+    const result = name ? { content: [], structuredContent: antwort } : {};
     return {
       status: 200,
       contentType: "application/json",
@@ -112,6 +179,7 @@ export function beantworten(anfrage: Anfrage, run: string): Antwort {
       body: JSON.stringify({ jsonrpc: "2.0", id: m.id, result }),
     };
   }
+  if (pathname in REST) return json(REST[pathname]);
   if (pathname.startsWith("/svc/makod/api/v1/probe/")) return json(PROBE);
   if (pathname === "/svc/agentd/api/v1/agents/catalog")
     return { status: 200, contentType: "application/json", body: katalog };

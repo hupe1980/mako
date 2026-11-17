@@ -58,8 +58,18 @@
 //     || action == MaKo::Action::"AdminPartnerRead"
 //   };
 
+// Every action but ActOnBehalf: naming the actor of a command lets a caller
+// attribute its events to a person, so only a service the operator names may
+// do it, e.g.
+//
+//   permit(
+//     principal == MaKo::Principal::"processd",
+//     action    == MaKo::Action::"ActOnBehalf",
+//     resource
+//   );
 permit(
   principal is MaKo::Principal,
   action,
   resource
-);
+)
+unless { action == MaKo::Action::"ActOnBehalf" };

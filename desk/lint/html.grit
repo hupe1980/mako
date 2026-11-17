@@ -1,0 +1,18 @@
+// What a service returns is text: a counterparty's FTX, a Bemerkung, a
+// reason. Rendered through `dangerouslySetInnerHTML` or `innerHTML` it would
+// run as markup in the operator's session; used as an `href` it could send
+// them to any address. The Desk renders service text as React text only, and
+// links to its own routes or to a URL a validator in src/app/ built
+// (`handbuchLink`) — an identifier, never an expression over a service value.
+language js
+
+or {
+  `dangerouslySetInnerHTML={$_}`,
+  `$_.innerHTML = $_`,
+  `$_.outerHTML = $_`,
+  `$_.insertAdjacentHTML($_, $_)`,
+  `href={$x}` where { $x <: not r"^[\"'`]/.*", $x <: not r"^[A-Za-z_$][A-Za-z0-9_$]*$" }
+} as $sink where {
+  $filename <: not r".*\.test\.tsx?$",
+  register_diagnostic(span=$sink, message="No raw HTML sink and no href built from a value. Render service text as React text; link to a route or to a URL a validator in src/app returned.")
+}

@@ -90,6 +90,7 @@ async fn approval_queue_enqueue_list_approve() {
                     "test E_0624 event".to_owned(),
                     now + time::Duration::minutes(45),
                     "9900357000004".to_owned(),
+                    "test-regel",
                 )
             }
             .with_commands(
@@ -139,12 +140,18 @@ async fn approval_queue_enqueue_list_approve() {
             "9900357000004",
             QueueStatus::Approved,
             "operator@example.com",
+            Some("sha-of-the-sent-body"),
         )
         .await
         .expect("claim")
         .expect("a Pending entry is claimable");
     assert!(matches!(claimed.status, QueueStatus::Approved));
     assert!(claimed.decided_at.is_some(), "the claim stamps decided_at");
+    assert_eq!(
+        claimed.gesendet_sha256.as_deref(),
+        Some("sha-of-the-sent-body"),
+        "the claim stores the fingerprint of what goes out"
+    );
     // The Meldepflicht rides the claim. It is dispatched after the answer and
     // states what was true when the decision was taken, so it has to come back
     // off the row rather than be rebuilt at approval time.
@@ -168,7 +175,8 @@ async fn approval_queue_enqueue_list_approve() {
                 id,
                 "9900357000004",
                 QueueStatus::Rejected,
-                "operator@example.com"
+                "operator@example.com",
+                None,
             )
             .await
             .expect("second claim")
@@ -184,6 +192,7 @@ async fn approval_queue_enqueue_list_approve() {
         .expect("find released")
         .expect("entry still exists");
     assert!(matches!(released.status, QueueStatus::Pending));
+    assert_eq!(released.gesendet_sha256, None, "nothing went out");
     assert!(released.decided_at.is_none());
 
     queue
@@ -192,6 +201,7 @@ async fn approval_queue_enqueue_list_approve() {
             "9900357000004",
             QueueStatus::Approved,
             "operator@example.com",
+            Some("sha-of-the-sent-body"),
         )
         .await
         .expect("re-claim")
@@ -225,6 +235,7 @@ async fn approval_queue_lists_by_expires_at_and_keeps_its_ebd() {
             format!("expires in {hours} h"),
             now + time::Duration::hours(hours),
             tenant.to_owned(),
+            "test-regel",
         )
         .with_commands(
             "gpke.lieferbeginn.bestaetigen",
@@ -261,6 +272,40 @@ async fn approval_queue_lists_by_expires_at_and_keeps_its_ebd() {
         ids,
         vec![early.id, late.id],
         "only the NB's, still by expires_at"
+    );
+
+    // One process's entries, whatever else is pending — the Prozess page's
+    // decision bar is not limited to the first page of the whole queue.
+    let one = queue
+        .list_page(
+            tenant,
+            &processd::pg::approval::QueueFilter {
+                status: Some(QueueStatus::Pending),
+                process_id: Some(lf.process_id),
+                ..Default::default()
+            },
+            50,
+            0,
+        )
+        .await
+        .expect("list by process");
+    assert_eq!(one.iter().map(|e| e.id).collect::<Vec<_>>(), vec![lf.id]);
+    // Paging continues where the page ended, in the same order.
+    let second = queue
+        .list_page(
+            tenant,
+            &processd::pg::approval::QueueFilter {
+                status: Some(QueueStatus::Pending),
+                ..Default::default()
+            },
+            2,
+            2,
+        )
+        .await
+        .expect("second page");
+    assert_eq!(
+        second.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![late.id]
     );
 
     let stored = queue
@@ -690,5 +735,217 @@ async fn a_waiting_anmeldung_carries_its_meldepflicht_facts() {
     assert_eq!(
         repo.record(&rec).await.expect("record after resolve"),
         Waiting::AlreadySent
+    );
+}
+
+// ── A decision passes makod's pre-send check before it is marked ─────────────
+
+/// A stand-in that answers whatever it is asked with `200`.
+async fn stand_in(app: axum::Router) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{addr}")
+}
+
+/// An approval of a held answer whose message makod's pre-send check refuses
+/// is answered 422 with the rule — the entry stays pending and nothing is
+/// sent. The proposal's origin does not matter: the server checks, and it
+/// holds with agentd off.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_refused_agent_proposal_is_not_approvable_unchanged_over_rest() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (pool, pg) = pg_pool().await;
+    let port = pg.get_host_port_ipv4(5432).await.expect("port");
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+
+    let sent = Arc::new(AtomicUsize::new(0));
+    let counter = sent.clone();
+    let makod = stand_in(
+        axum::Router::new()
+            .route(
+                "/api/v1/probe/{command}",
+                axum::routing::post(|| async {
+                    axum::Json(serde_json::json!({
+                        "urteil": "abgelehnt", "stufe": "pruefung",
+                        "grund": "the UTILMD violates its AHB profile",
+                        "nachrichten": [{ "segmente": [],
+                            "befunde": [{ "text": "Muss", "regel": "AHB-55002-1" }] }]
+                    }))
+                }),
+            )
+            .route(
+                "/api/v1/commands",
+                axum::routing::post(move || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    async { axum::http::StatusCode::ACCEPTED }
+                }),
+            ),
+    )
+    .await;
+    let marktd =
+        stand_in(axum::Router::new().fallback(|| async { axum::http::StatusCode::OK })).await;
+
+    let mut cfg: toml::Value =
+        toml::from_str(include_str!("../../../../deploy/demo/processd.toml")).expect("parses");
+    cfg["database"]["url"] = toml::Value::String(url);
+    if let Some(db) = cfg["database"].as_table_mut() {
+        db.remove("migration_url");
+    }
+    cfg["makod"]["url"] = toml::Value::String(makod);
+    cfg["marktd"]["url"] = toml::Value::String(marktd);
+    let app = mako_service::build_for_test_on::<processd::Processd>(
+        cfg.try_into().expect("a processd configuration"),
+        pool.clone(),
+    )
+    .await
+    .expect("the router builds");
+    let base = stand_in(app).await;
+
+    use processd::pg::approval::{ApprovalQueueEntry, QueueStatus};
+    let tenant = "9900357000004";
+    let entry = ApprovalQueueEntry::pending(
+        Uuid::new_v4(),
+        55_001,
+        Some("51238696012".to_owned()),
+        "held by an agent's proposal".to_owned(),
+        time::OffsetDateTime::now_utc() + time::Duration::hours(2),
+        tenant.to_owned(),
+        "test-regel",
+    )
+    .with_commands(
+        "gpke.lieferbeginn.bestaetigen",
+        "gpke.lieferbeginn.ablehnen",
+        Some("NB"),
+    )
+    .with_ebd("E_0623")
+    .with_answer_payload(serde_json::json!({ "antwort_code": "A51", "antwort_tree": "E_0623" }));
+    let queue = processd::pg::PgApprovalQueue::new(pool.clone());
+    queue.enqueue(&entry).await.expect("enqueue");
+
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/v1/queue/{}/approve", entry.id))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.expect("a problem body");
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], "pruefung_abgelehnt", "{body}");
+    assert_eq!(body["regeln"][0], "AHB-55002-1", "{body}");
+
+    let after = queue
+        .find_by_id(entry.id, tenant)
+        .await
+        .expect("read")
+        .expect("present");
+    assert_eq!(after.status, QueueStatus::Pending, "nothing was marked");
+    assert!(after.decided_by.is_none());
+    assert_eq!(sent.load(Ordering::SeqCst), 0, "nothing was sent");
+}
+
+/// An approval stores the fingerprint of what it dispatched, the hash
+/// `rehearse_decision` states as `body_sha256` — so a held answer approved as
+/// proposed reads back `gesendet_sha256 == vorschlag_sha256`, and agentd reads
+/// a proposal's fate off processd rather than off a client's report.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_approval_stores_the_fingerprint_of_what_it_sent() {
+    let (pool, pg) = pg_pool().await;
+    let port = pg.get_host_port_ipv4(5432).await.expect("port");
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    let makod = stand_in(
+        axum::Router::new()
+            .route(
+                "/api/v1/probe/{command}",
+                axum::routing::post(|| async {
+                    axum::Json(serde_json::json!({ "urteil": "besteht", "nachrichten": [] }))
+                }),
+            )
+            .route(
+                "/api/v1/commands",
+                axum::routing::post(|| async {
+                    (
+                        axum::http::StatusCode::ACCEPTED,
+                        axum::Json(serde_json::json!({
+                            "process_id": Uuid::new_v4(),
+                            "command": "gpke.lieferbeginn.bestaetigen",
+                        })),
+                    )
+                }),
+            ),
+    )
+    .await;
+    let marktd =
+        stand_in(axum::Router::new().fallback(|| async { axum::http::StatusCode::OK })).await;
+    let mut cfg: toml::Value =
+        toml::from_str(include_str!("../../../../deploy/demo/processd.toml")).expect("parses");
+    cfg["database"]["url"] = toml::Value::String(url);
+    if let Some(db) = cfg["database"].as_table_mut() {
+        db.remove("migration_url");
+    }
+    cfg["makod"]["url"] = toml::Value::String(makod);
+    cfg["marktd"]["url"] = toml::Value::String(marktd);
+    let app = mako_service::build_for_test_on::<processd::Processd>(
+        cfg.try_into().expect("a processd configuration"),
+        pool.clone(),
+    )
+    .await
+    .expect("the router builds");
+    let base = stand_in(app).await;
+
+    use processd::pg::approval::{ApprovalQueueEntry, QueueStatus};
+    let tenant = "9900357000004";
+    let entry = ApprovalQueueEntry::pending(
+        Uuid::new_v4(),
+        55_001,
+        Some("51238696012".to_owned()),
+        "held for a person".to_owned(),
+        time::OffsetDateTime::now_utc() + time::Duration::hours(2),
+        tenant.to_owned(),
+        "test-regel",
+    )
+    .with_commands(
+        "gpke.lieferbeginn.bestaetigen",
+        "gpke.lieferbeginn.ablehnen",
+        Some("NB"),
+    )
+    .with_ebd("E_0623")
+    .with_answer_payload(serde_json::json!({ "antwort_code": "A51", "antwort_tree": "E_0623" }));
+    let proposed = entry.proposal_sha256().expect("a complete proposal");
+    let queue = processd::pg::PgApprovalQueue::new(pool.clone());
+    queue.enqueue(&entry).await.expect("enqueue");
+
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/v1/queue/{}/approve", entry.id))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(
+        resp.status().as_u16(),
+        204,
+        "{}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let after = queue
+        .find_by_id(entry.id, tenant)
+        .await
+        .expect("read")
+        .expect("present");
+    assert_eq!(after.status, QueueStatus::Approved);
+    assert_eq!(
+        after.gesendet_sha256.as_deref(),
+        Some(proposed.as_str()),
+        "approved as proposed: the sent body is the proposal's"
     );
 }

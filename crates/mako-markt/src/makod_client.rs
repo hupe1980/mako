@@ -85,6 +85,69 @@ pub struct CommandAccepted {
     pub idempotency_key: Option<String>,
 }
 
+/// makod's verdict on a rehearsed command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeUrteil {
+    /// The door built the message and the pre-send check passes it.
+    Besteht,
+    /// The door or the pre-send check refuses it.
+    Abgelehnt,
+    /// makod declined to rehearse the command — the body is unchecked.
+    NichtGeprueft,
+}
+
+/// What [`MakodClient::probe_command`] learned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommandProbe {
+    /// The verdict.
+    pub urteil: ProbeUrteil,
+    /// Where a refusal came from — `tuer` (the door) or `pruefung` (the
+    /// profile) — as makod names it.
+    pub stufe: Option<String>,
+    /// makod's refusal code where it declined to rehearse.
+    pub code: Option<String>,
+    /// The refusal in makod's words.
+    pub grund: Option<String>,
+    /// The profile rules (`AHB-…`, `MIG-…`) the findings rest on.
+    pub regeln: Vec<String>,
+}
+
+impl CommandProbe {
+    /// Read makod's `Probe` answer.
+    #[must_use]
+    pub fn from_probe(probe: &serde_json::Value) -> Self {
+        let text = |k: &str| probe.get(k).and_then(|v| v.as_str()).map(str::to_owned);
+        let mut regeln: Vec<String> = Vec::new();
+        for n in probe["nachrichten"].as_array().into_iter().flatten() {
+            let segment_befunde = n["segmente"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|s| s["befunde"].as_array().into_iter().flatten());
+            let lose = n["befunde"].as_array().into_iter().flatten();
+            for b in segment_befunde.chain(lose) {
+                if let Some(r) = b["regel"].as_str()
+                    && !regeln.iter().any(|x| x == r)
+                {
+                    regeln.push(r.to_owned());
+                }
+            }
+        }
+        Self {
+            urteil: if probe["urteil"] == "besteht" {
+                ProbeUrteil::Besteht
+            } else {
+                ProbeUrteil::Abgelehnt
+            },
+            stufe: text("stufe"),
+            code: None,
+            grund: text("grund"),
+            regeln,
+        }
+    }
+}
+
 // ── PartnerRecord (makod wire format) ─────────────────────────────────────────
 
 /// Trading-partner record in `makod`'s admin API format.
@@ -186,13 +249,46 @@ impl MakodClient {
         idempotency_key: &str,
         cmd: &ForwardCommand,
     ) -> Result<CommandAccepted, MdmError> {
+        self.send_command(idempotency_key, cmd, None).await
+    }
+
+    /// Forward a command `makod` attributes to `akteur` — the JSON of a
+    /// `mako_engine::envelope::Akteur::Freigabe`, sent as the `Mako-Akteur`
+    /// header: a person's approval the calling service relays.
+    ///
+    /// `makod` honours it only for a caller its Cedar policy grants
+    /// `ActOnBehalf` (`403 actor_not_permitted` otherwise) and only for an
+    /// approval (`400 invalid_actor_header` otherwise).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::post_command`].
+    pub async fn post_command_on_behalf(
+        &self,
+        idempotency_key: &str,
+        cmd: &ForwardCommand,
+        akteur: &serde_json::Value,
+    ) -> Result<CommandAccepted, MdmError> {
+        self.send_command(idempotency_key, cmd, Some(akteur)).await
+    }
+
+    async fn send_command(
+        &self,
+        idempotency_key: &str,
+        cmd: &ForwardCommand,
+        akteur: Option<&serde_json::Value>,
+    ) -> Result<CommandAccepted, MdmError> {
         let url = format!("{}/api/v1/commands", self.base_url);
         debug!(command = %cmd.command, idempotency_key, "forwarding command to makod");
-        let resp = self
+        let mut req = self
             .client
             .post(&url)
             .bearer_auth(self.api_key.expose_secret())
-            .header("Idempotency-Key", idempotency_key)
+            .header("Idempotency-Key", idempotency_key);
+        if let Some(akteur) = akteur {
+            req = req.header("Mako-Akteur", akteur.to_string());
+        }
+        let resp = req
             .json(cmd)
             .send()
             .await
@@ -241,6 +337,60 @@ impl MakodClient {
                 "POST /api/v1/commands returned HTTP {status}: {body}"
             )))
         }
+    }
+
+    /// Rehearse `cmd` at `makod` — `POST /api/v1/probe/{command}`: its door
+    /// runs up to the pre-send check and nothing is written or sent.
+    ///
+    /// A `422` — makod declines to rehearse the command (not rehearsable, a
+    /// Marktrolle it does not declare) — is answered as
+    /// [`ProbeUrteil::NichtGeprueft`] with makod's `code` and `detail`, not
+    /// as an error: the caller learns the body was not checked.
+    ///
+    /// # Errors
+    ///
+    /// [`MdmError::MakodSync`] when makod cannot be reached or answers
+    /// anything but `200` or `422`.
+    pub async fn probe_command(&self, cmd: &ForwardCommand) -> Result<CommandProbe, MdmError> {
+        let url = format!("{}/api/v1/probe/{}", self.base_url, cmd.command);
+        let wire = serde_json::to_value(cmd).map_err(|e| MdmError::MakodSync(e.to_string()))?;
+        let mut body = serde_json::json!({ "payload": wire["payload"].clone() });
+        if let Some(rolle) = &cmd.marktrolle {
+            body["marktrolle"] = serde_json::Value::String(rolle.clone());
+        }
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| MdmError::MakodSync(e.to_string()))?;
+        let status = resp.status();
+        let answer: serde_json::Value = resp.json().await.unwrap_or_default();
+        if status.is_success() {
+            return Ok(CommandProbe::from_probe(&answer));
+        }
+        if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+            return Ok(CommandProbe {
+                urteil: ProbeUrteil::NichtGeprueft,
+                stufe: None,
+                code: answer
+                    .get("code")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
+                grund: answer
+                    .get("detail")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
+                regeln: Vec::new(),
+            });
+        }
+        Err(MdmError::MakodSync(format!(
+            "POST /api/v1/probe/{} returned HTTP {}: {answer}",
+            cmd.command,
+            status.as_u16()
+        )))
     }
 
     /// Fetch the BO4E `Rechnung` for a WiM billing process from makod.
@@ -442,5 +592,30 @@ mod conflict_tests {
         };
         assert_eq!(err.status_u16(), 409);
         assert_eq!(err.error_code(), "makod_conflict");
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::{CommandProbe, ProbeUrteil};
+
+    /// A refused rehearsal carries makod's sentence and every rule its
+    /// findings name, once each, whether on a segment or loose.
+    #[test]
+    fn a_refused_probe_names_its_rules() {
+        let p = CommandProbe::from_probe(&serde_json::json!({
+            "urteil": "abgelehnt", "stufe": "pruefung",
+            "grund": "the UTILMD violates its AHB profile",
+            "nachrichten": [{
+                "segmente": [{ "befunde": [{ "text": "x", "regel": "AHB-1" }] },
+                             { "befunde": [{ "text": "y", "regel": "AHB-1" }] }],
+                "befunde": [{ "text": "z", "regel": "MIG-2" }, { "text": "w" }]
+            }]
+        }));
+        assert_eq!(p.urteil, ProbeUrteil::Abgelehnt);
+        assert_eq!(p.stufe.as_deref(), Some("pruefung"));
+        assert_eq!(p.regeln, ["AHB-1", "MIG-2"]);
+        let ok = CommandProbe::from_probe(&serde_json::json!({ "urteil": "besteht" }));
+        assert_eq!(ok.urteil, ProbeUrteil::Besteht);
     }
 }

@@ -94,7 +94,7 @@ fn receive_sperrauftrag(validation_passed: bool) -> SperrungCommand {
 async fn nb_receive_valid_sperrauftrag_validation_passed() {
     let p = nb_process();
 
-    p.run(receive_sperrauftrag(true), RunOptions::new())
+    p.run(receive_sperrauftrag(true), RunOptions::system())
         .await
         .expect("ReceiveSperrung (valid) must succeed from New");
 
@@ -110,7 +110,7 @@ async fn nb_receive_valid_sperrauftrag_validation_passed() {
 async fn nb_receive_invalid_sperrauftrag_transitions_to_rejected() {
     let p = nb_process();
 
-    p.run(receive_sperrauftrag(false), RunOptions::new())
+    p.run(receive_sperrauftrag(false), RunOptions::system())
         .await
         .expect("ReceiveSperrung (invalid) must not return Err — emits Rejected event");
 
@@ -127,7 +127,7 @@ async fn nb_receive_invalid_sperrauftrag_transitions_to_rejected() {
 async fn nb_happy_path_ausgefuehrt() {
     let p = nb_process();
 
-    p.run(receive_sperrauftrag(true), RunOptions::new())
+    p.run(receive_sperrauftrag(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -136,7 +136,7 @@ async fn nb_happy_path_ausgefuehrt() {
             durchgefuehrt: true,
             reason: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("BestaetigueSperrung must succeed from ValidationPassed");
@@ -154,7 +154,7 @@ async fn nb_happy_path_ausgefuehrt() {
 async fn nb_bestaetige_nicht_durchgefuehrt_transitions_to_rejected() {
     let p = nb_process();
 
-    p.run(receive_sperrauftrag(true), RunOptions::new())
+    p.run(receive_sperrauftrag(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -163,7 +163,7 @@ async fn nb_bestaetige_nicht_durchgefuehrt_transitions_to_rejected() {
             durchgefuehrt: false,
             reason: Some("Zähler nicht zugänglich".to_owned()),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("BestaetigueSperrung (nicht durchgeführt) must succeed");
@@ -180,7 +180,7 @@ async fn nb_bestaetige_nicht_durchgefuehrt_transitions_to_rejected() {
 async fn nb_receive_stornierung_transitions_to_storniert() {
     let p = nb_process();
 
-    p.run(receive_sperrauftrag(true), RunOptions::new())
+    p.run(receive_sperrauftrag(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -190,7 +190,7 @@ async fn nb_receive_stornierung_transitions_to_storniert() {
             sender: lf_mp_id(),
             message_ref: msg("LF-STORNO-001"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveStornierung must succeed from ValidationPassed");
@@ -208,7 +208,7 @@ async fn nb_receive_stornierung_transitions_to_storniert() {
 async fn nb_receive_msb_antwort_bestaetigung_not_yet_terminal() {
     let p = nb_process();
 
-    p.run(receive_sperrauftrag(true), RunOptions::new())
+    p.run(receive_sperrauftrag(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -218,7 +218,7 @@ async fn nb_receive_msb_antwort_bestaetigung_not_yet_terminal() {
             is_confirmed: true,
             message_ref: msg("MSB-ORDRSP-001"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveMsbAntwort must succeed from ValidationPassed");
@@ -237,7 +237,7 @@ async fn nb_receive_msb_antwort_bestaetigung_not_yet_terminal() {
 async fn nb_timeout_is_a_frist_breach() {
     let p = nb_process();
 
-    p.run(receive_sperrauftrag(true), RunOptions::new())
+    p.run(receive_sperrauftrag(true), RunOptions::system())
         .await
         .expect("receive");
 
@@ -246,7 +246,7 @@ async fn nb_timeout_is_a_frist_breach() {
             deadline_id: DeadlineId::new(),
             label: Box::from(SPERRUNG_WINDOW_LABEL),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired must succeed from active state");
@@ -277,7 +277,7 @@ async fn nb_domain_data_preserved_in_validation_passed() {
             validation_passed: true,
             validation_errors: vec![],
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("receive");
@@ -308,7 +308,7 @@ async fn nb_receive_entsperrauftrag_valid() {
             validation_passed: true,
             validation_errors: vec![],
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Entsperrauftrag (PID 17117) must succeed from New");
@@ -334,7 +334,7 @@ async fn lf_initiate_sperrauftrag_transitions_to_auftrag_gesendet() {
             location_id: malo(),
             message_ref: msg("LF-SPERR-002"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("InitiateSperrung must succeed from New");
@@ -358,7 +358,7 @@ async fn lf_initiate_entsperrauftrag_transitions_to_auftrag_gesendet() {
             location_id: malo(),
             message_ref: msg("LF-ENTSPERR-002"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("InitiateSperrung (Entsperrauftrag) must succeed from New");
@@ -382,7 +382,7 @@ async fn lf_happy_path_auftrag_bestaetigt_then_ausgefuehrt() {
             location_id: malo(),
             message_ref: msg("LF-SPERR-003"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -396,7 +396,7 @@ async fn lf_happy_path_auftrag_bestaetigt_then_ausgefuehrt() {
             sender: nb_mp_id(),
             reason: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveOrdrsp (Bestätigung) must succeed from AuftragGesendet");
@@ -414,7 +414,7 @@ async fn lf_happy_path_auftrag_bestaetigt_then_ausgefuehrt() {
             message_ref: msg("NB-IFTSTA-001"),
             sender: nb_mp_id(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveIftsta must succeed from OrdrsepBestaetigt");
@@ -439,7 +439,7 @@ async fn lf_rejection_transitions_to_ordrsp_abgelehnt() {
             location_id: malo(),
             message_ref: msg("LF-SPERR-004"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -452,7 +452,7 @@ async fn lf_rejection_transitions_to_ordrsp_abgelehnt() {
             sender: nb_mp_id(),
             reason: Some("Keine Sperrpflicht an dieser Messlokation".to_owned()),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveOrdrsp (Ablehnung) must succeed");
@@ -477,7 +477,7 @@ async fn lf_stornierung_before_ordrsp() {
             location_id: malo(),
             message_ref: msg("LF-SPERR-005"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -486,7 +486,7 @@ async fn lf_stornierung_before_ordrsp() {
         SperrungLfCommand::SendStornierung {
             message_ref: msg("LF-STORNO-001"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("SendStornierung must succeed from AuftragGesendet");
@@ -510,7 +510,7 @@ async fn lf_stornierung_accepted_path() {
             location_id: malo(),
             message_ref: msg("LF-SPERR-006"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -519,7 +519,7 @@ async fn lf_stornierung_accepted_path() {
         SperrungLfCommand::SendStornierung {
             message_ref: msg("LF-STORNO-002"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("stornierung");
@@ -532,7 +532,7 @@ async fn lf_stornierung_accepted_path() {
             message_ref: msg("NB-STORNO-001"),
             sender: nb_mp_id(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("ReceiveStornoOrdrsp (Bestätigung) must succeed from StornierungGesendet");
@@ -558,7 +558,7 @@ async fn lf_timeout_is_a_frist_breach() {
             location_id: malo(),
             message_ref: msg("LF-SPERR-007"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("initiate");
@@ -568,7 +568,7 @@ async fn lf_timeout_is_a_frist_breach() {
             deadline_id: DeadlineId::new(),
             label: Box::from(SPERRUNG_LF_ANTWORT_WINDOW_LABEL),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired must succeed from AuftragGesendet");

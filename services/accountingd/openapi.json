@@ -1,0 +1,723 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "accountingd — Customer Account Ledger",
+    "description": "REST API of the supplier sub-ledger: customer accounts, the Kontokorrent, open items, dunning and payment matching.",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.37.0"
+  },
+  "paths": {
+    "/api/v1/accounts/{malo_id}/balance": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "`GET /api/v1/accounts/{malo_id}/balance` — the open-items balance\n(`crate::reads::balance`, shared with MCP `get_balance`).",
+        "operationId": "get_balance",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Kontostand"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-account` refused"
+          },
+          "404": {
+            "description": "`account_not_found`"
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{malo_id}/ledger": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "`GET /api/v1/accounts/{malo_id}/ledger` — the newest movements with the\nbalance the window opens at (`crate::reads::ledger`, shared with MCP\n`list_ledger`).",
+        "operationId": "get_ledger",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum movements, newest first (default 100, at most 1000); what is\ncut off is folded into `opening_ct`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The statement window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Kontoauszug"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-account` refused"
+          },
+          "404": {
+            "description": "`account_not_found`"
+          }
+        }
+      }
+    },
+    "/api/v1/dunning": {
+      "get": {
+        "tags": [
+          "books"
+        ],
+        "summary": "`GET /api/v1/dunning` — the open dunning cases, newest Mahnung first\n(`crate::reads::dunning`, shared with MCP `list_dunning`).",
+        "operationId": "get_dunning",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum cases (default 100, at most 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The open cases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Mahnfaelle"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-books` refused"
+          }
+        }
+      }
+    },
+    "/api/v1/offene-posten": {
+      "get": {
+        "tags": [
+          "books"
+        ],
+        "summary": "`GET /api/v1/offene-posten` — the accounts with an open balance, largest\nfirst (`crate::reads::overdue`, shared with MCP `list_overdue`). A\ntenant-wide book read, so Cedar `read-books`.",
+        "operationId": "get_offene_posten",
+        "parameters": [
+          {
+            "name": "min_balance_eur",
+            "in": "query",
+            "description": "Minimum balance in EUR, as a decimal string (e.g. `\"1.99\"`). Default: 1 ct minimum.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum accounts (default 100, at most 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UeberfaelligeKonten"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-books` refused"
+          },
+          "422": {
+            "description": "`invalid_min_balance`"
+          }
+        }
+      }
+    },
+    "/api/v1/payments/match": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "`POST /api/v1/payments/match` — the accounts an incoming payment may\nbelong to (`crate::reads::payment_match`, shared with MCP\n`suggest_payment_match`). Reads only; booking is the camt import or a\nmanual Buchung.",
+        "description": "A read posted as a body because it carries the payer's IBAN: in a query\nstring the IBAN lands in every access log and trace span that records the\nURI, which is personal data no log may hold.",
+        "operationId": "match_payment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentMatchParams"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The candidates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Zahlungszuordnung"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-account` refused"
+          },
+          "422": {
+            "description": "A body that is not a payment to match"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Kontoauszug": {
+        "type": "object",
+        "description": "A statement window (`list_ledger`, `GET /api/v1/accounts/{malo_id}/ledger`):\n`opening_ct` plus every `signed_ct` is the newest line's `running_ct`.",
+        "required": [
+          "malo_id",
+          "lf_mp_id",
+          "opening_ct",
+          "lines"
+        ],
+        "properties": {
+          "lf_mp_id": {
+            "type": "string",
+            "description": "The Lieferant's MP-ID the account is kept under."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Kontobewegung"
+            },
+            "description": "The movements, newest first."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Marktlokations-ID."
+          },
+          "opening_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The signed balance the window opens at, in cents — what was booked\nbefore it and what `limit` cut off its front."
+          }
+        }
+      },
+      "Kontobewegung": {
+        "type": "object",
+        "description": "One movement on the Kontokorrent.",
+        "required": [
+          "entry_id",
+          "side",
+          "amount_ct",
+          "signed_ct",
+          "running_ct",
+          "booking_date"
+        ],
+        "properties": {
+          "amount_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The movement in cents, always positive; `side` carries the sign."
+          },
+          "beleg": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Beleg the booking cites — a Rechnungsnummer, a bank reference."
+          },
+          "booking_date": {
+            "type": "string",
+            "format": "date",
+            "description": "The booking date."
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "The doubleentry entry id."
+          },
+          "entry_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Buchungsart, e.g. `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `ABSCHLAG`."
+          },
+          "running_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The running balance after this movement, in cents."
+          },
+          "side": {
+            "type": "string",
+            "description": "`D` (debit — increases the receivable) or `C` (credit)."
+          },
+          "signed_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Signed contribution to the balance (debit +, credit −), in cents."
+          }
+        }
+      },
+      "Kontostand": {
+        "type": "object",
+        "description": "The account's open-items balance (`get_balance`,\n`GET /api/v1/accounts/{malo_id}/balance`).",
+        "required": [
+          "malo_id",
+          "lf_mp_id",
+          "balance_ct",
+          "balance_eur",
+          "status",
+          "abschlag_ct"
+        ],
+        "properties": {
+          "abschlag_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The monthly Abschlag in cents."
+          },
+          "balance_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Open-items balance in cents: positive is owed, negative a Guthaben."
+          },
+          "balance_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`balance_ct` as a decimal EUR string, e.g. `\"-12.50\"`."
+          },
+          "lf_mp_id": {
+            "type": "string",
+            "description": "The Lieferant's MP-ID the account is kept under."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Marktlokations-ID."
+          },
+          "status": {
+            "$ref": "#/components/schemas/Saldostatus",
+            "description": "Where the balance stands."
+          }
+        }
+      },
+      "Mahnfaelle": {
+        "type": "object",
+        "description": "The open dunning cases (`list_dunning`, `GET /api/v1/dunning`).",
+        "required": [
+          "faelle",
+          "count",
+          "saturated"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "How many cases `faelle` holds.",
+            "minimum": 0
+          },
+          "faelle": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Mahnfall"
+            },
+            "description": "The open cases, newest Mahnung first."
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "The page is full: more cases may be open than were listed."
+          }
+        }
+      },
+      "Mahnfall": {
+        "type": "object",
+        "description": "One open dunning case.",
+        "required": [
+          "id",
+          "account_id",
+          "stufe",
+          "amount_due_ct",
+          "amount_due_eur",
+          "issued_at",
+          "due_date"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "The customer account it was opened on."
+          },
+          "amount_due_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The amount the Mahnung demands, in cents."
+          },
+          "amount_due_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`amount_due_ct` as a decimal EUR string."
+          },
+          "due_date": {
+            "type": "string",
+            "format": "date",
+            "description": "The payment date the Mahnung sets."
+          },
+          "id": {
+            "type": "string",
+            "description": "The dunning case."
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the Mahnung was issued."
+          },
+          "sperrauftrag_ce_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The CloudEvent id of the Sperrauftrag a Mahnstufe 3 raised, if any."
+          },
+          "stufe": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The Mahnstufe, 1–3."
+          }
+        }
+      },
+      "PaymentMatchParams": {
+        "type": "object",
+        "description": "`suggest_payment_match`'s parameters — the body of\n`POST /api/v1/payments/match`. It reads and books nothing.\n\n`Debug` leaves the IBAN out: a payment to match is logged, if ever, by its\namount and reference, never by the payer's account.",
+        "required": [
+          "amount_ct",
+          "reference"
+        ],
+        "properties": {
+          "amount_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Payment amount in 1/100 EUR cents (e.g. 12500 = 125.00 EUR)."
+          },
+          "end_to_end_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`EndToEndId`, when the bank echoed one back."
+          },
+          "iban": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Counterparty IBAN, when the bank reported one — the strongest evidence\nof who paid, and the rung that resolves without any guessing."
+          },
+          "reference": {
+            "type": "string",
+            "description": "Payment reference / Verwendungszweck from the bank statement."
+          },
+          "tolerance_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Fuzzy tolerance for the fallback rung: how many percent the open balance\nmay deviate from the payment (default 2 %). Ignored when the reference\nidentifies the account outright."
+          },
+          "value_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Value date of the payment (YYYY-MM-DD)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Saldostatus": {
+        "type": "string",
+        "description": "Where an account's balance stands: `overdue` — the customer owes\n(`balance_ct > 0`); `credit` — a Guthaben (`balance_ct < 0`); `settled` —\nnothing is open.",
+        "enum": [
+          "overdue",
+          "credit",
+          "settled"
+        ]
+      },
+      "UeberfaelligeKonten": {
+        "type": "object",
+        "description": "The accounts with an open balance (`list_overdue`,\n`GET /api/v1/offene-posten`).",
+        "required": [
+          "accounts",
+          "count",
+          "saturated"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UeberfaelligesKonto"
+            },
+            "description": "The accounts, largest balance first."
+          },
+          "count": {
+            "type": "integer",
+            "description": "How many accounts `accounts` holds.",
+            "minimum": 0
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "At least `limit` accounts matched: more may be overdue than were listed."
+          }
+        }
+      },
+      "UeberfaelligesKonto": {
+        "type": "object",
+        "description": "One account with an overdue balance.",
+        "required": [
+          "account_id",
+          "malo_id",
+          "lf_mp_id",
+          "balance_ct",
+          "balance_eur",
+          "abschlag_ct",
+          "updated_at"
+        ],
+        "properties": {
+          "abschlag_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The monthly Abschlag in cents."
+          },
+          "account_id": {
+            "type": "string",
+            "description": "The customer account."
+          },
+          "balance_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The open balance in cents."
+          },
+          "balance_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`balance_ct` as a decimal EUR string."
+          },
+          "kunden_nr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operator's customer number, where recorded."
+          },
+          "lf_mp_id": {
+            "type": "string",
+            "description": "The Lieferant's MP-ID the account is kept under."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Marktlokations-ID."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the account's balance last changed."
+          }
+        }
+      },
+      "Zahlungszuordnung": {
+        "type": "object",
+        "description": "The accounts an incoming payment may belong to (`suggest_payment_match`,\n`POST /api/v1/payments/match`).",
+        "required": [
+          "payment_amount_ct",
+          "payment_amount_eur",
+          "payment_reference",
+          "candidates_count",
+          "candidates",
+          "note"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Zuordnungskandidat"
+            },
+            "description": "One exact candidate, or up to ten ranked by amount proximity."
+          },
+          "candidates_count": {
+            "type": "integer",
+            "description": "How many candidates `candidates` holds.",
+            "minimum": 0
+          },
+          "note": {
+            "type": "string",
+            "description": "How to read the answer."
+          },
+          "payment_amount_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The payment in cents."
+          },
+          "payment_amount_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`payment_amount_ct` as a decimal EUR string."
+          },
+          "payment_reference": {
+            "type": "string",
+            "description": "The Verwendungszweck the bank reported."
+          },
+          "tolerance_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The tolerance the amount-proximity rung ran with, in percent; absent\nwhen the reference identified the account."
+          }
+        }
+      },
+      "Zuordnungskandidat": {
+        "type": "object",
+        "description": "One account a payment may belong to.",
+        "required": [
+          "account_id",
+          "malo_id",
+          "lf_mp_id",
+          "open_balance_ct",
+          "open_balance_eur",
+          "matched_by",
+          "confidence",
+          "residual_ct"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "The customer account."
+          },
+          "confidence": {
+            "type": "string",
+            "description": "`EXACT` for an exact rung; `MEDIUM` or `LOW` for amount proximity."
+          },
+          "lf_mp_id": {
+            "type": "string",
+            "description": "The Lieferant's MP-ID the account is kept under."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Marktlokations-ID."
+          },
+          "matched_by": {
+            "type": "string",
+            "description": "The evidence: an exact rung (`iban`, `end_to_end_id`,\n`remittance_token`) or `amount_proximity`."
+          },
+          "open_balance_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The account's open balance in cents."
+          },
+          "open_balance_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`open_balance_ct` as a decimal EUR string."
+          },
+          "residual_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What stays open after booking the payment, in cents (0 settles it)."
+          },
+          "similarity_score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Amount closeness 0–100, only on the amount-proximity rung.",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "accounts",
+      "description": "One customer account: balance and Kontokorrent"
+    },
+    {
+      "name": "books",
+      "description": "Tenant-wide book reads: open items and dunning"
+    },
+    {
+      "name": "payments",
+      "description": "Payment reconciliation"
+    }
+  ]
+}

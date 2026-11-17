@@ -377,6 +377,9 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         }
     }
 
+    // makod grants this key `ActOnBehalf`: a module's own answer is then the
+    // system's act, and an approval names its person per dispatch
+    // (`post_command_on_behalf`).
     let makod = MakodClient::new(&cfg.makod_url, cfg.makod_api_key.clone());
 
     // ── NB module state ───────────────────────────────────────────────────
@@ -727,6 +730,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         .route("/api/v1/obs/rebuild", post(rest::rebuild_projection))
         .route("/api/v1/decisions", get(rest::list_decisions))
         .route("/api/v1/queue", get(rest::list_queue))
+        .route("/api/v1/klaerfaelle", get(rest::list_klaerfaelle))
         .route(QUEUE_APPROVE.path_template, post(rest::approve_queue_entry))
         .route(QUEUE_REJECT.path_template, post(rest::reject_queue_entry))
         .route("/api/v1/start-supply", post(rest::start_supply))
@@ -1057,6 +1061,30 @@ mod rest {
         ))
     }
 
+    /// `GET /api/v1/klaerfaelle` — the open Klärfälle, the earliest due date
+    /// first (`crate::klaerfall`).
+    pub async fn list_klaerfaelle(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+    ) -> ApiResult<Json<crate::klaerfall::Klaerfaelle>> {
+        authorize(&enforcer, &claims, "read-case", &state.tenant)?;
+        // Kept to the caller's own Marktrollen: an LF reads no case
+        // of the NB side.
+        Ok(Json(
+            crate::klaerfall::list_open(
+                &pool,
+                &state.tenant,
+                &claims.principal().roles,
+                200,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await
+            .map_err(ApiError::internal)?,
+        ))
+    }
+
     pub async fn list_queue(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1179,13 +1207,23 @@ mod rest {
         }
     }
 
-    /// Claim a pending entry, dispatch its market command, release the claim on
-    /// failure.
+    /// Check a pending entry's decision, claim it, dispatch its market command,
+    /// release the claim on failure.
     ///
-    /// The claim comes **first**. Dispatching before the `status = 'Pending'`
-    /// guard let a terminal entry re-send its market command, and let operator A
-    /// approving while operator B rejected send both an einwilligung and an
-    /// ablehnen (different idempotency keys) while the DB recorded one decision.
+    /// Every check runs **before** the claim, so a refused decision leaves
+    /// the entry pending and marks nothing: processd's own (the body from the
+    /// frozen answer and what the person states, the Antwortcode against the
+    /// entry's Entscheidungsbaum, the body the person was shown), then makod's
+    /// pre-send check on exactly the message the decision dispatches
+    /// ([`crate::entscheidungsprobe::makod_prueft`]). A body that check
+    /// refuses — or that makod did not check — is never approved, whoever
+    /// proposed it.
+    ///
+    /// The claim then comes before the dispatch. Dispatching before the
+    /// `status = 'Pending'` guard let a terminal entry re-send its market
+    /// command, and let operator A approving while operator B rejected send
+    /// both an einwilligung and an ablehnen (different idempotency keys) while
+    /// the DB recorded one decision.
     async fn decide_queue_entry(
         state: &ProcessdState,
         pool: PgPool,
@@ -1218,13 +1256,14 @@ mod rest {
             crate::pg::approval::QueueStatus::Rejected
         };
 
-        // Nothing pending to claim: absent (404), or decided by somebody
+        // Nothing pending to decide: absent (404), or decided by somebody
         // first — 409 naming who and when, so the person who lost the race
         // sees whose answer went out instead of a missing page.
-        let Some(entry) = queue
-            .claim(id, &state.tenant, target, decided_by)
+        let found = queue
+            .find_by_id(id, &state.tenant)
             .await
-            .map_err(ApiError::internal)?
+            .map_err(ApiError::internal)?;
+        let Some(entry) = found.filter(|e| e.status == crate::pg::approval::QueueStatus::Pending)
         else {
             let found = queue
                 .find_by_id(id, &state.tenant)
@@ -1243,13 +1282,25 @@ mod rest {
             entry.reject_command.as_deref()
         };
         let Some(command) = stored else {
+            if queue
+                .claim(id, &state.tenant, target, decided_by, None)
+                .await
+                .map_err(ApiError::internal)?
+                .is_none()
+            {
+                let found = queue
+                    .find_by_id(id, &state.tenant)
+                    .await
+                    .map_err(ApiError::internal)?;
+                return Err(super::unclaimable(id, found.as_ref()));
+            }
             tracing::info!(%id, pid = entry.pid, approve, "processd: queue entry decided without a market message");
             return Ok(StatusCode::NO_CONTENT);
         };
 
         // The body the command needs: frozen at enqueue where the answer was
-        // known then, otherwise stated by the operator now. Refused here —
-        // and the claim released — rather than sent and refused by `makod`.
+        // known then, otherwise stated by the operator now. Refused here
+        // rather than sent and refused by `makod`.
         let frozen = if approve {
             entry.answer_payload.as_ref()
         } else {
@@ -1258,28 +1309,57 @@ mod rest {
         // The body first — a frozen answer refuses an edit before any code is
         // judged — then the stated code against the tree the entry was decided
         // in: a code means something only inside its tree.
-        let payload = match crate::pg::approval::decision_body(&entry, command, frozen, &operator)
+        let mut payload = crate::pg::approval::decision_body(&entry, command, frozen, &operator)
             .and_then(|body| {
                 crate::pg::approval::check_operator_code(&entry, approve, &operator).map(|()| body)
-            }) {
-            Ok(mut p) => {
-                let by = if approve {
-                    "approved_by"
-                } else {
-                    "rejected_by"
-                };
-                if let Some(m) = p.as_object_mut() {
-                    m.insert(by.into(), serde_json::json!(decided_by));
-                }
-                p
-            }
-            Err(refusal) => {
-                if let Err(e) = queue.unclaim(id, &state.tenant).await {
-                    tracing::error!(%id, error = %e, "processd: failed to release the queue claim");
-                }
-                return Err(ApiError::unprocessable(refusal.to_string()));
-            }
+            })
+            .map_err(|refusal| ApiError::unprocessable(refusal.to_string()))?;
+        // The person approved the body they were shown, or nothing.
+        crate::entscheidungsprobe::gezeigter_koerper(&operator, command, &payload)?;
+        // Attributed before `approved_by` joins the body: the fingerprint is
+        // over what the proposal would have sent.
+        let akteur = entry.akteur_der_entscheidung(command, &payload, decided_by);
+        // What goes out, fingerprinted as the proposal was: agentd reads a
+        // proposal's fate off it.
+        let gesendet = crate::pg::approval::vorschlag_sha256(command, &payload);
+
+        // makod's pre-send check on the message itself, before anything is
+        // marked decided.
+        crate::entscheidungsprobe::makod_prueft(
+            &state.makod,
+            &mako_markt::makod_client::ForwardCommand {
+                marktrolle: entry.marktrolle.clone(),
+                command: command.to_owned(),
+                malo_id: entry.malo_id.clone(),
+                melo_id: None,
+                payload: payload.clone(),
+            },
+        )
+        .await?;
+
+        let by = if approve {
+            "approved_by"
+        } else {
+            "rejected_by"
         };
+        if let Some(m) = payload.as_object_mut() {
+            m.insert(by.into(), serde_json::json!(decided_by));
+        }
+
+        // The checks passed; claim it. Losing the race to another decision
+        // is the same 409 as finding it decided.
+        if queue
+            .claim(id, &state.tenant, target, decided_by, Some(&gesendet))
+            .await
+            .map_err(ApiError::internal)?
+            .is_none()
+        {
+            let found = queue
+                .find_by_id(id, &state.tenant)
+                .await
+                .map_err(ApiError::internal)?;
+            return Err(super::unclaimable(id, found.as_ref()));
+        }
 
         // The key names the queue entry, not a role — the NB, LF and MSB all
         // enqueue here. The UUID makes it unique; the prefix is what an
@@ -1292,9 +1372,14 @@ mod rest {
             melo_id: None,
             payload,
         };
+        // makod records who decided, not processd's service identity: the
+        // `Mako-Akteur` header carries the approving person and whether the
+        // proposal went out unchanged.
+        let akteur =
+            serde_json::to_value(&akteur).map_err(|e| ApiError::internal(anyhow::Error::new(e)))?;
         if let Err(e) = state
             .makod
-            .post_command(&format!("processd-queue-{verb}-{id}"), &cmd)
+            .post_command_on_behalf(&format!("processd-queue-{verb}-{id}"), &cmd, &akteur)
             .await
         {
             tracing::warn!(
@@ -1333,7 +1418,7 @@ mod rest {
             };
             match state
                 .makod
-                .post_command(&format!("processd-queue-followup-{id}"), &cmd)
+                .post_command_on_behalf(&format!("processd-queue-followup-{id}"), &cmd, &akteur)
                 .await
             {
                 Ok(_) => tracing::info!(
@@ -1370,6 +1455,7 @@ mod rest {
         body: axum::body::Bytes,
     ) -> ApiResult<StatusCode> {
         authorize(&enforcer, &claims, "decide-queue", &state.tenant)?;
+        crate::entscheidungsprobe::nur_json(&headers)?;
         decide_queue_entry(
             &state,
             pool,
@@ -1396,6 +1482,7 @@ mod rest {
         body: axum::body::Bytes,
     ) -> ApiResult<StatusCode> {
         authorize(&enforcer, &claims, "decide-queue", &state.tenant)?;
+        crate::entscheidungsprobe::nur_json(&headers)?;
         decide_queue_entry(
             &state,
             pool,
@@ -2231,6 +2318,7 @@ mod unclaimable_tests {
             "test".into(),
             time::macros::datetime!(2026-11-05 09:00 UTC),
             "t".into(),
+            "test-regel",
         );
         entry.status = QueueStatus::Approved;
         entry.decided_by = Some("erika".into());

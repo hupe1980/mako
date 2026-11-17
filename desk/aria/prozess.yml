@@ -1,0 +1,72 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - navigation "Pfad":
+    - link "Prozesse":
+      - /url: /prozess
+    - text: "51238696012"
+  - heading "Lieferantenwechsel · Strom läuft" [level=1]
+  - list "Eckdaten":
+    - listitem:
+      - link "MaLo 51238696012":
+        - /url: /lokation/51238696012
+    - listitem: PID 55001
+    - listitem: GPKE
+  - group "Nächste Frist":
+    - time: "Frist: in 1 Tag"
+    - text: Frist des Prozesses
+  - list "Schritte":
+    - listitem: "erledigt: Eingang · PID 55001"
+    - listitem: "aktuell: Antwort"
+    - listitem: "offen: abgeschlossen"
+  - region "Wartet auf deine Entscheidung":
+    - heading "Wartet auf deine Entscheidung" [level=2]
+    - paragraph:
+      - text: Anmeldung eines verbundenen Lieferanten (Antwortfrist 2026-11-05)
+      - 'button "Quelle: E_0623"': E_0623
+    - time: "Frist: in 1 Tag"
+    - button "Entscheiden"
+  - region "Verlauf":
+    - heading "Verlauf" [level=2]
+    - text: ← Eingang · Ausgang →
+    - list:
+      - listitem:
+        - paragraph: Eingang PID 55001
+        - paragraph: 04.11.2026, 09:00 Uhr · UTILMD-2026-11-04-0001
+      - listitem:
+        - text: Frist des Prozesses
+        - time: "Frist: in 1 Tag"
+  - region "Nachweise":
+    - heading "Nachweise" [level=2]
+    - list "Nachweise":
+      - listitem: Eingang · PID 55001 — belegt UTILMD-2026-11-04-0001 04.11.2026, 09:00
+      - listitem:
+        - text: Frist des Prozesses steht aus
+        - time: "Frist: in 1 Tag"
+  - heading "Details" [level=2]
+  - term: Workflow
+  - definition: gpke-supplier-change
+  - term: Prozess-ID
+  - definition:
+    - text: p-1
+    - button "Prozess-ID kopieren"
+  - term: Stream
+  - definition:
+    - text: process/buehne/p-1
+    - button "Stream kopieren"
+  - term: Prozessfamilie
+  - definition: GPKE
+  - term: Begonnen
+  - definition: 04.11.2026, 09:00
+  - term: Letztes Ereignis
+  - definition: 04.11.2026, 09:00
+  - term: Antwortfrist
+  - definition: 05.11.2026, 11:00
+  - region "Fragen":
+    - textbox "Frage an den Assistenten":
+      - /placeholder: Frag den Assistenten …  ⌘J
+    - button "Fragen" [disabled]
+    - paragraph: Antwortet mit claude-sonnet-5 · anthropic · liest nur, handelt nie
+    - button "Was kam zuletzt an?"
+    - button "Was ist hier offen?"
+    - button "Wann endet die Frist?"

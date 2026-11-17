@@ -1107,7 +1107,8 @@ mod tests {
         for pid in [55_555, 55_156, 55_220, 55_673] {
             assert!(!is_rueckmeldung_pid(pid), "{pid} is answered elsewhere");
         }
-        // 55174, 55176, 55178 and 55179 exist in no AHB; 44170 is withdrawn.
+        // 55174, 55176, 55178 and 55179 exist in no AHB; 44170 is the WiM Gas
+        // Ablehnung der Verpflichtungsanfrage, answered in `mako-wim`.
         for pid in [55_174, 55_176, 55_178, 55_179, 44_170] {
             assert!(!is_aenderung_pid(pid) && rueckmeldung_pid_for(pid).is_none());
             assert!(!STAMMDATEN_PAIRS.iter().any(|(_, r, _)| *r == pid), "{pid}");

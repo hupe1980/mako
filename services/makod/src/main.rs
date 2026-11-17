@@ -318,6 +318,19 @@ struct Cli {
     #[arg(long, env = "MAKOD_CEDAR_PERMIT_ALL")]
     cedar_permit_all: bool,
 
+    /// Principals granted Cedar `ActOnBehalf`: they may name the actor of a
+    /// command in the `Mako-Akteur` header — processd dispatching a person's
+    /// approval. No other caller may, whatever the baseline.
+    ///
+    /// Can also be set via `MAKOD_CEDAR_ACT_ON_BEHALF` (comma-separated).
+    #[arg(
+        long,
+        value_name = "PRINCIPAL",
+        env = "MAKOD_CEDAR_ACT_ON_BEHALF",
+        value_delimiter = ','
+    )]
+    cedar_act_on_behalf: Vec<String>,
+
     /// OIDC issuer URL for JWT bearer token validation.
     ///
     /// When set, `makod` fetches `<ISSUER>/.well-known/openid-configuration`
@@ -1001,7 +1014,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     let registry = MpIdRegistry::from_config(&cli.parties).ok();
     let (extra_policies, cedar_policy_dir_fehler) =
         match read_cedar_policy_dir(&cli.cedar_policy_dir) {
-            Ok(p) => (p, None),
+            Ok(p) => (
+                cedar_authz::with_act_on_behalf(p, &cli.cedar_act_on_behalf),
+                None,
+            ),
             Err(e) => (None, Some(format!("{e:#}"))),
         };
     let preflight_input = registry.as_ref().map(|r| preflight::PreflightInput {
@@ -1035,6 +1051,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         auth_keys: &cli.auth_keys,
         cedar_policies: extra_policies.clone(),
         cedar_permit_all: cli.cedar_permit_all,
+        act_on_behalf: &cli.cedar_act_on_behalf,
         oidc_issuer: cli.oidc_issuer.as_deref(),
         oidc_audience: cli.oidc_audience.as_deref(),
     });
@@ -1905,6 +1922,9 @@ fn apply_config_file(
         }
         if authz.permit_all {
             cli.cedar_permit_all = true;
+        }
+        if cli.cedar_act_on_behalf.is_empty() {
+            cli.cedar_act_on_behalf = authz.act_on_behalf;
         }
     }
 

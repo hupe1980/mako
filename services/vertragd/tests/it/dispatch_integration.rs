@@ -751,6 +751,61 @@ async fn a_confirmed_component_is_a_billing_candidate() {
     assert_eq!(candidates[0].malo_id, MALO);
 }
 
+/// A component whose supply ended stays a billing candidate,
+/// flagged `beendet`, so billingd issues its Schlussrechnung without anybody
+/// asking. The window is twelve weeks: past it the § 40c Abs. 2 EnWG six weeks
+/// are long gone and the stuck-period watch, not the feed, carries the case.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_ended_supply_is_a_candidate_for_twelve_weeks() {
+    let Some((pool, _pg)) = test_pool("billing_candidates_ended").await else {
+        return;
+    };
+    let tenant = "9800000000002";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("ERP-END-1"))
+            .await
+            .expect("create");
+    // The state `close_due_supply` leaves behind a move-out last month.
+    sqlx::query("UPDATE versorgungsvertraege SET status='ABGELAUFEN' WHERE id=$1")
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .expect("close contract");
+    sqlx::query(
+        "UPDATE vertragskomponenten
+            SET status='BEENDET', lieferbeginn = heute() - 400, lieferende = heute() - 30
+          WHERE vertrag_id=$1",
+    )
+    .bind(created.id)
+    .execute(&pool)
+    .await
+    .expect("end component");
+
+    let candidates = pg::list_billing_candidates(&pool, tenant)
+        .await
+        .expect("list");
+    assert_eq!(candidates.len(), 1, "a supply ended last month is billable");
+    assert!(
+        candidates[0].beendet,
+        "and is flagged for its Schlussrechnung"
+    );
+
+    sqlx::query("UPDATE vertragskomponenten SET lieferende = heute() - 91 WHERE vertrag_id=$1")
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .expect("age component");
+    assert!(
+        pg::list_billing_candidates(&pool, tenant)
+            .await
+            .expect("list")
+            .is_empty(),
+        "a supply ended thirteen weeks ago is not"
+    );
+}
+
 // ── Kündigung — the whole termination is one transaction ─────────────────────
 
 /// Terminating a contract must set the term it now actually has, enqueue the
@@ -1168,12 +1223,11 @@ async fn supply_that_has_run_out_closes_its_contract() {
         after.completed_at.is_some(),
         "the § 147 AO retention clock starts here"
     );
+    let feed = pg::list_billing_candidates(&pool, tenant).await.unwrap();
     assert!(
-        pg::list_billing_candidates(&pool, tenant)
-            .await
-            .unwrap()
-            .is_empty(),
-        "and the component leaves the billing feed"
+        feed.len() == 1 && feed[0].beendet,
+        "and the component stays in the billing feed, flagged ended, until its \
+         Schlussrechnung is issued: {feed:?}"
     );
 }
 

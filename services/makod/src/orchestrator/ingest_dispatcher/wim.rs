@@ -74,10 +74,9 @@ impl EdifactIngestDispatcher {
                 }
                 // Antwort PIDs close an order **we** sent — resume, never spawn.
                 // An answer with no open order is Skipped rather than creating
-                // an orphan stream. 44170 is absent: it does not exist under
-                // FV2026-10-01 (PID-Übersicht 4.0 publishes 44168 → 44169 only).
+                // an orphan stream.
                 55_040 | 55_041 | 55_043 | 55_044 | 55_052 | 55_053 | 55_169 | 55_170 | 44_040
-                | 44_041 | 44_043 | 44_044 | 44_052 | 44_053 | 44_169 => {
+                | 44_041 | 44_043 | 44_044 | 44_052 | 44_053 | 44_169 | 44_170 => {
                     let cmd = adapters::wim_registry(received_at).dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_utilmd(msg);
                     self.resume_by_key::<WimDeviceChangeWorkflow>(

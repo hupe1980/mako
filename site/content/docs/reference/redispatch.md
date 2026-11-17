@@ -169,7 +169,7 @@ All nine document types are CIM/IEC 62325-based XML — **not** EDIFACT. The
 
 | Document type | XSD version | Sender → Receiver | Handled by workflow |
 |---|---|---|---|
-| `ActivationDocument` | 1.1f | ÜNB → VNB → ANB | `redispatch-aktivierung` |
+| `ActivationDocument` | 1.1f (AWT 1.1g from 01.04.2027) | ÜNB → VNB → ANB | `redispatch-aktivierung` |
 | `PlannedResourceScheduleDocument` | 1.0f | ÜNB → VNB → ANB | `redispatch-planungsdaten` |
 | `AcknowledgementDocument` | 1.0g | any → sender of referenced doc | correlation routing (ProcessRegistry) |
 | `Stammdaten` (master data) | 1.4b | ANB → VNB → ÜNB | `redispatch-stammdaten` |

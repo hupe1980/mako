@@ -6,11 +6,14 @@
 //   context.resource_tenant   — owning tenant of the target data row
 //
 // Actions:
-//   "read-anlage"        — GET  /api/v1/anlagen[/{tr_id}], /foerderung-auslaufend
+//   "read-anlage"        — GET  /api/v1/anlagen[/{tr_id}], /foerderung-auslaufend, /ohne-mastr;
+//                          MCP get_plant, list_expiring, list_plants_without_mastr
 //   "write-anlage"       — POST/PUT/DELETE /api/v1/anlagen[/{tr_id}]
 //   "read-einspeiser"    — GET  /api/v1/einspeiser[/{einspeiser_id}]
 //   "write-einspeiser"   — PUT  /api/v1/einspeiser/{einspeiser_id}
-//   "read-settlement"    — GET  /api/v1/anlagen/{tr_id}/settlements
+//   "read-settlement"    — GET  /api/v1/anlagen/{tr_id}/settlements[/{year}/{month}/erklaerung],
+//                          /api/v1/anlagen/unabgerechnet/{year}/{month}; MCP list_settlements,
+//                          explain_settlement, list_unsettled_plants
 //   "run-settlement"     — POST /api/v1/anlagen/{tr_id}/settle/... and /api/v1/settle/...
 //   "correct-settlement" — POST .../settlements/{year}/{month}/correction (§147 AO / GoBD)
 //   "manage-lifecycle"   — repowering (§3 Nr. 30 i.V.m. §25), zusammenlegen (§24),

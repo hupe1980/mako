@@ -132,7 +132,7 @@ async fn a_workflow_registered_once_is_spawned_resumed_and_timed_out() {
     let frist = time::macros::datetime!(2026-10-09 22:00 UTC);
     let spawned = ctx.spawn::<FixtureWorkflow>(tenant, workflow_id.clone());
     let ran = spawned
-        .run(FixtureCommand::Senden { frist }, RunOptions::new())
+        .run(FixtureCommand::Senden { frist }, RunOptions::system())
         .await
         .expect("spawned");
     assert_eq!(ran.deadlines.len(), 1);
@@ -153,11 +153,11 @@ async fn a_workflow_registered_once_is_spawned_resumed_and_timed_out() {
     // same firing then decides nothing.
     let second = ctx.spawn::<FixtureWorkflow>(tenant, workflow_id);
     let ran = second
-        .run(FixtureCommand::Senden { frist }, RunOptions::new())
+        .run(FixtureCommand::Senden { frist }, RunOptions::system())
         .await
         .expect("spawned");
     ctx.resume::<FixtureWorkflow>(second.identity())
-        .run(FixtureCommand::Antworten, RunOptions::new())
+        .run(FixtureCommand::Antworten, RunOptions::system())
         .await
         .expect("resumed");
     let fired = dispatch_deadline(

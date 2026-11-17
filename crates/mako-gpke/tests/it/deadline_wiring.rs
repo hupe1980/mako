@@ -65,7 +65,7 @@ async fn timeout_on_pending_is_a_frist_breach() {
     let p = make_lf_anmeldung();
 
     // Spawn the process in `Pending` state by issuing an Initiate command.
-    p.run(initiate_cmd(), RunOptions::new())
+    p.run(initiate_cmd(), RunOptions::system())
         .await
         .expect("Initiate must succeed");
 
@@ -82,7 +82,7 @@ async fn timeout_on_pending_is_a_frist_breach() {
             deadline_id,
             label: NB_RESPONSE_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired on Pending must succeed");
@@ -105,7 +105,7 @@ async fn timeout_on_pending_is_a_frist_breach() {
 async fn a_second_timeout_is_absorbed() {
     let p = make_lf_anmeldung();
 
-    p.run(initiate_cmd(), RunOptions::new())
+    p.run(initiate_cmd(), RunOptions::system())
         .await
         .expect("Initiate must succeed");
 
@@ -116,7 +116,7 @@ async fn a_second_timeout_is_absorbed() {
             deadline_id,
             label: NB_RESPONSE_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("first TimeoutExpired must succeed");
@@ -127,7 +127,7 @@ async fn a_second_timeout_is_absorbed() {
             deadline_id,
             label: NB_RESPONSE_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("late/duplicate TimeoutExpired must not error");
@@ -149,7 +149,7 @@ async fn a_second_timeout_is_absorbed() {
 async fn timeout_on_active_is_noop() {
     let p = make_lf_anmeldung();
 
-    p.run(initiate_cmd(), RunOptions::new())
+    p.run(initiate_cmd(), RunOptions::system())
         .await
         .expect("Initiate must succeed");
 
@@ -162,7 +162,7 @@ async fn timeout_on_active_is_noop() {
             response_ref: MessageRef::new("NB-ACCEPT-001"),
             antwort: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("HandleAntwort(accepted) must succeed");
@@ -180,7 +180,7 @@ async fn timeout_on_active_is_noop() {
             deadline_id,
             label: NB_RESPONSE_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("late TimeoutExpired on Active must not error");

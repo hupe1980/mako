@@ -39,7 +39,7 @@
 //!     .ok_or(EngineError::registry("unknown conversation"))?;
 //!
 //! let process = ctx.resume::<SupplierChangeWorkflow>(identity);
-//! process.run(HandleAperak { .. }, RunOptions::new()).await?;
+//! process.run(HandleAperak { .. }, RunOptions::system()).await?;
 //!
 //! // Clean up after process completion:
 //! ctx.registry.remove(tenant_id, &RegistryKey::from_conversation_and_sender(utilmd_conv_id, sender_mp_id)).await?;

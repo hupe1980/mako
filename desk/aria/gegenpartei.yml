@@ -1,0 +1,57 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "9800357000005 als NB" [level=1]
+  - paragraph: 9800357000005 · 01.08.2026 – 04.11.2026
+  - button "Begriffe"
+  - link "Als Nachweis exportieren":
+    - /url: /svc/processd/api/v1/counterparties/9800357000005/NB?von=2026-08-01&bis=2026-11-04&format=csv
+  - list "Kennzahlen":
+    - listitem: 11 von 13 fristgerecht beantwortet
+    - listitem: 1 verspätet
+    - listitem: 1 unbeantwortet
+    - listitem: 0 noch offen
+    - listitem: 180 min Verspätung im Median
+  - heading "Ablehnungen" [level=2]
+  - list "Ablehnungen":
+    - listitem:
+      - text: A16 Die Marktlokation ist im Netzgebiet nicht bekannt.
+      - 'button "Quelle: E_3005"': E_3005
+      - text: 1×
+  - grid "Prozesse dieser Gegenpartei":
+    - rowgroup:
+      - row "PID Ergebnis Frist Beantwortet Verspätung Antwortcode":
+        - columnheader "PID"
+        - columnheader "Ergebnis"
+        - columnheader "Frist"
+        - columnheader "Beantwortet"
+        - columnheader "Verspätung"
+        - columnheader "Antwortcode"
+    - rowgroup:
+      - row "44001":
+        - rowheader "44001":
+          - link "44001":
+            - /url: /prozess?key=p-1
+        - gridcell "verspätet"
+        - gridcell "07.10.2026, 23:59"
+        - gridcell "08.10.2026, 02:59"
+        - gridcell "180 min"
+        - gridcell "A16E_3005"
+      - row "44001":
+        - rowheader "44001":
+          - link "44001":
+            - /url: /prozess?key=p-2
+        - gridcell "fristgerecht"
+        - gridcell "16.10.2026, 23:59"
+        - gridcell "13.10.2026, 11:10"
+        - gridcell
+        - gridcell "E01E_3005"
+      - row "44004":
+        - rowheader "44004":
+          - link "44004":
+            - /url: /prozess?key=p-3
+        - gridcell "unbeantwortet"
+        - gridcell "23.10.2026, 23:59"
+        - gridcell
+        - gridcell
+        - gridcell

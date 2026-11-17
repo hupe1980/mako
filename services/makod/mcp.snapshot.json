@@ -1682,6 +1682,16 @@
                 "string",
                 "null"
               ]
+            },
+            "akteur": {
+              "description": "Who caused the event, as a class: `system`, `freigabe` (a person\napproved a proposal unchanged), `freigabe-geaendert` (after changing\nit) or `person`. Never the principal — who it was is the audit log's.",
+              "type": "string",
+              "enum": [
+                "system",
+                "freigabe",
+                "freigabe-geaendert",
+                "person"
+              ]
             }
           },
           "required": [
@@ -1693,7 +1703,8 @@
             "message_ref",
             "antwortcode",
             "codeliste",
-            "bedeutung"
+            "bedeutung",
+            "akteur"
           ]
         }
       },

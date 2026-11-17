@@ -599,6 +599,25 @@ pub struct BillingdConfig {
     /// settlement in all configurations.
     #[serde(default)]
     pub vpp_auto_billing: bool,
+
+    /// `[nachrechnen]` — the link every issued invoice carries to its public
+    /// recomputation. Unset, no invoice gets a link and no token is minted.
+    #[serde(default)]
+    pub nachrechnen: Option<NachrechnenConfig>,
+}
+
+/// `[nachrechnen]` — Rechnung nachrechnen for anyone holding the invoice.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NachrechnenConfig {
+    /// HMAC key the verify token of each invoice is derived from (at least 32
+    /// bytes). The token is HMAC-SHA256(key, record id), cut to 128 bits; only
+    /// its SHA-256 is stored, so a database read yields no working link, and
+    /// the letter can print it again on every re-send.
+    pub token_key: String,
+    /// The public page the token is appended to, e.g.
+    /// `https://kundenportal.example.de/nachrechnen/` (portald's public route).
+    pub public_url: String,
 }
 
 impl BillingdConfig {
@@ -636,6 +655,22 @@ impl BillingdConfig {
     pub fn validate(&self) -> Vec<Befund> {
         let mut out = self.reject_removed_keys();
         out.extend(self.risk.validate());
+        if let Some(n) = &self.nachrechnen {
+            if n.token_key.len() < 32 {
+                out.push(Befund::blockiert(
+                    "nachrechnen.token_key",
+                    "`[nachrechnen] token_key` must be at least 32 bytes: the verify token is \
+                     the only credential the public recomputation page asks for",
+                ));
+            }
+            if !(n.public_url.starts_with("https://") || n.public_url.starts_with("http://")) {
+                out.push(Befund::blockiert(
+                    "nachrechnen.public_url",
+                    "`[nachrechnen] public_url` must be an http(s) URL — it is printed on every \
+                     invoice",
+                ));
+            }
+        }
         // Neither identifier means every document this service issues omits a
         // § 14 Abs. 4 Nr. 2 UStG Pflichtangabe. Fail at startup, like [oidc],
         // not per invoice at 02:00 on the first of the month.

@@ -36,6 +36,7 @@ fn actions_used_in_code() -> BTreeSet<String> {
         "mcp_server.rs",
         "handler.rs",
         "obs/rest.rs",
+        "obs/counterparty.rs",
         "sperr/handlers.rs",
     ] {
         let text = src(file);
@@ -169,6 +170,7 @@ fn no_handler_extracts_claims_as_a_request_extension() {
         "handler.rs",
         "mcp_server.rs",
         "obs/rest.rs",
+        "obs/counterparty.rs",
         "obs/mcp.rs",
         "sperr/handlers.rs",
         "sperr/mcp.rs",

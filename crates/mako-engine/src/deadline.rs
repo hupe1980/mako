@@ -55,7 +55,7 @@
 //! // Background scheduler (runs every N minutes):
 //! let result = deadline_store.due_now(100).await?;
 //! for d in result.deadlines {
-//!     process_handle.run_timeout(&d, RunOptions::new()).await?;
+//!     process_handle.run_timeout(&d, RunOptions::system()).await?;
 //!     // Cancel *after* dispatch, so a fired deadline cannot fire again.
 //!     deadline_store.cancel(d.deadline_id()).await?;
 //! }

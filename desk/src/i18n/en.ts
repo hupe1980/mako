@@ -88,6 +88,12 @@ export const en: Katalog = {
     },
   },
   verlauf: {
+    akteur: {
+      system: "automatic",
+      freigabe: "approved, proposal unchanged",
+      "freigabe-geaendert": "approved, proposal changed",
+      person: "by a person",
+    },
     titel: "History",
     legende: "← Inbound · Outbound →",
     fehler: "The history could not be read",
@@ -423,6 +429,12 @@ export const en: Katalog = {
     untertitel: (rolle) =>
       `${rolle} — each figure as its service reports it; click to open the list.`,
     fristen: "Fristen overdue",
+    ohneEingriff: (pid) => `No touch · PID ${pid}`,
+    vonBeendet: (n, von) => `${n} of ${von}`,
+    abrechnungsfristen: "Billing overdue",
+    abrechnungsfristenVon: (lf) => `Billing overdue · ${lf}`,
+    fristenStand: (geschuldet, puenktlich, spaet) =>
+      `${geschuldet} owed, ${puenktlich} billed on time, ${spaet} late`,
     anmeldungen: "Anmeldungen open",
     deadLetters: "Dead Letters",
     pruefung: "Invoice review",
@@ -683,6 +695,12 @@ export const en: Katalog = {
     quelle: (name, stand) => `${name}: ${stand}`,
     quelleLaedt: "loading …",
     assistentFehlt: "Assistant: unreachable",
+    arbeitsvorrat: "Work queue",
+    aeltesteVom: (tag) => `oldest from ${tag}`,
+    nichtsOffen: "nothing open",
+    mehrAlsSeite: "more than one page — the oldest is in the list",
+    alleQuellen: "Show every source",
+    nurQuelle: (name) => `Only: ${name}`,
     assistent: "Assistant",
     bereitetVor: "The assistant is preparing a proposal …",
     vorschlag: (aktion) => `Proposal: ${aktion}`,
@@ -695,6 +713,10 @@ export const en: Katalog = {
     warum: "Why?",
   },
   freigabenAnsicht: {
+    keineDarstellung:
+      "The Marktkommunikation cannot render this message ahead — do not take the proposal in unchanged; decide yourself.",
+    darstellungLaeuft: "Rendering the proposal's message …",
+    andererKoerper: "The proposal was checked for another body than the one now to be sent.",
     titel: "Approvals",
     untertitel: (dienst) => `What ${dienst} puts to a person to decide — the next Frist first.`,
     fehler: "The approvals could not be read",
@@ -738,6 +760,7 @@ export const en: Katalog = {
     mehr: "More than 20 matches — keep typing to narrow them down.",
   },
   kundeAnsicht: {
+    kontoVon: (malo) => `Account of supply point ${malo}`,
     kundentyp: {
       B2C: "Private customer",
       B2B_SLP: "Business (SLP)",
@@ -784,6 +807,36 @@ export const en: Katalog = {
     keiner: (key) => `No process for “${key}”`,
     devStart: "starts it with the Desk.",
     unerwartet: "The answer was unexpected",
+    pfad: "Path",
+    eckdaten: "Key facts",
+    naechsteFrist: "Next Frist",
+    unter: (n, text, key) => `${n === 1 ? "1 process" : `${text} processes`} under ${key}`,
+    schritte: "Steps",
+    schrittArt: { aperak: "APERAK", contrl: "CONTRL", prozess: "Answer" },
+    schrittStand: { erledigt: "done", jetzt: "current", offen: "open" },
+    abgeschlossen: "completed",
+    entscheidung: "Waiting for your decision",
+    entscheiden: "Decide",
+    uebernehmen: "Take in",
+    bearbeiten: "Edit",
+    geprueft: "Checked: Entscheidungsbaum and pre-send check passed.",
+    abgelehntWeil: (grund) => `Refused by the check — ${grund}. Make the decision yourself.`,
+    nichtGeprueft: (grund) =>
+      `Not checked${grund ? ` (${grund})` : ""} — make the decision yourself.`,
+    ohneGrund: "no reason given",
+    nachweise: "Evidence",
+    belegt: "on record",
+    stehtAus: "outstanding",
+    aperakFehler: (code) => `APERAK with error code ${code}`,
+    details: "Details",
+    familie: "Process family",
+    marktpartner: "Counterparty",
+    begonnen: "Started",
+    letztes: "Last event",
+    antwortfrist: "Antwortfrist",
+    stand: "As of",
+    standJetzt: "As of now",
+    standZu: (wann) => `As of ${wann}`,
   },
   aktionen: {
     art: {
@@ -871,6 +924,168 @@ export const en: Katalog = {
     messstelle: "Metering",
     energieservice: "Energy services",
   },
+  lokation: {
+    qualitaet: (note, abdeckung, luecken) =>
+      `Quality ${note} · ${abdeckung} % covered · ${luecken} gaps`,
+    note: { A: "very good", B: "good", C: "fair", D: "poor", F: "insufficient" },
+    korrekturen: "Corrections",
+    korrektur: (ab, alt, neu, grund) => `${ab}: ${alt} kWh → ${neu} kWh — ${grund}`,
+    titel: (id) => `Marktlokation ${id}`,
+    abgelehnt: "The service refused the request",
+    versorgung: "Supply",
+    keineVersorgung: "No supply is recorded for this Marktlokation.",
+    seitBis: (von, bis) => (bis ? `${von} – ${bis}` : `since ${von}`),
+    lieferant: (mp) => `Lieferant ${mp}`,
+    angekuendigt: "announced",
+    lieferstatus: {
+      Beliefert: "Supplied",
+      Unbeliefert: "Unsupplied",
+      Grundversorgung: "Grundversorgung",
+      Ersatzversorgung: "Ersatzversorgung",
+      Ruhend: "Dormant",
+      Stillgelegt: "Decommissioned",
+    },
+    messkonzept: "Metering concept",
+    standZu: (tag) => `As of ${tag}`,
+    widerspruch:
+      "The assignments name more than one Lokationsbündel code — the bundle contradicts itself.",
+    objekttyp: {
+      MALO: "Marktlokation",
+      MELO: "Messlokation",
+      NELO: "Netzlokation",
+      TR: "Technical resource",
+      SR: "Controllable resource",
+    },
+    zaehler: (id) => `Meter ${id}`,
+    messwerte: "Readings",
+    letzteTage: (n) => `last ${n} days`,
+    abdeckung: "Readings per day",
+    tageszustand: {
+      gemessen: "measured",
+      ersatzwert: "Ersatzwert",
+      korrigiert: "corrected",
+      fehlt: "missing",
+    },
+    tage: (was, n) => `${was}: ${n}`,
+    lastgang: "Lastgang of the last 7 days",
+    keineMesswerte: "There are no readings for the last 7 days.",
+    energierichtung: { AUSSP: "Withdrawal", EINSP: "Feed-in" },
+    konto: "Account",
+    kontoauszug: "Statement, the latest booking first",
+    saldo: { overdue: "owed", credit: "credit", settled: "settled" },
+    abschlag: (betrag) => `Abschlag ${betrag}`,
+    buchung: "Booking",
+    oeffnen: "Open Marktlokation",
+  },
+  gegenpartei: {
+    liste: "Counterparties",
+    listeZeitraum: (von, bis) => `How each counterparty answered from ${von} to ${bis}.`,
+    gegenpartei: "Counterparty",
+    rolle: "Role",
+    gezaehlt: "Processes",
+    alsRolle: (rolle) => `as ${rolle}`,
+    zeitraum: (mp, von, bis) => `${mp} · ${von} – ${bis}`,
+    begriffe: "Definitions",
+    exportieren: "Export as evidence",
+    keine: "There is no record for this counterparty",
+    kennzahlen: "Figures",
+    vonGezaehlt: (n, von) => `${n} of ${von}`,
+    fristgerecht: "answered within the Frist",
+    quote: (n) => `within the Frist, of ${n} processes`,
+    median: "Median delay",
+    minuten: (n) => `${n} min`,
+    ablehnungen: "Refusals",
+    keineAblehnung: "No refusal in the period.",
+    ohneWortlaut: "The list publishes no wording for it.",
+    mal: (n) => `${n}×`,
+    prozesse: "Processes with this counterparty",
+    pid: "PID",
+    kategorie: "Outcome",
+    frist: "Frist",
+    beantwortet: "Answered",
+    verspaetung: "Delay",
+    antwort: "Antwortcode",
+    ausserhalb: (ohneFrist, unbestimmt) =>
+      `Not counted: ${ohneFrist} without a Frist, ${unbestimmt} with no determinable debtor of the answer.`,
+    kategorien: {
+      fristgerecht: "within the Frist",
+      verspaetet: "late",
+      unbeantwortet: "unanswered",
+      offen: "still open",
+      abgebrochen: "aborted",
+      ohne_frist: "without a Frist",
+      schuldner_unbestimmt: "debtor undetermined",
+    },
+    vonProzess: "Open counterparty",
+  },
+  nachrechnen: {
+    kundenLink: "Link for the customer",
+    kopieren: "Copy link",
+    kopiert: "Copied",
+    titel: "Recompute",
+    untertitel: (nr, malo, zeitraum) => `Invoice ${nr} · MaLo ${malo} · ${zeitraum}`,
+    stimmt: "Matches",
+    weichtAb: "Differs",
+    storniert: "Cancelled",
+    stimmtText:
+      "Every line and total was recomputed from the invoice's inputs and matches to the cent.",
+    weichtAbIn: (positionen) =>
+      positionen.length === 1
+        ? `Line ${positionen[0]} does not recompute to the amount stated.`
+        : `Lines ${positionen.join(", ")} do not recompute to the amounts stated.`,
+    weichtAbSonst: "A total does not recompute to the amount stated.",
+    siegelGilt: "The issued invoice's seal holds.",
+    siegelGebrochen: "The issued invoice's seal no longer matches the document.",
+    summe: {
+      NETTO: "Net",
+      STEUER: "VAT",
+      STEUERBASIS: "Tax base",
+      GESAMTSTEUER: "VAT total",
+      BRUTTO: "Gross",
+      ZU_ZAHLEN: "To pay",
+    },
+    berechnetAus: "Computed from",
+    menge: "Quantity",
+    preis: "Price",
+    geschaetzt: "estimated",
+    zeileStimmt: "matches",
+    zeileWeichtAb: "differs",
+    vorauszahlungen: "Instalments deducted",
+    nichtNachrechenbar: "This invoice cannot be recomputed",
+    oeffnen: "Recompute",
+  },
+  freigabeVorschau: {
+    titel: "What is sent",
+    urteil: {
+      besteht: "The Prozessüberwachung accepts this decision as it is.",
+      abgelehnt: "The Prozessüberwachung would not accept this decision",
+      ohne_nachricht: "This decision sends no market message.",
+    },
+    ohneDarstellung:
+      "The Marktkommunikation cannot render this message ahead — this is the body it would get:",
+  },
+  unbestaetigt: {
+    titel: "Sent last time",
+    fragt: "asking …",
+    unbekannt: "the service does not say what became of it — check its list",
+    inDerListe: "its list shows whether it arrived",
+    status: (status, von) =>
+      status === "Approved"
+        ? `approved${von ? ` by ${von}` : ""}`
+        : status === "Rejected"
+          ? `rejected${von ? ` by ${von}` : ""}`
+          : status === "Expired"
+            ? "expired, undecided"
+            : "did not arrive — it still waits for your decision",
+    verstanden: "Got it",
+  },
+  drift: {
+    keineEntscheidung: (dienst) => `Deciding resumes once the Desk matches ${dienst} again.`,
+    text: (dienste, n) =>
+      n === 1
+        ? `${dienste} serves other tools than the Desk knows — views reading it may fail. Update the Desk.`
+        : `${dienste} serve other tools than the Desk knows — views reading them may fail. Update the Desk.`,
+  },
   dienstNamen: {
     makod: "Marktkommunikation",
     marktd: "Market master data",
@@ -934,6 +1149,25 @@ export const en: Katalog = {
     dispute: "Invoice disputes",
     pruefposten: "Invoice review",
     geparkt: "Parked bookings",
+    abrechnungen: "Unbilled periods",
+    mahnungen: "Dunning due",
+    mahnstufe: (n) => `Dunning level ${n}`,
+    klaerfaelle: "Klärfälle",
+    mal: (n) => `${n}×`,
+    ursacheOhneWortlaut: (code, liste) =>
+      `${code} from ${liste} — the list publishes no wording for it`,
+    schlussrechnung: "final invoice",
+    faelligAm: (tag) => `due ${tag}`,
+    tageOffen: (n, text) =>
+      n > 1
+        ? `${text} days left`
+        : n === 1
+          ? "1 day left"
+          : n === 0
+            ? "due today"
+            : n === -1
+              ? "overdue by 1 day"
+              : `overdue by ${text} days`,
     prozess: (id) => `Process ${id}`,
     fristOverdue: (familie) => `Antwortfrist overdue · ${familie}`,
     antwortFestgehalten: "Answer held",
@@ -1009,6 +1243,31 @@ export const en: Katalog = {
       BEAUFTRAGT: "ordered",
       FEHLGESCHLAGEN: "failed",
     },
+    klaerfallAktion: {
+      retry_with_correction: "Correct and send again",
+      escalate_to_operator: "Resolve it yourself",
+      abort_process: "Abort the process",
+      wait_and_retry: "Wait, it is retried",
+    },
+    klaerfallHerkunft: {
+      aperak: "APERAK",
+      dead_letter: "Dead Letter",
+      refusal: "Refusal",
+      frist_missed: "Frist missed",
+    },
+    abrechnungsGrund: {
+      NO_METER_DATA:
+        "Meter readings for the period are missing — request them from the Messstellenbetreiber.",
+      INCOMPLETE_METER_DATA: "The meter readings have gaps — check the missing days.",
+      RATE_REFUSED: "The tariff could not be applied to the period — check the product.",
+      REGULATORY_RATES: "A statutory rate for the period is missing — add it.",
+      ABSCHLAEGE_UNBEKANNT: "The instalments paid are not known — reconcile the customer account.",
+      STORNIERT: "The invoice was cancelled and has to be issued again.",
+      UPSTREAM_UNAVAILABLE: "A service billing needs was unreachable — it will try again.",
+      INTERNAL: "Billing failed on an internal error — report it with the error id.",
+      VALIDATION_BLOCKED: "The invoice check stopped it — look at the findings.",
+      NO_ACTIVE_PRODUCT: "No product is active for the Marktlokation — assign one.",
+    },
     readingReason: {
       JAHRESABLESUNG: "Annual reading",
       ZWISCHENABLESUNG: "Interim reading",
@@ -1031,6 +1290,10 @@ export const en: Katalog = {
     },
   },
   codes: {
+    pruefung_abgelehnt:
+      "The check refused this decision — it would send a message that breaks a rule. Change the decision.",
+    nicht_geprueft: "This decision could not be checked, so it is not sent. Try again shortly.",
+    json_required: "The decision did not arrive as JSON and was not accepted. Reload the page.",
     process_not_found:
       "No process is known under this key. Check the spelling — or the message has not arrived yet.",
     malo_not_found: "This MaLo is not known.",

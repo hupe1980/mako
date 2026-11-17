@@ -219,6 +219,7 @@ async fn geli_eog_anmelden_renders_a_44013_its_profile_accepts() {
     let c = combined().await;
     dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.eog.anmelden",
         &support::geli_eog_anmeldung(MALO, LF_MP),
     )
@@ -252,9 +253,14 @@ async fn geli_eog_anmelden_without_a_muss_fact_is_refused() {
     for missing in ["transaktionsgrund", "bilanzierungsbeginn"] {
         let mut body = support::geli_eog_anmeldung(MALO, LF_MP);
         body.as_object_mut().expect("an object").remove(missing);
-        let err = dispatch_command(&c.state, "geli.eog.anmelden", &body)
-            .await
-            .expect_err("a 44013 without it is refused");
+        let err = dispatch_command(
+            &c.state,
+            mako_engine::envelope::Akteur::System,
+            "geli.eog.anmelden",
+            &body,
+        )
+        .await
+        .expect_err("a 44013 without it is refused");
         assert!(
             format!("{err:?}").contains(missing),
             "the refusal names {missing:?}: {err:?}"
@@ -262,9 +268,14 @@ async fn geli_eog_anmelden_without_a_muss_fact_is_refused() {
     }
     let mut body = support::geli_eog_anmeldung(MALO, LF_MP);
     body["stammdaten"] = serde_json::json!({ "lokationen": [], "bloecke": [] });
-    let err = dispatch_command(&c.state, "geli.eog.anmelden", &body)
-        .await
-        .expect_err("Stammdaten from the caller are refused");
+    let err = dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "geli.eog.anmelden",
+        &body,
+    )
+    .await
+    .expect_err("Stammdaten from the caller are refused");
     assert!(
         format!("{err:?}").contains("stammdaten"),
         "the refusal names the undeclared key: {err:?}"
@@ -282,6 +293,7 @@ async fn geli_eog_anmelden_for_a_marktlokation_without_an_address_is_refused() {
     let c = combined_with(Some(record)).await;
     let err = dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.eog.anmelden",
         &support::geli_eog_anmeldung(MALO, LF_MP),
     )
@@ -309,6 +321,7 @@ async fn geli_eog_anmelden_without_readable_master_data_is_refused() {
     let c = combined_with(None).await;
     let err = dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.eog.anmelden",
         &support::geli_eog_anmeldung(MALO, LF_MP),
     )
@@ -328,6 +341,7 @@ async fn geli_eog_anmelden_without_readable_master_data_is_refused() {
     c.state.marktd_client = Some(Arc::new(support::unreachable_marktd()));
     let err = dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.eog.anmelden",
         &support::geli_eog_anmeldung(MALO, LF_MP),
     )
@@ -343,6 +357,7 @@ async fn geli_eog_anmelden_without_readable_master_data_is_refused() {
     c.state.marktd_client = None;
     let err = dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.eog.anmelden",
         &support::geli_eog_anmeldung(MALO, LF_MP),
     )
@@ -378,15 +393,21 @@ pub(crate) async fn rendered_44014() -> mako_engine::outbox::OutboxMessage {
     let c = combined().await;
     dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.eog.anmelden",
         &support::geli_eog_anmeldung(MALO, LF_MP),
     )
     .await
     .expect("geli.eog.anmelden spawns");
     c.loopback().await;
-    dispatch_command(&c.state, "geli.eog.bestaetigen", &bestaetigung())
-        .await
-        .expect("the LF answers");
+    dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "geli.eog.bestaetigen",
+        &bestaetigung(),
+    )
+    .await
+    .expect("the LF answers");
     let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
     OutboxStore::pending(&*c.store, 100, now)
         .await
@@ -418,6 +439,7 @@ async fn geli_eog_bestaetigen_without_an_lf_fact_is_refused() {
     let c = combined().await;
     dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.eog.anmelden",
         &support::geli_eog_anmeldung(MALO, LF_MP),
     )
@@ -430,9 +452,14 @@ async fn geli_eog_bestaetigen_without_an_lf_fact_is_refused() {
     for missing in ["bilanzkreis", "abrechnungsintervall_monate"] {
         let mut body = bestaetigung();
         body.as_object_mut().expect("an object").remove(missing);
-        let err = dispatch_command(&c.state, "geli.eog.bestaetigen", &body)
-            .await
-            .expect_err("a 44014 without it is refused");
+        let err = dispatch_command(
+            &c.state,
+            mako_engine::envelope::Akteur::System,
+            "geli.eog.bestaetigen",
+            &body,
+        )
+        .await
+        .expect_err("a 44014 without it is refused");
         assert!(
             format!("{err:?}").contains(missing),
             "the refusal names {missing:?}: {err:?}"
@@ -457,6 +484,7 @@ async fn a_combined_deployment_runs_the_gas_eog_to_its_answer() {
     // 1. The GNB assigns the Marktlokation to its own Grundversorger.
     let gnb = match dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.eog.anmelden",
         &support::geli_eog_anmeldung(MALO, LF_MP),
     )
@@ -482,9 +510,14 @@ async fn a_combined_deployment_runs_the_gas_eog_to_its_answer() {
     // 3. The LF confirms the Ersatz-/Grundversorgung out of `E_3008`, stating
     //    the two facts of its own a 44014 carries beside the Marktlokation's
     //    record; the loopback below holds the rendering to its profile.
-    let answered = dispatch_command(&c.state, "geli.eog.bestaetigen", &bestaetigung())
-        .await
-        .expect("the LF answers its own process");
+    let answered = dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "geli.eog.bestaetigen",
+        &bestaetigung(),
+    )
+    .await
+    .expect("the LF answers its own process");
     assert!(
         matches!(answered, DispatchOutcome::Dispatched { process_id } if process_id == lf),
         "geli.eog.bestaetigen answers the LF's process, got {answered:?}"
@@ -568,6 +601,7 @@ async fn geli_beendigung_zuordnung_anfragen_renders_a_44010_its_profile_accepts(
     let c = combined().await;
     let gnb = match dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.beendigung-zuordnung.anfragen",
         &abmeldungsanfrage(),
     )
@@ -627,6 +661,7 @@ async fn the_lfa_widerspruch_resumes_the_gas_anmeldung() {
     let c = combined().await;
     let gnb = match dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.beendigung-zuordnung.anfragen",
         &abmeldungsanfrage(),
     )
@@ -645,6 +680,7 @@ async fn the_lfa_widerspruch_resumes_the_gas_anmeldung() {
 
     dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "geli.beendigung-zuordnung.ablehnen",
         &serde_json::json!({ "malo_id": MALO, "antwort_code": "Z12" }),
     )

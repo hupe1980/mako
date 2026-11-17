@@ -1,0 +1,38 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Freigaben" [level=1]
+  - paragraph: Was die Prozessüberwachung einer Person zur Entscheidung vorlegt — die nächste Frist zuerst.
+  - region "Offene Freigaben":
+    - grid "Offene Freigaben":
+      - row "Anmeldung eines verbundenen Lieferanten (Antwortfrist 2026-11-05)" [selected]:
+        - 'gridcell "Anmeldung eines verbundenen Lieferanten (Antwortfrist 2026-11-05) Antwort offen · PID 55001 · 51238696012 Frist: in 1 Tag"':
+          - text: Anmeldung eines verbundenen Lieferanten (Antwortfrist 2026-11-05) Antwort offen · PID 55001 · 51238696012
+          - time: "Frist: in 1 Tag"
+  - paragraph: Antwort offen · PID 55001
+  - heading "Anmeldung eines verbundenen Lieferanten (Antwortfrist 2026-11-05)" [level=2]
+  - text: entscheiden bis
+  - time: "Frist: in 1 Tag"
+  - button "MaLo 51238696012"
+  - heading "Entscheidung" [level=3]
+  - radiogroup "Entscheidung":
+    - radio "Freigeben"
+    - text: Freigeben
+    - radio "Ablehnen"
+    - text: Ablehnen
+  - button "Freigeben" [disabled]
+  - region "Fragen":
+    - textbox "Frage an den Assistenten":
+      - /placeholder: Frag den Assistenten …  ⌘J
+    - button "Fragen" [disabled]
+    - paragraph: Antwortet mit claude-sonnet-5 · anthropic · liest nur, handelt nie
+    - button "Was schlägst du vor?"
+    - button "Warum liegt das bei uns?"
+    - button "Was kam zuletzt an?"
+  - region "Verlauf":
+    - heading "Verlauf" [level=2]
+    - text: ← Eingang · Ausgang →
+    - list:
+      - listitem:
+        - paragraph: Eingang PID 55001
+        - paragraph: 04.11.2026, 09:00 Uhr · UTILMD-2026-11-04-0001

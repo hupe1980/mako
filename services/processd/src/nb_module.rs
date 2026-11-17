@@ -1784,6 +1784,7 @@ fn queue_entry(
         ),
         window.expires_at,
         config.tenant.clone(),
+        "nb-module",
     )
     .with_commands(accept, reject, Some("NB"));
     if let Some(baum) = meta.baum {
@@ -1803,7 +1804,7 @@ fn queue_entry(
 /// Anmeldung and Abmeldung take **different commands**, and both resolve from
 /// the PID alone: an Abmeldung answered with `gpke.lieferbeginn.bestaetigen`
 /// would drive the wrong response PID onto the wire.
-fn answer_commands(pid: u32) -> (&'static str, &'static str) {
+pub(crate) fn answer_commands(pid: u32) -> (&'static str, &'static str) {
     match pid {
         44_001 => (
             mako_markt::commands::GELI_LIEFERBEGINN_BESTAETIGEN,

@@ -275,6 +275,11 @@ pub struct ScheduleTimeSeries {
 /// reduction document.
 ///
 /// XSD version: 1.1f (Fehlerkorrektur 2026-02-19)  
+/// Anwendungstabelle: AWT 1.1g from 01.04.2027 (1.1f before). Its one change
+/// adds `11YRBAHNSTROM--P` to `ConnectingArea`, `InArea` and `OutArea` of five
+/// Use-Cases (Änderungshistorie Redispatch 2.0, 01.10.2026, X15156, S. 37–38);
+/// [`crate::types::ControlZone`] already admits it everywhere, so
+/// no verdict changes on the date.  
 /// Namespace: `urn:entsoe.eu:wgedi:errp:activationdocument:5:0`
 ///
 /// Three document types share this format:

@@ -39,7 +39,7 @@
 //!
 //! // Spawn a new process.
 //! let process = ctx.spawn::<MyWorkflow>(TenantId::new(), WorkflowId::new("…", "FV2024-10-01"));
-//! let ran = process.run(my_command, RunOptions::new()).await?;
+//! let ran = process.run(my_command, RunOptions::system()).await?;
 //!
 //! // Reconstruct typed state by replaying all events.
 //! let state = process.state().await?;

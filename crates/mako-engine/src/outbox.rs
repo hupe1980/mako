@@ -132,6 +132,13 @@ pub struct PendingOutbox {
     ///
     /// [`RunOptions::received_at`]: crate::process::RunOptions::received_at
     pub occurred_at: Option<OffsetDateTime>,
+    /// The process's most human actor up to and including this command —
+    /// set by [`Process::run`], which replays the stream and knows it. `None`
+    /// on an entry appended outside a run, which then reports its own event's
+    /// actor.
+    ///
+    /// [`Process::run`]: crate::process::Process::run
+    pub(crate) eingriff: Option<crate::envelope::Eingriffsklasse>,
 }
 
 impl PendingOutbox {
@@ -168,6 +175,7 @@ impl PendingOutbox {
             payload_schema: None,
             caused_by_event_index: 0,
             occurred_at: None,
+            eingriff: None,
         }
     }
 
@@ -369,6 +377,13 @@ pub struct OutboxMessage {
     /// across the asynchronous outbox boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_context: Option<Box<str>>,
+
+    /// The most human actor of the process up to and including the event that
+    /// caused this message — its class only, never the principal, which stays
+    /// in the event store. The ERP notification's CloudEvent carries it as the
+    /// `makoakteur` extension, so the process's terminal notification states
+    /// how the process was handled even when the person's act enqueued none.
+    pub akteur: crate::envelope::Eingriffsklasse,
 }
 
 /// Materialise `pending` into the [`OutboxMessage`] a store enqueues, from the
@@ -409,6 +424,7 @@ pub(crate) fn materialise(
         first_attempt_at: None,
         workflow_name: env.workflow_id.name.clone(),
         format_version: Some(env.workflow_id.format_version.clone()),
+        akteur: pending.eingriff.unwrap_or_else(|| env.akteur.klasse()),
     }
 }
 
@@ -416,7 +432,8 @@ impl OutboxMessage {
     /// Construct a new outbox message.
     ///
     /// `message_id` and `created_at` are generated automatically.
-    /// `attempt_count` is initialized to `0`.
+    /// `attempt_count` is initialized to `0`; the actor is the system's, as
+    /// no person's event causes a message built here.
     ///
     /// Call [`OutboxMessage::with_deliver_after`] to schedule deferred
     /// delivery.
@@ -456,6 +473,7 @@ impl OutboxMessage {
             workflow_name: "".into(),
             format_version: None,
             trace_context: crate::trace_ctx::current().map(Into::into),
+            akteur: crate::envelope::Eingriffsklasse::System,
         }
     }
 
@@ -522,6 +540,7 @@ pub fn process_failed_notice(undelivered: &OutboxMessage, reason: &str) -> Outbo
         workflow_name: undelivered.workflow_name.clone(),
         format_version: undelivered.format_version.clone(),
         trace_context: undelivered.trace_context.clone(),
+        akteur: undelivered.akteur,
     }
 }
 

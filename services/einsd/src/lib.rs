@@ -30,6 +30,7 @@ pub mod mcp_server;
 pub mod models;
 pub mod pg;
 pub mod pg_einspeiser;
+pub mod reads;
 pub mod routes;
 pub mod sect52;
 pub mod settle;

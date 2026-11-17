@@ -17,6 +17,9 @@
 //! | `get_queue_entry`           | One Freigabe by its UUID (typed `Freigabe`) |
 //! | `approve_queue_entry`       | Approve a pending queue entry (dispatch its answer) |
 //! | `reject_queue_entry`        | Reject a pending queue entry (dispatch its refusal) |
+//! | `rehearse_decision`         | A decision rehearsed: the route's checks and the body it would send, nothing claimed or sent |
+//! | `get_counterparty_record`   | One counterparty's Akte in one role over a period (typed `CounterpartyRecord`) |
+//! | `list_counterparties`       | Every counterparty and role that owed answers in a period |
 //!
 //! The process read model adds seven tools and two prompts
 //! (`obs::mcp`); an NB build adds the four Sperrauftrag tools and
@@ -79,6 +82,28 @@ fn self_base_url(makod_url: &str) -> Option<String> {
     Some(format!("{scheme}://{host}:8580"))
 }
 
+/// A decision the REST route refused, as the tool's error: the status and
+/// the route's problem body — its stable `code` (`pruefung_abgelehnt`,
+/// `nicht_geprueft`, `stale_body`, `already_decided`, …) and the rule — so an
+/// agent or a person reads why, not only that.
+async fn decision_refused(verb: &str, resp: reqwest::Response) -> CallToolResult {
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    decision_refusal(verb, status, &body)
+}
+
+fn decision_refusal(verb: &str, status: u16, body: &serde_json::Value) -> CallToolResult {
+    let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
+    let detail = body.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+    let mut blocks = vec![ContentBlock::text(format!(
+        "{verb} refused: HTTP {status} {code}: {detail}"
+    ))];
+    if let Ok(b) = ContentBlock::json(body.clone()) {
+        blocks.push(b);
+    }
+    CallToolResult::error(blocks)
+}
+
 #[derive(Clone)]
 pub struct ProcessdMcpState {
     pub pool: PgPool,
@@ -90,6 +115,27 @@ pub struct ProcessdMcpState {
     pub makod_api_key: secrecy::SecretString,
     /// The operator policy and posture the runner built at boot.
     pub policy: mako_service::policy::PolicyReport,
+}
+
+impl ProcessdMcpState {
+    /// The verified caller's Marktrollen, which a tool keeps its rows to as
+    /// the REST twin does. A caller that cannot be verified, or a key that
+    /// declares no role, is refused — never answered with the tenant's rows
+    /// unfiltered.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request` naming the missing roles.
+    pub fn caller_roles(&self, headers: &axum::http::HeaderMap) -> Result<Vec<String>, McpError> {
+        match self.auth.roles(headers) {
+            Some(rollen) if !rollen.is_empty() => Ok(rollen),
+            _ => Err(McpError::invalid_request(
+                "this tool keeps its rows to the caller's Marktrollen, and the caller \
+                 carries none — give the key `roles`",
+                None,
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -160,6 +206,20 @@ pub struct ListQueueParams {
     /// every role's when absent.
     #[serde(default)]
     pub marktrolle: Option<String>,
+    /// Only the entries of this process (its UUID) — every Freigabe a
+    /// Prozess holds, however long the queue.
+    #[serde(default)]
+    pub process_id: Option<String>,
+    /// Skip this many entries first — the next page starts at the previous
+    /// `offset` plus its `count` (default 0).
+    #[serde(default)]
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListKlaerfaelleParams {
+    /// At most this many cases (default 50, at most 200).
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -204,6 +264,10 @@ pub struct QueueActionParams {
     /// among the facts it still needs.
     #[serde(default)]
     pub enfg: Option<String>,
+    /// The `body_sha256` `rehearse_decision` reported for the body you were
+    /// shown; the decision is refused when the body it would send is another.
+    #[serde(default)]
+    pub body_sha256: Option<String>,
 }
 
 impl QueueActionParams {
@@ -218,6 +282,7 @@ impl QueueActionParams {
             versorgungsart: self.versorgungsart.clone(),
             abrechnungsintervall_monate: self.abrechnungsintervall_monate,
             enfg: self.enfg.clone(),
+            body_sha256: self.body_sha256.clone(),
         }
     }
 }
@@ -243,7 +308,10 @@ impl ProcessdMcpHandler {
     /// Every tool and prompt this build serves, in one place for the handler
     /// and the snapshot test.
     fn routers() -> (ToolRouter<Self>, PromptRouter<Self>) {
-        let tool_router = Self::tool_router() + Self::obs_tool_router();
+        let tool_router = Self::tool_router()
+            + Self::obs_tool_router()
+            + Self::decision_probe_tool_router()
+            + Self::counterparty_tool_router();
         let prompt_router = Self::prompt_router() + Self::obs_prompt_router();
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         let (tool_router, prompt_router) = (
@@ -426,10 +494,46 @@ are not counted. `target` is processd's operating target, not a regulatory one, 
     }
 
     #[tool(
+        description = "Open Klärfälle — one per message mako could not bring to its end: an \
+APERAK rejection, a dead letter, a refusing answer, a lapsed Antwortfrist — the earliest due date \
+first, those without a Frist last. Each names its cause as a code in the list that defines it \
+(`ursache_code`, `ursache_liste`), the BDEW's wording where the list publishes one \
+(`bedeutung` — quote it, never paraphrase a code), the tabulated `aktion` with its `hinweis`, the \
+correcting `befehl` where a table names one, and `due_at` (the business Antwortfrist, null is \
+„keine Frist“) with `overdue`. Every field is a table lookup; nothing here is model output. \
+Read-only.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::klaerfall::Klaerfaelle>()
+    )]
+    async fn list_klaerfaelle(
+        &self,
+        Parameters(params): Parameters<ListKlaerfaelleParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        let rollen = self.state.caller_roles(&parts.headers)?;
+        let limit = params.limit.unwrap_or(50).clamp(1, 200);
+        let cases = crate::klaerfall::list_open(
+            &self.state.pool,
+            &self.state.tenant,
+            &rollen,
+            i64::from(limit),
+            time::OffsetDateTime::now_utc(),
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::structured(
+            serde_json::to_value(cases)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+        ))
+    }
+
+    #[tool(
         description = "Approval-queue entries (Freigaben) of every role, the earliest `expires_at` \
 first (status: Pending by default, or Approved/Rejected/Expired; `marktrolle` narrows to one \
-role). Each is `gehalten` — a decided answer approved exactly as shown in `antwort` — or \
-`eskaliert` — the person states the answer: a code from `zustimmung` to approve, from \
+role, `process_id` to one process's; page with `offset`). Each is `gehalten` — a decided \
+answer approved exactly as shown in `antwort` — or `eskaliert` — the person states the answer: a code from `zustimmung` to approve, from \
 `ablehnung` to reject, each with its Entscheidungsbaum (`ebd`, state it as `antwort_tree`). \
 Quote `bedeutung`; a code means something only within its tree. `saturated` means at least \
 `limit` entries matched.",
@@ -448,9 +552,25 @@ Quote `bedeutung`; a code means something only within its tree. `saturated` mean
             .map(|s| s.parse().unwrap_or(QueueStatus::Pending))
             .or(Some(QueueStatus::Pending));
         let limit = params.limit.unwrap_or(50).clamp(1, 200);
-        let marktrolle = params.marktrolle.as_deref().filter(|r| !r.is_empty());
+        let process_id =
+            match params.process_id.as_deref().filter(|p| !p.is_empty()) {
+                Some(p) => Some(p.parse::<uuid::Uuid>().map_err(|_| {
+                    McpError::invalid_params("process_id must be a valid UUID", None)
+                })?),
+                None => None,
+            };
+        let filter = crate::pg::approval::QueueFilter {
+            status,
+            marktrolle: params.marktrolle.clone().filter(|r| !r.is_empty()),
+            process_id,
+        };
         let entries = queue
-            .list(&self.state.tenant, status, marktrolle, limit)
+            .list_page(
+                &self.state.tenant,
+                &filter,
+                limit,
+                params.offset.unwrap_or(0),
+            )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let freigaben: Vec<crate::freigabe::Freigabe> = entries
@@ -553,10 +673,7 @@ hour — check it with `list_pending_approvals` first.",
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None))
             }
-            Ok(resp) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "approve failed: HTTP {}",
-                resp.status()
-            ))])),
+            Ok(resp) => Ok(decision_refused("approve", resp).await),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -618,10 +735,7 @@ For the aggregated parity figures use `get_parity_report`.",
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None))
             }
-            Ok(resp) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "reject failed: HTTP {}",
-                resp.status()
-            ))])),
+            Ok(resp) => Ok(decision_refused("reject", resp).await),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -818,7 +932,8 @@ fn tool_action(name: &str) -> Option<&'static str> {
         | "get_stp_rate"
         | "get_stp_breakdown_by_erc"
         | "list_affiliate_decisions" => "read-decisions",
-        "list_pending_approvals" | "get_queue_entry" => "read-queue",
+        "list_pending_approvals" | "get_queue_entry" | "rehearse_decision" => "read-queue",
+        "list_klaerfaelle" => "read-case",
         // Irreversible: dispatches `gpke.nb-lieferende.bestaetigen` (PID 55008)
         // or `geli.stornierung.initiieren`. The market message cannot be
         // withdrawn once sent.
@@ -829,6 +944,7 @@ fn tool_action(name: &str) -> Option<&'static str> {
         | "list_open_processes"
         | "count_open_processes" => "read-process",
         "get_kpi_report" | "get_parity_report" | "get_process_stp_rate" => "read-kpi",
+        "get_counterparty_record" | "list_counterparties" => "read-counterparty",
         "list_overdue_processes" => "read-overdue",
         // The Sperrauftrag queue — dispatch data naming the household to be
         // disconnected, held to the role its REST reads require.
@@ -967,6 +1083,23 @@ pub fn router(state: Arc<ProcessdMcpState>, _shutdown: CancellationToken) -> Rou
 mod tests {
     use super::*;
 
+    /// The MCP decision tools reach the REST route, which runs makod's
+    /// pre-send check before it marks anything; an unchecked or refused body
+    /// comes back as the tool's error carrying the route's `code`, so an
+    /// agent cannot read a refused approval as a transport hiccup.
+    #[test]
+    fn an_unchecked_agent_proposal_is_not_approvable_unchanged_over_mcp() {
+        let r = decision_refusal(
+            "approve",
+            422,
+            &serde_json::json!({ "code": "nicht_geprueft", "detail": "makod did not check" }),
+        );
+        assert_eq!(r.is_error, Some(true));
+        let text = serde_json::to_string(&r.content).expect("json");
+        assert!(text.contains("nicht_geprueft"), "{text}");
+        assert!(text.contains("HTTP 422"), "{text}");
+    }
+
     /// Every tool the surface exposes maps to an action, and the two
     /// irreversible ones need more than the blanket `use-mcp` grant.
     ///
@@ -1062,7 +1195,10 @@ mod tests {
     /// it). An NB build adds the Sperrauftrag tools, which no Desk view reads.
     #[test]
     fn the_tool_contract_matches_the_snapshot() {
-        let router = ProcessdMcpHandler::tool_router() + ProcessdMcpHandler::obs_tool_router();
+        let router = ProcessdMcpHandler::tool_router()
+            + ProcessdMcpHandler::obs_tool_router()
+            + ProcessdMcpHandler::decision_probe_tool_router()
+            + ProcessdMcpHandler::counterparty_tool_router();
         let tools: Vec<serde_json::Value> = router
             .list_all()
             .iter()

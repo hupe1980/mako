@@ -114,7 +114,7 @@ pub async fn rebuild(
             fresh += 1;
             report.read += 1;
             match project(state, &row.envelope).await? {
-                Projected::Upserted => report.projected += 1,
+                Projected::Upserted | Projected::Beendet { .. } => report.projected += 1,
                 Projected::Ignored => report.ignored += 1,
             }
             if row.received_at != last_at {

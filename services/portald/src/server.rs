@@ -103,8 +103,8 @@ impl Daemon for Portald {
 
 /// The portal routes.
 ///
-/// Every one of them is customer-scoped and authorises through
-/// [`crate::auth::authorize`]; the infra routes (`/health/*`, `/metrics`) are
+/// Every one of them but `/nachrechnen/{token}` is customer-scoped and
+/// authorises through [`crate::auth::authorize`]; the infra routes (`/health/*`, `/metrics`) are
 /// the runner's and are not mounted here.
 pub fn router() -> Router {
     Router::new()
@@ -178,4 +178,10 @@ pub fn router() -> Router {
             "/api/v1/portal/{malo_id}/sepa",
             put(handlers::put_portal_sepa),
         )
+        // ── Public, token-addressed: the one route without a customer session
+        // (see `crate::nachrechnen`).
+        .route("/nachrechnen/{token}", get(crate::nachrechnen::get_page))
+        .layer(Extension(std::sync::Arc::new(
+            crate::nachrechnen::Limiter::default(),
+        )))
 }

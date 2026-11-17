@@ -337,7 +337,13 @@ mod tests {
         ];
         let ohne = state(None).await;
         for (command, pid) in commands {
-            let r = super::super::dispatch_command(&ohne, command, &p(pid)).await;
+            let r = super::super::dispatch_command(
+                &ohne,
+                mako_engine::envelope::Akteur::System,
+                command,
+                &p(pid),
+            )
+            .await;
             assert!(
                 matches!(r, Err(DispatchError::EdiUnzulaessig(_))),
                 "{command}: {r:?}"
@@ -346,7 +352,13 @@ mod tests {
         let client = marktd(HashMap::from([(LF, partner(Some(true), Some(true)))])).await;
         let mit = state(Some(client)).await;
         for (command, pid) in commands {
-            let r = super::super::dispatch_command(&mit, command, &p(pid)).await;
+            let r = super::super::dispatch_command(
+                &mit,
+                mako_engine::envelope::Akteur::System,
+                command,
+                &p(pid),
+            )
+            .await;
             assert!(
                 !matches!(
                     r,

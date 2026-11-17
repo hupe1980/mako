@@ -60,7 +60,7 @@ fn receive_cmd(validation_passed: bool) -> LfAbmeldungCommand {
 async fn receive_ankuendigung_validation_passed_transitions_correctly() {
     let p = make_process();
 
-    p.run(receive_cmd(true), RunOptions::new())
+    p.run(receive_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveAnkuendigung must succeed");
 
@@ -76,7 +76,7 @@ async fn receive_ankuendigung_validation_passed_transitions_correctly() {
 async fn receive_ankuendigung_validation_failed_transitions_to_rejected() {
     let p = make_process();
 
-    p.run(receive_cmd(false), RunOptions::new())
+    p.run(receive_cmd(false), RunOptions::system())
         .await
         .expect("ReceiveAnkuendigung with failed validation must still succeed at command level");
 
@@ -92,7 +92,7 @@ async fn receive_ankuendigung_validation_failed_transitions_to_rejected() {
 async fn send_antwort_bestaetigung_transitions_to_antwort_gesendet() {
     let p = make_process();
 
-    p.run(receive_cmd(true), RunOptions::new())
+    p.run(receive_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveAnkuendigung");
 
@@ -100,7 +100,7 @@ async fn send_antwort_bestaetigung_transitions_to_antwort_gesendet() {
         LfAbmeldungCommand::SendAntwort {
             antwort: mako_gpke::LfAntwort::zustimmung("A10", "E_0609"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("SendAntwort Bestätigung must succeed from ValidationPassed");
@@ -123,7 +123,7 @@ async fn send_antwort_bestaetigung_transitions_to_antwort_gesendet() {
 async fn send_antwort_ablehnung_transitions_to_rejected() {
     let p = make_process();
 
-    p.run(receive_cmd(true), RunOptions::new())
+    p.run(receive_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveAnkuendigung");
 
@@ -132,7 +132,7 @@ async fn send_antwort_ablehnung_transitions_to_rejected() {
             antwort: mako_gpke::LfAntwort::ablehnung("A99", "E_0609")
                 .with_bemerkung("Belieferung läuft noch; NB-Kündigung unbegründet"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("SendAntwort Ablehnung must succeed");
@@ -149,18 +149,18 @@ async fn send_antwort_ablehnung_transitions_to_rejected() {
 async fn beenden_bestaetigen_transitions_to_beendet() {
     let p = make_process();
 
-    p.run(receive_cmd(true), RunOptions::new())
+    p.run(receive_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveAnkuendigung");
     p.run(
         LfAbmeldungCommand::SendAntwort {
             antwort: mako_gpke::LfAntwort::zustimmung("A10", "E_0609"),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("SendAntwort Bestätigung");
-    p.run(LfAbmeldungCommand::BeendenBestaetigen, RunOptions::new())
+    p.run(LfAbmeldungCommand::BeendenBestaetigen, RunOptions::system())
         .await
         .expect("BeendenBestaetigen must succeed from AntwortGesendet");
 
@@ -180,7 +180,7 @@ async fn beenden_bestaetigen_transitions_to_beendet() {
 async fn deadline_expiry_in_validation_passed_is_a_frist_breach() {
     let p = make_process();
 
-    p.run(receive_cmd(true), RunOptions::new())
+    p.run(receive_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveAnkuendigung");
 
@@ -190,7 +190,7 @@ async fn deadline_expiry_in_validation_passed_is_a_frist_breach() {
             deadline_id,
             label: LF_ABMELDUNG_ANTWORT_WINDOW_LABEL.into(),
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("TimeoutExpired must succeed");
@@ -232,7 +232,7 @@ async fn deadline_expiry_in_eingegangen_is_decided_by_the_guard() {
 
     // After receiving the Ankündigung, the state is ValidationPassed.
     // on_deadline must return TimeoutExpired for that state.
-    p.run(receive_cmd(true), RunOptions::new())
+    p.run(receive_cmd(true), RunOptions::system())
         .await
         .expect("ReceiveAnkuendigung");
     let state = p.state().await.expect("state");
@@ -253,7 +253,7 @@ async fn send_antwort_from_new_returns_error() {
             LfAbmeldungCommand::SendAntwort {
                 antwort: mako_gpke::LfAntwort::zustimmung("A10", "E_0609"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 
@@ -279,7 +279,7 @@ async fn wrong_pid_at_receive_returns_error() {
                 validation_passed: true,
                 validation_errors: vec![],
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await;
 

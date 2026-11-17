@@ -61,6 +61,14 @@ What "about" means depends on the kind:
 | `INVOICE` | `model` — the EN 16931 semantic model | outputd projects the page view from it, so the projection the publish gate proves templates against is the one production feeds them |
 | every other kind | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
 
+An `INVOICE` may carry `nachrechnen_url` — billingd's public Nachrechnen link
+for the record. outputd adds it to the view as `nachrechnen` (`url`, and
+`qr_svg`, the same link as a QR code at error correction level M), which the
+reference layout prints under the totals; an `http(s)` link only
+(**`422 INVALID_NACHRECHNEN_URL`**), and on no other kind
+(**`422 NACHRECHNEN_ONLY_ON_AN_INVOICE`**). It is not an EN 16931 term, so the
+embedded CII does not carry it.
+
 A Textform letter is written in the deployment's
 [`[policy] anrede`](#policy-anrede): outputd adds `anrede` (`"sie"` or `"du"`)
 to the view before its template renders it, and answers with
@@ -264,7 +272,10 @@ A template exports exactly one function:
 outputd from the EN 16931 model: the §14 Abs. 4 UStG Pflichtangaben, lines, VAT
 breakdown and totals, each field documented with its BT/BG term. Amounts are
 exact decimal strings at their term's scale (money 2, unit price 4); a template
-pads and never truncates. `GET /api/v1/templates/reference/{kind}` serves mako's
+pads and never truncates. `nachrechnen` is `none` unless the issuer sent a
+link — read it with `invoice.at("nachrechnen", default: none)` and place the
+QR code with `image(bytes(n.qr_svg), format: "svg")`; the gate's specimen
+carries one. `GET /api/v1/templates/reference/{kind}` serves mako's
 reference layout (DIN 5008, German number formatting), compiled by the test
 suite against the gate's specimen on every run.
 

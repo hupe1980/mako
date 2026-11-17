@@ -82,7 +82,7 @@ use crate::{
         },
         tranche::{get_tranche, list_tranchen, put_tranche},
         utilmd_stammdaten,
-        versorgung::{get_versorgungsstatus, get_versorgungsstatus_history, put_versorgungsstatus},
+        versorgung::put_versorgungsstatus,
         zuordnungsermaechtigung::list_zuordnungsermaechtigungen,
     },
     openapi::openapi_router,
@@ -260,7 +260,9 @@ impl Daemon for Marktd {
             shutdown,
         );
 
+        let (documented, doc) = crate::openapi::documented();
         let app = Router::new()
+            .merge(documented)
             .merge(malo_routes())
             .merge(melo_routes())
             .merge(device_routes())
@@ -271,7 +273,7 @@ impl Daemon for Marktd {
             .merge(subscription_routes())
             .merge(admin_routes())
             .route(&cfg.webhook.inbound_path, post(ingest_event))
-            .merge(openapi_router())
+            .merge(openapi_router(doc))
             .with_state(state)
             // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
             // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
@@ -350,25 +352,17 @@ fn malo_routes() -> Router<S> {
         // The Lokationsbündel of a Marktlokation on a Stichtag (makod reads it
         // for the Geschäftsdatenanfrage answers 55035/55095/55060), and the
         // NB's Angaben of it no BO4E object carries.
-        .route(
-            "/api/v1/malos/{id}/lokationsbuendel",
-            get(lokationsbuendel::get_lokationsbuendel),
-        )
+        // `GET …/lokationsbuendel` is a shared read, mounted with its document
+        // entry by `openapi::documented`.
         .route(
             "/api/v1/malos/{id}/lokationsbuendel-angaben",
             put(lokationsbuendel::put_lokationsbuendel_angaben),
         )
         .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
         .route("/api/v1/malos/{id}/buendel", get(get_malo_buendel))
-        // VersorgungsStatus per MaLo, with point-in-time and full history.
-        .route(
-            "/api/v1/versorgung/{malo_id}",
-            get(get_versorgungsstatus).put(put_versorgungsstatus),
-        )
-        .route(
-            "/api/v1/versorgung/{malo_id}/history",
-            get(get_versorgungsstatus_history),
-        )
+        // VersorgungsStatus per MaLo. The GETs (current, point-in-time and
+        // history) are shared reads mounted by `openapi::documented`.
+        .route("/api/v1/versorgung/{malo_id}", put(put_versorgungsstatus))
 }
 
 fn melo_routes() -> Router<S> {

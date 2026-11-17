@@ -13,7 +13,8 @@
 //!
 //! ## Access control
 //!
-//! - `GET` — `read-utilmd-stammdaten`: the bündel is part of the same record
+//! - `GET` — `read-utilmd-stammdaten`: the bündel is part of the same record;
+//!   `GET /api/v1/lokationsbuendelstrukturen`, the Codeliste naming its code, too
 //! - `PUT` — `write-netznutzungsdaten`: NB role only
 
 use std::sync::Arc;
@@ -22,7 +23,6 @@ use axum::{
     Extension,
     extract::{Path, Query},
     http::StatusCode,
-    response::IntoResponse,
 };
 use mako_markt::domain::MaloId;
 use mako_markt::lokationsbuendel::{
@@ -77,29 +77,61 @@ fn malo_id(raw: &str) -> ApiResult<MaloId> {
         .map_err(|e| ApiError::bad_request(format!("invalid malo_id: {e}")))
 }
 
-/// `GET /api/v1/malos/{malo_id}/lokationsbuendel?stichtag=YYYY-MM-DD`.
+/// `GET /api/v1/malos/{id}/lokationsbuendel?stichtag=YYYY-MM-DD`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malos/{id}/lokationsbuendel",
+    tag = "malo",
+    operation_id = "get_lokationsbuendel",
+    params(
+        ("id" = String, Path, description = "11-digit Marktlokations-ID"),
+        ("stichtag" = String, Query, description = "The date the bündel is resolved for (YYYY-MM-DD)"),
+    ),
+    responses(
+        (status = 200, description = "The Lokationsbündel on the Stichtag", body = crate::reads::Lokationsbuendel),
+        (status = 403, description = "Missing read-utilmd-stammdaten"),
+        (status = 404, description = "`malo_not_found`"),
+        (status = 422, description = "`invalid_malo_id` or an invalid `stichtag`"),
+    )
+)]
 pub async fn get_lokationsbuendel(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(repo): Extension<LokationsbuendelRepoExt>,
+    Extension(pool): Extension<sqlx::PgPool>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Path(raw): Path<String>,
     Query(q): Query<StichtagQuery>,
-) -> ApiResult<impl IntoResponse> {
+) -> ApiResult<Json<crate::reads::Lokationsbuendel>> {
     enforcer
         .check(&claims.principal(), "read-utilmd-stammdaten", &tenant)
         .map_err(|e| ApiError::forbidden(e.to_string()))?;
-    let malo = malo_id(&raw)?;
-    let stichtag = mako_service::dates::parse_iso_date("stichtag", &q.stichtag)?;
-    match repo
-        .find_at(&tenant, malo.as_ref(), stichtag)
+    crate::reads::lokationsbuendel(&pool, &tenant, &raw, &q.stichtag)
         .await
-        .map_err(mdm_error)?
-    {
-        Some(buendel) => Ok(Json(buendel)),
-        None => Err(ApiError::not_found("no Marktlokation of this ID")
-            .with_fields(serde_json::json!({ "malo_id": malo.as_ref() }))),
-    }
+        .map(Json)
+}
+
+/// `GET /api/v1/lokationsbuendelstrukturen` — every published
+/// Lokationsbündelstruktur with its Bezeichnung, so a reader names a
+/// `lokationsbuendelcode` without a copy of the Codeliste.
+#[utoipa::path(
+    get,
+    path = "/api/v1/lokationsbuendelstrukturen",
+    tag = "malo",
+    operation_id = "list_lokationsbuendelstrukturen",
+    responses(
+        (status = 200, description = "The Codeliste der Lokationsbündelstrukturen", body = crate::reads::Lokationsbuendelstrukturen),
+        (status = 403, description = "Missing read-utilmd-stammdaten"),
+    )
+)]
+pub async fn list_lokationsbuendelstrukturen(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
+) -> ApiResult<Json<crate::reads::Lokationsbuendelstrukturen>> {
+    enforcer
+        .check(&claims.principal(), "read-utilmd-stammdaten", &tenant)
+        .map_err(|e| ApiError::forbidden(e.to_string()))?;
+    Ok(Json(crate::reads::lokationsbuendelstrukturen()))
 }
 
 /// `PUT /api/v1/malos/{malo_id}/lokationsbuendel-angaben` — store one dated

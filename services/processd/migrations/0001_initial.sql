@@ -66,6 +66,18 @@ CREATE TABLE approval_queue (
     -- evidence and the GoBD trail both have to say *who* decided.
     decided_by  TEXT,
     tenant      TEXT        NOT NULL,
+    -- Who proposed the held answer (`{"art":"regel","name":…}`), and the
+    -- SHA-256 of the RFC 8785 canonical `{command, body}` an approval would
+    -- dispatch with no operator input. NULL hash: an escalation, nothing
+    -- complete was proposed. A decision whose dispatched command and body hash
+    -- to it is „Freigabe unverändert"; any other is „Freigabe geändert".
+    vorschlag_quelle JSONB NOT NULL,
+    vorschlag_sha256 TEXT,
+    -- The same fingerprint of the command and body the decision dispatched,
+    -- written with the claim. A proposal's fate is read off it — the body the
+    -- proposal was checked for against the one that went out — never off a
+    -- client's report. NULL while pending and for a decision with no message.
+    gesendet_sha256 TEXT,
     UNIQUE (process_id, tenant)
 );
 
@@ -320,8 +332,16 @@ CREATE TABLE process_projections (
     state               TEXT        NOT NULL DEFAULT 'initiated',
     malo_id             TEXT,
     partner_mp_id       TEXT,
-    -- Market role of the counterparty (LF | NB | MSB | BKV | ÜNB)
+    -- The operator's own Marktrolle in this process (LF | NB | MSB | BIKO):
+    -- the `marktrole` marktd derives from the workflow name
+    -- (`marktrole_from_workflow`: `gpke-lf-anmeldung` → LF, `wim-*` → MSB),
+    -- not the counterparty's.
     mdm_role            TEXT,
+    -- The most human actor any event of the process named (CloudEvent
+    -- `makoakteur`), ordered system < freigabe < freigabe-geaendert < person;
+    -- the upsert never lowers it. NULL until an event names one.
+    eingriff            TEXT
+        CHECK (eingriff IN ('system','freigabe','freigabe-geaendert','person')),
     -- The BUSINESS Antwortfrist from mako_fristen::antwort — NOT the APERAK
     -- clock, which is minutes and arrives as its own de.mako.antwortfrist.abgelaufen
     -- event. NULL means no Festlegung this codebase has read quantifies the
@@ -590,3 +610,42 @@ CREATE INDEX so_pending_frist ON sperr_orders (tenant, ausfuehrung_faellig_am)
 -- Terminal orders still owing their IFTSTA, by Frist — the escalation sweep.
 CREATE INDEX so_iftsta_open   ON sperr_orders (tenant, iftsta_faellig_am)
     WHERE status IN ('executed', 'failed') AND iftsta_dispatched_at IS NULL;
+
+-- ── Klärfälle ────────────────────────────────────────────────────────────────
+-- One case per message mako could not bring to its end (`crate::klaerfall`).
+-- Cause and action come from code tables (ERC, dead-letter reasons, the
+-- Entscheidungsbaum of a refusal), never from a model; the due date is read
+-- from process_projections.deadline_at, so it has one source. Only codes are
+-- stored: a counterparty's free text never reaches a case.
+CREATE TABLE klaerfaelle (
+    id              UUID        PRIMARY KEY,
+    tenant          TEXT        NOT NULL,
+    -- The message the signal concerns, `process:<id>` for a refusal or a
+    -- lapse, `dead-letter:<id>` for a dead letter that names no message.
+    message_ref     TEXT        NOT NULL,
+    -- The MP-ID that sent the signal (the APERAK's or the dead letter's
+    -- sender); null for a signal about a process, which names no sender.
+    -- Part of the key: a message_ref is only unique per partner, so an APERAK
+    -- from another partner citing the same reference opens its own case and
+    -- never attaches to or closes this one.
+    partner_mp_id   TEXT,
+    process_id      UUID,
+    pid             INTEGER,
+    -- Every origin attached, the first one first.
+    origins         TEXT[]      NOT NULL
+        CHECK (cardinality(origins) > 0
+               AND origins <@ ARRAY['aperak','dead_letter','refusal','frist_missed']::text[]),
+    -- The first cause stands; a later signal attaches, it does not rewrite.
+    ursache_code    TEXT        NOT NULL,
+    ursache_liste   TEXT        NOT NULL,
+    aktion          TEXT        NOT NULL
+        CHECK (aktion IN ('retry_with_correction','escalate_to_operator','abort_process','wait_and_retry')),
+    hinweis         TEXT        NOT NULL,
+    state           TEXT        NOT NULL DEFAULT 'open'
+        CHECK (state IN ('open','resolved','dispatched')),
+    occurrences     INTEGER     NOT NULL DEFAULT 1,
+    opened_at       TIMESTAMPTZ NOT NULL,
+    last_signal_at  TIMESTAMPTZ NOT NULL,
+    UNIQUE NULLS NOT DISTINCT (tenant, partner_mp_id, message_ref)
+);
+CREATE INDEX klaerfaelle_open ON klaerfaelle (tenant, opened_at) WHERE state = 'open';

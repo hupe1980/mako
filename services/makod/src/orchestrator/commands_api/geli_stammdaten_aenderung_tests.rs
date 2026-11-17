@@ -49,30 +49,33 @@ async fn state_for(role: &str) -> CommandsApiState {
 
 /// The NB's 44112 arrived at the LF and passed its structural check.
 async fn seed_44112(state: &CommandsApiState) {
-    spawn_process::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow>(
-        &state.store,
-        state.tenant_id,
-        WorkflowId::new(
-            mako_geli_gas::stammdatenaenderung::WORKFLOW_NAME,
-            latest_format_version(),
+    als(
+        mako_engine::envelope::Akteur::System,
+        spawn_process::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow>(
+            &state.store,
+            state.tenant_id,
+            WorkflowId::new(
+                mako_geli_gas::stammdatenaenderung::WORKFLOW_NAME,
+                latest_format_version(),
+            ),
+            mako_geli_gas::GasStammdatenCommand::ReceiveAenderung {
+                pid: Pruefidentifikator::const_new(44112),
+                sender: MarktpartnerCode::new(PARTNER_MP_ID),
+                receiver: MarktpartnerCode::new(OWN_MP_ID),
+                location_id: MaLo::new(MALO_ID),
+                aenderungsdatum: "20261215".to_owned(),
+                patch: serde_json::json!({}),
+                vertragsbeginn: Some("20250101".to_owned()),
+                vorgangsnummer: Some("AEND-VG-1".to_owned()),
+                dokumentenart: Some("E03".to_owned()),
+                message_ref: MessageRef::new("AEND-1"),
+                validation_passed: true,
+                validation_errors: Vec::new(),
+                received_at: time::macros::datetime!(2026-11-09 10:00 UTC),
+            },
+            &[],
+            &[MALO_ID],
         ),
-        mako_geli_gas::GasStammdatenCommand::ReceiveAenderung {
-            pid: Pruefidentifikator::const_new(44112),
-            sender: MarktpartnerCode::new(PARTNER_MP_ID),
-            receiver: MarktpartnerCode::new(OWN_MP_ID),
-            location_id: MaLo::new(MALO_ID),
-            aenderungsdatum: "20261215".to_owned(),
-            patch: serde_json::json!({}),
-            vertragsbeginn: Some("20250101".to_owned()),
-            vorgangsnummer: Some("AEND-VG-1".to_owned()),
-            dokumentenart: Some("E03".to_owned()),
-            message_ref: MessageRef::new("AEND-1"),
-            validation_passed: true,
-            validation_errors: Vec::new(),
-            received_at: time::macros::datetime!(2026-11-09 10:00 UTC),
-        },
-        &[],
-        &[MALO_ID],
     )
     .await
     .expect("seed the inbound 44112");
@@ -111,6 +114,7 @@ async fn a_received_44112_is_answered_with_a_44115_the_gate_passes() {
     seed_44112(&state).await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         GELI_STAMMDATEN_AENDERUNG_BEANTWORTEN,
         &serde_json::json!({ "malo_id": MALO_ID, "antwort_code": "E15" }),
     )
@@ -133,6 +137,7 @@ async fn a_code_outside_the_columns_codeliste_is_refused_by_name() {
     seed_44112(&state).await;
     let err = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         GELI_STAMMDATEN_AENDERUNG_BEANTWORTEN,
         &serde_json::json!({ "malo_id": MALO_ID, "antwort_code": "E13" }),
     )
@@ -144,6 +149,7 @@ async fn a_code_outside_the_columns_codeliste_is_refused_by_name() {
 
     let err = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         GELI_STAMMDATEN_AENDERUNG_BEANTWORTEN,
         &serde_json::json!({ "malo_id": MALO_ID, "antwort_code": "E15", "grund": "x" }),
     )
@@ -181,6 +187,7 @@ async fn the_lf_sends_a_44109_its_column_accepts() {
     let state = state_for("LFG").await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         GELI_STAMMDATEN_AENDERUNG_SENDEN,
         &aenderung_44109(&[
             "ABRECHNUNGSINTERVALL_LF",
@@ -200,6 +207,7 @@ async fn the_lf_sends_a_44109_its_column_accepts() {
     // A second Änderung on the same Marktlokation waits for the first.
     let err = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         GELI_STAMMDATEN_AENDERUNG_SENDEN,
         &aenderung_44109(&["GRUPPENZUORDNUNG"]),
     )
@@ -221,6 +229,7 @@ async fn an_aenderung_naming_no_changed_group_or_a_foreign_one_is_refused() {
     ] {
         let err = dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             GELI_STAMMDATEN_AENDERUNG_SENDEN,
             &aenderung_44109(gruppen),
         )
@@ -231,23 +240,38 @@ async fn an_aenderung_naming_no_changed_group_or_a_foreign_one_is_refused() {
     // The 44120 carries its SG8 whole, named by no group.
     let mut bila = aenderung_44109(&["GRUPPENZUORDNUNG"]);
     bila["pid"] = serde_json::json!(44120);
-    let err = dispatch_command(&state, GELI_STAMMDATEN_AENDERUNG_SENDEN, &bila)
-        .await
-        .expect_err("a 44120 names no group");
+    let err = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        GELI_STAMMDATEN_AENDERUNG_SENDEN,
+        &bila,
+    )
+    .await
+    .expect_err("a 44120 names no group");
     assert!(format!("{err:?}").contains("GRUPPENZUORDNUNG"), "{err:?}");
     // The MSB's Änderungen are not sent from here.
     let mut msb = aenderung_44109(&[]);
     msb["pid"] = serde_json::json!(44159);
-    let err = dispatch_command(&state, GELI_STAMMDATEN_AENDERUNG_SENDEN, &msb)
-        .await
-        .expect_err("a 44159 is not assembled");
+    let err = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        GELI_STAMMDATEN_AENDERUNG_SENDEN,
+        &msb,
+    )
+    .await
+    .expect_err("a 44159 is not assembled");
     assert!(matches!(err, DispatchError::NotImplemented(_)), "{err:?}");
     // The 44112 is the GNB's.
     let mut nb = aenderung_44109(&["MARKTGEBIET"]);
     nb["pid"] = serde_json::json!(44112);
-    let err = dispatch_command(&state, GELI_STAMMDATEN_AENDERUNG_SENDEN, &nb)
-        .await
-        .expect_err("an LF deployment does not send a 44112");
+    let err = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        GELI_STAMMDATEN_AENDERUNG_SENDEN,
+        &nb,
+    )
+    .await
+    .expect_err("an LF deployment does not send a 44112");
     assert!(format!("{err:?}").contains("GNB"), "{err:?}");
     assert!(utilmd(&state).await.is_empty());
 }

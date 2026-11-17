@@ -2261,7 +2261,7 @@ async fn meldepflicht_erfuellt(state: &CommandsApiState, malo_id: &str, pid: u32
         if let Err(e) = process
             .run(
                 mako_gpke::BeendigungZuordnungCommand::MeldungGesendet { pid },
-                RunOptions::new().snapshot(&state.snapshot_store, state.snapshot_interval),
+                RunOptions::system().snapshot(&state.snapshot_store, state.snapshot_interval),
             )
             .await
         {

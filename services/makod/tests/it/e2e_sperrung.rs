@@ -185,7 +185,7 @@ impl MockLfn {
         };
 
         self.process
-            .run(cmd, RunOptions::new())
+            .run(cmd, RunOptions::system())
             .await
             .expect("LFN: execute ReceiveSperrung");
     }
@@ -202,7 +202,7 @@ impl MockLfn {
                     durchgefuehrt,
                     reason: reason.map(str::to_owned),
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("LFN: execute BestaetigueSperrung");
@@ -315,7 +315,7 @@ async fn e2e_sperrung_validation_failure() {
                     "LOC segment missing mandatory location identifier".to_owned(),
                 ],
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("ReceiveSperrung with invalid message must not panic");

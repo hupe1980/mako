@@ -98,7 +98,7 @@ async fn a_recorded_aktivierung_on_a_repealed_serie_is_reported() {
     let p = process(store.clone());
     p.run(
         receive(ZpSerie::TaeglicheAauez, ZpVorgang::Aktivierung),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Anfrage accepted");
@@ -128,11 +128,11 @@ async fn a_refused_anfrage_does_not_activate() {
     let p = process(store.clone());
     p.run(
         receive(ZpSerie::NetzzeitreiheBiko, ZpVorgang::Aktivierung),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Anfrage accepted");
-    p.run(antwort(false), RunOptions::new())
+    p.run(antwort(false), RunOptions::system())
         .await
         .expect("Ablehnung sent");
 
@@ -149,7 +149,7 @@ async fn an_unanswered_anfrage_does_not_activate() {
     let p = process(store.clone());
     p.run(
         receive(ZpSerie::NetzzeitreiheBiko, ZpVorgang::Aktivierung),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Anfrage accepted");
@@ -169,7 +169,7 @@ async fn a_family_that_answers_nothing_activates_on_the_record() {
     let p = process(store.clone());
     p.run(
         receive(ZpSerie::TaeglicheAauez, ZpVorgang::Aktivierung),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Anfrage accepted");
@@ -193,7 +193,7 @@ async fn a_confirmed_deaktivierung_on_another_stream_ends_it() {
     let p1 = process(store.clone());
     p1.run(
         receive(ZpSerie::TaeglicheAauez, ZpVorgang::Aktivierung),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Aktivierung accepted");
@@ -202,7 +202,7 @@ async fn a_confirmed_deaktivierung_on_another_stream_ends_it() {
     let p2 = process(store.clone());
     p2.run(
         receive(ZpSerie::TaeglicheAauez, ZpVorgang::Deaktivierung),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Deaktivierung accepted");
@@ -224,11 +224,11 @@ async fn a_live_serie_is_never_reported() {
     let p = process(store.clone());
     p.run(
         receive(ZpSerie::NetzzeitreiheBiko, ZpVorgang::Aktivierung),
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("Anfrage accepted");
-    p.run(antwort(true), RunOptions::new())
+    p.run(antwort(true), RunOptions::system())
         .await
         .expect("Antwort sent");
 

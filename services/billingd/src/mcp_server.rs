@@ -258,6 +258,41 @@ pub struct Pruefliste {
     pub saturated: bool,
 }
 
+/// Filters for `list_unbilled_periods`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListUnbilledParams {
+    /// Include the periods an invoice has since discharged (default `false`).
+    pub include_settled: Option<bool>,
+    /// Max results (default 100, clamped to 1–500).
+    pub limit: Option<i64>,
+}
+
+/// `list_unbilled_periods`' answer.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct UnbilledPeriods {
+    /// The earliest `due_on` first.
+    pub periods: Vec<crate::pg::UnbilledPeriodRow>,
+    /// How many periods `periods` holds.
+    pub count: usize,
+    /// At least `limit` periods matched: more may be waiting than were listed.
+    pub saturated: bool,
+}
+
+/// `summarize_billing_deadlines`' answer.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DeadlineSummary {
+    /// One row per Lieferant (MP-ID).
+    pub lieferanten: Vec<crate::pg::DeadlineSummaryRow>,
+}
+
+/// An internal failure as a tool answers it: an `error_id` the log line
+/// carries, never the error's own text.
+fn internal(e: &dyn std::fmt::Display) -> McpError {
+    let error_id = Uuid::new_v4();
+    tracing::error!(%error_id, error = %e, "billingd MCP: internal failure");
+    McpError::internal_error(format!("internal error {error_id}"), None)
+}
+
 #[derive(Clone)]
 pub struct BillingdMcpHandler {
     state: Arc<BillingdMcpState>,
@@ -318,7 +353,7 @@ impl BillingdMcpHandler {
             Ok(rows) => ContentBlock::json(serde_json::to_value(rows).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+            Err(e) => Err(internal(&e)),
         }
     }
 
@@ -342,7 +377,7 @@ impl BillingdMcpHandler {
                 format!("record {id} not found"),
                 None,
             )),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+            Err(e) => Err(internal(&e)),
         }
     }
 
@@ -434,7 +469,7 @@ before anything is sent to ZRE / OZG-RE."
                 format!("record {id} not found"),
                 None,
             )),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+            Err(e) => Err(internal(&e)),
         }
     }
 
@@ -497,7 +532,7 @@ agentd billing-anomaly-agent calls this on every de.billing.rechnung.erstellt ev
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None))
             }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+            Err(e) => Err(internal(&e)),
         }
     }
 
@@ -545,7 +580,7 @@ emitted to the ERP."
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+            Err(e) => Err(internal(&e)),
         }
     }
 
@@ -587,7 +622,7 @@ period for re-billing."
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+            Err(e) => Err(internal(&e)),
         }
     }
 
@@ -778,7 +813,7 @@ before billing.",
 
         let record = fetch_billing_record(&self.state.pool, &self.state.tenant, record_id)
             .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .map_err(|e| internal(&e))?
             .ok_or_else(|| {
                 McpError::invalid_params(format!("record {record_id} not found"), None)
             })?;
@@ -849,6 +884,77 @@ before billing.",
     }
 
     #[tool(
+        description = "Rechnung nachrechnen: recompute one stored invoice to the cent from what it states — every line as quantity × unit price, gesamtnetto from the lines, each Steuerbetrag from its base × rate, gesamtsteuer, gesamtbrutto and zuZahlen less the Vorauszahlungen — and check the SHA-256 seal taken over the document at issue. `verdict.matches` is „Stimmt überein“; otherwise `verdict.mismatched_positions` names the lines that do not recompute. Each line carries its inputs: quantity and how it was obtained (`quantity_source`, `estimated` for an estimate or Ersatzwert), unit price and its source, the rules it bills under. Recomputing proves the arithmetic, not that the inputs were right. A Storno- or Korrekturrechnung is refused; recompute its original.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::nachrechnen::Nachrechnung>()
+    )]
+    async fn recompute_invoice(
+        &self,
+        Parameters(params): Parameters<GetRecordParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Ok(id) = params.id.parse::<Uuid>() else {
+            return Err(McpError::invalid_params("id must be a valid UUID", None));
+        };
+        let row = crate::pg::fetch_billing_record(&self.state.pool, &self.state.tenant, id)
+            .await
+            .map_err(|e| internal(&e))?
+            .ok_or_else(|| McpError::invalid_params(format!("record {id} not found"), None))?;
+        if row.is_correction {
+            return Err(McpError::invalid_params(
+                "a Storno- or Korrekturrechnung is recomputed through its original",
+                None,
+            ));
+        }
+        let mut view = crate::nachrechnen::nachrechnen(&row).map_err(|e| internal(&e))?;
+        view.public_link = crate::nachrechnen::public_link(&self.state.deps.cfg, id);
+        Ok(CallToolResult::structured(
+            serde_json::to_value(view).map_err(|e| internal(&e))?,
+        ))
+    }
+
+    #[tool(
+        description = "The § 40c Abs. 2 EnWG watch: every billing period the scheduled run attempted and could not bill — customer (MaLo), Lieferant, period, whether it is the Abschlussrechnung at the end of supply, the stable refusal code (`NO_METER_DATA`, `RATE_REFUSED`, `ABSCHLAEGE_UNBEKANNT`, `STORNIERT`, …; word it from the catalogue, never show it raw), the day the invoice is owed by (`due_on`) and the days left (negative = overdue), the earliest due first. A period closes when any path writes its invoice and re-opens when a Storno cancels it.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<UnbilledPeriods>()
+    )]
+    async fn list_unbilled_periods(
+        &self,
+        Parameters(params): Parameters<ListUnbilledParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = params.limit.unwrap_or(100).clamp(1, 500);
+        let periods = crate::pg::list_unbilled_periods(
+            &self.state.pool,
+            &self.state.tenant,
+            !params.include_settled.unwrap_or(false),
+            limit,
+        )
+        .await
+        .map_err(|e| internal(&e))?;
+        Ok(CallToolResult::structured(
+            serde_json::to_value(UnbilledPeriods {
+                count: periods.len(),
+                saturated: periods.len() >= usize::try_from(limit).unwrap_or(usize::MAX),
+                periods,
+            })
+            .map_err(|e| internal(&e))?,
+        ))
+    }
+
+    #[tool(
+        description = "Per Lieferant, the standing against § 40c Abs. 2 EnWG: invoices owed (open periods still inside their deadline), issued on time, issued late, and overdue (open periods past it). Only invoices that carry a § 40c due date count.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<DeadlineSummary>()
+    )]
+    async fn summarize_billing_deadlines(&self) -> Result<CallToolResult, McpError> {
+        let lieferanten = crate::pg::deadline_summary(&self.state.pool, &self.state.tenant)
+            .await
+            .map_err(|e| internal(&e))?;
+        Ok(CallToolResult::structured(
+            serde_json::to_value(DeadlineSummary { lieferanten }).map_err(|e| internal(&e))?,
+        ))
+    }
+
+    #[tool(
         description = "The analyst review queue: the undecided billing records the risk gate banded REVIEW (dispatched, queued until reviewed through POST /api/v1/billing/{id}/reviewed) or HELD (not dispatched until released through POST /api/v1/billing/{id}/release), the highest risk score first, each with the coded findings behind its score. A reviewed or released record has left the queue. `saturated` means at least `limit` records matched.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_output::<Pruefliste>()
@@ -865,19 +971,19 @@ before billing.",
             limit,
         )
         .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        .map_err(|e| internal(&e))?;
         let records = rows
             .into_iter()
             .map(Pruefposten::from_row)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| McpError::internal_error(format!("risk_findings: {e}"), None))?;
+            .map_err(|e| internal(&e))?;
         Ok(CallToolResult::structured(
             serde_json::to_value(Pruefliste {
                 count: records.len(),
                 saturated: records.len() >= usize::try_from(limit).unwrap_or(usize::MAX),
                 records,
             })
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+            .map_err(|e| internal(&e))?,
         ))
     }
 
@@ -904,7 +1010,7 @@ counted.",
             Ok(summary) => ContentBlock::json(summary)
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+            Err(e) => Err(internal(&e)),
         }
     }
 }
@@ -1166,11 +1272,47 @@ impl ServerHandler for BillingdMcpHandler {
     }
 }
 
+/// The Cedar action a tool requires beyond `use-mcp`, or `None`.
+///
+/// The blanket `use-mcp` gate admits any role of the tenant. A tool whose REST
+/// twin requires `read-billing` — the § 40c watch, the deadline counts, the
+/// recomputation — must clear the same action here, or a role the REST route
+/// refuses reads it through MCP.
+fn tool_action(body: &[u8]) -> Option<&'static str> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if v.get("method")?.as_str()? != "tools/call" {
+        return None;
+    }
+    match v.get("params")?.get("name")?.as_str()? {
+        "list_unbilled_periods" | "summarize_billing_deadlines" | "recompute_invoice" => {
+            Some("read-billing")
+        }
+        _ => None,
+    }
+}
+
 async fn mcp_auth_middleware(
     axum::extract::State(state): axum::extract::State<Arc<BillingdMcpState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
+    // Buffer the body to read the tool name, authorize, then hand the
+    // reconstructed request to `authenticate`.
+    use axum::response::IntoResponse as _;
+    const MAX_MCP_BODY: usize = 1024 * 1024;
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_MCP_BODY).await else {
+        return mako_service::ApiError::payload_too_large(format!(
+            "MCP request body exceeds {MAX_MCP_BODY} bytes"
+        ))
+        .into_response();
+    };
+    if let Some(action) = tool_action(&bytes)
+        && let Err(resp) = state.auth.authorize(&parts.headers, action)
+    {
+        return resp;
+    }
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     state.auth.authenticate(request, next).await
 }
 
@@ -1221,6 +1363,27 @@ mod contract_tests {
         if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
             panic!("{e}");
         }
+    }
+
+    /// SR: a tool whose REST twin requires `read-billing` requires it here too.
+    #[test]
+    fn the_watch_and_recompute_tools_require_read_billing() {
+        let call = |name: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": name, "arguments": {} }
+            }))
+            .expect("json")
+        };
+        for name in [
+            "list_unbilled_periods",
+            "summarize_billing_deadlines",
+            "recompute_invoice",
+        ] {
+            assert_eq!(tool_action(&call(name)), Some("read-billing"), "{name}");
+        }
+        assert_eq!(tool_action(&call("get_policy")), None);
+        assert_eq!(tool_action(b"{\"method\":\"tools/list\"}"), None);
     }
 
     /// The band filter admits the two bands an analyst works and nothing else:

@@ -63,6 +63,7 @@ async fn malformed_invoic_stream() -> (Arc<SlateDbStore>, TenantId, ProcessId) {
                 "WimInvoicReceived",
                 1,
                 serde_json::json!({ "data": {} }),
+                mako_engine::envelope::Akteur::System,
             )],
         ))
         .await

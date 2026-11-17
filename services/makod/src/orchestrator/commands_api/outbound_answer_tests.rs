@@ -74,13 +74,16 @@ where
     W: mako_engine::workflow::Workflow,
     Arc<mako_engine::store_slatedb::SlateDbStore>: mako_engine::event_store::AtomicAppend,
 {
-    spawn_process::<W>(
-        &state.store,
-        state.tenant_id,
-        WorkflowId::new(name, latest_format_version()),
-        command,
-        &[],
-        &[key],
+    als(
+        mako_engine::envelope::Akteur::System,
+        spawn_process::<W>(
+            &state.store,
+            state.tenant_id,
+            WorkflowId::new(name, latest_format_version()),
+            command,
+            &[],
+            &[key],
+        ),
     )
     .await
     .expect("seed the inbound leg");
@@ -137,9 +140,14 @@ async fn the_nb_confirms_a_strom_stornierung_with_utilmd_55023() {
     let state = state_for(&["NB"]).await;
     seed_gpke_storno(&state).await;
     let body = serde_json::json!({ "vorgang_id": VORGANG_ID });
-    dispatch_command(&state, "gpke.stornierung.bestaetigen", &body)
-        .await
-        .expect("the NB answers the 55022");
+    dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.stornierung.bestaetigen",
+        &body,
+    )
+    .await
+    .expect("the NB answers the 55022");
     let utilmd = outbox(&state, "UTILMD").await;
     assert_eq!(utilmd.len(), 1, "one answer: {utilmd:?}");
     let (recipient, payload) = &utilmd[0];
@@ -152,9 +160,14 @@ async fn the_nb_confirms_a_strom_stornierung_with_utilmd_55023() {
 
     // Answered once; a second answer finds no ValidationPassed state.
     assert!(
-        dispatch_command(&state, "gpke.stornierung.bestaetigen", &body)
-            .await
-            .is_err(),
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.stornierung.bestaetigen",
+            &body
+        )
+        .await
+        .is_err(),
         "an answered Stornierung is not answered again"
     );
 }
@@ -172,7 +185,13 @@ async fn the_nb_refuses_a_strom_stornierung_with_utilmd_55024() {
         serde_json::json!({ "vorgang_id": VORGANG_ID, "antwortcode": "A99" }),
         serde_json::json!({ "vorgang_id": VORGANG_ID, "antwortcode": "Z14", "grund": "x" }),
     ] {
-        let out = dispatch_command(&state, "gpke.stornierung.ablehnen", &bad).await;
+        let out = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.stornierung.ablehnen",
+            &bad,
+        )
+        .await;
         assert!(
             matches!(out, Err(DispatchError::InvalidPayload(_))),
             "{bad} must be refused, got {out:?}"
@@ -182,6 +201,7 @@ async fn the_nb_refuses_a_strom_stornierung_with_utilmd_55024() {
 
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "gpke.stornierung.ablehnen",
         &serde_json::json!({ "vorgang_id": VORGANG_ID, "antwortcode": "Z14" }),
     )
@@ -200,6 +220,7 @@ async fn the_gnb_answers_a_gas_stornierung_with_utilmd_44023_or_44024() {
     seed_geli_storno(&state).await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "geli.stornierung.ablehnen",
         &serde_json::json!({
             "vorgang_id": VORGANG_ID,
@@ -221,6 +242,7 @@ async fn the_gnb_answers_a_gas_stornierung_with_utilmd_44023_or_44024() {
     seed_geli_storno(&other).await;
     dispatch_command(
         &other,
+        mako_engine::envelope::Akteur::System,
         "geli.stornierung.bestaetigen",
         &serde_json::json!({ "vorgang_id": VORGANG_ID }),
     )
@@ -310,11 +332,14 @@ async fn the_gmsb_vorabinformation_opens_the_vorgang_the_inbound_21030_resumes()
         "wmsb_mp_id": PARTNER_MP_ID,
         "umstellungszeitpunkt": berlin_date_in(200),
     });
-    let DispatchOutcome::Spawned { process_id } =
-        dispatch_command(&state, "wim.ersteinbau.vorabinformation-senden", &body)
-            .await
-            .expect("the gMSB sends its Vorabinformation")
-    else {
+    let DispatchOutcome::Spawned { process_id } = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "wim.ersteinbau.vorabinformation-senden",
+        &body,
+    )
+    .await
+    .expect("the gMSB sends its Vorabinformation") else {
         panic!("the Vorabinformation opens a process");
     };
     let iftsta = outbox(&state, "IFTSTA").await;
@@ -326,7 +351,13 @@ async fn the_gmsb_vorabinformation_opens_the_vorgang_the_inbound_21030_resumes()
     // A second Vorabinformation on the same Messlokation is refused while the
     // first is unanswered.
     assert!(matches!(
-        dispatch_command(&state, "wim.ersteinbau.vorabinformation-senden", &body).await,
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "wim.ersteinbau.vorabinformation-senden",
+            &body
+        )
+        .await,
         Err(DispatchError::DuplicateProcess { .. })
     ));
 
@@ -334,6 +365,7 @@ async fn the_gmsb_vorabinformation_opens_the_vorgang_the_inbound_21030_resumes()
     assert!(
         dispatch_command(
             &state,
+            mako_engine::envelope::Akteur::System,
             "wim.ersteinbau.beantworten",
             &serde_json::json!({ "melo_id": MELO_ID, "antwortcode": "A03" }),
         )
@@ -369,6 +401,7 @@ async fn a_late_vorabinformation_is_refused() {
     let state = state_for(&["MSB"]).await;
     let out = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "wim.ersteinbau.vorabinformation-senden",
         &serde_json::json!({
             "melo_id": MELO_ID,
@@ -415,9 +448,14 @@ async fn the_wmsb_answers_the_vorabinformation_with_21030_or_21031() {
         let state = state_for(&["MSB"]).await;
         seed_wmsb_vorgang(&state).await;
         let body = serde_json::json!({ "melo_id": MELO_ID, "antwortcode": code });
-        dispatch_command(&state, "wim.ersteinbau.beantworten", &body)
-            .await
-            .unwrap_or_else(|e| panic!("the wMSB answers {code}: {e:?}"));
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "wim.ersteinbau.beantworten",
+            &body,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("the wMSB answers {code}: {e:?}"));
         let iftsta = outbox(&state, "IFTSTA").await;
         assert_eq!(iftsta.len(), 1);
         assert_eq!(iftsta[0].0, PARTNER_MP_ID, "the answer goes to the gMSB");
@@ -425,9 +463,14 @@ async fn the_wmsb_answers_the_vorabinformation_with_21030_or_21031() {
         assert_eq!(iftsta[0].1["antwort_code"], code);
         // Answered; the Vorgang owes nothing further.
         assert!(
-            dispatch_command(&state, "wim.ersteinbau.beantworten", &body)
-                .await
-                .is_err()
+            dispatch_command(
+                &state,
+                mako_engine::envelope::Akteur::System,
+                "wim.ersteinbau.beantworten",
+                &body
+            )
+            .await
+            .is_err()
         );
     }
 }
@@ -442,6 +485,7 @@ async fn the_wmsb_reports_its_scheitern_to_every_role_or_escalates_it() {
     seed_wmsb_vorgang(&state).await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "wim.ersteinbau.beantworten",
         &serde_json::json!({ "melo_id": MELO_ID, "antwortcode": "A02" }),
     )
@@ -449,6 +493,7 @@ async fn the_wmsb_reports_its_scheitern_to_every_role_or_escalates_it() {
     .expect("A02 announces the Eigenausbau");
     let refused = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "wim.ersteinbau.scheitern-melden",
         &serde_json::json!({ "melo_id": MELO_ID, "grund": "A99" }),
     )
@@ -459,6 +504,7 @@ async fn the_wmsb_reports_its_scheitern_to_every_role_or_escalates_it() {
     );
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "wim.ersteinbau.scheitern-melden",
         &serde_json::json!({ "melo_id": MELO_ID, "grund": "Z74", "reason": "kein Zugang" }),
     )
@@ -528,11 +574,14 @@ async fn the_requester_sends_a_reqote_the_answering_quotes_resumes() {
         "empfaenger_mp_id": PARTNER_MP_ID,
         "melo_id": MELO_ID,
     });
-    let DispatchOutcome::Spawned { process_id } =
-        dispatch_command(&state, "wim.preisanfrage.anfragen", &body)
-            .await
-            .expect("the MSBN sends its REQOTE")
-    else {
+    let DispatchOutcome::Spawned { process_id } = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "wim.preisanfrage.anfragen",
+        &body,
+    )
+    .await
+    .expect("the MSBN sends its REQOTE") else {
         panic!("the REQOTE opens a process");
     };
     let reqote = outbox(&state, "REQOTE").await;
@@ -542,7 +591,13 @@ async fn the_requester_sends_a_reqote_the_answering_quotes_resumes() {
     assert_eq!(reqote[0].1["location"], MELO_ID);
 
     assert!(matches!(
-        dispatch_command(&state, "wim.preisanfrage.anfragen", &body).await,
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "wim.preisanfrage.anfragen",
+            &body
+        )
+        .await,
         Err(DispatchError::DuplicateProcess { .. })
     ));
 
@@ -578,7 +633,13 @@ async fn a_reqote_outside_the_preisanfrage_or_without_one_location_is_refused() 
             "melo_id": MELO_ID, "malo_id": "51238696012",
         }),
     ] {
-        let out = dispatch_command(&state, "wim.preisanfrage.anfragen", &bad).await;
+        let out = dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "wim.preisanfrage.anfragen",
+            &bad,
+        )
+        .await;
         assert!(
             matches!(out, Err(DispatchError::InvalidPayload(_))),
             "{bad} must be refused, got {out:?}"
@@ -608,6 +669,7 @@ async fn angebot_senden_leaves_a_quotes_in_the_outbox() {
     .await;
     dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "wim.preisanfrage.angebot-senden",
         &serde_json::json!({ "melo_id": MELO_ID }),
     )
@@ -731,11 +793,14 @@ async fn the_anfrage_sends_17132_and_the_inbound_55035_resumes_it() {
         "nb_mp_id": PARTNER_MP_ID,
         "anfrage_nummer": GDA_NUMMER,
     });
-    let DispatchOutcome::Spawned { process_id } =
-        dispatch_command(&state, "gpke.geschaeftsdatenanfrage.anfragen", &body)
-            .await
-            .expect("the LF sends its Anfrage")
-    else {
+    let DispatchOutcome::Spawned { process_id } = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.geschaeftsdatenanfrage.anfragen",
+        &body,
+    )
+    .await
+    .expect("the LF sends its Anfrage") else {
         panic!("the Anfrage opens a process");
     };
     let orders = outbox_messages(&state, "ORDERS").await;
@@ -748,7 +813,13 @@ async fn the_anfrage_sends_17132_and_the_inbound_55035_resumes_it() {
 
     // A second Anfrage under the same number is refused while the first waits.
     assert!(matches!(
-        dispatch_command(&state, "gpke.geschaeftsdatenanfrage.anfragen", &body).await,
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.geschaeftsdatenanfrage.anfragen",
+            &body
+        )
+        .await,
         Err(DispatchError::DuplicateProcess { .. })
     ));
 
@@ -786,9 +857,14 @@ async fn the_anfrage_issues_its_own_number() {
         "lokation_id": MELO_ID,
         "nb_mp_id": PARTNER_MP_ID,
     });
-    dispatch_command(&state, "gpke.geschaeftsdatenanfrage.anfragen", &body)
-        .await
-        .expect("the MSB sends its Anfrage");
+    dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.geschaeftsdatenanfrage.anfragen",
+        &body,
+    )
+    .await
+    .expect("the MSB sends its Anfrage");
     let orders = outbox(&state, "ORDERS").await;
     let nummer = orders[0].1["document_id"].as_str().expect("a number");
     assert!(nummer.starts_with("GDA") && nummer.len() == 35, "{nummer}");
@@ -812,7 +888,13 @@ async fn the_nb_answer_reads_marktd_and_refuses_without_it() {
         });
         assert!(
             matches!(
-                dispatch_command(&state, "gpke.geschaeftsdatenanfrage.beantworten", &body).await,
+                dispatch_command(
+                    &state,
+                    mako_engine::envelope::Akteur::System,
+                    "gpke.geschaeftsdatenanfrage.beantworten",
+                    &body
+                )
+                .await,
                 Err(DispatchError::MarktdUnavailable(_))
             ),
             "{pid}: without marktd there is no answer"
@@ -820,7 +902,13 @@ async fn the_nb_answer_reads_marktd_and_refuses_without_it() {
         body["stammdaten"] = serde_json::json!({ "lokationen": [], "bloecke": [] });
         assert!(
             matches!(
-                dispatch_command(&state, "gpke.geschaeftsdatenanfrage.beantworten", &body).await,
+                dispatch_command(
+                    &state,
+                    mako_engine::envelope::Akteur::System,
+                    "gpke.geschaeftsdatenanfrage.beantworten",
+                    &body
+                )
+                .await,
                 Err(DispatchError::InvalidPayload(_))
             ),
             "{pid}: the caller's Stammdaten are not a field"
@@ -852,7 +940,13 @@ async fn an_answer_outside_the_column_is_refused() {
         "antwort_pid": 55_036,
     });
     assert!(matches!(
-        dispatch_command(&state, "gpke.geschaeftsdatenanfrage.beantworten", &body).await,
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.geschaeftsdatenanfrage.beantworten",
+            &body
+        )
+        .await,
         Err(DispatchError::InvalidPayload(_))
     ));
     assert!(outbox(&state, "UTILMD").await.is_empty());
@@ -871,9 +965,14 @@ async fn the_nb_refuses_with_an_ahb_valid_ordrsp_19101() {
             "anfragender": anfragender,
             "antwortcode": code,
         });
-        dispatch_command(&state, "gpke.geschaeftsdatenanfrage.ablehnen", &body)
-            .await
-            .unwrap_or_else(|e| panic!("the NB refuses ({anfragender}): {e:?}"));
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.geschaeftsdatenanfrage.ablehnen",
+            &body,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("the NB refuses ({anfragender}): {e:?}"));
         let ordrsp = outbox_messages(&state, "ORDRSP").await;
         assert_eq!(ordrsp.len(), 1);
         let wire = render_ahb_valid(&ordrsp[0], OWN_MP_ID, "NB");
@@ -892,9 +991,14 @@ async fn the_nb_refuses_with_an_ahb_valid_ordrsp_19101() {
         "antwortcode": "A02",
     });
     assert!(
-        dispatch_command(&state, "gpke.geschaeftsdatenanfrage.ablehnen", &body)
-            .await
-            .is_err()
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.geschaeftsdatenanfrage.ablehnen",
+            &body
+        )
+        .await
+        .is_err()
     );
 }
 

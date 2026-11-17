@@ -100,7 +100,7 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GeLi Gas Stammdatenänderung** | 🔥 | `mako-geli-gas` `geli-gas-stammdatenaenderung` | UTILMD G 44109–44182 | Ablauf des **10. WT** — hier echt: Gas gibt eine Zustimmung/Ablehnung, Strom nur Qualitätsrückmeldung | AWH GeLi Gas Kap. 4.3.2 |
 | **GeLi Gas Zuordnungs-Meldungen** | 🔥 | `mako-geli-gas` `geli-gas-zuordnungsmeldung` | UTILMD G 44036/44037/44038 | — Meldepflicht, **keine Antwortnachricht** | AWH GeLi Gas |
 | **PARTIN Gas Kommunikationsdaten** | 🔥 | `mako-geli-gas` `geli-gas-partin` | PARTIN 37008–37014 | — | PARTIN AHB 1.0f |
-| **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim` `wim-device-change` | UTILMD G 44039–44044/44051–44053/44168/44169/44183 | 3 / 5 / 7 / 1 WT | AWH WiM Gas 2.0 |
+| **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim` `wim-device-change` | UTILMD G 44039–44044/44051–44053/44168–44170/44183 | 3 / 5 / 7 / 1 WT | AWH WiM Gas 2.0 |
 | **WiM INSRPT** | 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23001–23009 (23005/23009 beide Sparten; Gas an den NB) | 3 WT Antwort · 7 WT Ergebnis | AWH WiM Gas 2.0 Kap. 4.3 |
 | **WiM Gas Abrechnung** | 🔥 | `mako-wim` `wim-invoic` | INVOIC 31003/31004 | Zahlungsziel (DTM+265) | AWH WiM Gas 2.0 Kap. 4.7 |
 | **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | das Zahlungsziel der Rechnung (`SG8 DTM+265`, Muss); ohne es wird die Rechnung abgewiesen | BK7-24-01-008 · INVOIC AHB 1.0b Kap. 3.1.3/3.1.4 |
@@ -540,10 +540,10 @@ process.
 | Kündigung MSB (neuer MSB initiiert) | MSBN → MSBA | **55039** · **44039** | 55040 · 44040 | 55041 · 44041 | **3 WT** | `mako-wim` ✅ |
 | Anmeldung MSB beim NB | MSBN → NB | **55042** · **44042** | 55043 · 44043 | 55044 · 44044 | **5 WT** | `mako-wim` ✅ |
 | Ende MSB (alter MSB → NB) | MSBA → NB | **55051** · **44051** | 55052 · 44052 | 55053 · 44053 | **7 WT** | `mako-wim` ✅ |
-| Verpflichtungsanfrage / Aufforderung | NB → gMSB | **55168** · **44168** | 55169 · 44169 | 55170 · 44169 | **1 WT** | `mako-wim` ✅ |
+| Verpflichtungsanfrage / Aufforderung | NB → gMSB | **55168** · **44168** | 55169 · 44169 | 55170 · 44170 | **1 WT** | `mako-wim` ✅ |
 
-Gas kennt keine 44170: die Ablehnung der Verpflichtungsanfrage läuft über
-dieselbe 44169 wie die Bestätigung, unterschieden durch den Antwortcode.
+The Gas Ablehnung der Verpflichtungsanfrage is **44170** (PID-Übersicht 4.0
+Lesefassung Stand 12.08.2026, Tabelle 1 Lfd. Nr. 39260, S. 76).
 Zusätzlich meldet der Gas-NB das Ende des Messstellenbetriebs mit **44183**.
 
 The **Antwortfrist differs per process** (BK6-24-174 WiM Strom Teil 1 Kap. 2.2.2
@@ -1249,7 +1249,7 @@ not every process has a twin.
 | **Ankündigung Zuordnung LF** — UTILMD 55607–55609 | ❌ No equivalent | The NB restores the 100 % LF-Zuordnung of an **erzeugende** Marktlokation or Tranche (GPKE Teil 2 Kap. 2.4). Gas has no Veräußerungsform/Direktvermarktung split, so no counterpart |
 | **UTILTS** — 25001/25004–25010 | ❌ No equivalent | UTILTS carries Zählzeitdefinitionen (HT/NT tariff clocks) and Berechnungsformeln — concepts that don't exist in Gas regulation |
 | **Allokationsliste Strom** — ORDERS 17110 · MSCONS 13014 | **GaBi Gas** Allokationsliste — MSCONS 13013 (`mako-gabi-gas`) | Different crate/domain: Gas allocation belongs to GaBi Gas (BK7-24-01-008), not GeLi Gas |
-| **Konfiguration / iMSys** — ORDERS 17134/17135 | **WiM Gas** — UTILMD G 44039–44044 / 44051–44053 / 44168/44169/44183 | Handled by `mako-wim`; MSB gateway configuration is a WiM concern in both Sparten |
+| **Konfiguration / iMSys** — ORDERS 17134/17135 | **WiM Gas** — UTILMD G 44039–44044 / 44051–44053 / 44168–44170 / 44183 | Handled by `mako-wim`; MSB gateway configuration is a WiM concern in both Sparten |
 | **GPKE Anfrage Bestellung** — UTILMD 55555 | ❌ No equivalent | Strom-only Stammdaten process for special metering configurations |
 | **MSCONS Zählerstand** — 13005/13006 | MSCONS Gas Zählerstand — 13002/13008/13009 | ✅ Equivalent function; Gas uses separate PID range due to Gas-specific Brennwert/Zustandszahl fields |
 | Datenabruf — ORDERS 17004/17102 | Datenabruf Gas — ORDERS 17103/17104 | ✅ Direct equivalent (Gas-specific fields: Abrechnungsbrennwert, Zustandszahl) |
@@ -1290,7 +1290,7 @@ Sparte-neutral AHBs carrying both, and the Sparte comes from the recipient MP-ID
 | Kündigung MSB Gas | MSBN → MSBA | **44039** → 44040/44041 | 3 WT | `E_2000` | ✅ |
 | Anmeldung MSB Gas (Beginn Messstellenbetrieb) | MSBN → NB | **44042** → 44043/44044 | 5 WT | `E_2002` | ✅ |
 | Ende MSB Gas | MSBA → NB | **44051** → 44052/44053 | 7 WT | `E_2005` | ✅ |
-| Verpflichtungsanfrage gMSB | NB → gMSB | **44168** → 44169 ¹ | 1 WT | `E_2006` | ✅ |
+| Verpflichtungsanfrage gMSB | NB → gMSB | **44168** → 44169/44170 ¹ | 1 WT | `E_2006` | ✅ |
 | Ende MSB von NB (Stilllegung) | NB → MSB | **44183** | — (Information) | — | ✅ |
 | Mitteilung über Gesamtvorgang | MSBN ↔ NB | IFTSTA 21009/21010 → 21011/21012, 21013 | 10./11. WT · 1 WT | `E_2003` | ✅ |
 | Weiterverpflichtung des MSB | NB → MSBA | ORDERS 17002 → ORDRSP 19003/19004 | 1 WT | `E_2004` | ✅ |
@@ -1298,10 +1298,9 @@ Sparte-neutral AHBs carrying both, and the Sparte comes from the recipient MP-ID
 | Gerätewechsel | MSBN → MSBA | ORDERS 17009 → ORDRSP 19015/19016; IFTSTA 21036 Zeitpunkt des Geräteausbaus | 2 WT **vor** dem Wechseltermin | `E_2007` | ✅ |
 | Stornierung ² | orig. → orig. | UTILMD G **44022–44024** | — | `G_0003`/`G_0004` | ✅ |
 
-> ¹ **44170 does not exist.** PID-Übersicht 4.0 publishes the Gas
-> Verpflichtungsanfrage as 44168 → 44169 and no Ablehnungs-PID. `E_2006` still
-> publishes the Ablehnungs-Codeliste `G_0071`, so a refusal has a code and no
-> carrier; the process escalates rather than emitting a PID the market rejects.
+> ¹ 44170 is the Ablehnung of the Gas Verpflichtungsanfrage, answered out of
+> `E_2006` with Codeliste `G_0071` (PID-Übersicht 4.0 Lesefassung Stand
+> 12.08.2026, Tabelle 1 Lfd. Nr. 39260, S. 76).
 >
 > ² PIDs 44022–44024 are **multi-domain** per BDEW PID overview: GeLi Gas
 > Lieferbeginn/-ende and the WiM Gas Kündigung Messstellenbetrieb. One workflow

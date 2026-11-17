@@ -258,7 +258,7 @@ async fn seed_anfrage(store: &SlateDbStore, anfrage_nummer: &str) {
                     anfrage_nummer: MessageRef::new(anfrage_nummer),
                 },
             },
-            RunOptions::new().correlations(&[key]),
+            RunOptions::system().correlations(&[key]),
         )
         .await
         .expect("record the sent 17132");

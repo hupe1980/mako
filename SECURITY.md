@@ -4,6 +4,9 @@ mako is software for operators of critical infrastructure. A defect here reaches
 market communication, metering and settlement, so this page says how to report
 one and what happens after you do.
 
+The system's trust boundaries, threats and the control that answers each are in
+[THREAT_MODEL.md](./THREAT_MODEL.md).
+
 ## Reporting a vulnerability
 
 **Report privately. Do not open a public issue.**

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "@tanstack/react-router";
+import { Link, useRouter, useSearch } from "@tanstack/react-router";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { Button as AriaButton } from "react-aria-components";
 import { entscheidbar, fokussieren, gefunden } from "../app/aktionen";
@@ -15,10 +15,10 @@ import { Page } from "../design/Page";
 import { EmptyState, Panel } from "../design/Panel";
 import type { BusinessDate } from "../format/brands";
 import { formatCount } from "../format/count";
-import { epochMs, formatBusinessDate } from "../format/date";
+import { epochMs, formatBusinessDate, formatInstantDay } from "../format/date";
 import { BAENDER, band, useNow } from "../format/frist";
 import { useT } from "../i18n";
-import { type Eintrag, type Stand, warumAnker } from "../inbox/model";
+import { type Eintrag, type QuelleId, type Stand, warumAnker } from "../inbox/model";
 import { alsEintrag, useBenannt, useHinweise, useQuellen, useVorschlaege } from "../inbox/quellen";
 import { Bewertung } from "./Bewertung";
 import { GeparktEntscheiden } from "./Buchungen";
@@ -172,7 +172,7 @@ function Zeile({
         data-aktiv={aktiv}
         className="group relative flex items-start hover:bg-fill data-[aktiv=true]:bg-[color-mix(in_srgb,var(--accent)_9%,transparent)]"
       >
-        {/* The row in hand: a bar in the Rolle's accent, not only a fill. */}
+        {/* The row in hand: a bar in the accent, not only a fill. */}
         <span
           aria-hidden="true"
           className="absolute inset-y-1.5 left-0 w-[3px] rounded-r-full bg-accent opacity-0 group-data-[aktiv=true]:opacity-100"
@@ -278,28 +278,73 @@ function Zeile({
   );
 }
 
-/** One quiet line per source: its count, or its refusal in its own words. */
-function Quellenzeile({ staende, agent }: { staende: Stand[]; agent: string | null }) {
+/** Where a source's row opens: its own view where the Desk has one, else Heute narrowed to it. */
+function zielVon(quelle: QuelleId) {
+  if (quelle === "freigaben") return { to: "/freigaben" as const, search: {} };
+  return { to: "/heute" as const, search: { quelle } };
+}
+
+/**
+ * The Arbeitsvorrat: one row per source the Rolle reads, with its count and
+ * the oldest item it states — a zero stays a row, and a source that did not
+ * answer says so instead of a number. The oldest is named only while the page
+ * is the whole list; a capped page says that instead.
+ */
+function Arbeitsvorrat({ staende, agent }: { staende: Stand[]; agent: string | null }) {
   const t = useT();
+  const k = t.heute;
   return (
-    <ul
-      aria-label={t.heute.quellen}
-      className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 px-1 text-caption text-text-2"
-    >
-      {staende.map((s) => (
-        <li key={s.quelle} className={s.fehler ? "text-critical" : undefined}>
-          {t.heute.quelle(
-            s.label,
-            s.fehler
+    <section aria-label={k.arbeitsvorrat}>
+      <Panel className="overflow-hidden">
+        <ul aria-label={k.arbeitsvorrat} className="m-0 list-none p-0">
+          {staende.map((s) => {
+            const seit = s.eintraege.flatMap((e) => (e.seit ? [e.seit] : []));
+            const aelteste = seit.sort((a, b) => epochMs(a) - epochMs(b))[0];
+            const n = s.eintraege.length;
+            const zeile = s.fehler
               ? s.fehler
               : s.laedt
-                ? t.heute.quelleLaedt
-                : `${formatCount(s.eintraege.length)}${s.mehr ? "+" : ""}`,
-          )}
-        </li>
-      ))}
-      {agent && <li>{t.heute.assistentFehlt}</li>}
-    </ul>
+                ? k.quelleLaedt
+                : n === 0
+                  ? k.nichtsOffen
+                  : s.mehr
+                    ? k.mehrAlsSeite
+                    : aelteste
+                      ? k.aeltesteVom(formatInstantDay(aelteste))
+                      : null;
+            return (
+              <li key={s.quelle} className="border-b border-separator last:border-b-0">
+                <Link
+                  {...zielVon(s.quelle)}
+                  className="focus-ring flex items-center gap-4 px-5 py-2.5 text-text no-underline hover:bg-fill"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-headline">{s.label}</span>
+                    {zeile && (
+                      <span
+                        className={`block text-caption ${s.fehler ? "text-critical" : "text-text-2"}`}
+                      >
+                        {zeile}
+                      </span>
+                    )}
+                  </span>
+                  {!s.fehler && !s.laedt && (
+                    <span
+                      className={`text-title2 font-semibold tabular-nums ${n === 0 ? "text-text-2" : "text-text"}`}
+                    >
+                      {formatCount(n, s.mehr)}
+                    </span>
+                  )}
+                  {s.fehler && <Icon name="warn" size={16} className="text-critical" />}
+                  <Icon name="chevron" size={14} className="text-text-2" />
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </Panel>
+      {agent && <p className="m-0 mt-2 px-1 text-caption text-text-2">{k.assistentFehlt}</p>}
+    </section>
   );
 }
 
@@ -313,6 +358,7 @@ export function HeuteView() {
   const t = useT();
   const k = t.heute;
   const { rolle } = useRolle();
+  const { quelle: nur } = useSearch({ from: "/heute" });
   const staende = useQuellen(rolle);
   const { hinweise, fehler: agentFehler } = useHinweise();
   const now = useNow();
@@ -327,7 +373,7 @@ export function HeuteView() {
   const [gefokust, setGefokust] = useState(false);
   const client = useQueryClient();
   const zeilen = useRef<(HTMLButtonElement | null)[]>([]);
-  const sichtbar = eintraege.slice(0, SICHTBAR);
+  const sichtbar = eintraege.filter((e) => !nur || e.quelle === nur).slice(0, SICHTBAR);
   const laedt = staende.some((s) => s.laedt) && eintraege.length === 0;
   const vorschlaege = useVorschlaege({
     freigabe: sichtbar.flatMap((e) => (e.freigabe ? [e.freigabe.id] : [])),
@@ -395,6 +441,20 @@ export function HeuteView() {
   return (
     <Page width="reading" title={k.titel}>
       {rolle === "lieferant" && <Lage />}
+
+      <Arbeitsvorrat staende={staende} agent={agentFehler} />
+      {nur && (
+        <p className="m-0 flex items-center gap-3 px-1 text-body text-text-2">
+          <span>{k.nurQuelle(staende.find((s) => s.quelle === nur)?.label ?? nur)}</span>
+          <Link
+            to="/heute"
+            search={{}}
+            className="focus-ring rounded-[4px] text-accent underline underline-offset-2"
+          >
+            {k.alleQuellen}
+          </Link>
+        </p>
+      )}
 
       {laedt && (
         <Panel className="flex flex-col gap-3 p-5">
@@ -471,7 +531,6 @@ export function HeuteView() {
         </section>
       )}
 
-      <Quellenzeile staende={staende} agent={agentFehler} />
       <p className="m-0 px-1 text-caption text-text-2">{k.hilfe}</p>
     </Page>
   );

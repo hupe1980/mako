@@ -362,6 +362,11 @@ pub struct HistoryEntry {
     /// `None` when the list does not publish the code — never another tree's
     /// meaning.
     pub bedeutung: Option<String>,
+    /// Who caused the event, as a class: `system`, `freigabe` (a person
+    /// approved a proposal unchanged), `freigabe-geaendert` (after changing
+    /// it) or `person`. Never the principal — who it was is the audit log's.
+    #[schemars(extend("enum" = ["system", "freigabe", "freigabe-geaendert", "person"]))]
+    pub akteur: String,
 }
 
 /// What kind of deadline a label is: a delivery window `mako_fristen` owns
@@ -407,6 +412,7 @@ fn history(process_id: &str, events: &[mako_engine::envelope::EventEnvelope]) ->
                     let liste = a.codeliste.as_deref()?;
                     mako_pruefung::codes::lies(liste, &a.code).map(|c| c.bedeutung.to_owned())
                 }),
+                akteur: e.akteur.klasse().as_str().to_owned(),
             })
             .collect(),
     }
@@ -771,7 +777,12 @@ impl MakodMcpHandler {
         // and reuse for a different request is refused rather than answered
         // with the first command's `process_id`.
         let tenant = self.state.commands.tenant_id.to_string();
-        let fingerprint = crate::commands_api::idempotency::fingerprint(&cmd_lower, &p.payload);
+        // The MCP door names no other actor: its caller acted.
+        let akteur = mako_engine::envelope::Akteur::Person {
+            principal: identity.name.to_string(),
+        };
+        let fingerprint =
+            crate::commands_api::idempotency::fingerprint(&cmd_lower, &akteur, &p.payload);
         if let Some(key) = p.idempotency_key.as_deref() {
             use crate::commands_api::idempotency::{Lookup, lookup};
             match lookup(&self.state.commands.store, &tenant, key, &fingerprint).await {
@@ -819,7 +830,7 @@ impl MakodMcpHandler {
                 .await;
         }
 
-        match dispatch_command(&self.state.commands, &cmd_lower, &p.payload).await {
+        match dispatch_command(&self.state.commands, akteur, &cmd_lower, &p.payload).await {
             Ok(outcome) => {
                 let (process_id, status) = match outcome {
                     DispatchOutcome::Spawned { process_id } => (process_id.to_string(), "spawned"),
@@ -2720,10 +2731,15 @@ mod tool_inventory_tests {
         };
         let stream = StreamId::for_process(tenant, &process);
         let events = [
-            ctx.new_event(&initiated).expect("event"),
-            ctx.new_event(&answered).expect("event"),
-            ctx.new_event(&SupplierChangeEvent::Activated)
+            ctx.new_event(&initiated, mako_engine::envelope::Akteur::System)
                 .expect("event"),
+            ctx.new_event(&answered, mako_engine::envelope::Akteur::System)
+                .expect("event"),
+            ctx.new_event(
+                &SupplierChangeEvent::Activated,
+                mako_engine::envelope::Akteur::System,
+            )
+            .expect("event"),
         ];
         store
             .append(AppendBatch::new(&stream, ExpectedVersion::Any, &events))
@@ -2780,6 +2796,7 @@ mod tool_inventory_tests {
                     "LfAnmeldungAntwortReceived",
                     1,
                     serde_json::Value::Null,
+                    mako_engine::envelope::Akteur::System,
                 )
                 .with_antwort(antwort),
                 StreamId::for_process(tenant, &process),
@@ -2811,6 +2828,58 @@ mod tool_inventory_tests {
             h.eintraege[2].bedeutung, None,
             "never another tree's wording"
         );
+    }
+
+    /// Each entry names its actor's class — the Verlauf labels who acted —
+    /// and never the principal behind it.
+    #[test]
+    fn a_history_entry_names_its_actors_class_and_no_principal() {
+        use mako_engine::envelope::{Akteur, EventEnvelope, NewEvent, Vorschlag};
+        use mako_engine::ids::{ConversationId, CorrelationId, ProcessId, StreamId, TenantId};
+        use mako_engine::version::WorkflowId;
+
+        let tenant = TenantId::new();
+        let process = ProcessId::new();
+        let envelope = |akteur: Akteur| {
+            EventEnvelope::from_new(
+                NewEvent::new(
+                    CorrelationId::new(),
+                    None,
+                    ConversationId::new(),
+                    process,
+                    tenant,
+                    WorkflowId::new("gpke-supplier-change", "FV2026-04-01"),
+                    "AntwortGesendet",
+                    1,
+                    serde_json::Value::Null,
+                    akteur,
+                ),
+                StreamId::for_process(tenant, &process),
+                1,
+                time::OffsetDateTime::UNIX_EPOCH,
+            )
+        };
+        let h = super::history(
+            &process.to_string(),
+            &[
+                envelope(Akteur::System),
+                envelope(Akteur::Person {
+                    principal: "erika.mustermann".into(),
+                }),
+                envelope(Akteur::Freigabe {
+                    principal: "erika.mustermann".into(),
+                    vorschlag: Vorschlag::Regel {
+                        name: "nb-module".into(),
+                    },
+                    unveraendert: false,
+                    dienst: "processd".into(),
+                }),
+            ],
+        );
+        let klassen: Vec<&str> = h.eintraege.iter().map(|e| e.akteur.as_str()).collect();
+        assert_eq!(klassen, ["system", "person", "freigabe-geaendert"]);
+        let wire = serde_json::to_string(&h).expect("json");
+        assert!(!wire.contains("erika"), "{wire}");
     }
 
     /// A deadline's kind comes from the labels `mako_fristen` owns, never from

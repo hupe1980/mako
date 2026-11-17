@@ -282,7 +282,7 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
     );
 
     nb_process
-        .run(exec_cmd, RunOptions::new())
+        .run(exec_cmd, RunOptions::system())
         .await
         .expect("NB process must accept AHB-validated 55001 without error");
 
@@ -470,7 +470,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
     );
 
     gnb_process
-        .run(exec_cmd, RunOptions::new())
+        .run(exec_cmd, RunOptions::system())
         .await
         .expect("GNB process must accept AHB-validated 44001 without error");
 
@@ -583,7 +583,7 @@ async fn ahb_44039_kuendigung_msb_gas_validates_and_dispatches() {
     );
 
     nb_process
-        .run(exec_cmd, RunOptions::new())
+        .run(exec_cmd, RunOptions::system())
         .await
         .expect("NB process must accept AHB-validated 44039 without error");
 
@@ -706,7 +706,7 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
     );
 
     nb_process
-        .run(exec_cmd, RunOptions::new())
+        .run(exec_cmd, RunOptions::system())
         .await
         .expect("NB process must accept AHB-validated 31001 INVOIC without error");
 
@@ -833,7 +833,7 @@ async fn ahb_44022_geli_gas_stornierung_validates_and_dispatches() {
     );
 
     gnb_process
-        .run(exec_cmd, RunOptions::new())
+        .run(exec_cmd, RunOptions::system())
         .await
         .expect("GNB process must accept AHB-validated 44022 without error");
 
@@ -992,7 +992,7 @@ async fn assert_wim_device_change_dispatches(
                 validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
                 received_at,
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("the receiving party must accept an AHB-valid WiM MSB-Wechsel");
@@ -1098,9 +1098,8 @@ const VERPFL_GMSB_ID: &str = "4012345000023";
 /// PID 44168 is NB → gMSB, answered out of `E_2006` within **1 Werktag**
 /// (AWH WiM Gas 2.0 Kap. 3.6.2 Nr. 4) — the same window as its Strom twin 55168.
 ///
-/// The Bestätigung is 44169. **There is no Ablehnungs-PID**: PID-Übersicht 4.0
-/// publishes only those two, and the 44170 of PID 3.3 was withdrawn with
-/// FV2026-10-01, so `antwort_pid_for(44168, false)` is `None` by design.
+/// The Bestätigung is 44169, the Ablehnung 44170 (PID-Übersicht 4.0
+/// Lesefassung Stand 12.08.2026, Tabelle 1 Lfd. Nr. 39250 / 39260, S. 76).
 #[tokio::test]
 async fn ahb_44168_wim_gas_verpflichtungsanfrage_validates_and_dispatches() {
     assert_wim_device_change_dispatches(
@@ -1118,8 +1117,7 @@ async fn ahb_44168_wim_gas_verpflichtungsanfrage_validates_and_dispatches() {
     );
     assert_eq!(
         mako_wim::geraetewechsel::antwort_pid_for(44_168, false),
-        None,
-        "the Gas Verpflichtungsanfrage publishes no Ablehnungs-Prüfidentifikator",
+        Some(44_170),
     );
 }
 

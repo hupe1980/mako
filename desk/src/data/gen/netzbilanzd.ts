@@ -46,3 +46,6 @@ export interface Korrekturbedarf {
 
 /** Tools netzbilanzd serves without an output schema: no view may read them. */
 export const netzbilanzdUntyped = ["get_billing_summary","get_draft","get_policy","get_submission_run","get_submission_status","list_corrections","list_disputed","list_drafts","list_failed_submissions","list_kostenblatt_gaps","list_pending_kostenblatt","list_undispatched"] as const;
+
+/** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
+export const netzbilanzdOberflaeche: Record<string, string> = {"list_korrekturbedarf":"4e7f44c1"};

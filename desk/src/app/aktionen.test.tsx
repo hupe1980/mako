@@ -145,6 +145,14 @@ const ABLEHNEN_A02 = {
     quelle: "processd/get_queue_entry",
     belegt: true,
   },
+  // The gate passed it: only such a proposal fills a Freigabe in.
+  pruefvermerk: {
+    urteil: "bestanden",
+    stufen: [],
+    grund: null,
+    body_sha256: null,
+    geprueft_um: "2031-01-01T09:03:00Z",
+  },
   schritte: [],
   hilfreich: null,
 };
@@ -152,9 +160,16 @@ const ABLEHNEN_A02 = {
 /** Every read the four decision sources make, and every write recorded. */
 function deskFetch(
   posts: Post[],
-  opts: { wartend?: Record<string, unknown>; freigabe?: Record<string, unknown> } = {},
+  opts: {
+    wartend?: Record<string, unknown>;
+    freigabe?: Record<string, unknown>;
+    /** makod refuses to render the proposed decision's message. */
+    unrenderbar?: boolean;
+  } = {},
 ) {
   return vi.fn(async (url: string, init?: RequestInit) => {
+    // The drift banner's read of a service's document is no decision.
+    if (url.endsWith("/api/v1/openapi.json")) return Response.json({});
     if (
       url.includes("/api/v1/queue/") ||
       url.startsWith("/svc/invoicd/api/") ||
@@ -165,6 +180,10 @@ function deskFetch(
       posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
       return new Response(null, { status: url.endsWith("/bewertung") ? 204 : 200 });
     }
+    if (url.startsWith("/svc/makod/api/v1/probe/"))
+      return opts.unrenderbar
+        ? Response.json({ code: "not_rehearsable", detail: "cannot rehearse" }, { status: 422 })
+        : Response.json({ nachrichten: [], urteil: "besteht", command: "x", marktrolle: "NB" });
     if (url === "/svc/agentd/api/v1/agents/catalog")
       return Response.json({ faehigkeiten: KATALOG });
     if (url.startsWith("/svc/agentd/api/v1/vorschlaege"))
@@ -173,6 +192,16 @@ function deskFetch(
     const m = JSON.parse(String(init?.body));
     const name = m.method === "tools/call" ? m.params.name : null;
     const out: Record<string, unknown> = {
+      rehearse_decision: {
+        id: "q-1",
+        freigeben: false,
+        urteil: "besteht",
+        command: "gpke.lieferbeginn.antworten",
+        marktrolle: "NB",
+        payload: { antwortcode: "A02" },
+        body_sha256: "h",
+        grund: null,
+      },
       list_pending_approvals: {
         freigaben: [opts.freigabe ?? FREIGABE],
         count: 1,
@@ -502,6 +531,36 @@ describe("the action panel", () => {
 });
 
 describe("the prefill", () => {
+  it("fills nothing in from a proposal the gate did not pass", async () => {
+    const posts: Post[] = [];
+    vi.stubGlobal(
+      "fetch",
+      deskFetch(posts, {
+        wartend: {
+          ...ABLEHNEN_A02,
+          pruefvermerk: { ...ABLEHNEN_A02.pruefvermerk, urteil: "nicht_geprueft" },
+        },
+      }),
+    );
+    await open("/heute");
+    await findenUndWaehlen("q-1", /Freigabe/);
+    aktion("Ablehnen");
+    const a02 = (await screen.findByRole("radio", { name: /A02/ })) as HTMLInputElement;
+    expect(a02.checked).toBe(false);
+  });
+
+  it("fills nothing in from a passed proposal makod cannot render", async () => {
+    const posts: Post[] = [];
+    vi.stubGlobal("fetch", deskFetch(posts, { wartend: ABLEHNEN_A02, unrenderbar: true }));
+    await open("/heute");
+    await findenUndWaehlen("q-1", /Freigabe/);
+    aktion("Ablehnen");
+    const a02 = (await screen.findByRole("radio", { name: /A02/ })) as HTMLInputElement;
+    // Give the rehearsal time to answer: still nothing is filled in.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(a02.checked).toBe(false);
+  });
+
   it("marks the code the waiting proposal filled, and sends it unchanged", async () => {
     const posts: Post[] = [];
     vi.stubGlobal("fetch", deskFetch(posts, { wartend: ABLEHNEN_A02 }));

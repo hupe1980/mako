@@ -32,6 +32,8 @@ pub async fn run(estate: &Estate) -> anyhow::Result<()> {
     gas(estate).await?;
     say("a Gas NN-Rechnung from the neighbouring Netzbetreiber, disputed (makod → invoicd)");
     nn_rechnung(estate).await?;
+    say("the neighbouring Netzbetreiber's late answer and refusal (processd's read model)");
+    gegenpartei(estate).await?;
     say("last month's meter readings for every household (edmd)");
     ablesungen(estate).await?;
     say("a message no workflow takes, in makod's dead letters");
@@ -865,6 +867,21 @@ async fn nn_rechnung(estate: &Estate) -> anyhow::Result<()> {
             nn_receipt(estate).await
         })
         .await?;
+    Ok(())
+}
+
+/// Gasnetz Nachbarstadt's Gegenpartei-Akte: the read-model events of two
+/// Anmeldungen it owed an answer — one answered three hours late, one refused
+/// `A16` — posted to processd's webhook as makod's fan-out would. Keyed on fixed
+/// process ids: a second run finds the rows and moves neither the start, the
+/// Frist nor the answer.
+async fn gegenpartei(estate: &Estate) -> anyhow::Result<()> {
+    for event in world::nachbar_ereignisse(time::OffsetDateTime::now_utc()) {
+        estate
+            .post("processd", "/webhook", &event)
+            .await?
+            .ok("POST processd /webhook")?;
+    }
     Ok(())
 }
 

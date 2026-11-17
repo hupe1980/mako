@@ -35,6 +35,10 @@ pub const SKILL: &str = "desk-assistant";
 /// asked what to do.
 pub const FRAGE: &str = "Was schlägst du vor?";
 
+/// The reader the tick reads proposals as — for the Prüfvermerk, never a
+/// person's verdict.
+const PRUEFLESER: &str = "agentd";
+
 /// Entries read per tick; a saturated page is reported, and the next tick
 /// admits what this one did not reach.
 const SEITE: u32 = 200;
@@ -176,6 +180,13 @@ pub async fn tick(plane: &Plane, art: Art, client: &dyn ToolClient) -> Result<us
             ),
             Some(_) => {}
             None => return Err(format!("{SKILL} is not activated")),
+        }
+    }
+    // Every concluded proposal gets its Prüfvermerk here, before a person
+    // opens it: reading the proposal stores the verdict on its run once.
+    for id in &ids {
+        if let Err(e) = plane.vorschlag_of(art, id, PRUEFLESER).await {
+            warn!(art = art.key(), entry = %id, error = %e, "agentd vorschlaege: the proposal was not checked");
         }
     }
     Ok(fresh)

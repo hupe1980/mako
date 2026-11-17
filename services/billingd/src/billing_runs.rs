@@ -162,6 +162,88 @@ fn clip(
     (from <= to).then_some((from, to))
 }
 
+/// One period the run owes an invoice for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Planned {
+    from: Date,
+    /// Inclusive.
+    to: Date,
+    /// The period ends with the supply: an Abschlussrechnung (§ 40c Abs. 2
+    /// Satz 1 EnWG), billed with `schlussrechnung = true`.
+    schluss: bool,
+}
+
+/// Whether the candidate's supply is over, so its last period is a
+/// Schlussrechnung. vertragd flags it `beendet` once its Ablauf worker ran; a
+/// `lieferende` already in the past says the same before it has.
+fn supply_ended(cand: &BillingCandidate, today: Date) -> Option<Date> {
+    cand.lieferende.filter(|ende| cand.beendet || *ende < today)
+}
+
+/// The periods a candidate owes, oldest first.
+///
+/// Every completed cadence period inside the supply window, and — once supply
+/// has ended — the Schlussrechnung from the day after the last billed day
+/// (`latest_billed_to`, or the last ordinary period planned here) up to
+/// `lieferende`. The cadence period the supply ends in is the Schlussrechnung's,
+/// never an ordinary invoice; a supply billed through its end already (billed in
+/// advance, or the Schlussrechnung issued) plans none, which is what makes a
+/// second run issue nothing.
+fn plan_periods(
+    cand: &BillingCandidate,
+    today: Date,
+    catch_up: usize,
+    latest_billed_to: Option<Date>,
+) -> Vec<Planned> {
+    let mut out: Vec<Planned> = due_periods(
+        &cand.abrechnungszyklus,
+        today,
+        cand.vertragsbeginn,
+        catch_up,
+    )
+    .into_iter()
+    .rev()
+    .filter_map(|p| clip(p, cand.lieferbeginn, cand.lieferende))
+    .map(|(from, to)| Planned {
+        from,
+        to,
+        schluss: false,
+    })
+    .collect();
+    let Some(ende) = supply_ended(cand, today) else {
+        return out;
+    };
+    out.retain(|p| p.to < ende);
+    let after = out.iter().map(|p| p.to).chain(latest_billed_to).max();
+    let from = match after {
+        Some(d) => match d.next_day() {
+            Some(next) => next.max(cand.lieferbeginn),
+            None => return out,
+        },
+        None => cand.lieferbeginn,
+    };
+    if from <= ende {
+        out.push(Planned {
+            from,
+            to: ende,
+            schluss: true,
+        });
+    }
+    out
+}
+
+/// The stable code a failed period is recorded under: the refusal's own code
+/// when billing refused it, `INTERNAL` otherwise.
+fn reason_of(e: &anyhow::Error) -> (&'static str, String) {
+    match e.downcast_ref::<crate::error::BillingError>() {
+        Some(crate::error::BillingError::Internal(_)) | None => (
+            "INTERNAL",
+            "the run failed unexpectedly — the billingd log carries the cause".to_owned(),
+        ),
+        Some(b) => (b.code(), b.to_string()),
+    }
+}
+
 /// Spawn the §40b billing-run worker. No-op when disabled in config.
 pub fn spawn_billing_run_worker(
     deps: Arc<BillingDeps>,
@@ -247,26 +329,31 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
                  accountingd_url, bill via POST /api/v1/billing/{{malo_id}}/calculate, or set \
                  [billing_runs] jahresrechnung=true to emit without the deduction anyway"
             );
-            counters.skipped += 1;
         }
 
         // Bill every completed period still missing a record — oldest first, so
         // invoices are created in chronological order and a worker that missed a
-        // cycle catches up rather than skipping periods (§40c).
-        let periods = if refuse_settlement {
-            Vec::new()
+        // cycle catches up rather than skipping periods (§40c) — and, once supply
+        // has ended, the Schlussrechnung after them.
+        let latest_billed_to = if supply_ended(cand, today).is_some() {
+            match pg::latest_billed_to(pool, &cfg.tenant, &cand.malo_id, &cand.lf_mp_id).await {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(malo_id = %cand.malo_id, error = %e, "billing-run: last billed day unreadable — skipping");
+                    counters.errors += 1;
+                    continue;
+                }
+            }
         } else {
-            due_periods(
-                &cand.abrechnungszyklus,
-                today,
-                cand.vertragsbeginn,
-                cfg.billing_runs.catch_up_periods,
-            )
+            None
         };
-        for period in periods.into_iter().rev() {
-            let Some((from, to)) = clip(period, cand.lieferbeginn, cand.lieferende) else {
-                continue;
-            };
+        let periods = plan_periods(
+            cand,
+            today,
+            cfg.billing_runs.catch_up_periods,
+            latest_billed_to,
+        );
+        for Planned { from, to, schluss } in periods {
             match pg::billing_record_exists_for_period(pool, &cfg.tenant, &cand.malo_id, from, to)
                 .await
             {
@@ -278,11 +365,61 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
                     continue;
                 }
             }
-            match bill_one(deps, pool, cand, from, to, &run_id).await {
+            let outcome = if refuse_settlement {
+                Err(anyhow::Error::from(
+                    crate::error::BillingError::unprocessable(
+                        "ABSCHLAEGE_UNBEKANNT",
+                        "no accountingd_url is configured, so the run has no source for the \
+                     paid Abschläge this settlement must deduct (§ 40 Abs. 1 EnWG)",
+                    ),
+                ))
+            } else {
+                bill_one(deps, pool, cand, from, to, schluss, &run_id).await
+            };
+            match outcome {
                 Ok(()) => counters.billed += 1,
                 Err(e) => {
-                    tracing::warn!(malo_id = %cand.malo_id, %from, %to, error = %e, "billing-run: billing failed");
-                    counters.errors += 1;
+                    let (reason_code, message) = reason_of(&e);
+                    if refuse_settlement {
+                        counters.skipped += 1;
+                    } else {
+                        tracing::warn!(malo_id = %cand.malo_id, %from, %to, error = %e, "billing-run: billing failed");
+                        counters.errors += 1;
+                    }
+                    // The § 40c watch: which customer, which period, which
+                    // refusal, and the day the invoice is owed by.
+                    let due_on = mako_fristen::vorlauf::abrechnung_faellig(
+                        to,
+                        mako_fristen::vorlauf::Abrechnungsart::aus_zyklus(
+                            &cand.abrechnungszyklus,
+                            schluss,
+                        ),
+                    );
+                    // A crash before this write is repaired by the next run,
+                    // which attempts the same period again and records it then.
+                    // committed apart: a refused period emits no event to share a transaction with.
+                    if let Err(e) = pg::record_unbilled_period(
+                        pool,
+                        &pg::NewUnbilledPeriod {
+                            tenant: &cfg.tenant,
+                            malo_id: &cand.malo_id,
+                            lf_mp_id: &cand.lf_mp_id,
+                            period_from: from,
+                            period_to: to,
+                            final_invoice: schluss,
+                            reason_code,
+                            message: &message,
+                            due_on,
+                        },
+                    )
+                    .await
+                    {
+                        // A period nobody can see is the failure this watch
+                        // exists for, so it fails the month even when the
+                        // refusal itself was a deliberate skip.
+                        tracing::error!(malo_id = %cand.malo_id, %from, %to, error = %e, "billing-run: the unbilled period could not be recorded");
+                        counters.errors += 1;
+                    }
                 }
             }
         }
@@ -333,6 +470,7 @@ async fn bill_one(
     cand: &BillingCandidate,
     from: Date,
     to: Date,
+    schluss: bool,
     run_id: &str,
 ) -> anyhow::Result<()> {
     let cfg = &deps.cfg;
@@ -349,7 +487,7 @@ async fn bill_one(
         (true, Some(accounting)) => accounting
             .get_abschlaege(&cand.malo_id, from, to)
             .await
-            .map_err(|e| anyhow::anyhow!("accountingd abschlaege: {e}"))?
+            .map_err(|e| crate::error::BillingError::upstream("accountingd", e))?
             .unwrap_or_default(),
         _ => Vec::new(),
     };
@@ -368,6 +506,10 @@ async fn bill_one(
         // §40b Abs. 1 monthly billing shortens the §40c deadline to three weeks.
         // The cadence comes from the contract, not from this period's length.
         monatliche_abrechnung: cand.abrechnungszyklus.eq_ignore_ascii_case("MONATLICH"),
+        // § 40c Abs. 2 Satz 1 EnWG: the period that ends with the supply is
+        // settled by the Abschlussrechnung, whose credit § 40c Abs. 3 Satz 2
+        // pays out.
+        schlussrechnung: schluss,
         abschlaege,
         ..Default::default()
     };
@@ -378,7 +520,7 @@ async fn bill_one(
     // wherever the run started.
     let legs = handlers::resolve_legs(&req, deps, &cand.malo_id, from, to)
         .await
-        .map_err(|e| anyhow::anyhow!("tariff: {e}"))?;
+        .map_err(anyhow::Error::from)?;
 
     // § 14 Abs. 4 Nr. 4 UStG: from the tenant's `RE` series, keyed on the
     // billed period's year, so a December period swept in January stays in the
@@ -394,7 +536,7 @@ async fn bill_one(
         RunId(Some(run_id)),
     )
     .await
-    .map_err(|e| anyhow::anyhow!("dispatch: {e}"))?;
+    .map_err(anyhow::Error::from)?;
     let summary = handlers::LegSummary::of(&legs);
     // A public-law Gebühr is issued as a Bescheid beside the supply invoice, in
     // the same run.
@@ -474,6 +616,7 @@ async fn bill_one(
             total_netto_eur: invoice.netto_eur,
             total_brutto_eur: invoice.brutto_eur,
             steuerzeilen: &crate::steuerzeilen::aus_rechnung(&invoice),
+            due_on: Some(handlers::sect40c_due_on(&req, to)),
         },
     )
     .await?;
@@ -796,6 +939,132 @@ mod tests {
         assert_eq!(ps.len(), 2, "two full anniversary years have completed");
         assert_eq!(ps[0], (date!(2025 - 03 - 15), date!(2026 - 03 - 14)));
         assert_eq!(ps[1], (date!(2024 - 03 - 15), date!(2025 - 03 - 14)));
+    }
+
+    fn cand(zyklus: &str, lieferende: Option<Date>, beendet: bool) -> BillingCandidate {
+        BillingCandidate {
+            malo_id: "51238696781".to_owned(),
+            lf_mp_id: "9900000000003".to_owned(),
+            nb_mp_id: None,
+            sparte: "STROM".to_owned(),
+            abrechnungszyklus: zyklus.to_owned(),
+            vertragsbeginn: date!(2024 - 01 - 01),
+            vertragsende: lieferende,
+            lieferbeginn: date!(2024 - 01 - 01),
+            lieferende,
+            beendet,
+        }
+    }
+
+    /// A household moved out on 15.03. on a monthly contract, February
+    /// billed — one run plans the Schlussrechnung 01.03.–15.03., not an
+    /// ordinary March invoice.
+    #[test]
+    fn an_ended_supply_plans_its_schlussrechnung() {
+        let c = cand("MONATLICH", Some(date!(2026 - 03 - 15)), true);
+        let plan = plan_periods(&c, date!(2026 - 04 - 05), 2, Some(date!(2026 - 02 - 28)));
+        assert_eq!(
+            plan,
+            vec![
+                Planned {
+                    from: date!(2026 - 02 - 01),
+                    to: date!(2026 - 02 - 28),
+                    schluss: false
+                },
+                Planned {
+                    from: date!(2026 - 03 - 01),
+                    to: date!(2026 - 03 - 15),
+                    schluss: true
+                },
+            ]
+        );
+    }
+
+    /// Once the Schlussrechnung is written, the next run plans no
+    /// second one.
+    #[test]
+    fn a_second_run_plans_no_second_schlussrechnung() {
+        let c = cand("MONATLICH", Some(date!(2026 - 03 - 15)), true);
+        let plan = plan_periods(&c, date!(2026 - 04 - 06), 2, Some(date!(2026 - 03 - 15)));
+        assert!(plan.iter().all(|p| !p.schluss), "{plan:?}");
+    }
+
+    /// A supply ending inside a period already billed in advance: the
+    /// Schlussrechnung covers only the days after the last billed one.
+    #[test]
+    fn a_schlussrechnung_starts_after_the_last_billed_day() {
+        let c = cand("JAEHRLICH", Some(date!(2026 - 08 - 20)), true);
+        let plan = plan_periods(&c, date!(2026 - 09 - 01), 3, Some(date!(2026 - 07 - 31)));
+        assert_eq!(
+            plan.last(),
+            Some(&Planned {
+                from: date!(2026 - 08 - 01),
+                to: date!(2026 - 08 - 20),
+                schluss: true
+            })
+        );
+        let billed_through =
+            plan_periods(&c, date!(2026 - 09 - 01), 3, Some(date!(2026 - 08 - 31)));
+        assert!(
+            billed_through.iter().all(|p| !p.schluss),
+            "billed in advance: nothing left"
+        );
+    }
+
+    /// Two components ending on different days are two candidates and get one
+    /// Schlussrechnung each.
+    #[test]
+    fn two_components_get_one_schlussrechnung_each() {
+        let strom = cand("JAEHRLICH", Some(date!(2026 - 03 - 15)), true);
+        let gas = cand("JAEHRLICH", Some(date!(2026 - 03 - 31)), true);
+        let today = date!(2026 - 04 - 10);
+        let ends: Vec<Date> = [strom, gas]
+            .iter()
+            .flat_map(|c| plan_periods(c, today, 3, Some(date!(2025 - 12 - 31))))
+            .filter(|p| p.schluss)
+            .map(|p| p.to)
+            .collect();
+        assert_eq!(ends, vec![date!(2026 - 03 - 15), date!(2026 - 03 - 31)]);
+    }
+
+    /// A `lieferende` already past ends the supply before vertragd's Ablauf
+    /// worker flags it — the last period is still a Schlussrechnung.
+    #[test]
+    fn a_past_lieferende_is_ended_before_the_flag() {
+        let c = cand("MONATLICH", Some(date!(2026 - 03 - 31)), false);
+        let plan = plan_periods(&c, date!(2026 - 04 - 02), 1, Some(date!(2026 - 02 - 28)));
+        assert_eq!(
+            plan,
+            vec![Planned {
+                from: date!(2026 - 03 - 01),
+                to: date!(2026 - 03 - 31),
+                schluss: true
+            }]
+        );
+    }
+
+    /// A supply still running plans no Schlussrechnung.
+    #[test]
+    fn a_running_supply_plans_none() {
+        let c = cand("MONATLICH", Some(date!(2026 - 12 - 31)), false);
+        assert!(
+            plan_periods(&c, date!(2026 - 04 - 02), 2, None)
+                .iter()
+                .all(|p| !p.schluss)
+        );
+    }
+
+    #[test]
+    fn a_refusal_keeps_its_code_and_an_internal_error_its_secret() {
+        let refused = anyhow::Error::from(crate::error::BillingError::unprocessable(
+            "NO_METER_DATA",
+            "no reading",
+        ));
+        assert_eq!(reason_of(&refused).0, "NO_METER_DATA");
+        let internal = anyhow::anyhow!("connection to 10.0.0.5 refused");
+        let (code, message) = reason_of(&internal);
+        assert_eq!(code, "INTERNAL");
+        assert!(!message.contains("10.0.0.5"));
     }
 
     #[test]

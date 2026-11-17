@@ -33,6 +33,89 @@ export interface BillingdTools {
       saturated: boolean;
     };
   };
+  list_unbilled_periods: {
+    input: {
+      /**
+       * Include the periods an invoice has since discharged (default `false`).
+       */
+      include_settled?: boolean | null;
+      /**
+       * Max results (default 100, clamped to 1–500).
+       */
+      limit?: number | null;
+    };
+    output: {
+      /**
+       * The earliest `due_on` first.
+       */
+      periods: UnbilledPeriodRow[];
+      /**
+       * How many periods `periods` holds.
+       */
+      count: number;
+      /**
+       * At least `limit` periods matched: more may be waiting than were listed.
+       */
+      saturated: boolean;
+    };
+  };
+  recompute_invoice: {
+    input: {
+      /**
+       * UUID of the billing record.
+       */
+      id: string;
+    };
+    output: {
+      /**
+       * The billing record.
+       */
+      record_id: string;
+      /**
+       * § 14 Abs. 4 Nr. 4 UStG Rechnungsnummer.
+       */
+      rechnungsnummer: string;
+      /**
+       * 11-digit MaLo-ID.
+       */
+      malo_id: string;
+      /**
+       * First day of the billed period.
+       */
+      period_from: BusinessDate;
+      /**
+       * Last day of the billed period.
+       */
+      period_to: BusinessDate;
+      verdict: Verdict;
+      /**
+       * Every line, in the invoice's order.
+       */
+      lines: LineView[];
+      /**
+       * Every document total.
+       */
+      totals: TotalView[];
+      /**
+       * Sum of the Vorauszahlungen deducted.
+       */
+      vorauszahlungen_eur: string;
+      /**
+       * The public Nachrechnen link printed on the invoice (and in its QR
+       * code), when `[nachrechnen]` is configured — what the customer opens.
+       */
+      public_link: string | null;
+    };
+  };
+  summarize_billing_deadlines: {
+    input: {};
+    output: {
+      /**
+       * One row per Lieferant (MP-ID).
+       */
+      lieferanten: DeadlineSummaryRow[];
+    };
+  };
 }
 /**
  * One billing record on the analyst review queue.
@@ -117,6 +200,177 @@ export interface RiskFinding {
    */
   blocking: boolean;
 }
+/**
+ * One recorded unbilled period, as the Desk's Heute and the MCP tool read it.
+ */
+export interface UnbilledPeriodRow {
+  malo_id: string;
+  lf_mp_id: string;
+  period_from: BusinessDate;
+  period_to: BusinessDate;
+  /**
+   * The period ends with the supply and is owed an Abschlussrechnung.
+   */
+  final_invoice: boolean;
+  /**
+   * Stable refusal code — word it from the catalogue, never show it raw.
+   */
+  reason_code: string;
+  /**
+   * The refusal's developer message (for „Details").
+   */
+  message: string;
+  /**
+   * § 40c Abs. 2 EnWG: the last day the invoice may reach the customer.
+   */
+  due_on: BusinessDate;
+  /**
+   * Days from today (Europe/Berlin) to `due_on`; negative once overdue.
+   */
+  days_left: number;
+  attempts: number;
+  /**
+   * The invoice that discharged the period; `None` while it is open.
+   */
+  settled_by: string | null;
+}
+/**
+ * The verdict, on top.
+ */
+export interface Verdict {
+  /**
+   * Every line and total recomputes and the seal holds — „Stimmt überein".
+   */
+  matches: boolean;
+  /**
+   * Every line and total recomputes to the cent.
+   */
+  arithmetic_matches: boolean;
+  /**
+   * The stored document still hashes to the seal taken at issue. `None`
+   * for a record never issued (no seal yet).
+   */
+  seal_holds: boolean | null;
+  /**
+   * The positions whose stated amount does not recompute.
+   */
+  mismatched_positions: number[];
+  /**
+   * The invoice was cancelled by a Storno.
+   */
+  storniert: boolean;
+}
+/**
+ * One recomputed line, amounts as decimal strings.
+ */
+export interface LineView {
+  /**
+   * `positionsnummer`, from 1.
+   */
+  position: number;
+  /**
+   * The line's text as printed.
+   */
+  text: string;
+  /**
+   * Quantity as stated.
+   */
+  quantity: string | null;
+  /**
+   * Unit (`KWH`, `Tage`, …).
+   */
+  unit: string | null;
+  /**
+   * Unit price in EUR, full precision.
+   */
+  unit_price_eur: string | null;
+  /**
+   * The line amount the invoice states.
+   */
+  stated_eur: string | null;
+  /**
+   * Quantity × unit price, to the cent.
+   */
+  recomputed_eur: string | null;
+  /**
+   * `stated − recomputed`.
+   */
+  difference_eur: string | null;
+  /**
+   * The line recomputes to the cent.
+   */
+  matches: boolean;
+  /**
+   * The calculation as the engine wrote it.
+   */
+  formula: string | null;
+  /**
+   * Provisions the line bills under.
+   */
+  rules: string[];
+  /**
+   * Where the unit price comes from.
+   */
+  price_source: string | null;
+  /**
+   * How the quantity was obtained (§ 40 Abs. 2 Nr. 6 EnWG).
+   */
+  quantity_source: string | null;
+  /**
+   * The quantity is an estimate or an Ersatzwert (§ 40a EnWG).
+   */
+  estimated: boolean;
+}
+/**
+ * One recomputed document total.
+ */
+export interface TotalView {
+  /**
+   * `NETTO`, `STEUER`, `STEUERBASIS`, `GESAMTSTEUER`, `BRUTTO`, `ZU_ZAHLEN`.
+   */
+  kind: string;
+  /**
+   * VAT rate in percent, on a `STEUER` row.
+   */
+  rate_percent: string | null;
+  /**
+   * The amount the invoice states.
+   */
+  stated_eur: string | null;
+  /**
+   * The amount recomputed.
+   */
+  recomputed_eur: string;
+  /**
+   * The two agree to the cent.
+   */
+  matches: boolean;
+}
+/**
+ * One Lieferant's § 40c Abs. 2 EnWG standing — the Überblick tile.
+ */
+export interface DeadlineSummaryRow {
+  lf_mp_id: string;
+  /**
+   * Open unbilled periods still inside their deadline.
+   */
+  owed: number;
+  /**
+   * Invoices issued on or before their `due_on` (Berlin date of issue).
+   */
+  issued_on_time: number;
+  /**
+   * Invoices issued after their `due_on`.
+   */
+  issued_late: number;
+  /**
+   * Open unbilled periods past their deadline.
+   */
+  overdue: number;
+}
 
 /** Tools billingd serves without an output schema: no view may read them. */
 export const billingdUntyped = ["check_billing_anomaly","explain_invoice_position","get_billing_record","get_billing_summary","get_policy","get_xrechnung","list_billing_records","list_corrections","list_product_categories","list_vpp_settlements","preview_billing","validate_tariff_config"] as const;
+
+/** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
+export const billingdOberflaeche: Record<string, string> = {"list_review_queue":"e071e211","list_unbilled_periods":"52072d02","recompute_invoice":"01267f16","summarize_billing_deadlines":"5f711cce"};

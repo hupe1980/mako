@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useBelegZiel } from "../app/belege";
 import { fristArt } from "../app/prozesse";
+import { offeneFristen } from "../app/prozessStand";
 import { useRolle } from "../app/rollen";
 import type { DeadlineView, HistoryEntry } from "../data/gen/makod";
 import { call } from "../data/mcp";
@@ -9,8 +10,8 @@ import { FristUhr } from "../design/FristUhr";
 import { Notice } from "../design/Panel";
 import { antwortTeile } from "../format/antwort";
 import { formatCount } from "../format/count";
-import { epochMs, formatInstant } from "../format/date";
-import { useT } from "../i18n";
+import { formatInstant } from "../format/date";
+import { eintrag, useT } from "../i18n";
 
 function Message({ entry }: { entry: HistoryEntry }) {
   const t = useT();
@@ -35,6 +36,15 @@ function Message({ entry }: { entry: HistoryEntry }) {
           <span className="font-semibold">{antwort.code}</span>
           {" — "}
           <span className={entry.bedeutung ? undefined : "text-text-2"}>{antwort.text}</span>
+        </p>
+      )}
+      {entry.akteur && (
+        // Who caused it, as makod states the class; a proposal was involved
+        // only in an approval, so only those carry the assistant's colour.
+        <p
+          className={`m-0 mt-0.5 text-caption ${entry.akteur === "freigabe" || entry.akteur === "freigabe-geaendert" ? "text-ai" : "text-text-2"}`}
+        >
+          {eintrag(t.verlauf.akteur, entry.akteur)}
         </p>
       )}
       <p className="m-0 mt-0.5 text-caption text-text-2">
@@ -105,6 +115,15 @@ function Row({ left, mid, right }: { left?: ReactNode; mid: ReactNode; right?: R
   );
 }
 
+/** makod's history of one process — one read, shared by every part of the page. */
+export function useHistorie(processId: string) {
+  const { rolle } = useRolle();
+  return useQuery({
+    queryKey: [rolle, "makod", "get_process_history", processId],
+    queryFn: () => call("makod", "get_process_history", { process_id: processId }),
+  });
+}
+
 /**
  * The Verlauf of one process: its messages as a thread — what arrived on the
  * left, what was sent on the right, the steps between quietly centred — and
@@ -114,20 +133,25 @@ function Row({ left, mid, right }: { left?: ReactNode; mid: ReactNode; right?: R
 export function Verlauf({
   processId,
   deadlines,
+  bis = null,
+  vorspann,
 }: {
   processId: string;
   deadlines: DeadlineView[];
+  /** Show the process as of this event's sequence; null for now. */
+  bis?: number | null;
+  /** Under the heading, above the thread: the Stand control. */
+  vorspann?: ReactNode;
 }) {
   const t = useT();
-  const { rolle } = useRolle();
-  const history = useQuery({
-    queryKey: [rolle, "makod", "get_process_history", processId],
-    queryFn: () => call("makod", "get_process_history", { process_id: processId }),
-  });
+  const history = useHistorie(processId);
   // An answer citing this Verlauf marks it while the citation has focus.
   const beleg = useBelegZiel(`makod/get_process_history/${processId}`);
-  const pending = deadlines.flatMap((d) => (d.due_at ? [{ ...d, due_at: d.due_at }] : []));
-  pending.sort((a, b) => epochMs(a.due_at) - epochMs(b.due_at));
+  // An earlier Stand knows nothing of the deadlines pending now.
+  const pending = bis === null ? offeneFristen(deadlines) : [];
+  const eintraege = (history.data?.eintraege ?? []).filter(
+    (e) => bis === null || e.sequence <= bis,
+  );
 
   return (
     <section
@@ -136,12 +160,13 @@ export function Verlauf({
       className="border-t border-separator px-6 py-5"
     >
       <div className="mb-3 flex items-baseline gap-3">
-        <h3 id={`verlauf-${processId}`} className="m-0 text-body font-semibold">
+        <h2 id={`verlauf-${processId}`} className="m-0 text-headline">
           {t.verlauf.titel}
-        </h3>
+        </h2>
         <span className="flex-1" />
         <span className="text-caption text-text-2">{t.verlauf.legende}</span>
       </div>
+      {vorspann}
       {history.isError && (
         <Notice tone="failure" title={t.verlauf.fehler}>
           {history.error.message}
@@ -150,7 +175,7 @@ export function Verlauf({
       {history.isPending && <div className="skeleton h-24" />}
       {history.data && (
         <ol className="relative m-0 list-none p-0 before:absolute before:top-2 before:bottom-2 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-separator">
-          {zeilen(history.data.eintraege).map((z) =>
+          {zeilen(eintraege).map((z) =>
             Array.isArray(z) ? (
               <Row
                 key={`s${z[0]?.sequence}`}

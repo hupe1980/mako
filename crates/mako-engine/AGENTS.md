@@ -130,10 +130,13 @@ Use `FormatVersion::parse(s)?` for user-supplied strings. `FormatVersion::new(..
 ```rust
 // Spawn a new process
 let process = ctx.spawn::<MyWorkflow>(tenant_id, workflow_id);
-let ran = process.run(command, RunOptions::new()).await?;   // the one way to run a command
+// Every event names who caused it: `RunOptions::by(Akteur::Person { .. })` for a
+// person's command, `RunOptions::system()` for an inbound message or a follow-up.
+// There is no actor-less constructor; `run_timeout` always stamps `System`.
+let ran = process.run(command, RunOptions::system()).await?;   // the one way to run a command
 
 // A fired deadline: the workflow's own on_deadline decides the command
-let acted = process.run_timeout(&deadline, RunOptions::new()).await?;
+let acted = process.run_timeout(&deadline, RunOptions::system()).await?;
 
 // Resume an existing process by identity (looked up via ProcessRegistry)
 let identity = ctx.registry().lookup(tenant, &conv_id).await?.unwrap();

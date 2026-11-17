@@ -121,8 +121,9 @@ const TENANT: &str = "9910000000002";
 /// Every action the router enforces must be decidable by the policy. A typo in
 /// either place — a renamed action, a handler wired to a string no policy
 /// mentions — turns into an endpoint nobody can reach.
-const ALL_ACTIONS: [&str; 9] = [
+const ALL_ACTIONS: [&str; 10] = [
     "read-billing",
+    "read-billing-by-token",
     "preview-billing",
     "run-billing",
     "settle-flexibility",
@@ -133,11 +134,14 @@ const ALL_ACTIONS: [&str; 9] = [
     "issue-billing",
 ];
 
-/// The service's own market roles reach every action.
+/// The service's own market roles reach every action but the token lookup.
 #[test]
 fn a_lieferant_may_operate_the_service() {
     let e = enforcer();
-    for action in ALL_ACTIONS {
+    for action in ALL_ACTIONS
+        .into_iter()
+        .filter(|a| *a != "read-billing-by-token")
+    {
         assert!(
             e.check(&principal(TENANT, &["LF"]), action, TENANT).is_ok(),
             "LF must be able to {action}"
@@ -212,13 +216,30 @@ fn no_role_crosses_the_tenant_boundary() {
 #[test]
 fn the_dev_admin_principal_reaches_every_endpoint() {
     let e = enforcer();
-    let dev = principal(TENANT, &["NB", "LF", "MSB"]);
+    let dev = CedarPrincipal {
+        sub: "dev-admin".to_owned(),
+        ..principal(TENANT, &["NB", "LF", "MSB"])
+    };
     for action in ALL_ACTIONS {
+        // The token route is portald's alone, in the demo too: there portald
+        // calls with its own configured service key, so the dev principal is
+        // never what reaches it.
+        if action == "read-billing-by-token" {
+            assert!(
+                e.check(&dev, action, TENANT).is_err(),
+                "dev-admin must not read an invoice by its verify token"
+            );
+            continue;
+        }
         assert!(
             e.check(&dev, action, TENANT).is_ok(),
             "dev-admin must be able to {action}"
         );
     }
+    assert!(
+        e.check(&dev, "read-billing-by-token", TENANT).is_err(),
+        "dev-admin must not read an invoice by its verify token"
+    );
 }
 
 /// An action the policy never mentions is denied, not defaulted — Cedar is
@@ -230,4 +251,23 @@ fn an_unknown_action_is_denied() {
         e.check(&principal(TENANT, &["LF"]), "delete-everything", TENANT)
             .is_err()
     );
+}
+
+/// A verify token is the customer's credential, relayed by portald.
+/// Its service principal reads by token; an operator holding every market
+/// role does not, nor does portald in another tenant.
+#[test]
+fn only_portald_reads_by_verify_token() {
+    let e = enforcer();
+    let portald = CedarPrincipal {
+        sub: "portald".to_owned(),
+        ..principal(TENANT, &[])
+    };
+    assert!(e.check(&portald, "read-billing-by-token", TENANT).is_ok());
+    assert!(
+        e.check(&portald, "read-billing-by-token", "9908888888888")
+            .is_err()
+    );
+    let operator = principal(TENANT, &["LF", "MSB", "ESA", "NB"]);
+    assert!(e.check(&operator, "read-billing-by-token", TENANT).is_err());
 }

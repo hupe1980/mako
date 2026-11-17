@@ -1,0 +1,2237 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "marktd — Master Data Manager",
+    "description": "REST API for the `marktd` master-data daemon (Marktlokation, Messlokation, Verträge, Partner, Subscriptions, Process Correlation, VersorgungsStatus, PRICAT).",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.37.0"
+  },
+  "paths": {
+    "/api/v1/lokationsbuendelstrukturen": {
+      "get": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`GET /api/v1/lokationsbuendelstrukturen` — every published\nLokationsbündelstruktur with its Bezeichnung, so a reader names a\n`lokationsbuendelcode` without a copy of the Codeliste.",
+        "operationId": "list_lokationsbuendelstrukturen",
+        "responses": {
+          "200": {
+            "description": "The Codeliste der Lokationsbündelstrukturen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Lokationsbuendelstrukturen"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-utilmd-stammdaten"
+          }
+        }
+      }
+    },
+    "/api/v1/malos": {
+      "get": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`GET /api/v1/malos`",
+        "operationId": "list_malo",
+        "parameters": [
+          {
+            "name": "sparte",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "example": "STROM"
+          },
+          {
+            "name": "zuordnungstyp",
+            "in": "query",
+            "description": "Filter by `zuordnungstyp` in active role assignments (e.g. `NB`, `LF`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "rollencodenummer",
+            "in": "query",
+            "description": "Filter by `rollencodenummer` (GLN) in active role assignments.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "fallgruppe",
+            "in": "query",
+            "description": "Filter by Gas GaBi RLM Fallgruppe (e.g. `GABI_RLM_MIT_TAGESBAND`).\nGas only — Strom MaLos have no Fallgruppe.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "bilanzierungsmethode",
+            "in": "query",
+            "description": "Filter by billing mode (e.g. `RLM`, `SLP`, `IMS`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "regelzone",
+            "in": "query",
+            "description": "Filter by Regelzone EIC code (e.g. `10YDE-EON------1`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 0
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 50
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of Marktlokationen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MaloResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/malos/{id}": {
+      "get": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`GET /api/v1/malos/:id`",
+        "operationId": "get_malo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "11-digit MaLo-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaloResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`PUT /api/v1/malos/:id`",
+        "operationId": "put_malo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "11-digit MaLo-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaloUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "409": {
+            "description": "Version conflict"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        }
+      }
+    },
+    "/api/v1/malos/{id}/lokationsbuendel": {
+      "get": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`GET /api/v1/malos/{id}/lokationsbuendel?stichtag=YYYY-MM-DD`.",
+        "operationId": "get_lokationsbuendel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stichtag",
+            "in": "query",
+            "description": "The date the bündel is resolved for (YYYY-MM-DD)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Lokationsbündel on the Stichtag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Lokationsbuendel"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-utilmd-stammdaten"
+          },
+          "404": {
+            "description": "`malo_not_found`"
+          },
+          "422": {
+            "description": "`invalid_malo_id` or an invalid `stichtag`"
+          }
+        }
+      }
+    },
+    "/api/v1/melos/{id}": {
+      "get": {
+        "tags": [
+          "melo"
+        ],
+        "summary": "`GET /api/v1/melos/:id`",
+        "operationId": "get_melo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "MeLo-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeloResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "melo"
+        ],
+        "summary": "`PUT /api/v1/melos/:id`",
+        "description": "# Single-write-path invariant (MaLo ↔ MeLo)\n\nThis PUT is the only writer of the `melo.malo_id` FK, and the repository\nmaintains the corresponding `melo → malo` edge in the temporal\n`lokationszuordnungen` graph in the same transaction: the graph is always a\nsuperset of the FK (the FK is a derived convenience for \"current parent\"),\nand reparenting closes the previous open edge (`valid_to`). See\n`marktd::pg::melo` for the reconciliation rules.",
+        "operationId": "put_melo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "MeLo-ID (DE + 31 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeloUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "409": {
+            "description": "Version conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/melos/{id}/standorteigenschaften": {
+      "get": {
+        "tags": [
+          "melo"
+        ],
+        "summary": "`GET /api/v1/melos/:id/standorteigenschaften`",
+        "description": "Returns the typed BO4E `Standorteigenschaften` for the MeLo — carrying\n`StandorteigenschaftenStrom` (regelzone EIC, bilanzierungsgebietEic) and/or\n`StandorteigenschaftenGas` (druckstufe). Required for Redispatch 2.0\n`NetworkConstraintDocument` cross-references and Gas billing zone routing.\n\nReturns 404 when the MeLo has no `standorteigenschaften` column populated yet.\nUse `PUT /api/v1/melos/{id}` with a `data.standorteigenschaften` field to populate it.",
+        "operationId": "get_melo_standorteigenschaften",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "MeLo-ID (DE + 31 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Standorteigenschaften",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "MeLo not found or no Standorteigenschaften"
+          }
+        }
+      }
+    },
+    "/api/v1/msb-rahmenvertraege": {
+      "get": {
+        "tags": [
+          "msb-rahmenvertraege"
+        ],
+        "summary": "`GET /api/v1/msb-rahmenvertraege` — list conclusion records.",
+        "operationId": "list_msb_rv",
+        "parameters": [
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "Filter by Sparte (STROM / GAS)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nb_mp_id",
+            "in": "query",
+            "description": "Filter by NB MP-ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "msb_mp_id",
+            "in": "query",
+            "description": "Filter by MSB MP-ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by lifecycle status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conclusion records, newest valid_from first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MsbRahmenvertrag"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-msb-rv scope"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "msb-rahmenvertraege"
+        ],
+        "summary": "`PUT /api/v1/msb-rahmenvertraege` — upsert a conclusion record.",
+        "description": "Idempotent on the natural key `(sparte, nb_mp_id, msb_mp_id, valid_from)`;\nthe record id stays stable across re-submits. A non-zero `version` in the\nbody acts as an optimistic-locking guard. The row and its CloudEvent\ncommit in one transaction.",
+        "operationId": "upsert_msb_rv",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MsbRvUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upserted; returns stable id and new version"
+          },
+          "403": {
+            "description": "Missing write-msb-rv scope"
+          },
+          "412": {
+            "description": "Supplied version does not match the stored version"
+          },
+          "422": {
+            "description": "An invalid window, a Strom row with a Gas-only status, or a window overlapping another contract of the same parties and Sparte"
+          }
+        }
+      }
+    },
+    "/api/v1/msb-rahmenvertraege/check": {
+      "get": {
+        "tags": [
+          "msb-rahmenvertraege"
+        ],
+        "summary": "`GET /api/v1/msb-rahmenvertraege/check` — is a contract `abgeschlossen`\nand valid on `datum`?",
+        "description": "Always `200` with a Befund: `abgeschlossen: false` names why (no contract,\nonly offered, to be adapted, ended). A database failure is `500`, never a\n`false` — an outage is not evidence that no contract exists.",
+        "operationId": "check_msb_rv",
+        "parameters": [
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "STROM or GAS",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nb_mp_id",
+            "in": "query",
+            "description": "The NB's MP-ID in that Sparte",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "msb_mp_id",
+            "in": "query",
+            "description": "The MSB's MP-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "datum",
+            "in": "query",
+            "description": "The day the contract must be valid on (YYYY-MM-DD)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Befund for that day",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MsbRvPruefung"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing or malformed query parameter"
+          },
+          "403": {
+            "description": "Missing read-msb-rv scope"
+          }
+        }
+      }
+    },
+    "/api/v1/msb-rahmenvertraege/{id}": {
+      "get": {
+        "tags": [
+          "msb-rahmenvertraege"
+        ],
+        "summary": "`GET /api/v1/msb-rahmenvertraege/{id}` — fetch one record.",
+        "operationId": "get_msb_rv",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Record id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MsbRahmenvertrag"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-msb-rv scope"
+          },
+          "404": {
+            "description": "Unknown id"
+          }
+        }
+      }
+    },
+    "/api/v1/netzzugang/antraege": {
+      "get": {
+        "tags": [
+          "netzzugang"
+        ],
+        "summary": "`GET /api/v1/netzzugang/antraege` — list requests.",
+        "operationId": "list_antraege",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by lifecycle status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "netzanschluss_id",
+            "in": "query",
+            "description": "Filter by Netzanschluss",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requests incl. version, newest first"
+          },
+          "403": {
+            "description": "Missing read-netzzugang scope"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "netzzugang"
+        ],
+        "summary": "`PUT /api/v1/netzzugang/antraege` — upsert a request (makod adapter).",
+        "operationId": "upsert_antrag",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upserted; returns id and version"
+          },
+          "400": {
+            "description": "Missing netzanschluss_id / nb_mp_id"
+          },
+          "403": {
+            "description": "Missing write-netzzugang scope"
+          }
+        }
+      }
+    },
+    "/api/v1/netzzugang/antraege/{id}": {
+      "get": {
+        "tags": [
+          "netzzugang"
+        ],
+        "summary": "`GET /api/v1/netzzugang/antraege/{id}` — fetch a request.",
+        "operationId": "get_antrag",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Request id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request incl. version"
+          },
+          "403": {
+            "description": "Missing read-netzzugang scope"
+          },
+          "404": {
+            "description": "Unknown id"
+          }
+        }
+      }
+    },
+    "/api/v1/netzzugang/antraege/{id}/status": {
+      "patch": {
+        "tags": [
+          "netzzugang"
+        ],
+        "summary": "`PATCH /api/v1/netzzugang/antraege/{id}/status` — advance the lifecycle.",
+        "description": "Used by the makod sender (`uebermittelt`/`fehlgeschlagen`) and by the\noperator or answer channel (`bestaetigt`/`abgelehnt`).",
+        "operationId": "set_antrag_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Request id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated request incl. new version"
+          },
+          "403": {
+            "description": "Missing write-netzzugang scope"
+          },
+          "404": {
+            "description": "Unknown id"
+          },
+          "412": {
+            "description": "expected_version does not match the stored version"
+          }
+        }
+      }
+    },
+    "/api/v1/pricat/{nb_mp_id}/dispatch": {
+      "post": {
+        "tags": [
+          "crate::handlers::pricat"
+        ],
+        "summary": "`POST /api/v1/pricat/{nb_mp_id}/dispatch`",
+        "description": "Enqueue immediate (re-)dispatch of the latest PRICAT version for the given NB\nto all currently active LF partners.\n\nThe actual dispatch happens asynchronously in the background. Returns `202\nAccepted` with the version ID that was queued.\n\nUse this endpoint to manually trigger dispatch after an AS4 connectivity\nincident, or to force re-distribution to newly on-boarded LF partners without\nwaiting for the next scheduled scan.",
+        "operationId": "post_pricat_dispatch",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "NB GLN to dispatch PRICAT for",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Dispatch enqueued"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "No PRICAT version found for this NB"
+          }
+        }
+      }
+    },
+    "/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}": {
+      "get": {
+        "tags": [
+          "crate::handlers::pricat"
+        ],
+        "summary": "`GET /api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}`",
+        "description": "Returns the dispatch audit log for a specific PRICAT version — one entry per\nLF partner that was reached (or attempted).",
+        "operationId": "get_dispatch_log",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "NB GLN",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "description": "PRICAT version UUID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dispatch log entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DispatchLogEntry"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/pricat/{nb_mp_id}/history": {
+      "get": {
+        "tags": [
+          "crate::handlers::pricat"
+        ],
+        "summary": "`GET /api/v1/pricat/{nb_mp_id}/history`",
+        "description": "Returns all versioned PRICAT snapshots for the given NB GLN, newest first.\nEach entry includes dispatch state so operators can monitor the pipeline.",
+        "operationId": "get_pricat_history",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "NB GLN (13-digit BDEW/DVGW code)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PRICAT version history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PriCatVersionSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/versorgung/{malo_id}": {
+      "get": {
+        "tags": [
+          "versorgung"
+        ],
+        "summary": "`GET /api/v1/versorgung/{malo_id}` — the current supply state, or with\n`?at=YYYY-MM-DD` the state as of that German calendar day.",
+        "operationId": "get_versorgung_at",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "description": "Point-in-time date in `YYYY-MM-DD` format (German local time, i.e. CET/CEST).\n\nWhen present, returns the supply state as it was at end-of-day on this date,\nreconstructed from the history log.  Omit for the current state.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "example": "2025-04-01"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The supply state; `ETag` carries its version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersorgungsStatusResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-versorgungsstatus"
+          },
+          "404": {
+            "description": "`versorgung_not_found`"
+          },
+          "422": {
+            "description": "`invalid_malo_id` or an invalid `at`"
+          }
+        }
+      }
+    },
+    "/api/v1/versorgung/{malo_id}/history": {
+      "get": {
+        "tags": [
+          "versorgung"
+        ],
+        "summary": "`GET /api/v1/versorgung/{malo_id}/history` — the supply-state change\nhistory, newest first, paged.",
+        "operationId": "get_versorgungsstatus_history",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 0
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 50
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersorgungsStatusHistorie"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-versorgungsstatus"
+          },
+          "422": {
+            "description": "`invalid_malo_id`"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Angaben": {
+        "type": "object",
+        "description": "The NB's Angaben of the bündel no BO4E object carries — one dated row.",
+        "required": [
+          "valid_from",
+          "nna_positionen",
+          "obis",
+          "register"
+        ],
+        "properties": {
+          "nna_positionen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Nna"
+            }
+          },
+          "obis": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Obis"
+            }
+          },
+          "profilverfahren": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Verfahren"
+              }
+            ]
+          },
+          "register": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Register"
+            }
+          },
+          "standardlastprofil": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "technische_einrichtungen": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "uenb_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          }
+        }
+      },
+      "DispatchLogEntry": {
+        "type": "object",
+        "description": "One dispatch audit entry.",
+        "required": [
+          "id",
+          "lf_mp_id",
+          "dispatched_at",
+          "outcome"
+        ],
+        "properties": {
+          "dispatched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lf_mp_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "Granularitaet": {
+        "type": "string",
+        "description": "The Wertegranularität of a register.",
+        "enum": [
+          "JAEHRLICH",
+          "HALBJAEHRLICH",
+          "QUARTALSWEISE",
+          "MONATLICH"
+        ]
+      },
+      "Kante": {
+        "type": "object",
+        "description": "One edge of the bündel valid on the Stichtag, half-open\n`[valid_from, valid_to)`.",
+        "required": [
+          "von_id",
+          "von_typ",
+          "nach_id",
+          "nach_typ"
+        ],
+        "properties": {
+          "nach_id": {
+            "type": "string"
+          },
+          "nach_typ": {
+            "$ref": "#/components/schemas/Objekttyp"
+          },
+          "valid_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "von_id": {
+            "type": "string"
+          },
+          "von_typ": {
+            "$ref": "#/components/schemas/Objekttyp"
+          }
+        }
+      },
+      "Lieferstatus": {
+        "type": "string",
+        "description": "The Lieferstatus of a Marktlokation.",
+        "enum": [
+          "Beliefert",
+          "Unbeliefert",
+          "Grundversorgung",
+          "Ersatzversorgung",
+          "Ruhend",
+          "Stillgelegt"
+        ]
+      },
+      "Lokationsbuendel": {
+        "type": "object",
+        "description": "The Lokationsbündel of a Marktlokation on a Stichtag — the read model\nbehind the Geschäftsdatenanfrage answers 55035 / 55095 / 55060 (UTILMD AHB\nStrom 2.2 Kap. 9.5). Its wire is [`MaloLokationsbuendel`]'s, which makod\nreads with `deny_unknown_fields`, so it carries no field that type lacks;\nthe Lokationsbündelstruktur's wording is [`lokationsbuendelstrukturen`].",
+        "required": [
+          "malo_id",
+          "stichtag",
+          "lokationsbuendelcodes",
+          "objekte",
+          "zuordnungen",
+          "zaehler"
+        ],
+        "properties": {
+          "angaben": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Angaben",
+                "description": "The NB's Angaben row covering the Stichtag."
+              }
+            ]
+          },
+          "energierichtung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BO4E `Marktlokation.energierichtung` — `AUSSP` verbrauchend, `EINSP`\nerzeugend."
+          },
+          "lokationsbuendelcodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every distinct `lokationsbuendelcode` the bündel's edges carry; more\nthan one is a graph that disagrees with itself."
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "objekte": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Objekt"
+            },
+            "description": "Every object reached, the Marktlokation itself first."
+          },
+          "stichtag": {
+            "type": "string",
+            "format": "date",
+            "description": "The date every edge and the Angaben row are resolved for."
+          },
+          "zaehler": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Zaehler"
+            },
+            "description": "The Zähler of the bündel's Messlokationen."
+          },
+          "zuordnungen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Kante"
+            },
+            "description": "Every edge valid on the Stichtag that reached them."
+          }
+        }
+      },
+      "Lokationsbuendelstruktur": {
+        "type": "object",
+        "description": "One published Lokationsbündelstruktur.",
+        "required": [
+          "code",
+          "bezeichnung"
+        ],
+        "properties": {
+          "bezeichnung": {
+            "type": "string",
+            "description": "Its Bezeichnung in the Codeliste der Lokationsbündelstrukturen."
+          },
+          "code": {
+            "type": "string",
+            "description": "The `lokationsbuendelcode`."
+          }
+        }
+      },
+      "Lokationsbuendelstrukturen": {
+        "type": "object",
+        "description": "The Codeliste der Lokationsbündelstrukturen (EDI@Energy, BDEW V1.0,\n31.03.2023), as `rubo4e::lokationsbuendel::STRUKTUREN` carries it.",
+        "required": [
+          "strukturen"
+        ],
+        "properties": {
+          "strukturen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Lokationsbuendelstruktur"
+            }
+          }
+        }
+      },
+      "MaloResponse": {
+        "type": "object",
+        "required": [
+          "malo_id",
+          "sparte",
+          "version",
+          "data",
+          "rollenzuordnung"
+        ],
+        "properties": {
+          "bilanzierungsgebiet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bilanzierungsgebiet EIC code extracted from `data.bilanzierungsgebiet`.\nUsed by `processd` NB check 4 as primary source; falls back to `malo_grid` when absent."
+          },
+          "bilanzierungsmethode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Billing mode extracted from `Marktlokation.bilanzierungsmethode`.\n\nValues: `\"RLM\"` | `\"SLP\"` | `\"TLP_GEMEINSAM\"` | `\"TLP_GETRENNT\"` | `\"PAUSCHAL\"` | `\"IMS\"`.\n`\"RLM\"` → `netzbilanzd` includes Leistungspreis position (`spitzenleistung_kw` required).\n`\"SLP\"` → Arbeitspreis only."
+          },
+          "data": {
+            "type": "object",
+            "description": "Validated BO4E `Marktlokation` payload in canonical camelCase form.\nSchema is enforced on every `PUT` — enum fields like `bilanzierungsmethode`\nand `netzebene` are rejected with 422 if they contain unknown values."
+          },
+          "energierichtung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BO4E `Energierichtung`, named from the grid's point of view:\n`\"EINSP\"` = generation (feeds the grid), `\"AUSSP\"` = consumption."
+          },
+          "fallgruppe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Gas GaBi RLM Fallgruppe (`data[\"fallgruppenzuordnung\"]`) — determines GaBi billing\ncategory. Values: `GABI_RLM_MIT_TAGESBAND` | `GABI_RLM_OHNE_TAGESBAND` |\n`GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN`. Required for Gas MMM settlement routing."
+          },
+          "fernsteuerbar": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "§14a EnWG „Status der Fernsteuerbarkeit\" (`true` = technisch fernsteuerbar,\n`false` = nicht fernsteuerbar). Populated from UTILMD `CCI+7037` Z97/Z96."
+          },
+          "gasqualitaet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Gas quality extracted from `data.gasqualitaet` (`\"H_GAS\"` | `\"L_GAS\"`)."
+          },
+          "lokationsbuendel_objektcode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lokationsbündel object code (`Marktlokation.lokationsbuendelObjektcode`,\nUTILMD Lokationsbündelstruktur)."
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "netzebene": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Voltage/pressure level extracted from `data.netzebene` — a BO4E\n`Netzebene` wire value (`\"NSP\"`, `\"MSP\"`, `\"HSP\"`, `\"HSS\"`, `\"MSP_NSP_UMSP\"`, …).\nAvailable immediately on write; no separate grid provisioning needed."
+          },
+          "regelzone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Regelzone EIC code (`Marktlokation.regelzone`) — maps to the ÜNB for MABIS IFTSTA 21000\nrouting and Redispatch 2.0 Stammdaten forwarding (VNB → ÜNB)."
+          },
+          "rollenzuordnung": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "sparte": {
+            "type": "string",
+            "example": "STROM"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "MaloUpsertRequest": {
+        "type": "object",
+        "required": [
+          "sparte",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "description": "Full BO4E MARKTLOKATION payload."
+          },
+          "rollenzuordnung": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "sparte": {
+            "type": "string",
+            "description": "\"STROM\" or \"GAS\"",
+            "example": "STROM"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MeloResponse": {
+        "type": "object",
+        "required": [
+          "melo_id",
+          "version",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Validated BO4E `Messlokation` payload in canonical camelCase form.\n`_typ` is auto-injected on write; enum fields validated on write."
+          },
+          "lokationsbuendel_objektcode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lokationsbündel object code (`Messlokation.lokationsbuendelObjektcode`,\nUTILMD Lokationsbündelstruktur)."
+          },
+          "malo_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "melo_id": {
+            "type": "string"
+          },
+          "netzebene_messung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Voltage/pressure level at the metering point (`Messlokation.netzebeneMessung`)."
+          },
+          "regelzone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Regelzone EIC code extracted from `standorteigenschaften.eigenschaftenStrom[0].regelzone`.\nMaps this MeLo to the ÜNB for Redispatch 2.0 Stammdaten routing."
+          },
+          "standorteigenschaften": {
+            "description": "Full BO4E `Standorteigenschaften` JSONB — carries `StandorteigenschaftenStrom`\n(regelzone, bilanzierungsgebietEic) and `StandorteigenschaftenGas` (druckstufe).\nRequired for Redispatch 2.0 `NetworkConstraintDocument` and Gas billing zones."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "MeloUpsertRequest": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "description": "Full BO4E MESSLOKATION payload.\n\nThe BO4E schema version is **not** a request field: it is provenance,\nand only the server knows which series it parsed the payload under. It\nis returned on the `GET`."
+          },
+          "malo_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Associated MaLo-ID (optional)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MsbRahmenvertrag": {
+        "type": "object",
+        "description": "An MSB framework-contract record **as stored**.\n\nThe natural key is `(tenant, sparte, nb_mp_id, msb_mp_id, valid_from)` —\nupserts are idempotent on it and keep the `id` stable.\n\n`vertrag` reads back as opaque JSON, the way every stored BO4E document in\nmako does: a row may predate the current schema series. What goes *in* is\n[`MsbRvUpsertRequest`], gated.",
+        "required": [
+          "id",
+          "tenant",
+          "sparte",
+          "nb_mp_id",
+          "msb_mp_id",
+          "status",
+          "valid_from",
+          "vertrag",
+          "version"
+        ],
+        "properties": {
+          "fassung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contract text edition. Gas: `KoV XV Anlage 8` unless named otherwise\n(legacy: `BK7-17-026`). Strom: as the parties name it, or absent."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "msb_mp_id": {
+            "type": "string"
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "signed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "sparte": {
+            "type": "string",
+            "example": "GAS"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MsbRvStatus"
+          },
+          "tenant": {
+            "type": "string"
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date",
+            "description": "First day of validity, inclusive."
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "First day **no longer** valid (half-open `[valid_from, valid_to)`)."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-locking version, incremented on every successful write."
+          },
+          "vertrag": {
+            "description": "The stored BO4E `Vertrag` (vertragsart `RAHMENVERTRAG`), as stored."
+          }
+        }
+      },
+      "MsbRvBefund": {
+        "type": "string",
+        "description": "What the registry says about one (Sparte, NB, MSB, day).",
+        "enum": [
+          "abgeschlossen",
+          "kein_vertrag",
+          "angeboten",
+          "anpassung_erforderlich",
+          "beendet"
+        ]
+      },
+      "MsbRvPruefung": {
+        "type": "object",
+        "description": "The answer of `GET /api/v1/msb-rahmenvertraege/check`.",
+        "required": [
+          "abgeschlossen",
+          "befund"
+        ],
+        "properties": {
+          "abgeschlossen": {
+            "type": "boolean",
+            "description": "`true` only when a contract with status `abgeschlossen` is valid on\n`datum`."
+          },
+          "befund": {
+            "$ref": "#/components/schemas/MsbRvBefund"
+          },
+          "vertrag": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MsbRahmenvertrag",
+                "description": "The contract covering `datum`, when one does."
+              }
+            ]
+          }
+        }
+      },
+      "MsbRvStatus": {
+        "type": "string",
+        "description": "Lifecycle state of an MSB framework contract.",
+        "enum": [
+          "angeboten",
+          "abgeschlossen",
+          "anpassung_erforderlich",
+          "beendet"
+        ]
+      },
+      "MsbRvUpsertRequest": {
+        "type": "object",
+        "description": "The `PUT /api/v1/msb-rahmenvertraege` body.\n\nSeparate from [`MsbRahmenvertrag`] because the two directions are not\nsymmetric: what is **written** must cross the BO4E gate, and what is\n**read** is whatever was stored.",
+        "required": [
+          "sparte",
+          "nb_mp_id",
+          "msb_mp_id",
+          "valid_from"
+        ],
+        "properties": {
+          "fassung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contract text edition. Absent on a Gas row stores [`FASSUNG_GAS`];\nabsent on a Strom row stores nothing."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Optional: an id to keep stable. Absent → allocated on insert."
+          },
+          "msb_mp_id": {
+            "type": "string"
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "signed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "sparte": {
+            "type": "string",
+            "description": "`STROM` or `GAS` — required: the NB holds one MP-ID per Sparte, and a\ncontract of one Sparte never answers the other's lookup.",
+            "example": "STROM"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MsbRvStatus"
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-locking version; `0`/absent skips the check."
+          },
+          "vertrag": {
+            "type": "object",
+            "description": "The BO4E `Vertrag` (vertragsart `RAHMENVERTRAG`), crossing\n[the gate](mako_markt::bo4e::decode) as it deserialises.\n\nAbsent stores the empty object the column defaults to, not `null`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Nna": {
+        "type": "object",
+        "description": "One Netznutzungsabrechnungsposition.",
+        "required": [
+          "artikel_id",
+          "zu_abschlag_prozent"
+        ],
+        "properties": {
+          "artikel_id": {
+            "type": "string"
+          },
+          "zu_abschlag_prozent": {
+            "type": "string",
+            "format": "decimal",
+            "description": "Zuschlag (> 0) or Abschlag (< 0) in Prozent."
+          }
+        }
+      },
+      "Obis": {
+        "type": "object",
+        "description": "One OBIS-Kennzahl of the Marktlokation with its Verwendungszwecke.",
+        "required": [
+          "obis_kennzahl"
+        ],
+        "properties": {
+          "obis_kennzahl": {
+            "type": "string"
+          },
+          "verwendungszweck_lf": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verwendungszweck_nb": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verwendungszweck_uenb": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wertegranularitaet": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Granularitaet"
+              }
+            ]
+          }
+        }
+      },
+      "Objekt": {
+        "type": "object",
+        "description": "One object of the bündel.",
+        "required": [
+          "typ",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "objektcode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BO4E `lokationsbuendelObjektcode` — the object's position in the\nLokationsbündelstruktur."
+          },
+          "typ": {
+            "$ref": "#/components/schemas/Objekttyp"
+          }
+        }
+      },
+      "Objekttyp": {
+        "type": "string",
+        "description": "The kind of object in a Lokationsbündel.",
+        "enum": [
+          "MALO",
+          "MELO",
+          "NELO",
+          "SR",
+          "TR"
+        ]
+      },
+      "PriCatVersionSummary": {
+        "type": "object",
+        "description": "One entry in the PRICAT version history list.",
+        "required": [
+          "id",
+          "nb_mp_id",
+          "valid_from",
+          "bo4e_version",
+          "source",
+          "dispatch_state",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "bo4e_version": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dispatch_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dispatch_state": {
+            "type": "string",
+            "description": "Dispatch state: `pending` | `queued` | `done` | `error`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_from": {
+            "type": "string",
+            "description": "Start of validity period (ISO 8601 date)."
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "End of validity period, or `null` for open-ended."
+          }
+        }
+      },
+      "Register": {
+        "type": "object",
+        "description": "The Wertegranularität of one register of a Zähler.",
+        "required": [
+          "zaehler_id",
+          "obis_kennzahl",
+          "wertegranularitaet"
+        ],
+        "properties": {
+          "obis_kennzahl": {
+            "type": "string"
+          },
+          "wertegranularitaet": {
+            "$ref": "#/components/schemas/Granularitaet"
+          },
+          "zaehler_id": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusBody": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optimistic-locking guard: the version the caller last read. When\nsupplied and stale, the update fails with a version-conflict problem\nresponse instead of overwriting."
+          },
+          "platform_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Platform reference, once known."
+          },
+          "status": {
+            "type": "string",
+            "description": "Target lifecycle state."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SubscriptionResponse": {
+        "type": "object",
+        "required": [
+          "subscriber_id",
+          "webhook_url",
+          "roles",
+          "event_types",
+          "sparten",
+          "active",
+          "version"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sparten": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subscriber_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "webhook_url": {
+            "type": "string"
+          }
+        }
+      },
+      "SubscriptionUpsertRequest": {
+        "type": "object",
+        "required": [
+          "webhook_url"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sparten": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "webhook_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "webhook_url": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Verfahren": {
+        "type": "string",
+        "description": "The Verfahren of a normiertes Profil.",
+        "enum": [
+          "SYNTHETISCH",
+          "ANALYTISCH"
+        ]
+      },
+      "VersorgungsStatusHistorie": {
+        "type": "object",
+        "description": "One page of a Marktlokation's supply-state history, newest first.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VersorgungsStatusHistoryResponse"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based page index.",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Page size (at most 500).",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every change recorded for the Marktlokation, not only this page's.",
+            "minimum": 0
+          }
+        }
+      },
+      "VersorgungsStatusHistoryResponse": {
+        "type": "object",
+        "description": "One supply-state change of a Marktlokation.",
+        "required": [
+          "id",
+          "malo_id",
+          "lieferstatus",
+          "zuordnungen",
+          "nb_mp_id",
+          "version",
+          "valid_from"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_process_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lieferende": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "lieferstatus": {
+            "$ref": "#/components/schemas/Lieferstatus"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "msb_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The instant this state became active (RFC 3339)."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "zuordnungen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Zuordnung"
+            },
+            "description": "The assignment list as it stood at `valid_from`."
+          }
+        }
+      },
+      "VersorgungsStatusResponse": {
+        "type": "object",
+        "description": "The VersorgungsStatus of a Marktlokation — now, or as it stood on a date.",
+        "required": [
+          "malo_id",
+          "lieferstatus",
+          "zuordnungen",
+          "nb_mp_id",
+          "updated_at",
+          "version"
+        ],
+        "properties": {
+          "eog_seit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Start of the running Ersatz-/Grundversorgung (§38/§36 EnWG), if any."
+          },
+          "last_process_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lf_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The single active Lieferant, when there is exactly one.\n\nDerived from `zuordnungen` and **absent on a tranchierte\nMarktlokation**, where no single supplier exists — read `zuordnungen`\nthere rather than treating the omission as „unsupplied\"."
+          },
+          "lf_mp_id_next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The single announced Lieferant, when exactly one Anmeldung is pending.\nDerived, with the same caveat as `lf_mp_id`."
+          },
+          "lf_next_lieferbeginn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Lieferbeginn of the announced Lieferant."
+          },
+          "lieferbeginn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "lieferende": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "lieferstatus": {
+            "$ref": "#/components/schemas/Lieferstatus"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "msb_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this state was written (RFC 3339) — for a state read `at` a date,\nwhen that historic state became active."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-locking version, also the `ETag`."
+          },
+          "zuordnungen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Zuordnung"
+            },
+            "description": "Every Lieferant holding a share of this Marktlokation — the authoritative\nanswer to „who supplies it\". A tranchierte Marktlokation carries several."
+          }
+        }
+      },
+      "Zaehler": {
+        "type": "object",
+        "description": "A Zähler of one of the bündel's Messlokationen.",
+        "required": [
+          "melo_id",
+          "zaehler_id"
+        ],
+        "properties": {
+          "melo_id": {
+            "type": "string"
+          },
+          "zaehler_id": {
+            "type": "string"
+          },
+          "zaehlertyp_spezifikation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BO4E `Zaehler.zaehlertypSpezifikation` (`EDL40`, `EDL21`,\n`SONSTIGER_EHZ`, `MME_STANDARD`, `MME_MEDA`)."
+          }
+        }
+      },
+      "Zuordnung": {
+        "type": "object",
+        "description": "One Lieferant's share of a Marktlokation.",
+        "required": [
+          "lf_mp_id",
+          "prozent",
+          "status"
+        ],
+        "properties": {
+          "lf_mp_id": {
+            "type": "string",
+            "description": "MP-ID of the Lieferant holding this share."
+          },
+          "process_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The process that wrote this assignment."
+          },
+          "prozent": {
+            "type": "string",
+            "format": "decimal",
+            "description": "The share in percent — `100` for an untranchierte Marktlokation."
+          },
+          "status": {
+            "$ref": "#/components/schemas/Zuordnungsstatus"
+          },
+          "tranche_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Tranchen-ID of a tranchierte Marktlokation."
+          },
+          "zuordnungsbeginn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Zuordnungsbeginn — the Lieferbeginn of this assignment."
+          },
+          "zuordnungsende": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Zuordnungsende, once one is agreed."
+          }
+        }
+      },
+      "Zuordnungsstatus": {
+        "type": "string",
+        "description": "Whether a Zuordnung is announced (Anmeldung in flight) or running.",
+        "enum": [
+          "Angekuendigt",
+          "Aktiv"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "malo",
+      "description": "Marktlokation (MaLo) management"
+    },
+    {
+      "name": "melo",
+      "description": "Messlokation (MeLo) management"
+    },
+    {
+      "name": "subscriptions",
+      "description": "Webhook subscription management"
+    },
+    {
+      "name": "correlations",
+      "description": "Process correlation index"
+    },
+    {
+      "name": "partners",
+      "description": "Trading partner directory"
+    },
+    {
+      "name": "versorgung",
+      "description": "VersorgungsStatus per MaLo"
+    },
+    {
+      "name": "pricat",
+      "description": "PRICAT 27003 version history and dispatch"
+    },
+    {
+      "name": "netzzugang",
+      "description": "§20b EnWG Netzzugangsplattform request registry"
+    },
+    {
+      "name": "msb-rahmenvertraege",
+      "description": "MSB-Rahmenvertrag registry, both Sparten (§ 9 Abs. 1 Nr. 3 MsbG; Gas: GeLi Gas 3.0, KoV XV Anlage 8)"
+    },
+    {
+      "name": "health",
+      "description": "Health endpoints"
+    }
+  ]
+}

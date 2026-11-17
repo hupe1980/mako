@@ -39,7 +39,7 @@ export function Bewertung({ run, initial }: { run: string; initial?: boolean | n
     hold(
       `bewertung/${run}`,
       begruendung ? b.begruendet : hilfreich ? b.hilfreich : b.nichtHilfreich,
-      (keepalive) =>
+      ({ keepalive }) =>
         bewerten(run, hilfreich, begruendung, keepalive).then(
           () => setStand("gespeichert"),
           (e: unknown) =>

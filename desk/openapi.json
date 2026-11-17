@@ -1,0 +1,4584 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "mako services through the Desk gateway",
+    "version": "merged"
+  },
+  "paths": {
+    "/svc/accountingd/api/v1/accounts/{malo_id}/balance": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "`GET /api/v1/accounts/{malo_id}/balance` — the open-items balance\n(`crate::reads::balance`, shared with MCP `get_balance`).",
+        "operationId": "get_balance",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/accountingd.Kontostand"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-account` refused"
+          },
+          "404": {
+            "description": "`account_not_found`"
+          }
+        }
+      }
+    },
+    "/svc/accountingd/api/v1/accounts/{malo_id}/ledger": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "`GET /api/v1/accounts/{malo_id}/ledger` — the newest movements with the\nbalance the window opens at (`crate::reads::ledger`, shared with MCP\n`list_ledger`).",
+        "operationId": "get_ledger",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum movements, newest first (default 100, at most 1000); what is\ncut off is folded into `opening_ct`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The statement window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/accountingd.Kontoauszug"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-account` refused"
+          },
+          "404": {
+            "description": "`account_not_found`"
+          }
+        }
+      }
+    },
+    "/svc/accountingd/api/v1/dunning": {
+      "get": {
+        "tags": [
+          "books"
+        ],
+        "summary": "`GET /api/v1/dunning` — the open dunning cases, newest Mahnung first\n(`crate::reads::dunning`, shared with MCP `list_dunning`).",
+        "operationId": "get_dunning",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum cases (default 100, at most 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The open cases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/accountingd.Mahnfaelle"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-books` refused"
+          }
+        }
+      }
+    },
+    "/svc/accountingd/api/v1/offene-posten": {
+      "get": {
+        "tags": [
+          "books"
+        ],
+        "summary": "`GET /api/v1/offene-posten` — the accounts with an open balance, largest\nfirst (`crate::reads::overdue`, shared with MCP `list_overdue`). A\ntenant-wide book read, so Cedar `read-books`.",
+        "operationId": "get_offene_posten",
+        "parameters": [
+          {
+            "name": "min_balance_eur",
+            "in": "query",
+            "description": "Minimum balance in EUR, as a decimal string (e.g. `\"1.99\"`). Default: 1 ct minimum.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum accounts (default 100, at most 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/accountingd.UeberfaelligeKonten"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-books` refused"
+          },
+          "422": {
+            "description": "`invalid_min_balance`"
+          }
+        }
+      }
+    },
+    "/svc/accountingd/api/v1/payments/match": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "`POST /api/v1/payments/match` — the accounts an incoming payment may\nbelong to (`crate::reads::payment_match`, shared with MCP\n`suggest_payment_match`). Reads only; booking is the camt import or a\nmanual Buchung.",
+        "description": "A read posted as a body because it carries the payer's IBAN: in a query\nstring the IBAN lands in every access log and trace span that records the\nURI, which is personal data no log may hold.",
+        "operationId": "match_payment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/accountingd.PaymentMatchParams"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The candidates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/accountingd.Zahlungszuordnung"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-account` refused"
+          },
+          "422": {
+            "description": "A body that is not a payment to match"
+          }
+        }
+      }
+    },
+    "/svc/edmd/api/v1/corrections/{malo_id}": {
+      "get": {
+        "tags": [
+          "messwerte"
+        ],
+        "summary": "The corrections recorded for a Marktlokation (Cedar `read-corrections`).",
+        "operationId": "get_corrections",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Earliest `corrected_at`, RFC 3339; defaults to 90 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Latest `corrected_at`, RFC 3339; defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many (default 100, at most 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The corrections, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.Korrekturen"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_instant"
+          }
+        }
+      }
+    },
+    "/svc/edmd/api/v1/coverage/{malo_id}": {
+      "get": {
+        "tags": [
+          "messwerte"
+        ],
+        "summary": "One state per day — gemessen, ersatzwert, korrigiert, fehlt — for a\nMarktlokation (Cedar `read-timeseries`).",
+        "operationId": "get_coverage",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First day, `YYYY-MM-DD`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last day, `YYYY-MM-DD` (inclusive).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "`STROM`, `GAS`, `WAERME` or `WASSER`; absent, the Sparte the MaLo's\nreadings are stored under.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One state per day",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.Abdeckung"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_date, zeitraum_ungueltig"
+          },
+          "422": {
+            "description": "zeitraum_zu_lang, sparte_unklar"
+          }
+        }
+      }
+    },
+    "/svc/edmd/api/v1/quality/{malo_id}": {
+      "get": {
+        "tags": [
+          "messwerte"
+        ],
+        "summary": "The quality verdict over a window (Cedar `read-timeseries`).",
+        "operationId": "get_quality",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Window start, RFC 3339; defaults per route.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Window end, RFC 3339; defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.Qualitaetsbefund"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_instant"
+          },
+          "404": {
+            "description": "no_data: nothing stored in the window"
+          }
+        }
+      }
+    },
+    "/svc/edmd/api/v1/timeseries/{malo_id}": {
+      "get": {
+        "tags": [
+          "messwerte"
+        ],
+        "summary": "The version-resolved series of a Marktlokation (Cedar `read-timeseries`).",
+        "operationId": "get_timeseries",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Window start, RFC 3339.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Window end, RFC 3339.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.Messwerte"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_instant, zeitraum_ungueltig"
+          },
+          "422": {
+            "description": "zeitraum_zu_lang"
+          }
+        }
+      }
+    },
+    "/svc/einsd/api/v1/anlagen/foerderung-auslaufend": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "operationId": "list_expiring",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "description": "Look-ahead window in days (default 180).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active plants whose Förderung ends within the horizon",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/einsd.AuslaufendeAnlagen"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A negative horizon"
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused"
+          }
+        }
+      }
+    },
+    "/svc/einsd/api/v1/anlagen/ohne-mastr": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "operationId": "list_plants_without_mastr",
+        "responses": {
+          "200": {
+            "description": "Active plants not registered in the MaStR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/einsd.AnlagenOhneMastr"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused"
+          }
+        }
+      }
+    },
+    "/svc/einsd/api/v1/anlagen/unabgerechnet/{year}/{month}": {
+      "get": {
+        "tags": [
+          "settlements"
+        ],
+        "operationId": "list_unsettled_plants",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active plants with no receipt for the month",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/einsd.UnabgerechneteAnlagen"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A month outside 1–12"
+          },
+          "403": {
+            "description": "Cedar `read-settlement` refused"
+          }
+        }
+      }
+    },
+    "/svc/einsd/api/v1/anlagen/{tr_id}": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "operationId": "get_plant",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/einsd.AnlageRow"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused"
+          },
+          "404": {
+            "description": "`anlage_not_found`"
+          }
+        }
+      }
+    },
+    "/svc/einsd/api/v1/anlagen/{tr_id}/settlements": {
+      "get": {
+        "tags": [
+          "settlements"
+        ],
+        "operationId": "list_settlements",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "description": "Abrechnungsjahr, e.g. `2026`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "description": "Abrechnungsmonat, 1–12. A month without a year narrows every year to\nthat month, which is what a year-on-year comparison asks for.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many receipts (default 24, at most 200).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plant's receipts, the newest month first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/einsd.Abrechnungen"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A month outside 1–12, or an unknown parameter"
+          },
+          "403": {
+            "description": "Cedar `read-settlement` refused"
+          }
+        }
+      }
+    },
+    "/svc/einsd/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/erklaerung": {
+      "get": {
+        "tags": [
+          "settlements"
+        ],
+        "operationId": "explain_settlement",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The newest receipt for the month with its positions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/einsd.AbrechnungsErklaerung"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A month outside 1–12"
+          },
+          "403": {
+            "description": "Cedar `read-settlement` refused"
+          },
+          "404": {
+            "description": "`settlement_not_found`"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/lokationsbuendelstrukturen": {
+      "get": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`GET /api/v1/lokationsbuendelstrukturen` — every published\nLokationsbündelstruktur with its Bezeichnung, so a reader names a\n`lokationsbuendelcode` without a copy of the Codeliste.",
+        "operationId": "list_lokationsbuendelstrukturen",
+        "responses": {
+          "200": {
+            "description": "The Codeliste der Lokationsbündelstrukturen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.Lokationsbuendelstrukturen"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-utilmd-stammdaten"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/malos": {
+      "get": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`GET /api/v1/malos`",
+        "operationId": "list_malo",
+        "parameters": [
+          {
+            "name": "sparte",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "example": "STROM"
+          },
+          {
+            "name": "zuordnungstyp",
+            "in": "query",
+            "description": "Filter by `zuordnungstyp` in active role assignments (e.g. `NB`, `LF`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "rollencodenummer",
+            "in": "query",
+            "description": "Filter by `rollencodenummer` (GLN) in active role assignments.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "fallgruppe",
+            "in": "query",
+            "description": "Filter by Gas GaBi RLM Fallgruppe (e.g. `GABI_RLM_MIT_TAGESBAND`).\nGas only — Strom MaLos have no Fallgruppe.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "bilanzierungsmethode",
+            "in": "query",
+            "description": "Filter by billing mode (e.g. `RLM`, `SLP`, `IMS`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "regelzone",
+            "in": "query",
+            "description": "Filter by Regelzone EIC code (e.g. `10YDE-EON------1`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 0
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 50
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of Marktlokationen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/marktd.MaloResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/malos/{id}": {
+      "get": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`GET /api/v1/malos/:id`",
+        "operationId": "get_malo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "11-digit MaLo-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.MaloResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`PUT /api/v1/malos/:id`",
+        "operationId": "put_malo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "11-digit MaLo-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/marktd.MaloUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "409": {
+            "description": "Version conflict"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/malos/{id}/lokationsbuendel": {
+      "get": {
+        "tags": [
+          "malo"
+        ],
+        "summary": "`GET /api/v1/malos/{id}/lokationsbuendel?stichtag=YYYY-MM-DD`.",
+        "operationId": "get_lokationsbuendel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stichtag",
+            "in": "query",
+            "description": "The date the bündel is resolved for (YYYY-MM-DD)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Lokationsbündel on the Stichtag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.Lokationsbuendel"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-utilmd-stammdaten"
+          },
+          "404": {
+            "description": "`malo_not_found`"
+          },
+          "422": {
+            "description": "`invalid_malo_id` or an invalid `stichtag`"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/melos/{id}": {
+      "get": {
+        "tags": [
+          "melo"
+        ],
+        "summary": "`GET /api/v1/melos/:id`",
+        "operationId": "get_melo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "MeLo-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.MeloResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "melo"
+        ],
+        "summary": "`PUT /api/v1/melos/:id`",
+        "description": "# Single-write-path invariant (MaLo ↔ MeLo)\n\nThis PUT is the only writer of the `melo.malo_id` FK, and the repository\nmaintains the corresponding `melo → malo` edge in the temporal\n`lokationszuordnungen` graph in the same transaction: the graph is always a\nsuperset of the FK (the FK is a derived convenience for \"current parent\"),\nand reparenting closes the previous open edge (`valid_to`). See\n`marktd::pg::melo` for the reconciliation rules.",
+        "operationId": "put_melo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "MeLo-ID (DE + 31 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/marktd.MeloUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "409": {
+            "description": "Version conflict"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/melos/{id}/standorteigenschaften": {
+      "get": {
+        "tags": [
+          "melo"
+        ],
+        "summary": "`GET /api/v1/melos/:id/standorteigenschaften`",
+        "description": "Returns the typed BO4E `Standorteigenschaften` for the MeLo — carrying\n`StandorteigenschaftenStrom` (regelzone EIC, bilanzierungsgebietEic) and/or\n`StandorteigenschaftenGas` (druckstufe). Required for Redispatch 2.0\n`NetworkConstraintDocument` cross-references and Gas billing zone routing.\n\nReturns 404 when the MeLo has no `standorteigenschaften` column populated yet.\nUse `PUT /api/v1/melos/{id}` with a `data.standorteigenschaften` field to populate it.",
+        "operationId": "get_melo_standorteigenschaften",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "MeLo-ID (DE + 31 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Standorteigenschaften",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "MeLo not found or no Standorteigenschaften"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/msb-rahmenvertraege": {
+      "get": {
+        "tags": [
+          "msb-rahmenvertraege"
+        ],
+        "summary": "`GET /api/v1/msb-rahmenvertraege` — list conclusion records.",
+        "operationId": "list_msb_rv",
+        "parameters": [
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "Filter by Sparte (STROM / GAS)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nb_mp_id",
+            "in": "query",
+            "description": "Filter by NB MP-ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "msb_mp_id",
+            "in": "query",
+            "description": "Filter by MSB MP-ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by lifecycle status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conclusion records, newest valid_from first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/marktd.MsbRahmenvertrag"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-msb-rv scope"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "msb-rahmenvertraege"
+        ],
+        "summary": "`PUT /api/v1/msb-rahmenvertraege` — upsert a conclusion record.",
+        "description": "Idempotent on the natural key `(sparte, nb_mp_id, msb_mp_id, valid_from)`;\nthe record id stays stable across re-submits. A non-zero `version` in the\nbody acts as an optimistic-locking guard. The row and its CloudEvent\ncommit in one transaction.",
+        "operationId": "upsert_msb_rv",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/marktd.MsbRvUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upserted; returns stable id and new version"
+          },
+          "403": {
+            "description": "Missing write-msb-rv scope"
+          },
+          "412": {
+            "description": "Supplied version does not match the stored version"
+          },
+          "422": {
+            "description": "An invalid window, a Strom row with a Gas-only status, or a window overlapping another contract of the same parties and Sparte"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/msb-rahmenvertraege/check": {
+      "get": {
+        "tags": [
+          "msb-rahmenvertraege"
+        ],
+        "summary": "`GET /api/v1/msb-rahmenvertraege/check` — is a contract `abgeschlossen`\nand valid on `datum`?",
+        "description": "Always `200` with a Befund: `abgeschlossen: false` names why (no contract,\nonly offered, to be adapted, ended). A database failure is `500`, never a\n`false` — an outage is not evidence that no contract exists.",
+        "operationId": "check_msb_rv",
+        "parameters": [
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "STROM or GAS",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nb_mp_id",
+            "in": "query",
+            "description": "The NB's MP-ID in that Sparte",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "msb_mp_id",
+            "in": "query",
+            "description": "The MSB's MP-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "datum",
+            "in": "query",
+            "description": "The day the contract must be valid on (YYYY-MM-DD)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Befund for that day",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.MsbRvPruefung"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing or malformed query parameter"
+          },
+          "403": {
+            "description": "Missing read-msb-rv scope"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/msb-rahmenvertraege/{id}": {
+      "get": {
+        "tags": [
+          "msb-rahmenvertraege"
+        ],
+        "summary": "`GET /api/v1/msb-rahmenvertraege/{id}` — fetch one record.",
+        "operationId": "get_msb_rv",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Record id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.MsbRahmenvertrag"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-msb-rv scope"
+          },
+          "404": {
+            "description": "Unknown id"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/netzzugang/antraege": {
+      "get": {
+        "tags": [
+          "netzzugang"
+        ],
+        "summary": "`GET /api/v1/netzzugang/antraege` — list requests.",
+        "operationId": "list_antraege",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by lifecycle status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "netzanschluss_id",
+            "in": "query",
+            "description": "Filter by Netzanschluss",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requests incl. version, newest first"
+          },
+          "403": {
+            "description": "Missing read-netzzugang scope"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "netzzugang"
+        ],
+        "summary": "`PUT /api/v1/netzzugang/antraege` — upsert a request (makod adapter).",
+        "operationId": "upsert_antrag",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upserted; returns id and version"
+          },
+          "400": {
+            "description": "Missing netzanschluss_id / nb_mp_id"
+          },
+          "403": {
+            "description": "Missing write-netzzugang scope"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/netzzugang/antraege/{id}": {
+      "get": {
+        "tags": [
+          "netzzugang"
+        ],
+        "summary": "`GET /api/v1/netzzugang/antraege/{id}` — fetch a request.",
+        "operationId": "get_antrag",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Request id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request incl. version"
+          },
+          "403": {
+            "description": "Missing read-netzzugang scope"
+          },
+          "404": {
+            "description": "Unknown id"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/netzzugang/antraege/{id}/status": {
+      "patch": {
+        "tags": [
+          "netzzugang"
+        ],
+        "summary": "`PATCH /api/v1/netzzugang/antraege/{id}/status` — advance the lifecycle.",
+        "description": "Used by the makod sender (`uebermittelt`/`fehlgeschlagen`) and by the\noperator or answer channel (`bestaetigt`/`abgelehnt`).",
+        "operationId": "set_antrag_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Request id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/marktd.StatusBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated request incl. new version"
+          },
+          "403": {
+            "description": "Missing write-netzzugang scope"
+          },
+          "404": {
+            "description": "Unknown id"
+          },
+          "412": {
+            "description": "expected_version does not match the stored version"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/pricat/{nb_mp_id}/dispatch": {
+      "post": {
+        "tags": [
+          "crate::handlers::pricat"
+        ],
+        "summary": "`POST /api/v1/pricat/{nb_mp_id}/dispatch`",
+        "description": "Enqueue immediate (re-)dispatch of the latest PRICAT version for the given NB\nto all currently active LF partners.\n\nThe actual dispatch happens asynchronously in the background. Returns `202\nAccepted` with the version ID that was queued.\n\nUse this endpoint to manually trigger dispatch after an AS4 connectivity\nincident, or to force re-distribution to newly on-boarded LF partners without\nwaiting for the next scheduled scan.",
+        "operationId": "post_pricat_dispatch",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "NB GLN to dispatch PRICAT for",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Dispatch enqueued"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "No PRICAT version found for this NB"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}": {
+      "get": {
+        "tags": [
+          "crate::handlers::pricat"
+        ],
+        "summary": "`GET /api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}`",
+        "description": "Returns the dispatch audit log for a specific PRICAT version — one entry per\nLF partner that was reached (or attempted).",
+        "operationId": "get_dispatch_log",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "NB GLN",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "description": "PRICAT version UUID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dispatch log entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/marktd.DispatchLogEntry"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/pricat/{nb_mp_id}/history": {
+      "get": {
+        "tags": [
+          "crate::handlers::pricat"
+        ],
+        "summary": "`GET /api/v1/pricat/{nb_mp_id}/history`",
+        "description": "Returns all versioned PRICAT snapshots for the given NB GLN, newest first.\nEach entry includes dispatch state so operators can monitor the pipeline.",
+        "operationId": "get_pricat_history",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "NB GLN (13-digit BDEW/DVGW code)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PRICAT version history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/marktd.PriCatVersionSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/versorgung/{malo_id}": {
+      "get": {
+        "tags": [
+          "versorgung"
+        ],
+        "summary": "`GET /api/v1/versorgung/{malo_id}` — the current supply state, or with\n`?at=YYYY-MM-DD` the state as of that German calendar day.",
+        "operationId": "get_versorgung_at",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "description": "Point-in-time date in `YYYY-MM-DD` format (German local time, i.e. CET/CEST).\n\nWhen present, returns the supply state as it was at end-of-day on this date,\nreconstructed from the history log.  Omit for the current state.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "example": "2025-04-01"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The supply state; `ETag` carries its version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.VersorgungsStatusResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-versorgungsstatus"
+          },
+          "404": {
+            "description": "`versorgung_not_found`"
+          },
+          "422": {
+            "description": "`invalid_malo_id` or an invalid `at`"
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/versorgung/{malo_id}/history": {
+      "get": {
+        "tags": [
+          "versorgung"
+        ],
+        "summary": "`GET /api/v1/versorgung/{malo_id}/history` — the supply-state change\nhistory, newest first, paged.",
+        "operationId": "get_versorgungsstatus_history",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 0
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 50
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.VersorgungsStatusHistorie"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing read-versorgungsstatus"
+          },
+          "422": {
+            "description": "`invalid_malo_id`"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "accountingd.Kontoauszug": {
+        "type": "object",
+        "description": "A statement window (`list_ledger`, `GET /api/v1/accounts/{malo_id}/ledger`):\n`opening_ct` plus every `signed_ct` is the newest line's `running_ct`.",
+        "required": [
+          "malo_id",
+          "lf_mp_id",
+          "opening_ct",
+          "lines"
+        ],
+        "properties": {
+          "lf_mp_id": {
+            "type": "string",
+            "description": "The Lieferant's MP-ID the account is kept under."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/accountingd.Kontobewegung"
+            },
+            "description": "The movements, newest first."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Marktlokations-ID."
+          },
+          "opening_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The signed balance the window opens at, in cents — what was booked\nbefore it and what `limit` cut off its front."
+          }
+        }
+      },
+      "accountingd.Kontobewegung": {
+        "type": "object",
+        "description": "One movement on the Kontokorrent.",
+        "required": [
+          "entry_id",
+          "side",
+          "amount_ct",
+          "signed_ct",
+          "running_ct",
+          "booking_date"
+        ],
+        "properties": {
+          "amount_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The movement in cents, always positive; `side` carries the sign."
+          },
+          "beleg": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Beleg the booking cites — a Rechnungsnummer, a bank reference."
+          },
+          "booking_date": {
+            "type": "string",
+            "format": "date",
+            "description": "The booking date."
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "The doubleentry entry id."
+          },
+          "entry_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Buchungsart, e.g. `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `ABSCHLAG`."
+          },
+          "running_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The running balance after this movement, in cents."
+          },
+          "side": {
+            "type": "string",
+            "description": "`D` (debit — increases the receivable) or `C` (credit)."
+          },
+          "signed_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Signed contribution to the balance (debit +, credit −), in cents."
+          }
+        }
+      },
+      "accountingd.Kontostand": {
+        "type": "object",
+        "description": "The account's open-items balance (`get_balance`,\n`GET /api/v1/accounts/{malo_id}/balance`).",
+        "required": [
+          "malo_id",
+          "lf_mp_id",
+          "balance_ct",
+          "balance_eur",
+          "status",
+          "abschlag_ct"
+        ],
+        "properties": {
+          "abschlag_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The monthly Abschlag in cents."
+          },
+          "balance_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Open-items balance in cents: positive is owed, negative a Guthaben."
+          },
+          "balance_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`balance_ct` as a decimal EUR string, e.g. `\"-12.50\"`."
+          },
+          "lf_mp_id": {
+            "type": "string",
+            "description": "The Lieferant's MP-ID the account is kept under."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Marktlokations-ID."
+          },
+          "status": {
+            "$ref": "#/components/schemas/accountingd.Saldostatus",
+            "description": "Where the balance stands."
+          }
+        }
+      },
+      "accountingd.Mahnfaelle": {
+        "type": "object",
+        "description": "The open dunning cases (`list_dunning`, `GET /api/v1/dunning`).",
+        "required": [
+          "faelle",
+          "count",
+          "saturated"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "How many cases `faelle` holds.",
+            "minimum": 0
+          },
+          "faelle": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/accountingd.Mahnfall"
+            },
+            "description": "The open cases, newest Mahnung first."
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "The page is full: more cases may be open than were listed."
+          }
+        }
+      },
+      "accountingd.Mahnfall": {
+        "type": "object",
+        "description": "One open dunning case.",
+        "required": [
+          "id",
+          "account_id",
+          "stufe",
+          "amount_due_ct",
+          "amount_due_eur",
+          "issued_at",
+          "due_date"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "The customer account it was opened on."
+          },
+          "amount_due_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The amount the Mahnung demands, in cents."
+          },
+          "amount_due_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`amount_due_ct` as a decimal EUR string."
+          },
+          "due_date": {
+            "type": "string",
+            "format": "date",
+            "description": "The payment date the Mahnung sets."
+          },
+          "id": {
+            "type": "string",
+            "description": "The dunning case."
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the Mahnung was issued."
+          },
+          "sperrauftrag_ce_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The CloudEvent id of the Sperrauftrag a Mahnstufe 3 raised, if any."
+          },
+          "stufe": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The Mahnstufe, 1–3."
+          }
+        }
+      },
+      "accountingd.PaymentMatchParams": {
+        "type": "object",
+        "description": "`suggest_payment_match`'s parameters — the body of\n`POST /api/v1/payments/match`. It reads and books nothing.\n\n`Debug` leaves the IBAN out: a payment to match is logged, if ever, by its\namount and reference, never by the payer's account.",
+        "required": [
+          "amount_ct",
+          "reference"
+        ],
+        "properties": {
+          "amount_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Payment amount in 1/100 EUR cents (e.g. 12500 = 125.00 EUR)."
+          },
+          "end_to_end_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`EndToEndId`, when the bank echoed one back."
+          },
+          "iban": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Counterparty IBAN, when the bank reported one — the strongest evidence\nof who paid, and the rung that resolves without any guessing."
+          },
+          "reference": {
+            "type": "string",
+            "description": "Payment reference / Verwendungszweck from the bank statement."
+          },
+          "tolerance_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Fuzzy tolerance for the fallback rung: how many percent the open balance\nmay deviate from the payment (default 2 %). Ignored when the reference\nidentifies the account outright."
+          },
+          "value_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Value date of the payment (YYYY-MM-DD)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "accountingd.Saldostatus": {
+        "type": "string",
+        "description": "Where an account's balance stands: `overdue` — the customer owes\n(`balance_ct > 0`); `credit` — a Guthaben (`balance_ct < 0`); `settled` —\nnothing is open.",
+        "enum": [
+          "overdue",
+          "credit",
+          "settled"
+        ]
+      },
+      "accountingd.UeberfaelligeKonten": {
+        "type": "object",
+        "description": "The accounts with an open balance (`list_overdue`,\n`GET /api/v1/offene-posten`).",
+        "required": [
+          "accounts",
+          "count",
+          "saturated"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/accountingd.UeberfaelligesKonto"
+            },
+            "description": "The accounts, largest balance first."
+          },
+          "count": {
+            "type": "integer",
+            "description": "How many accounts `accounts` holds.",
+            "minimum": 0
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "At least `limit` accounts matched: more may be overdue than were listed."
+          }
+        }
+      },
+      "accountingd.UeberfaelligesKonto": {
+        "type": "object",
+        "description": "One account with an overdue balance.",
+        "required": [
+          "account_id",
+          "malo_id",
+          "lf_mp_id",
+          "balance_ct",
+          "balance_eur",
+          "abschlag_ct",
+          "updated_at"
+        ],
+        "properties": {
+          "abschlag_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The monthly Abschlag in cents."
+          },
+          "account_id": {
+            "type": "string",
+            "description": "The customer account."
+          },
+          "balance_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The open balance in cents."
+          },
+          "balance_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`balance_ct` as a decimal EUR string."
+          },
+          "kunden_nr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operator's customer number, where recorded."
+          },
+          "lf_mp_id": {
+            "type": "string",
+            "description": "The Lieferant's MP-ID the account is kept under."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Marktlokations-ID."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the account's balance last changed."
+          }
+        }
+      },
+      "accountingd.Zahlungszuordnung": {
+        "type": "object",
+        "description": "The accounts an incoming payment may belong to (`suggest_payment_match`,\n`POST /api/v1/payments/match`).",
+        "required": [
+          "payment_amount_ct",
+          "payment_amount_eur",
+          "payment_reference",
+          "candidates_count",
+          "candidates",
+          "note"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/accountingd.Zuordnungskandidat"
+            },
+            "description": "One exact candidate, or up to ten ranked by amount proximity."
+          },
+          "candidates_count": {
+            "type": "integer",
+            "description": "How many candidates `candidates` holds.",
+            "minimum": 0
+          },
+          "note": {
+            "type": "string",
+            "description": "How to read the answer."
+          },
+          "payment_amount_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The payment in cents."
+          },
+          "payment_amount_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`payment_amount_ct` as a decimal EUR string."
+          },
+          "payment_reference": {
+            "type": "string",
+            "description": "The Verwendungszweck the bank reported."
+          },
+          "tolerance_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The tolerance the amount-proximity rung ran with, in percent; absent\nwhen the reference identified the account."
+          }
+        }
+      },
+      "accountingd.Zuordnungskandidat": {
+        "type": "object",
+        "description": "One account a payment may belong to.",
+        "required": [
+          "account_id",
+          "malo_id",
+          "lf_mp_id",
+          "open_balance_ct",
+          "open_balance_eur",
+          "matched_by",
+          "confidence",
+          "residual_ct"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "The customer account."
+          },
+          "confidence": {
+            "type": "string",
+            "description": "`EXACT` for an exact rung; `MEDIUM` or `LOW` for amount proximity."
+          },
+          "lf_mp_id": {
+            "type": "string",
+            "description": "The Lieferant's MP-ID the account is kept under."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Marktlokations-ID."
+          },
+          "matched_by": {
+            "type": "string",
+            "description": "The evidence: an exact rung (`iban`, `end_to_end_id`,\n`remittance_token`) or `amount_proximity`."
+          },
+          "open_balance_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The account's open balance in cents."
+          },
+          "open_balance_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "`open_balance_ct` as a decimal EUR string."
+          },
+          "residual_ct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What stays open after booking the payment, in cents (0 settles it)."
+          },
+          "similarity_score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Amount closeness 0–100, only on the amount-proximity rung.",
+            "minimum": 0
+          }
+        }
+      },
+      "edmd.Abdeckung": {
+        "type": "object",
+        "description": "One state per day for a Marktlokation's series.",
+        "required": [
+          "malo_id",
+          "sparte",
+          "von",
+          "bis",
+          "tage",
+          "gemessen",
+          "ersatzwert",
+          "korrigiert",
+          "fehlt"
+        ],
+        "properties": {
+          "bis": {
+            "type": "string",
+            "format": "date",
+            "description": "Last day answered: the requested `to`, or the last day that has\nalready ended when `to` lies later. Before `von` when no requested day\nhas ended yet, and then `tage` is empty."
+          },
+          "ersatzwert": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fehlt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gemessen": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "korrigiert": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "sparte": {
+            "type": "string",
+            "description": "`STROM`, `GAS`, `WAERME` or `WASSER` — Gas days are Gastage\n(06:00–06:00 Berlin), every other Sparte's calendar days."
+          },
+          "tage": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/edmd.Tag"
+            },
+            "description": "One entry per day, oldest first."
+          },
+          "von": {
+            "type": "string",
+            "format": "date",
+            "description": "First day answered."
+          }
+        }
+      },
+      "edmd.Korrektur": {
+        "type": "object",
+        "description": "One retroactive correction of a stored interval (§ 147 Abs. 1 AO /\n§ 146 Abs. 4 AO, GoBD).",
+        "required": [
+          "correction_id",
+          "dtm_from",
+          "dtm_to",
+          "original_kwh",
+          "original_quality",
+          "corrected_kwh",
+          "corrected_quality",
+          "reason",
+          "source",
+          "corrected_at"
+        ],
+        "properties": {
+          "corrected_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "corrected_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "corrected_kwh": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "corrected_quality": {
+            "$ref": "#/components/schemas/edmd.Messwertqualitaet"
+          },
+          "correction_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dtm_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dtm_to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "obis_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The register corrected; absent when the correction named none."
+          },
+          "original_kwh": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "original_quality": {
+            "$ref": "#/components/schemas/edmd.Messwertqualitaet"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "`MSCONS_UPDATE`, `OPERATOR`, `AUTO_SUBSTITUTE`, `IMSYS_DIRECT_PUSH` or\n`OTHER`."
+          }
+        }
+      },
+      "edmd.Korrekturen": {
+        "type": "object",
+        "description": "The corrections recorded for a Marktlokation in a window, newest first.",
+        "required": [
+          "malo_id",
+          "from",
+          "to",
+          "count",
+          "saturated",
+          "corrections"
+        ],
+        "properties": {
+          "corrections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/edmd.Korrektur"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Window over `corrected_at`."
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "`limit` corrections matched: older ones may exist beyond the page."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "edmd.Messwert": {
+        "type": "object",
+        "description": "One stored interval of a Marktlokation's series.",
+        "required": [
+          "dtm_from",
+          "dtm_to",
+          "quantity_kwh",
+          "quality"
+        ],
+        "properties": {
+          "dtm_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval start."
+          },
+          "dtm_to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval end (exclusive)."
+          },
+          "obis_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The register's OBIS-Kennzahl, when the delivery named one."
+          },
+          "quality": {
+            "$ref": "#/components/schemas/edmd.Messwertqualitaet",
+            "description": "The value's quality."
+          },
+          "quantity_kwh": {
+            "type": "string",
+            "format": "decimal",
+            "description": "The quantity in the Sparte's billing unit (kWh; m³ for water)."
+          }
+        }
+      },
+      "edmd.Messwerte": {
+        "type": "object",
+        "description": "The version-resolved series of a Marktlokation over a window.",
+        "required": [
+          "malo_id",
+          "from",
+          "to",
+          "count",
+          "readings"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "How many intervals `readings` holds.",
+            "minimum": 0
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Window start (inclusive)."
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "readings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/edmd.Messwert"
+            },
+            "description": "Every register's intervals, oldest first. Empty when nothing was\ndelivered for the window."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Window end."
+          }
+        }
+      },
+      "edmd.Messwertqualitaet": {
+        "type": "string",
+        "description": "The quality of one stored value — the MSCONS Messwertstatus: `MEASURED`\n(Messwert), `ESTIMATED` (Prognosewert), `SUBSTITUTED` (Ersatzwert),\n`CALCULATED` (Rechenwert), `CORRECTED` (Nachbearbeitungswert),\n`PRELIMINARY` (vorläufig), `FAULTY` (fehlerhaft, not billable), `UNKNOWN`.\n\nThe variants carry no doc comment of their own: one would make schemars\ndescribe the enum as a `oneOf` of constants where utoipa writes an `enum`,\nand the two doors' schemas would differ.",
+        "enum": [
+          "MEASURED",
+          "ESTIMATED",
+          "SUBSTITUTED",
+          "CALCULATED",
+          "CORRECTED",
+          "PRELIMINARY",
+          "FAULTY",
+          "UNKNOWN"
+        ]
+      },
+      "edmd.Note": {
+        "type": "string",
+        "description": "A quality grade: `A` clean, `B` warnings, `C` errors an Ersatzwert\nrepairs, `F` blocking — the window is not billable as it stands.",
+        "enum": [
+          "A",
+          "B",
+          "C",
+          "F"
+        ]
+      },
+      "edmd.Qualitaetsbefund": {
+        "type": "object",
+        "description": "The quality verdict over a window, recomputed from the version-resolved\nseries by the scorer the ingest and rescore paths run.",
+        "required": [
+          "malo_id",
+          "window_from",
+          "window_to",
+          "interval_count",
+          "grade",
+          "has_warnings",
+          "gaps_detected",
+          "zero_run_length",
+          "coverage_pct",
+          "intervals_consistent",
+          "outlier_intervals",
+          "spike_intervals",
+          "algorithm"
+        ],
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "description": "The validation that produced the verdict."
+          },
+          "coverage_pct": {
+            "type": "string",
+            "format": "decimal",
+            "description": "Delivered time inside the window over its length, in percent."
+          },
+          "expected_intervals": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Slots the window holds on the observed grid; absent without one.",
+            "minimum": 0
+          },
+          "gaps_detected": {
+            "type": "integer",
+            "description": "Slots of the window no interval delivered.",
+            "minimum": 0
+          },
+          "grade": {
+            "$ref": "#/components/schemas/edmd.Note"
+          },
+          "has_warnings": {
+            "type": "boolean"
+          },
+          "interval_count": {
+            "type": "integer",
+            "description": "Intervals scored.",
+            "minimum": 0
+          },
+          "intervals_consistent": {
+            "type": "boolean",
+            "description": "`false`: a slot delivered twice or a span off the grid kept the\ncontent rules from running."
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "outlier_intervals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Interval starts flagged as statistical outliers."
+          },
+          "spike_intervals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Interval starts above the plant's physical capacity."
+          },
+          "window_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "window_to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "zero_run_length": {
+            "type": "integer",
+            "description": "The longest run of zeros, in slots.",
+            "minimum": 0
+          }
+        }
+      },
+      "edmd.Tag": {
+        "type": "object",
+        "description": "One day of the ribbon.",
+        "required": [
+          "tag",
+          "zustand"
+        ],
+        "properties": {
+          "tag": {
+            "type": "string",
+            "format": "date",
+            "description": "The Berlin calendar day — for Gas the Gastag starting 06:00 that day."
+          },
+          "zustand": {
+            "$ref": "#/components/schemas/edmd.Tageszustand"
+          }
+        }
+      },
+      "edmd.Tageszustand": {
+        "type": "string",
+        "description": "What a day of a Marktlokation's series holds: `gemessen` — every slot of\nevery energy register a measured value; `ersatzwert` — complete, with at\nleast one Ersatz- or Prognosewert; `korrigiert` — complete, no Ersatzwert,\nat least one corrected slot; `fehlt` — at least one slot of an energy\nregister without a billable value.",
+        "enum": [
+          "gemessen",
+          "ersatzwert",
+          "korrigiert",
+          "fehlt"
+        ]
+      },
+      "einsd.Abrechnungen": {
+        "type": "object",
+        "description": "`list_settlements`' answer: a plant's receipts, the newest month first.",
+        "required": [
+          "tr_id",
+          "count",
+          "saturated",
+          "settlements"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "At least `limit` receipts matched: older ones were not listed."
+          },
+          "settlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/einsd.SettlementReceipt"
+            }
+          },
+          "tr_id": {
+            "type": "string"
+          }
+        }
+      },
+      "einsd.AbrechnungsErklaerung": {
+        "type": "object",
+        "description": "`explain_settlement`'s answer: the newest receipt for the month and its\npositions as stored.",
+        "required": [
+          "tr_id",
+          "billing_year",
+          "billing_month",
+          "settlement_model",
+          "status",
+          "verlaengerungsanspruch_qh",
+          "settled_at",
+          "positions",
+          "interpretation"
+        ],
+        "properties": {
+          "billing_days_fraction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "billing_month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "billing_year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "einspeisemenge_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "interpretation": {
+            "type": "string"
+          },
+          "pflichtzahlung_eur": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "A separate § 52 EEG 2023 Pflichtzahlung owed to the Netzbetreiber."
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/einsd.Abrechnungsposition"
+            }
+          },
+          "settled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "settlement_eur": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "The sum of the positions' `eur`."
+          },
+          "settlement_model": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The receipt's status code (see `list_settlements`)."
+          },
+          "tr_id": {
+            "type": "string"
+          },
+          "verlaengerungsanspruch_qh": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "einsd.Abrechnungsposition": {
+        "type": "object",
+        "description": "One position of a stored settlement receipt.",
+        "required": [
+          "description",
+          "legal_basis",
+          "kwh",
+          "rate_ct_kwh",
+          "eur"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "eur": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "kwh": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "legal_basis": {
+            "type": "string",
+            "description": "The provision the position rests on."
+          },
+          "rate_ct_kwh": {
+            "type": "string",
+            "format": "decimal"
+          }
+        }
+      },
+      "einsd.AnlageOhneMastr": {
+        "type": "object",
+        "description": "One active plant not registered in the MaStR.",
+        "required": [
+          "tr_id",
+          "malo_id",
+          "erzeugungsart",
+          "leistung_kwp",
+          "eeg_gesetz",
+          "regime"
+        ],
+        "properties": {
+          "eeg_gesetz": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "erzeugungsart": {
+            "type": "string"
+          },
+          "leistung_kwp": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "monthly_penalty_eur": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "§ 52 Abs. 2 EEG 2023: 10 €/kW per month; `None` for a plant under the\npre-2023 regime, which owes no Pflichtzahlung."
+          },
+          "regime": {
+            "type": "string",
+            "description": "The rule the plant falls under, as text."
+          },
+          "tr_id": {
+            "type": "string"
+          }
+        }
+      },
+      "einsd.AnlageRow": {
+        "type": "object",
+        "description": "Stored plant record returned by GET endpoints.",
+        "required": [
+          "tr_id",
+          "tenant",
+          "malo_id",
+          "eeg_gesetz",
+          "inbetriebnahme",
+          "leistung_kwp",
+          "erzeugungsart",
+          "verguetungssatz_ct",
+          "verguetungsform",
+          "settlement_model",
+          "direktvermarktung",
+          "ist_repowering",
+          "kwk_bmwk_feststellung",
+          "status",
+          "mastr_registriert",
+          "einspeiser_id",
+          "sect9_fernsteuerbarkeit",
+          "sect9_begrenzung_60",
+          "is_biogas_sect51b",
+          "ist_innovationsausschreibung",
+          "ist_buergerenergie",
+          "speicher_option",
+          "negative_price_qh_gesamt",
+          "biogas_quota_kwh_ytd",
+          "ist_pilotwindanlage",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "ausschreibungs_zuschlag_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "biogas_quota_kwh_ytd": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "biogas_quota_ytd_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "biomasse_getreide_mais_anteil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "biomasse_guelle_anteil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "biomasse_hauptbrennstoff": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capacity_blocks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "A JSON array of `eeg_billing::CapacityBlock` objects; their fields are that crate's and are\nnot described here."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "direktverm_aw_ct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "direktverm_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "direktvermarktung": {
+            "type": "boolean"
+          },
+          "eeg_gesetz": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "einspeiser_id": {
+            "type": "string",
+            "description": "The operator behind the plant (`einspeiser.einspeiser_id`)."
+          },
+          "erzeugungsart": {
+            "type": "string"
+          },
+          "fernsteuerbarkeit_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "flex_leistung_kw": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "flex_praemie_ct_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "foerderendedatum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The EEG Förderende, or `NULL` for a plant that has none.\n\n§ 25 Abs. 1 EEG 2023 dates the EEG claim in years. § 8 KWKG does not: it\nmeasures the Zuschlag in Vollbenutzungsstunden (Abs. 1–3) and caps each\ncalendar year separately (Abs. 4), and both are counters against\ngeneration. A KWK plant therefore has no calendar Förderende and this is\n`NULL` for it — `kwk_max_kwh` is what ends its Zuschlag."
+          },
+          "foerderung_alert_sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the 180-day Förderende alert was emitted; NULL until it is."
+          },
+          "gebotstermin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The Gebotstermin of the Zuschlag (§ 100 Abs. 37 EEG 2023)."
+          },
+          "imesys_rollout_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "inbetriebnahme": {
+            "type": "string",
+            "format": "date"
+          },
+          "inbetriebnahme_typ": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_biogas_sect51b": {
+            "type": "boolean"
+          },
+          "ist_buergerenergie": {
+            "type": "boolean",
+            "description": "§22b EEG 2023 — Bürgerenergiegesellschaft (§3 Nr. 15)."
+          },
+          "ist_innovationsausschreibung": {
+            "type": "boolean",
+            "description": "§39n EEG 2023 — Innovationsausschreibung."
+          },
+          "ist_pilotwindanlage": {
+            "type": "boolean"
+          },
+          "ist_repowering": {
+            "type": "boolean"
+          },
+          "kwk_anlagenart": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kwk_bimschg_genehmigung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "§ 6 Abs. 1 Satz 1 Nr. 1 lit. c aa KWKG — BImSchG-Genehmigung erteilt am."
+          },
+          "kwk_bmwk_feststellung": {
+            "type": "boolean",
+            "description": "§ 7 Abs. 1 Satz 2 KWKG — whether the BMWK Feststellung is published."
+          },
+          "kwk_foerderdauer_h": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "kwk_kostenanteil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "kwk_kwh_jahr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "kwk_kwh_jahr_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "kwk_strom_kwh_gesamt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "kwk_verbindliche_bestellung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "§ 6 Abs. 1 Satz 1 Nr. 1 lit. c bb KWKG — verbindliche Bestellung am."
+          },
+          "kwk_verwendung": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_veraeusserungsform_switch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "leistung_kwp": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "mastr_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "mastr_nummer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mastr_registriert": {
+            "type": "boolean"
+          },
+          "mastr_violation_start": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "melo_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mieter_zuschlag_ct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "negative_price_qh_gesamt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_tr_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repowering_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "sect51_optin_erklaert_am": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "sect9_begrenzung_60": {
+            "type": "boolean",
+            "description": "§ 9 Abs. 2 Satz 1 Nr. 2 lit. b / Nr. 3 — 60 % Wirkleistungsbegrenzung."
+          },
+          "sect9_fernsteuerbarkeit": {
+            "type": "boolean",
+            "description": "§ 9 Abs. 2 Satz 1 Nr. 1 / Nr. 2 lit. a — ferngesteuerte Reduzierung."
+          },
+          "settlement_model": {
+            "type": "string"
+          },
+          "settlement_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "speicher_option": {
+            "type": "string",
+            "description": "§ 19 Abs. 3b / 3c EEG 2023 — `KEINE` | `ABGRENZUNG` | `PAUSCHAL`. Anlage 1\nNr. 2 Satz 3 moves a plant claiming either option onto the\nJahresmarktwert whatever its vintage."
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant": {
+            "type": "string"
+          },
+          "tr_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ursprungs_inbetriebnahme": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "veraeusserungsform_notification_sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "verguetungsform": {
+            "type": "string"
+          },
+          "verguetungssatz_ct": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "wechselrichterleistung_va": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "Wechselrichterleistung in VA, for the Abs. 2 Satz 4 Steckersolar carve-out."
+          },
+          "wind_guetefaktor_reevaluations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "A JSON array of `eeg_billing::wind::GuetefaktorReeval` objects; their fields are that crate's and are\nnot described here."
+          },
+          "wind_guetegrad": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "wind_korrekturfaktor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "zuschlag_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date of the BNetzA award notification."
+          },
+          "zuschlag_erloeschen_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "zuschlagswert_ct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "§22 EEG 2023 — the awarded anzulegender Wert (ct/kWh)."
+          }
+        }
+      },
+      "einsd.AnlagenOhneMastr": {
+        "type": "object",
+        "description": "`list_plants_without_mastr`' answer, the largest plant first.",
+        "required": [
+          "count",
+          "total_monthly_penalty_eur",
+          "plants",
+          "regulatory_note"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "plants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/einsd.AnlageOhneMastr"
+            }
+          },
+          "regulatory_note": {
+            "type": "string"
+          },
+          "total_monthly_penalty_eur": {
+            "type": "string",
+            "format": "decimal",
+            "description": "The sum of `monthly_penalty_eur` over the plants that owe one."
+          }
+        }
+      },
+      "einsd.AuslaufendeAnlagen": {
+        "type": "object",
+        "description": "`list_expiring`'s answer: active plants whose Förderung ends within\n`horizon_days`, the earliest Förderende first.",
+        "required": [
+          "horizon_days",
+          "count",
+          "plants"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "horizon_days": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "plants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/einsd.AnlageRow"
+            }
+          }
+        }
+      },
+      "einsd.SettlementReceipt": {
+        "type": "object",
+        "description": "One settlement receipt as the history lists it: an original and the\ncorrection that superseded it are two rows for one month, told apart by\n`is_correction` / `correction_of` — without them the history reads as a\ndouble payment.",
+        "required": [
+          "id",
+          "tr_id",
+          "billing_year",
+          "billing_month",
+          "settlement_model",
+          "status",
+          "settled_at",
+          "is_correction"
+        ],
+        "properties": {
+          "billing_month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "billing_year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "correction_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "correction_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "einspeisemenge_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a settlement that paid nothing did not — the developer text beside\n`status`."
+          },
+          "faelligkeitsdatum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "§ 26 Abs. 1 EEG 2023: the payment's due date."
+          },
+          "gutschrift_nummer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_correction": {
+            "type": "boolean"
+          },
+          "settled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "settlement_eur": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal"
+          },
+          "settlement_model": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`calculated`, `price_missing`, `no_data`, `error`, `foerderung_beendet`,\n`jahreskontingent_erschoepft`, `sanctioned`, `kein_anspruch`, `unknown`\nor `gehalten` — a stable code, worded by the reader's catalogue."
+          },
+          "tr_id": {
+            "type": "string"
+          }
+        }
+      },
+      "einsd.UnabgerechneteAnlagen": {
+        "type": "object",
+        "description": "`list_unsettled_plants`' answer: active plants with no receipt for the month.",
+        "required": [
+          "billing_year",
+          "billing_month",
+          "unsettled_count",
+          "plants"
+        ],
+        "properties": {
+          "billing_month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "billing_year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "plants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/einsd.AnlageRow"
+            }
+          },
+          "unsettled_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "marktd.Angaben": {
+        "type": "object",
+        "description": "The NB's Angaben of the bündel no BO4E object carries — one dated row.",
+        "required": [
+          "valid_from",
+          "nna_positionen",
+          "obis",
+          "register"
+        ],
+        "properties": {
+          "nna_positionen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.Nna"
+            }
+          },
+          "obis": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.Obis"
+            }
+          },
+          "profilverfahren": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/marktd.Verfahren"
+              }
+            ]
+          },
+          "register": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.Register"
+            }
+          },
+          "standardlastprofil": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "technische_einrichtungen": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "uenb_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          }
+        }
+      },
+      "marktd.DispatchLogEntry": {
+        "type": "object",
+        "description": "One dispatch audit entry.",
+        "required": [
+          "id",
+          "lf_mp_id",
+          "dispatched_at",
+          "outcome"
+        ],
+        "properties": {
+          "dispatched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lf_mp_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "marktd.Granularitaet": {
+        "type": "string",
+        "description": "The Wertegranularität of a register.",
+        "enum": [
+          "JAEHRLICH",
+          "HALBJAEHRLICH",
+          "QUARTALSWEISE",
+          "MONATLICH"
+        ]
+      },
+      "marktd.Kante": {
+        "type": "object",
+        "description": "One edge of the bündel valid on the Stichtag, half-open\n`[valid_from, valid_to)`.",
+        "required": [
+          "von_id",
+          "von_typ",
+          "nach_id",
+          "nach_typ"
+        ],
+        "properties": {
+          "nach_id": {
+            "type": "string"
+          },
+          "nach_typ": {
+            "$ref": "#/components/schemas/marktd.Objekttyp"
+          },
+          "valid_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "von_id": {
+            "type": "string"
+          },
+          "von_typ": {
+            "$ref": "#/components/schemas/marktd.Objekttyp"
+          }
+        }
+      },
+      "marktd.Lieferstatus": {
+        "type": "string",
+        "description": "The Lieferstatus of a Marktlokation.",
+        "enum": [
+          "Beliefert",
+          "Unbeliefert",
+          "Grundversorgung",
+          "Ersatzversorgung",
+          "Ruhend",
+          "Stillgelegt"
+        ]
+      },
+      "marktd.Lokationsbuendel": {
+        "type": "object",
+        "description": "The Lokationsbündel of a Marktlokation on a Stichtag — the read model\nbehind the Geschäftsdatenanfrage answers 55035 / 55095 / 55060 (UTILMD AHB\nStrom 2.2 Kap. 9.5). Its wire is [`MaloLokationsbuendel`]'s, which makod\nreads with `deny_unknown_fields`, so it carries no field that type lacks;\nthe Lokationsbündelstruktur's wording is [`lokationsbuendelstrukturen`].",
+        "required": [
+          "malo_id",
+          "stichtag",
+          "lokationsbuendelcodes",
+          "objekte",
+          "zuordnungen",
+          "zaehler"
+        ],
+        "properties": {
+          "angaben": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/marktd.Angaben",
+                "description": "The NB's Angaben row covering the Stichtag."
+              }
+            ]
+          },
+          "energierichtung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BO4E `Marktlokation.energierichtung` — `AUSSP` verbrauchend, `EINSP`\nerzeugend."
+          },
+          "lokationsbuendelcodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every distinct `lokationsbuendelcode` the bündel's edges carry; more\nthan one is a graph that disagrees with itself."
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "objekte": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.Objekt"
+            },
+            "description": "Every object reached, the Marktlokation itself first."
+          },
+          "stichtag": {
+            "type": "string",
+            "format": "date",
+            "description": "The date every edge and the Angaben row are resolved for."
+          },
+          "zaehler": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.Zaehler"
+            },
+            "description": "The Zähler of the bündel's Messlokationen."
+          },
+          "zuordnungen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.Kante"
+            },
+            "description": "Every edge valid on the Stichtag that reached them."
+          }
+        }
+      },
+      "marktd.Lokationsbuendelstruktur": {
+        "type": "object",
+        "description": "One published Lokationsbündelstruktur.",
+        "required": [
+          "code",
+          "bezeichnung"
+        ],
+        "properties": {
+          "bezeichnung": {
+            "type": "string",
+            "description": "Its Bezeichnung in the Codeliste der Lokationsbündelstrukturen."
+          },
+          "code": {
+            "type": "string",
+            "description": "The `lokationsbuendelcode`."
+          }
+        }
+      },
+      "marktd.Lokationsbuendelstrukturen": {
+        "type": "object",
+        "description": "The Codeliste der Lokationsbündelstrukturen (EDI@Energy, BDEW V1.0,\n31.03.2023), as `rubo4e::lokationsbuendel::STRUKTUREN` carries it.",
+        "required": [
+          "strukturen"
+        ],
+        "properties": {
+          "strukturen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.Lokationsbuendelstruktur"
+            }
+          }
+        }
+      },
+      "marktd.MaloResponse": {
+        "type": "object",
+        "required": [
+          "malo_id",
+          "sparte",
+          "version",
+          "data",
+          "rollenzuordnung"
+        ],
+        "properties": {
+          "bilanzierungsgebiet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bilanzierungsgebiet EIC code extracted from `data.bilanzierungsgebiet`.\nUsed by `processd` NB check 4 as primary source; falls back to `malo_grid` when absent."
+          },
+          "bilanzierungsmethode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Billing mode extracted from `Marktlokation.bilanzierungsmethode`.\n\nValues: `\"RLM\"` | `\"SLP\"` | `\"TLP_GEMEINSAM\"` | `\"TLP_GETRENNT\"` | `\"PAUSCHAL\"` | `\"IMS\"`.\n`\"RLM\"` → `netzbilanzd` includes Leistungspreis position (`spitzenleistung_kw` required).\n`\"SLP\"` → Arbeitspreis only."
+          },
+          "data": {
+            "type": "object",
+            "description": "Validated BO4E `Marktlokation` payload in canonical camelCase form.\nSchema is enforced on every `PUT` — enum fields like `bilanzierungsmethode`\nand `netzebene` are rejected with 422 if they contain unknown values."
+          },
+          "energierichtung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BO4E `Energierichtung`, named from the grid's point of view:\n`\"EINSP\"` = generation (feeds the grid), `\"AUSSP\"` = consumption."
+          },
+          "fallgruppe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Gas GaBi RLM Fallgruppe (`data[\"fallgruppenzuordnung\"]`) — determines GaBi billing\ncategory. Values: `GABI_RLM_MIT_TAGESBAND` | `GABI_RLM_OHNE_TAGESBAND` |\n`GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN`. Required for Gas MMM settlement routing."
+          },
+          "fernsteuerbar": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "§14a EnWG „Status der Fernsteuerbarkeit\" (`true` = technisch fernsteuerbar,\n`false` = nicht fernsteuerbar). Populated from UTILMD `CCI+7037` Z97/Z96."
+          },
+          "gasqualitaet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Gas quality extracted from `data.gasqualitaet` (`\"H_GAS\"` | `\"L_GAS\"`)."
+          },
+          "lokationsbuendel_objektcode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lokationsbündel object code (`Marktlokation.lokationsbuendelObjektcode`,\nUTILMD Lokationsbündelstruktur)."
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "netzebene": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Voltage/pressure level extracted from `data.netzebene` — a BO4E\n`Netzebene` wire value (`\"NSP\"`, `\"MSP\"`, `\"HSP\"`, `\"HSS\"`, `\"MSP_NSP_UMSP\"`, …).\nAvailable immediately on write; no separate grid provisioning needed."
+          },
+          "regelzone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Regelzone EIC code (`Marktlokation.regelzone`) — maps to the ÜNB for MABIS IFTSTA 21000\nrouting and Redispatch 2.0 Stammdaten forwarding (VNB → ÜNB)."
+          },
+          "rollenzuordnung": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "sparte": {
+            "type": "string",
+            "example": "STROM"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "marktd.MaloUpsertRequest": {
+        "type": "object",
+        "required": [
+          "sparte",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "description": "Full BO4E MARKTLOKATION payload."
+          },
+          "rollenzuordnung": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "sparte": {
+            "type": "string",
+            "description": "\"STROM\" or \"GAS\"",
+            "example": "STROM"
+          }
+        },
+        "additionalProperties": false
+      },
+      "marktd.MeloResponse": {
+        "type": "object",
+        "required": [
+          "melo_id",
+          "version",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Validated BO4E `Messlokation` payload in canonical camelCase form.\n`_typ` is auto-injected on write; enum fields validated on write."
+          },
+          "lokationsbuendel_objektcode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lokationsbündel object code (`Messlokation.lokationsbuendelObjektcode`,\nUTILMD Lokationsbündelstruktur)."
+          },
+          "malo_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "melo_id": {
+            "type": "string"
+          },
+          "netzebene_messung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Voltage/pressure level at the metering point (`Messlokation.netzebeneMessung`)."
+          },
+          "regelzone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Regelzone EIC code extracted from `standorteigenschaften.eigenschaftenStrom[0].regelzone`.\nMaps this MeLo to the ÜNB for Redispatch 2.0 Stammdaten routing."
+          },
+          "standorteigenschaften": {
+            "description": "Full BO4E `Standorteigenschaften` JSONB — carries `StandorteigenschaftenStrom`\n(regelzone, bilanzierungsgebietEic) and `StandorteigenschaftenGas` (druckstufe).\nRequired for Redispatch 2.0 `NetworkConstraintDocument` and Gas billing zones."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "marktd.MeloUpsertRequest": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "description": "Full BO4E MESSLOKATION payload.\n\nThe BO4E schema version is **not** a request field: it is provenance,\nand only the server knows which series it parsed the payload under. It\nis returned on the `GET`."
+          },
+          "malo_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Associated MaLo-ID (optional)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "marktd.MsbRahmenvertrag": {
+        "type": "object",
+        "description": "An MSB framework-contract record **as stored**.\n\nThe natural key is `(tenant, sparte, nb_mp_id, msb_mp_id, valid_from)` —\nupserts are idempotent on it and keep the `id` stable.\n\n`vertrag` reads back as opaque JSON, the way every stored BO4E document in\nmako does: a row may predate the current schema series. What goes *in* is\n[`MsbRvUpsertRequest`], gated.",
+        "required": [
+          "id",
+          "tenant",
+          "sparte",
+          "nb_mp_id",
+          "msb_mp_id",
+          "status",
+          "valid_from",
+          "vertrag",
+          "version"
+        ],
+        "properties": {
+          "fassung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contract text edition. Gas: `KoV XV Anlage 8` unless named otherwise\n(legacy: `BK7-17-026`). Strom: as the parties name it, or absent."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "msb_mp_id": {
+            "type": "string"
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "signed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "sparte": {
+            "type": "string",
+            "example": "GAS"
+          },
+          "status": {
+            "$ref": "#/components/schemas/marktd.MsbRvStatus"
+          },
+          "tenant": {
+            "type": "string"
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date",
+            "description": "First day of validity, inclusive."
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "First day **no longer** valid (half-open `[valid_from, valid_to)`)."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-locking version, incremented on every successful write."
+          },
+          "vertrag": {
+            "description": "The stored BO4E `Vertrag` (vertragsart `RAHMENVERTRAG`), as stored."
+          }
+        }
+      },
+      "marktd.MsbRvBefund": {
+        "type": "string",
+        "description": "What the registry says about one (Sparte, NB, MSB, day).",
+        "enum": [
+          "abgeschlossen",
+          "kein_vertrag",
+          "angeboten",
+          "anpassung_erforderlich",
+          "beendet"
+        ]
+      },
+      "marktd.MsbRvPruefung": {
+        "type": "object",
+        "description": "The answer of `GET /api/v1/msb-rahmenvertraege/check`.",
+        "required": [
+          "abgeschlossen",
+          "befund"
+        ],
+        "properties": {
+          "abgeschlossen": {
+            "type": "boolean",
+            "description": "`true` only when a contract with status `abgeschlossen` is valid on\n`datum`."
+          },
+          "befund": {
+            "$ref": "#/components/schemas/marktd.MsbRvBefund"
+          },
+          "vertrag": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/marktd.MsbRahmenvertrag",
+                "description": "The contract covering `datum`, when one does."
+              }
+            ]
+          }
+        }
+      },
+      "marktd.MsbRvStatus": {
+        "type": "string",
+        "description": "Lifecycle state of an MSB framework contract.",
+        "enum": [
+          "angeboten",
+          "abgeschlossen",
+          "anpassung_erforderlich",
+          "beendet"
+        ]
+      },
+      "marktd.MsbRvUpsertRequest": {
+        "type": "object",
+        "description": "The `PUT /api/v1/msb-rahmenvertraege` body.\n\nSeparate from [`MsbRahmenvertrag`] because the two directions are not\nsymmetric: what is **written** must cross the BO4E gate, and what is\n**read** is whatever was stored.",
+        "required": [
+          "sparte",
+          "nb_mp_id",
+          "msb_mp_id",
+          "valid_from"
+        ],
+        "properties": {
+          "fassung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contract text edition. Absent on a Gas row stores [`FASSUNG_GAS`];\nabsent on a Strom row stores nothing."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Optional: an id to keep stable. Absent → allocated on insert."
+          },
+          "msb_mp_id": {
+            "type": "string"
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "signed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "sparte": {
+            "type": "string",
+            "description": "`STROM` or `GAS` — required: the NB holds one MP-ID per Sparte, and a\ncontract of one Sparte never answers the other's lookup.",
+            "example": "STROM"
+          },
+          "status": {
+            "$ref": "#/components/schemas/marktd.MsbRvStatus"
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-locking version; `0`/absent skips the check."
+          },
+          "vertrag": {
+            "type": "object",
+            "description": "The BO4E `Vertrag` (vertragsart `RAHMENVERTRAG`), crossing\n[the gate](mako_markt::bo4e::decode) as it deserialises.\n\nAbsent stores the empty object the column defaults to, not `null`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "marktd.Nna": {
+        "type": "object",
+        "description": "One Netznutzungsabrechnungsposition.",
+        "required": [
+          "artikel_id",
+          "zu_abschlag_prozent"
+        ],
+        "properties": {
+          "artikel_id": {
+            "type": "string"
+          },
+          "zu_abschlag_prozent": {
+            "type": "string",
+            "format": "decimal",
+            "description": "Zuschlag (> 0) or Abschlag (< 0) in Prozent."
+          }
+        }
+      },
+      "marktd.Obis": {
+        "type": "object",
+        "description": "One OBIS-Kennzahl of the Marktlokation with its Verwendungszwecke.",
+        "required": [
+          "obis_kennzahl"
+        ],
+        "properties": {
+          "obis_kennzahl": {
+            "type": "string"
+          },
+          "verwendungszweck_lf": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verwendungszweck_nb": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verwendungszweck_uenb": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wertegranularitaet": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/marktd.Granularitaet"
+              }
+            ]
+          }
+        }
+      },
+      "marktd.Objekt": {
+        "type": "object",
+        "description": "One object of the bündel.",
+        "required": [
+          "typ",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "objektcode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BO4E `lokationsbuendelObjektcode` — the object's position in the\nLokationsbündelstruktur."
+          },
+          "typ": {
+            "$ref": "#/components/schemas/marktd.Objekttyp"
+          }
+        }
+      },
+      "marktd.Objekttyp": {
+        "type": "string",
+        "description": "The kind of object in a Lokationsbündel.",
+        "enum": [
+          "MALO",
+          "MELO",
+          "NELO",
+          "SR",
+          "TR"
+        ]
+      },
+      "marktd.PriCatVersionSummary": {
+        "type": "object",
+        "description": "One entry in the PRICAT version history list.",
+        "required": [
+          "id",
+          "nb_mp_id",
+          "valid_from",
+          "bo4e_version",
+          "source",
+          "dispatch_state",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "bo4e_version": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dispatch_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dispatch_state": {
+            "type": "string",
+            "description": "Dispatch state: `pending` | `queued` | `done` | `error`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_from": {
+            "type": "string",
+            "description": "Start of validity period (ISO 8601 date)."
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "End of validity period, or `null` for open-ended."
+          }
+        }
+      },
+      "marktd.Register": {
+        "type": "object",
+        "description": "The Wertegranularität of one register of a Zähler.",
+        "required": [
+          "zaehler_id",
+          "obis_kennzahl",
+          "wertegranularitaet"
+        ],
+        "properties": {
+          "obis_kennzahl": {
+            "type": "string"
+          },
+          "wertegranularitaet": {
+            "$ref": "#/components/schemas/marktd.Granularitaet"
+          },
+          "zaehler_id": {
+            "type": "string"
+          }
+        }
+      },
+      "marktd.StatusBody": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optimistic-locking guard: the version the caller last read. When\nsupplied and stale, the update fails with a version-conflict problem\nresponse instead of overwriting."
+          },
+          "platform_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Platform reference, once known."
+          },
+          "status": {
+            "type": "string",
+            "description": "Target lifecycle state."
+          }
+        },
+        "additionalProperties": false
+      },
+      "marktd.SubscriptionResponse": {
+        "type": "object",
+        "required": [
+          "subscriber_id",
+          "webhook_url",
+          "roles",
+          "event_types",
+          "sparten",
+          "active",
+          "version"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sparten": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subscriber_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "webhook_url": {
+            "type": "string"
+          }
+        }
+      },
+      "marktd.SubscriptionUpsertRequest": {
+        "type": "object",
+        "required": [
+          "webhook_url"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sparten": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "webhook_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "webhook_url": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "marktd.Verfahren": {
+        "type": "string",
+        "description": "The Verfahren of a normiertes Profil.",
+        "enum": [
+          "SYNTHETISCH",
+          "ANALYTISCH"
+        ]
+      },
+      "marktd.VersorgungsStatusHistorie": {
+        "type": "object",
+        "description": "One page of a Marktlokation's supply-state history, newest first.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.VersorgungsStatusHistoryResponse"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based page index.",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Page size (at most 500).",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every change recorded for the Marktlokation, not only this page's.",
+            "minimum": 0
+          }
+        }
+      },
+      "marktd.VersorgungsStatusHistoryResponse": {
+        "type": "object",
+        "description": "One supply-state change of a Marktlokation.",
+        "required": [
+          "id",
+          "malo_id",
+          "lieferstatus",
+          "zuordnungen",
+          "nb_mp_id",
+          "version",
+          "valid_from"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_process_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lieferende": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "lieferstatus": {
+            "$ref": "#/components/schemas/marktd.Lieferstatus"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "msb_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The instant this state became active (RFC 3339)."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "zuordnungen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.Zuordnung"
+            },
+            "description": "The assignment list as it stood at `valid_from`."
+          }
+        }
+      },
+      "marktd.VersorgungsStatusResponse": {
+        "type": "object",
+        "description": "The VersorgungsStatus of a Marktlokation — now, or as it stood on a date.",
+        "required": [
+          "malo_id",
+          "lieferstatus",
+          "zuordnungen",
+          "nb_mp_id",
+          "updated_at",
+          "version"
+        ],
+        "properties": {
+          "eog_seit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Start of the running Ersatz-/Grundversorgung (§38/§36 EnWG), if any."
+          },
+          "last_process_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lf_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The single active Lieferant, when there is exactly one.\n\nDerived from `zuordnungen` and **absent on a tranchierte\nMarktlokation**, where no single supplier exists — read `zuordnungen`\nthere rather than treating the omission as „unsupplied\"."
+          },
+          "lf_mp_id_next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The single announced Lieferant, when exactly one Anmeldung is pending.\nDerived, with the same caveat as `lf_mp_id`."
+          },
+          "lf_next_lieferbeginn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Lieferbeginn of the announced Lieferant."
+          },
+          "lieferbeginn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "lieferende": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "lieferstatus": {
+            "$ref": "#/components/schemas/marktd.Lieferstatus"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "msb_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nb_mp_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this state was written (RFC 3339) — for a state read `at` a date,\nwhen that historic state became active."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-locking version, also the `ETag`."
+          },
+          "zuordnungen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/marktd.Zuordnung"
+            },
+            "description": "Every Lieferant holding a share of this Marktlokation — the authoritative\nanswer to „who supplies it\". A tranchierte Marktlokation carries several."
+          }
+        }
+      },
+      "marktd.Zaehler": {
+        "type": "object",
+        "description": "A Zähler of one of the bündel's Messlokationen.",
+        "required": [
+          "melo_id",
+          "zaehler_id"
+        ],
+        "properties": {
+          "melo_id": {
+            "type": "string"
+          },
+          "zaehler_id": {
+            "type": "string"
+          },
+          "zaehlertyp_spezifikation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BO4E `Zaehler.zaehlertypSpezifikation` (`EDL40`, `EDL21`,\n`SONSTIGER_EHZ`, `MME_STANDARD`, `MME_MEDA`)."
+          }
+        }
+      },
+      "marktd.Zuordnung": {
+        "type": "object",
+        "description": "One Lieferant's share of a Marktlokation.",
+        "required": [
+          "lf_mp_id",
+          "prozent",
+          "status"
+        ],
+        "properties": {
+          "lf_mp_id": {
+            "type": "string",
+            "description": "MP-ID of the Lieferant holding this share."
+          },
+          "process_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The process that wrote this assignment."
+          },
+          "prozent": {
+            "type": "string",
+            "format": "decimal",
+            "description": "The share in percent — `100` for an untranchierte Marktlokation."
+          },
+          "status": {
+            "$ref": "#/components/schemas/marktd.Zuordnungsstatus"
+          },
+          "tranche_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Tranchen-ID of a tranchierte Marktlokation."
+          },
+          "zuordnungsbeginn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Zuordnungsbeginn — the Lieferbeginn of this assignment."
+          },
+          "zuordnungsende": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Zuordnungsende, once one is agreed."
+          }
+        }
+      },
+      "marktd.Zuordnungsstatus": {
+        "type": "string",
+        "description": "Whether a Zuordnung is announced (Anmeldung in flight) or running.",
+        "enum": [
+          "Angekuendigt",
+          "Aktiv"
+        ]
+      }
+    }
+  }
+}

@@ -1197,6 +1197,103 @@ fn every_emitted_rechnung_is_valid_bo4e() {
     }
 }
 
+/// Rechnung nachrechnen: every invoice the engine emits
+/// recomputes to the cent from its stored form — every line from quantity ×
+/// unit price, every total from the lines, the Steuerbeträge and the
+/// Vorauszahlungen.
+#[test]
+fn every_emitted_rechnung_recomputes_to_the_cent() {
+    for (label, invoice) in emitted_invoices() {
+        let stored: rubo4e::current::Rechnung =
+            serde_json::from_value(invoice.to_rechnung_json()).expect("a Rechnung");
+        let r = energy_billing::recompute::recompute(&stored);
+        assert!(
+            r.matches,
+            "{label}: lines {:?}, totals {:?}",
+            r.mismatched_lines(),
+            r.totals.iter().filter(|t| !t.matches).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// A Schlussrechnung that deducts twelve Abschläge recomputes too: `zuZahlen`
+/// is the gross less the Vorauszahlungen, and a credit is a negative balance.
+#[test]
+fn a_schlussrechnung_with_abschlaege_recomputes() {
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"31.87","grundpreis_ct_per_day":"41.10"}"#,
+    )
+    .expect("strom fixture");
+    let rates = RegulatoryRates {
+        stromsteuer_ct_per_kwh: Ok(dec!(2.05)),
+        mwst_rate: dec!(0.19),
+        ..RegulatoryRates::default()
+    };
+    let abschlage = (1..=12)
+        .map(|m| energy_billing::AbschlagDeduction {
+            datum: date!(2025 - 01 - 15) + time::Duration::days(i64::from(m) * 30),
+            betrag_eur: dec!(97.00),
+            ust_satz: dec!(0.19),
+            beschreibung: Some(format!("Abschlag {m}/2025")),
+        })
+        .collect();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "SR-2025-001".to_owned(),
+        period: BillingPeriod::new(date!(2025 - 01 - 01), date!(2025 - 12 - 31)).unwrap(),
+        invoice_type: InvoiceType::Final,
+        regulatory_rates: rates.clone(),
+        abschlage,
+        ..Default::default()
+    };
+    let q = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(2873),
+            is_estimated: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(ctx, &q)
+        .expect("bills");
+    let stored: rubo4e::current::Rechnung =
+        serde_json::from_value(invoice.to_rechnung_json()).expect("a Rechnung");
+    let r = energy_billing::recompute::recompute(&stored);
+    assert!(r.matches, "{r:#?}");
+    assert_eq!(r.vorauszahlungen_eur, dec!(1164.00));
+    assert!(
+        r.lines
+            .iter()
+            .any(|l| l.unit.as_deref() == Some("KWH") && l.estimated),
+        "the metered line says it rests on an estimate: {:#?}",
+        r.lines
+    );
+}
+
+/// One stored line off by one cent makes the verdict name that line
+/// and nothing else.
+#[test]
+fn a_line_off_by_one_cent_is_named() {
+    let (_, invoice) = emitted_invoices().into_iter().next().expect("a scenario");
+    let mut json = invoice.to_rechnung_json();
+    let line = &mut json["rechnungspositionen"][0]["gesamtpreis"]["wert"];
+    let altered = line
+        .as_str()
+        .expect("a decimal string")
+        .parse::<rust_decimal::Decimal>()
+        .expect("a decimal")
+        + dec!(0.01);
+    *line = serde_json::json!(altered.to_string());
+    let stored: rubo4e::current::Rechnung = serde_json::from_value(json).expect("a Rechnung");
+    let r = energy_billing::recompute::recompute(&stored);
+    assert!(!r.matches);
+    assert_eq!(r.mismatched_lines(), vec![1]);
+    assert_eq!(r.lines[0].difference_eur, Some(dec!(0.01)));
+}
+
 /// The recipient reaches **both** document maps, off one field.
 ///
 /// `to_rechnung` and `to_en16931` must name the Rechnungsempfänger from the

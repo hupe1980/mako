@@ -4,7 +4,8 @@
 // exactly the request its form shows — a proposal only ever fills the form.
 
 import type { FaktKoerper } from "../format/fakt";
-import { problem, sentence } from "./problem";
+import { type Problem, problem, sentence } from "./problem";
+import { kopf, SOFORT, type Versand } from "./versand";
 import { verweigern } from "./verweigert";
 
 /** The decision body: the code, the Bemerkung, and the E/G facts the entry lists as still needed. */
@@ -14,11 +15,26 @@ export interface Entscheidung extends FaktKoerper {
   antwort_code?: string;
   antwort_tree?: string;
   bemerkung?: string;
+  /** The hash of the body processd rehearsed and the person was shown; a stale one is refused (412). */
+  body_sha256?: string;
 }
 
 /** processd refused the decision; its words, shown in place. */
 export class Abgelehnt extends Error {
   override name = "Abgelehnt";
+  /** The stable code (`pruefung_abgelehnt`, `nicht_geprueft`, `json_required`, …). */
+  readonly code: string | undefined;
+  /** The rules a refused check names (`E_0623`, an AHB rule). */
+  readonly regeln: string[];
+  readonly stufe: string | undefined;
+  readonly grund: string | undefined;
+  constructor(message: string, p?: Problem) {
+    super(message);
+    this.code = p?.code;
+    this.regeln = Array.isArray(p?.regeln) ? (p.regeln as unknown[]).map(String) : [];
+    this.stufe = typeof p?.stufe === "string" ? p.stufe : undefined;
+    this.grund = typeof p?.grund === "string" ? p.grund : undefined;
+  }
 }
 
 /** Somebody decided the Freigabe first: who, when, and how. */
@@ -36,17 +52,17 @@ export class SchonEntschieden extends Error {
 }
 
 /**
- * Send a decision. `keepalive` lets it outlive the page — a decision held for
- * undo and sent on `pagehide`.
+ * Send a decision, under the hold's Idempotency-Key; `keepalive` lets it
+ * outlive the page — a decision held for undo and sent on `pagehide`.
  */
-export async function entscheiden(id: string, e: Entscheidung, keepalive = false): Promise<void> {
+export async function entscheiden(id: string, e: Entscheidung, v: Versand = SOFORT): Promise<void> {
   const tuer = e.aktion === "freigeben" ? "approve" : "reject";
   const { aktion: _, ...body } = e;
   const res = await fetch(`/svc/processd/api/v1/queue/${encodeURIComponent(id)}/${tuer}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: kopf(v, true),
     body: JSON.stringify(body),
-    keepalive,
+    keepalive: v.keepalive,
   });
   if (res.ok) return;
   const p = await problem(res);
@@ -56,5 +72,5 @@ export async function entscheiden(id: string, e: Entscheidung, keepalive = false
   }
   if (res.status === 403)
     throw verweigern({ dienst: "processd", aktion: "entscheiden" }, sentence(p));
-  throw new Abgelehnt(sentence(p));
+  throw new Abgelehnt(sentence(p), p);
 }

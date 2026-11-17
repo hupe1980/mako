@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Versand } from "../data/versand";
 import { HoldProvider } from "./Holds";
 import { HOLD_MS, HoldQueue } from "./holdQueue";
 
@@ -9,7 +10,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const sender = () => vi.fn(async (_keepalive: boolean) => undefined);
+const sender = () => vi.fn(async (_v: Versand) => undefined);
+const SCHLUESSEL = expect.stringMatching(/^[0-9a-f-]{36}$/);
 
 describe("a held decision", () => {
   it("sends nothing when it is taken back inside the hold", () => {
@@ -25,6 +27,18 @@ describe("a held decision", () => {
     expect(q.list()).toHaveLength(0);
   });
 
+  it("takes a new Idempotency-Key when it is held again after an undo", () => {
+    const q = new HoldQueue();
+    const first = sender();
+    q.hold("a", "Verworfen", first, () => undefined);
+    q.undo();
+    const second = sender();
+    q.hold("a", "Verworfen", second, () => undefined);
+    q.flush();
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith({ keepalive: true, schluessel: SCHLUESSEL });
+  });
+
   it("is sent once when the hold ends", () => {
     const q = new HoldQueue();
     const send = sender();
@@ -34,7 +48,7 @@ describe("a held decision", () => {
     vi.advanceTimersByTime(1);
     vi.advanceTimersByTime(HOLD_MS * 3);
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith(false);
+    expect(send).toHaveBeenCalledWith({ keepalive: false, schluessel: SCHLUESSEL });
     expect(q.undo()).toBe(false);
   });
 
@@ -78,8 +92,10 @@ describe("the page's holds", () => {
     act(() => {
       window.dispatchEvent(new Event("pagehide"));
     });
-    expect(a).toHaveBeenCalledWith(true);
-    expect(b).toHaveBeenCalledWith(true);
+    expect(a).toHaveBeenCalledWith({ keepalive: true, schluessel: SCHLUESSEL });
+    expect(b).toHaveBeenCalledWith({ keepalive: true, schluessel: SCHLUESSEL });
+    // Each decision has its own key.
+    expect(a.mock.calls[0]?.[0].schluessel).not.toBe(b.mock.calls[0]?.[0].schluessel);
     vi.advanceTimersByTime(HOLD_MS * 2);
     expect(a).toHaveBeenCalledOnce();
     expect(b).toHaveBeenCalledOnce();

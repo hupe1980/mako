@@ -26,8 +26,11 @@
      black on the bright dark-mode ones — white on #34d1bf is about 2:1. */
   --text-on-accent: light-dark(#ffffff, #07120f);
 
-  /* The accent follows the Rolle (see [data-rolle] below). */
-  --accent: light-dark(#0066cc, #3d9bff);
+  /* The one accent: the primary button, the selection, a link, the row in
+     hand. Every Rolle wears it — the badge names the Rolle in words — and no
+     second hue joins it; the AI colour below is agent content's alone
+     (tokens.test.ts holds both). */
+  --accent: light-dark(#0b6e66, #34d1bf);
 
   /* Status — tinted text on its own faint fill, always with an icon and a
      word, never colour alone. A solid fill belongs to the one primary Button.
@@ -84,20 +87,6 @@
   --dur-fade: 160ms;
 }
 
-/* One accent per Rolle, so the hat you wear is visible on every screen. */
-[data-rolle="netz"] {
-  --accent: light-dark(#0b6e66, #34d1bf);
-}
-[data-rolle="lieferant"] {
-  --accent: light-dark(#4b3fd8, #a8b1ff);
-}
-[data-rolle="energieservice"] {
-  --accent: light-dark(#1f7a3a, #5fd68a);
-}
-[data-rolle="messstelle"] {
-  --accent: light-dark(#9a4a00, #ffbf47);
-}
-
 [data-theme="light"] {
   color-scheme: light;
 }
@@ -128,7 +117,16 @@
 @media (prefers-reduced-motion: reduce) {
   :root {
     --dur-move: 0ms;
+    --default-transition-duration: 0s;
   }
+}
+
+/* A hover or selection fades its background in 120 ms, as esales' console
+   does; nothing else on a control moves. Not inlined, so reduced motion can
+   set it to zero below for every transition at once. */
+@theme {
+  --default-transition-duration: 120ms;
+  --default-transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 @theme inline {

@@ -1534,6 +1534,10 @@ pub struct BillingCandidate {
     pub lieferbeginn: time::Date,
     #[serde(default)]
     pub lieferende: Option<time::Date>,
+    /// Supply has ended: the period up to `lieferende` is owed an
+    /// Abschlussrechnung (§ 40c Abs. 2 Satz 1 EnWG).
+    #[serde(default)]
+    pub beendet: bool,
 }
 
 /// Response of `GET /api/v1/vertraege/by-malo/{malo_id}`.
@@ -1727,6 +1731,21 @@ pub enum OutputdError {
     Unavailable(#[from] anyhow::Error),
 }
 
+/// What [`OutputdClient::render_invoice`] sends.
+#[derive(Clone, Copy)]
+pub struct RenderInvoiceRequest<'a> {
+    pub model: &'a en16931::Invoice,
+    /// The CII payload embedded beside the page.
+    pub xml: &'a str,
+    pub specification_id: &'a str,
+    /// A pinned template, or `None` for the tenant's current one.
+    pub template_hash: Option<&'a str>,
+    pub date: time::Date,
+    pub ident: &'a str,
+    /// The public Nachrechnen link the page prints with its QR code.
+    pub nachrechnen_url: Option<&'a str>,
+}
+
 /// Client for `outputd`, the customer-document renderer.
 ///
 /// billingd owns what an invoice *says* (the stored EN 16931 model and the CII
@@ -1761,13 +1780,17 @@ impl OutputdClient {
     /// failed.
     pub async fn render_invoice(
         &self,
-        model: &en16931::Invoice,
-        xml: String,
-        specification_id: &str,
-        template_hash: Option<&str>,
-        date: time::Date,
-        ident: &str,
+        req: &RenderInvoiceRequest<'_>,
     ) -> Result<RenderedDocument, OutputdError> {
+        let RenderInvoiceRequest {
+            model,
+            xml,
+            specification_id,
+            template_hash,
+            date,
+            ident,
+            nachrechnen_url,
+        } = *req;
         // The **semantic model**, not a projected view. outputd owns the
         // projection onto what a template may print, and it owns it once: the
         // publish gate proves every operator template against that projection,
@@ -1778,6 +1801,7 @@ impl OutputdClient {
             "attachment": { "xml": xml, "specification_id": specification_id },
             "date": date.to_string(),
             "ident": ident,
+            "nachrechnen_url": nachrechnen_url,
         });
         // Not `Upstream::send`: it maps a 404 to absence, and here a 404 *is*
         // the answer — outputd saying the pinned template does not exist, which
@@ -1878,6 +1902,7 @@ impl OutputdClient {
             "kunden_nr":   req.kunden_nr,
             "recipient":   req.recipient,
             "channels":    req.channels,
+            "nachrechnen_url": req.nachrechnen_url,
         });
         self.up
             .json(self.up.post("/api/v1/documents/issue/INVOICE").json(&body))
@@ -1948,6 +1973,9 @@ pub struct IssueInvoiceRequest<'a> {
     pub kunden_nr: Option<&'a str>,
     pub recipient: serde_json::Value,
     pub channels: Vec<String>,
+    /// The public Nachrechnen link the letter prints with its QR code
+    /// ([`crate::nachrechnen::public_link`]).
+    pub nachrechnen_url: Option<String>,
 }
 
 /// What outputd recorded for an issued document.

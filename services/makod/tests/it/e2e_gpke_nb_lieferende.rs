@@ -250,9 +250,14 @@ fn ankuendigung() -> serde_json::Value {
 }
 
 async fn ankuendigen(c: &Combined) -> ProcessId {
-    match dispatch_command(&c.state, "gpke.nb-lieferende.ankuendigen", &ankuendigung())
-        .await
-        .expect("gpke.nb-lieferende.ankuendigen spawns")
+    match dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.nb-lieferende.ankuendigen",
+        &ankuendigung(),
+    )
+    .await
+    .expect("gpke.nb-lieferende.ankuendigen spawns")
     {
         DispatchOutcome::Spawned { process_id } => process_id,
         other => panic!("the Ankündigung must spawn, got {other:?}"),
@@ -344,6 +349,7 @@ async fn an_answered_55007_runs_to_its_zustimmung() {
 
     dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "gpke.nb-lieferende.bestaetigen",
         &serde_json::json!({ "malo_id": MALO, "antwort_code": "A10" }),
     )
@@ -387,24 +393,39 @@ async fn a_running_ankuendigung_and_a_stilllegung_are_refused() {
     let c = combined().await;
     ankuendigen(&c).await;
     assert!(
-        dispatch_command(&c.state, "gpke.nb-lieferende.ankuendigen", &ankuendigung())
-            .await
-            .is_err()
+        dispatch_command(
+            &c.state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.nb-lieferende.ankuendigen",
+            &ankuendigung()
+        )
+        .await
+        .is_err()
     );
     let c = combined().await;
     let mut body = ankuendigung();
     body["transaktionsgrund"] = serde_json::json!("Z33");
     assert!(
-        dispatch_command(&c.state, "gpke.nb-lieferende.ankuendigen", &body)
-            .await
-            .is_err()
+        dispatch_command(
+            &c.state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.nb-lieferende.ankuendigen",
+            &body
+        )
+        .await
+        .is_err()
     );
     body["transaktionsgrund"] = serde_json::json!("ZQ7");
     body["unbekannt"] = serde_json::json!(true);
     assert!(
-        dispatch_command(&c.state, "gpke.nb-lieferende.ankuendigen", &body)
-            .await
-            .is_err(),
+        dispatch_command(
+            &c.state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.nb-lieferende.ankuendigen",
+            &body
+        )
+        .await
+        .is_err(),
         "an unknown key is refused"
     );
 }
@@ -506,9 +527,14 @@ async fn a_stilllegung_ends_the_msb_and_cancels_lfz_and_msbz() {
     body["msbz"] =
         serde_json::json!({ "mp_id": "9900001000004", "zuordnungsbeginn": "2027-03-01" });
     body["lfz"] = serde_json::json!({ "mp_id": "9900001000005", "zuordnungsbeginn": "2027-04-01" });
-    let nb = match dispatch_command(&c.state, "gpke.nb-lieferende.ankuendigen", &body)
-        .await
-        .expect("a Stilllegung is announced")
+    let nb = match dispatch_command(
+        &c.state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.nb-lieferende.ankuendigen",
+        &body,
+    )
+    .await
+    .expect("a Stilllegung is announced")
     {
         DispatchOutcome::Spawned { process_id } => process_id,
         other => panic!("the Ankündigung must spawn, got {other:?}"),
@@ -574,17 +600,27 @@ async fn a_stilllegung_without_its_facts_is_refused() {
     let mut body = ankuendigung();
     body["transaktionsgrund"] = serde_json::json!("Z33");
     assert!(
-        dispatch_command(&c.state, "gpke.nb-lieferende.ankuendigen", &body)
-            .await
-            .is_err()
+        dispatch_command(
+            &c.state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.nb-lieferende.ankuendigen",
+            &body
+        )
+        .await
+        .is_err()
     );
     let mut body = ankuendigung();
     body["geraeteausbaudatum"] = serde_json::json!("2027-01-15");
     body["msb_mp_id"] = serde_json::json!("9900001000003");
     assert!(
-        dispatch_command(&c.state, "gpke.nb-lieferende.ankuendigen", &body)
-            .await
-            .is_err()
+        dispatch_command(
+            &c.state,
+            mako_engine::envelope::Akteur::System,
+            "gpke.nb-lieferende.ankuendigen",
+            &body
+        )
+        .await
+        .is_err()
     );
 }
 
@@ -596,6 +632,7 @@ async fn the_meldung_doors_render_zh1_their_profile_admits() {
     let c = combined().await;
     dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "gpke.zuordnung.aufheben",
         &serde_json::json!({
             "malo_id": MALO,
@@ -609,6 +646,7 @@ async fn the_meldung_doors_render_zh1_their_profile_admits() {
     .expect("the 55038 is queued");
     dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "gpke.msb-zuordnung.beenden",
         &serde_json::json!({
             "malo_id": MALO,
@@ -637,6 +675,7 @@ async fn the_lieferbeginn_meldepflichten_ride_the_abmeldeanfrage() {
     let c = combined().await;
     let anfrage = match dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "gpke.beendigung-zuordnung.anfragen",
         &serde_json::json!({
             "malo_id": MALO,
@@ -655,6 +694,7 @@ async fn the_lieferbeginn_meldepflichten_ride_the_abmeldeanfrage() {
     };
     dispatch_command(
         &c.state,
+        mako_engine::envelope::Akteur::System,
         "gpke.zuordnung.informieren",
         &serde_json::json!({
             "malo_id": MALO,

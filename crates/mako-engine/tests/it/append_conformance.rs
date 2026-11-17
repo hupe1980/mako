@@ -86,6 +86,7 @@ fn event(tenant: TenantId, process: ProcessId) -> NewEvent {
         "Spawned",
         1,
         serde_json::json!({"v": 1}),
+        mako_engine::envelope::Akteur::System,
     )
 }
 

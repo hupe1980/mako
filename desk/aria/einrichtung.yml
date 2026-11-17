@@ -1,0 +1,192 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Einrichtung" [level=1]
+  - paragraph: "Vor dem Go-live: was die Bereitstellung noch verlangt, und die erste echte Nachricht zur Probe — ohne sie zu senden."
+  - region "Bereitschaft":
+    - heading "Bereitschaft" [level=2]
+    - paragraph: Die Marktkommunikation fragt jeden Dienst der Bereitstellung nach seinen Befunden und ordnet sie den Punkten zu. Die Liste prüft laufend nach.
+    - text: prüft alle 15 Sekunden
+    - button "Jetzt prüfen"
+    - status:
+      - paragraph: Noch nicht bereit
+      - paragraph: Ein Punkt blockiert, oder ein Dienst hat nicht geantwortet.
+    - heading "Dienste" [level=3]
+    - list "Dienste":
+      - listitem: Marktkommunikation blockiert · Version 1.0.0
+      - listitem: Prozessüberwachung bereit · Version 1.0.0
+      - listitem: Messwerte nicht erreichbar
+      - listitem: Abrechnung unlesbare Antwort
+    - heading "Punkte" [level=3]
+    - list "Punkte":
+      - listitem:
+        - heading "Identitäten" [level=4]
+        - text: blockiert
+        - paragraph: Jede Rolle hat je Sparte genau eine MP-ID mit der Codenummer, die sie verlangt.
+        - list "Befunde zu Identitäten":
+          - listitem:
+            - paragraph: "blockiert: \"9900001000001\" ist eine BDEW-Codenummer (Strom), aber die Rollen [\"GNB\"] gehören zur anderen Sparte — eine Gas-Rolle braucht eine DVGW-Codenummer (98…), eine Strom-Rolle eine BDEW-Codenummer (99…)"
+            - text: Marktkommunikation
+            - code: party[0].mp_id
+            - 'button "Quelle: BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“"': "BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“"
+            - link "Im Vorschlag beheben"
+      - listitem:
+        - heading "Zertifikate" [level=4]
+        - text: erfüllt
+        - paragraph: Jedes Zertifikat ist lesbar, passt zu seinem Schlüssel und läuft nicht ab.
+      - listitem:
+        - heading "Bilanzierung" [level=4]
+        - text: erfüllt
+        - paragraph: Jeder Bilanzkreis ist seiner Sparte eindeutig zugeordnet.
+      - listitem:
+        - heading "Zugriff" [level=4]
+        - text: erfüllt
+        - paragraph: Jede Tür ist authentifiziert und autorisiert.
+      - listitem:
+        - heading "Erreichbarkeit" [level=4]
+        - text: unbekannt
+        - paragraph: Jeder Dienst und jede Gegenstelle ist erreichbar.
+        - list "Befunde zu Erreichbarkeit":
+          - listitem:
+            - paragraph: "blockiert: [marktd] url is set without [marktd] webhook_url (MAKOD_MARKTD_WEBHOOK_URL): makod's MaLo cache follows marktd through its fan-out and needs the address marktd delivers to, e.g. http://makod:8080/webhooks/marktd"
+            - text: Marktkommunikation
+            - code: marktd.webhook_url
+          - listitem:
+            - paragraph: "Warnung: nicht erreichbar: error sending request for url (http://127.0.0.1:8380/admin/einrichtung)"
+            - text: Messwerte
+            - code: die ganze Datei
+          - listitem:
+            - paragraph: "blockiert: Antwort ist kein Einrichtungsbericht (expected value at line 1 column 1): <html><body>502 Bad Gateway</body></html>"
+            - text: Abrechnung
+            - code: die ganze Datei
+      - listitem:
+        - heading "Formatabdeckung" [level=4]
+        - text: erfüllt
+        - paragraph: Jede gültige Formatversion ist durch Profil und Adapter abgedeckt.
+      - listitem:
+        - heading "Konfiguration" [level=4]
+        - text: erfüllt
+        - paragraph: Jede weitere Einstellung ist gültig.
+    - heading "Antworten, die kein Bericht sind" [level=3]
+    - paragraph: Diese Dienste antworteten mit etwas anderem als einem Einrichtungsbericht. Die Antwort steht hier, wie sie kam.
+    - paragraph: "Abrechnung: expected value at line 1 column 1"
+    - text: <html><body>502 Bad Gateway</body></html>
+  - region "Vorschlag":
+    - heading "Vorschlag" [level=2]
+    - paragraph: "Ein paar Fragen zur Bereitstellung — daraus schlägt die Marktkommunikation je Dienst die Konfiguration vor, jede Zeile mit ihrer Quelle. Was offen bleibt, steht als Lücke darin. Angewendet wird nichts: Du kopierst oder lädst die Datei und setzt sie selbst ein."
+    - text: Aus einem Satz
+    - textbox "Aus einem Satz":
+      - /placeholder: Wir sind Lieferant Strom und Gas, Strom unter 9900357000004, Gas unter 9800357000005.
+    - button "Vorbelegen" [disabled]
+    - text: Der Assistent schlägt Antworten vor, jede übernimmst du selbst. Ohne ihn funktioniert die Befragung genauso.
+    - group "Rollen und MP-IDs":
+      - text: Rollen und MP-IDs
+      - paragraph: Welche Rollen spielt die Bereitstellung, und unter welcher MP-ID? Strom braucht eine BDEW-Codenummer (99…), Gas eine DVGW-Codenummer (98…).
+      - list:
+        - listitem:
+          - checkbox "Lieferant Strom"
+          - text: Lieferant Strom
+        - listitem:
+          - checkbox "Lieferant Gas"
+          - text: Lieferant Gas
+        - listitem:
+          - checkbox "Netzbetreiber Strom"
+          - text: Netzbetreiber Strom
+        - listitem:
+          - checkbox "Netzbetreiber Gas" [checked]
+          - text: Netzbetreiber Gas MP-ID Netzbetreiber Gas
+          - textbox "MP-ID Netzbetreiber Gas": "9900001000001"
+        - listitem:
+          - checkbox "Messstellenbetreiber Strom"
+          - text: Messstellenbetreiber Strom
+        - listitem:
+          - checkbox "Messstellenbetreiber Gas"
+          - text: Messstellenbetreiber Gas
+        - listitem:
+          - checkbox "Energieserviceanbieter"
+          - text: Energieserviceanbieter
+        - listitem:
+          - checkbox "Bilanzkreisverantwortlicher (Strom)"
+          - text: Bilanzkreisverantwortlicher (Strom)
+    - group "Bilanzkreise":
+      - text: Bilanzkreise
+      - paragraph: Denen der Lieferant zuordnet, durch Komma getrennt.
+      - paragraph: Erst mit einer Lieferantenrolle gefragt.
+    - group "Verbundene Lieferanten":
+      - text: Verbundene Lieferanten
+      - paragraph: Die MP-IDs der Lieferanten desselben Unternehmens, durch Komma getrennt.
+      - checkbox "Es gibt keine"
+      - text: Es gibt keine MP-IDs verbundener Lieferanten
+      - textbox "MP-IDs verbundener Lieferanten"
+    - heading "AS4-Schlüsselmaterial" [level=3]:
+      - button "AS4-Schlüsselmaterial"
+    - group "Weitere Dienste":
+      - text: Weitere Dienste
+      - paragraph: Wo die übrigen Dienste laufen; die Checkliste fragt jeden davon.
+      - list:
+        - listitem:
+          - text: Dienst
+          - textbox "Dienst": processd
+          - text: Adresse
+          - textbox "Adresse": http://127.0.0.1:8580
+          - button "processd entfernen"
+          - text: Schlüsseldatei (Pfad, optional)
+          - textbox "Schlüsseldatei (Pfad, optional)"
+      - button "Dienst hinzufügen"
+    - region "Vorgeschlagene Konfiguration":
+      - heading "Vorgeschlagene Konfiguration" [level=3]
+      - text: Nichts wird auf einen Server geschrieben.
+      - status:
+        - paragraph: Noch nicht vollständig
+      - tablist "Dateien":
+        - tab "makod.toml 10 Änderungen · 2 Lücken" [selected]
+        - tab "processd.toml 4 Änderungen · 1 Lücke"
+      - tabpanel "makod.toml 10 Änderungen · 2 Lücken":
+        - button "makod.toml kopieren"
+        - button "makod.toml herunterladen"
+        - list "Zeilen von makod.toml":
+          - listitem: "Abschnitt: [deployment]"
+          - listitem: "# makod [deployment] rollen: jede erklärte Rolle braucht genau eine [[party]]-MP-ID entfällt: rollen = [\"nb-gas\"]"
+          - listitem: "neu: rollen = [\"lf-strom\", \"lf-gas\"]"
+          - listitem: "Abschnitt: [[party]]"
+          - listitem: "# BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“ neu: mp_id = \"9900357000004\""
+          - listitem: "# BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4) neu: roles = [\"LF\"]"
+          - listitem: "# makod [[party]] primary: genau eine MP-ID ist der Speicherschlüssel aller Ereignisströme neu: primary = true"
+          - listitem:
+            - text: "Lücke: # FEHLT: [party.as4] für 9900357000004 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID"
+            - button "Zur Frage"
+          - listitem: "Abschnitt: [[party]]"
+          - listitem: "# BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“ neu: mp_id = \"9800357000005\""
+          - listitem: "# BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4) neu: roles = [\"LFG\"]"
+          - listitem:
+            - text: "Lücke: # FEHLT: [party.as4] für 9800357000005 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID"
+            - button "Zur Frage"
+          - listitem: "entfällt: [[party]]"
+          - listitem: "# BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4) entfällt: mp_id = \"9900001000001\""
+          - listitem: "entfällt: roles = [\"GNB\"]"
+          - listitem: "Abschnitt: [[einrichtung.dienst]]"
+          - listitem: "# makod [[einrichtung.dienst]]: die Checkliste fragt jeden Dienst nach GET /admin/einrichtung unverändert: name = \"processd\""
+          - listitem: "unverändert: url = \"http://127.0.0.1:8580\""
+  - heading "Probelauf" [level=2]
+  - paragraph: Die Marktkommunikation baut die Nachricht auf demselben Weg wie im Betrieb und hält sie gegen ihr Profil und die Prüfung vor dem Versand. Gesendet oder gespeichert wird nichts.
+  - radiogroup "Nachricht":
+    - text: Nachricht
+    - radio "Anmeldung Strom · 55001" [checked]
+    - text: Anmeldung Strom · 55001
+    - radio "Abmeldung Strom · 55004"
+    - text: Abmeldung Strom · 55004
+    - radio "Kündigung Strom · 55016"
+    - text: Kündigung Strom · 55016
+    - radio "Anmeldung Gas · 44001"
+    - text: Anmeldung Gas · 44001
+    - radio "Abmeldung Gas · 44004"
+    - text: Abmeldung Gas · 44004
+    - radio "Kündigung Gas · 44016"
+    - text: Kündigung Gas · 44016
+  - text: Angaben (JSON)
+  - textbox "Angaben (JSON)": "{ \"malo_id\": \"51238696012\", \"lieferbeginn_datum\": \"2027-01-01\", \"transaktionsgrund\": \"E03\", \"bilanzkreis\": \"11XBK-LF-------9\", \"haushaltskunde\": true, \"enfg_grundlage\": \"ZG1\", \"kunde\": { \"vorname\": \"Erika\", \"nachname\": \"Mustermann\", \"anschrift\": { \"strasse\": \"Hauptstraße\", \"hausnummer\": \"1\", \"postleitzahl\": \"50667\", \"ort\": \"Köln\", \"landescode\": \"DE\" } } }"
+  - paragraph: Beispielwerte aus den Profilen, vor dem Lauf anpassbar. ⌘↵ startet den Probelauf.
+  - button "Probelauf starten ⌘↵"
+  - button "Beispielwerte"
+  - paragraph: Noch kein Probelauf.
+  - text: Nachricht wählen, Angaben prüfen, Probelauf starten.

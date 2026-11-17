@@ -71,6 +71,30 @@ pub use mako_service::cedar_schema::{AuthzBuildError, CallerIdentity, NamedKey};
 const DEFAULT_POLICIES: &str = include_str!("../cedar/default.cedar");
 const SCHEMA_SRC: &str = include_str!("../cedar/mako.cedarschema");
 
+/// `policies` with a `permit` of `ActOnBehalf` and `RehearseCommand` for each
+/// of `principals` appended — the `[authz] act_on_behalf` grant. A service
+/// that relays a person's approval rehearses it first (processd refuses an
+/// approval makod has not checked), so the one grant carries both. A name is
+/// written as a Cedar string literal, so no name can close the literal and
+/// add a policy.
+#[must_use]
+pub fn with_act_on_behalf(policies: Option<String>, principals: &[String]) -> Option<String> {
+    if principals.is_empty() {
+        return policies;
+    }
+    let mut out = policies.unwrap_or_default();
+    for name in principals {
+        let literal: String = name.chars().flat_map(char::escape_default).collect();
+        for action in ["ActOnBehalf", "RehearseCommand"] {
+            out.push_str(&format!(
+                "\npermit(\n  principal == MaKo::Principal::\"{literal}\",\n  \
+                 action    == MaKo::Action::\"{action}\",\n  resource\n);\n"
+            ));
+        }
+    }
+    Some(out)
+}
+
 // ── MaKo Cedar actions ───────────────────────────────────────────────────────
 
 /// All actions in the `MaKo` Cedar namespace.
@@ -81,6 +105,10 @@ pub enum MakoAction {
     /// Rehearse an ERP command up to its pre-send check, writing nothing —
     /// `POST /api/v1/probe/{command}`.
     RehearseCommand,
+    /// Name the actor of a command in the `Mako-Akteur` header — a service
+    /// dispatching on a person's behalf (processd's approved answers). Never
+    /// granted by the permit-all baseline: an operator grants it by name.
+    ActOnBehalf,
     /// Ingest a raw EDIFACT interchange — `POST /edifact`.
     IngestEdifact,
     /// Read a MaLo record — `GET /admin/malo/{malo_id}`.
@@ -121,6 +149,7 @@ impl MakoAction {
         match self {
             Self::SubmitCommand => "SubmitCommand",
             Self::RehearseCommand => "RehearseCommand",
+            Self::ActOnBehalf => "ActOnBehalf",
             Self::IngestEdifact => "IngestEdifact",
             Self::AdminMaloRead => "AdminMaloRead",
             Self::AdminMaloWrite => "AdminMaloWrite",
@@ -312,8 +341,8 @@ impl CedarAuthorizer {
     /// Build an open-access authorizer for internal / loopback use only.
     ///
     /// Every call to [`authenticate`][Self::authenticate] returns a fixed
-    /// `"anonymous"` identity, and the default policy permits it to perform
-    /// any action.  **Never expose this on a public port.**
+    /// `"anonymous"` identity, and the policy permits it every action but
+    /// `ActOnBehalf`.  **Never expose this on a public port.**
     ///
     /// Used for the AS4 in-process ingest and loopback delivery paths where
     /// the calling code is trusted infrastructure, not an external ERP.
@@ -323,7 +352,8 @@ impl CedarAuthorizer {
             "  principal == MaKo::Principal::\"anonymous\",\n",
             "  action,\n",
             "  resource\n",
-            ");\n",
+            ")\n",
+            "unless { action == MaKo::Action::\"ActOnBehalf\" };\n",
         );
         // `Deny` rather than `PermitAll`: the anonymous grant above is the whole
         // intended policy, so the baseline would only add a second, broader way
@@ -378,6 +408,16 @@ impl CedarAuthorizer {
         res: &CommandResource<'_>,
     ) -> bool {
         self.authorize_on_command(identity, MakoAction::RehearseCommand, res)
+    }
+
+    /// Evaluate whether `identity` may name the actor of a command it submits
+    /// (`Mako-Akteur`) — Cedar `ActOnBehalf` on the command.
+    pub fn authorize_act_on_behalf(
+        &self,
+        identity: &CallerIdentity,
+        res: &CommandResource<'_>,
+    ) -> bool {
+        self.authorize_on_command(identity, MakoAction::ActOnBehalf, res)
     }
 
     fn authorize_on_command(
@@ -808,6 +848,35 @@ mod tests {
         CallerIdentity {
             name: Arc::from(name),
         }
+    }
+
+    /// The service granted `ActOnBehalf` relays approvals, and processd
+    /// rehearses each one before it marks the decision taken — so the grant
+    /// carries `RehearseCommand` on a least-privilege deployment too, and
+    /// nothing else.
+    #[test]
+    fn the_act_on_behalf_grant_carries_the_rehearsal() {
+        let a = CedarAuthorizer::new(
+            vec![NamedKey {
+                name: Arc::from("processd"),
+                token: SecretString::new("tok".to_owned().into()),
+            }],
+            with_act_on_behalf(None, &["processd".to_owned()]),
+            None,
+            None,
+            DefaultPolicy::Deny,
+        )
+        .expect("policies parse");
+        let res = CommandResource {
+            name: "gpke.lieferbeginn.bestaetigen",
+            marktrolle: "NB",
+            pid: 55002,
+            tenant: "9900357000004",
+        };
+        assert!(a.authorize_act_on_behalf(&id("processd"), &res));
+        assert!(a.authorize_rehearsal(&id("processd"), &res));
+        assert!(!a.authorize_command(&id("processd"), &res));
+        assert!(!a.authorize_rehearsal(&id("erp"), &res));
     }
 
     // ── Authorization — default policy ────────────────────────────────────────

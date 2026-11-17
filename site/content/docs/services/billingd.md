@@ -810,11 +810,33 @@ count — at most `catch_up_periods` (default 13), billing each through the
 `records_count`, `errors_count` (any error marks the month `failed`) and
 `skipped_count`.
 
+**Abschlussrechnung.** vertragd keeps an ended supply in the candidates for
+twelve weeks after its `lieferende`, flagged `beendet`. The sweep bills it once:
+the days after the last billed one up to `lieferende`, as a `SCHLUSSRECHNUNG`
+(§ 40c Abs. 2 Satz 1 EnWG), whose credit § 40c Abs. 3 Satz 2 pays out. The
+cadence period the supply ends in is never billed as an ordinary invoice, and a
+supply already billed through its end gets none. A `lieferende` already past
+ends the supply even before vertragd's Ablauf worker flags it.
+
+**The § 40c watch.** Every period the sweep attempts and cannot bill is a row
+in `unbilled_periods`: MaLo, Lieferant, period, whether it is the
+Abschlussrechnung, the refusal code (`NO_METER_DATA` when the Schlussablesung
+has not arrived, `RATE_REFUSED`, `ABSCHLAEGE_UNBEKANNT`, …) and `due_on` from
+`mako_fristen::vorlauf::abrechnung_faellig` — six weeks after the period's end,
+three under § 40b Abs. 1 monthly billing, six after `lieferende` for the
+Abschlussrechnung (§ 40c Abs. 2 EnWG). A later failure refreshes the row; an
+invoice for the period, by any path, closes it (`settled_by`); a Storno of that
+invoice re-opens it as `STORNIERT`. Every issued invoice of a supply period
+carries the same date as `billing_records.due_on`, which is what
+`GET /api/v1/billing/deadline-summary` counts on time or late. The watch is fed
+by the run: with `[billing_runs] enabled = false` it records nothing.
+
 **Advances.** A Jahresrechnung deducts the paid Abschläge, each at its own rate
 (§ 40 Abs. 1 EnWG, § 14 Abs. 5 Satz 2 UStG), read from accountingd
 (`GET /api/v1/accounts/{malo}/abschlaege`). An unreachable accountingd is an
-error. Without `accountingd_url` settling cadences are skipped unless
-`jahresrechnung = true` declares that no advances are collected.
+error. Without `accountingd_url` a settling cadence is recorded as
+`ABSCHLAEGE_UNBEKANNT` in `unbilled_periods` unless `jahresrechnung = true`
+declares that no advances are collected.
 
 **Sending.** `versand` (default **true**) issues each document of a period
 through outputd outside the billing transaction — the invoice and, beside it,
@@ -913,6 +935,36 @@ Art. 17 audit fields.
 
 ---
 
+## Rechnung nachrechnen {#nachrechnen}
+
+Every invoice can be recomputed to the cent from what it states
+(`energy_billing::recompute`): each line as quantity × unit price, `gesamtnetto`
+from the lines, each Steuerbetrag from base × rate, `gesamtsteuer`,
+`gesamtbrutto` and `zuZahlen` less the Vorauszahlungen. Each line carries its
+inputs — quantity and how it was obtained (`quantity_source`, `estimated` for
+an estimate or Ersatzwert), unit price and its source, the rules. Recomputing
+proves the arithmetic, not the inputs.
+
+At issue the record is **sealed**: SHA-256 over the RFC 8785 form of
+`rechnung_json` (`seal_sha256`); the verdict says whether it still holds. With
+`[nachrechnen]` the record also gets a **verify token** — HMAC-SHA256 of
+`token_key` over the record id, 128 bits — stored only as its hash. The public
+link is `public_url` + token; portald serves it (`/nachrechnen/{token}`) from
+the masked view, which names no customer and masks the MaLo-ID. `POST
+/api/v1/billing/{id}/verify-token/revoke` (`correct-billing`) withdraws it; a
+revoked token answers 404 like an unknown one. The link travels to outputd
+with every invoice render and issue (`nachrechnen_url`), so the letter prints
+it with its QR code, and the operator view (`GET …/nachrechnung`, MCP
+`recompute_invoice`) carries it as `public_link`.
+
+```toml
+[nachrechnen]
+token_key  = "env:BILLINGD_NACHRECHNEN_KEY"   # ≥ 32 bytes
+public_url = "https://kundenportal.example.de/nachrechnen/"
+```
+
+---
+
 ## Endpoints
 
 | Method | Path | Description |
@@ -930,6 +982,11 @@ Art. 17 audit fields.
 | `POST` | `/api/v1/billing/vpp/{vpp_id}` | Manual § 41e settlement |
 | `POST` | `/api/v1/webhooks/vpp-dispatch` | Signed `de.vpp.dispatch.confirmed` |
 | `GET` | `/api/v1/billing/review-queue` | REVIEW and HELD, highest risk first |
+| `GET` | `/api/v1/billing/unbilled` | The § 40c watch, earliest `due_on` first (`?open=false` includes settled) |
+| `GET` | `/api/v1/billing/deadline-summary` | Per Lieferant: owed, issued on time, issued late, overdue |
+| `GET` | `/api/v1/billing/{id}/nachrechnung` | The record recomputed, with the seal verdict |
+| `POST` | `/api/v1/billing/nachrechnen` | `{"token"}` → the masked recomputation the public page renders; the token rides in the body, never in a path. Cedar `read-billing-by-token`: portald's service principal alone (`[[oidc.service_keys]] name = "portald"`) |
+| `POST` | `/api/v1/billing/{id}/verify-token/revoke` | Revoke the verify token |
 | `POST` | `/api/v1/billing/{id}/release` | Release a held record |
 | `POST` | `/api/v1/billing/{id}/reviewed` | Record the review of a REVIEW record; sends nothing |
 | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G (§ 4a EGovG i.V.m. ERechV) |
@@ -950,6 +1007,8 @@ One envelope, `{ "error": { "code", "message", … } }`:
 | `PERIOD_ALREADY_BILLED` | 409 | An issued document holds the period |
 | `RECHNUNGSNUMMER_IN_USE` | 409 | § 14 Abs. 4 Nr. 4 UStG collision |
 | `NOT_HELD`, `ALREADY_CANCELLED`, `NOT_YET_ISSUED` | 409 | Wrong record state |
+| `VERIFY_TOKEN_NOT_FOUND` | 404 | The record carries no verify token |
+| `NOT_AN_ORIGINAL` | 422 | A Storno is recomputed through its original |
 | `ZEITRAUM_UEBERSCHREITET_SATZGRENZE` | 422 | Period straddles a Stichtag |
 | `RATE_REFUSED` | 422 | No lawful statutory rate for the period (e.g. a 2028 tax, a 2027 nEHS price) |
 | `VALIDATION_BLOCKED` | 422 | The engine refused; the body lists every blocking warning |
@@ -972,12 +1031,12 @@ equality is part of every rule, and Cedar is default-deny.
 
 | Action | Routes | Roles |
 |---|---|---|
-| `read-billing` | `GET /api/v1/billing…`, review queue, renderings | any caller of the tenant |
+| `read-billing` | `GET /api/v1/billing…`, review queue, renderings, the § 40c watch, Nachrechnung | any caller of the tenant |
 | `preview-billing` | `…/preview` | any caller of the tenant |
 | `run-billing` | `/calculate`, `/tarifwechsel`, `/sammelrechnung/…`, `/ggv/…` | `LF`, `MSB`, `ESA` |
 | `issue-billing` | `…/versenden` | `LF`, `MSB`, `ESA` |
 | `settle-flexibility` | `/billing/vpp/{vpp_id}` | `LF`, `MSB`, `ESA` |
-| `correct-billing` | `…/correction` | `LF`, `MSB`, `ESA` |
+| `correct-billing` | `…/correction`, `…/verify-token/revoke` | `LF`, `MSB`, `ESA` |
 | `release-billing` | `…/release` | `LF`, `MSB`, `ESA` |
 | `review-billing` | `…/reviewed` | `LF`, `MSB`, `ESA` |
 | `submit-b2g` | `…/submit-b2g` | `LF`, `MSB`, `ESA` |
@@ -992,7 +1051,7 @@ keep releases and reviews attributable.
 
 ## MCP server
 
-`/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session): **thirteen tools** and six prompts, every
+`/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session): **sixteen tools** and six prompts, every
 tool **read-only**, run in process. There is no `calculate_billing`: issuing a
 Rechnung is a legally binding act for an OIDC identity, not a model.
 
@@ -1011,6 +1070,9 @@ Rechnung is a legally binding act for an OIDC identity, not a model.
 | `validate_tariff_config` | Engine validation (incl. `KEIN_ARBEITSPREIS`), § 41a iMSys guard, § 42 Energiemix disclosure |
 | `explain_invoice_position` | `PositionTrace` of a position |
 | `list_review_queue` | The undecided REVIEW + HELD records with their risk findings, typed (`Pruefposten`) |
+| `list_unbilled_periods` | The § 40c watch, typed (`UnbilledPeriods`) |
+| `summarize_billing_deadlines` | Per Lieferant: owed, on time, late, overdue, typed (`DeadlineSummary`) |
+| `recompute_invoice` | Rechnung nachrechnen for one record, typed (`Nachrechnung`) |
 
 Prompts: `order-to-cash`, `preview-invoice`, `check-dynamic-tariff`,
 `14a-steuerungsrabatt`, `eeg-billing`, `gas-billing`. agentd's
@@ -1023,8 +1085,9 @@ Prompts: `order-to-cash`, `preview-invoice`, `check-dynamic-tariff`,
 
 | Table | Purpose |
 |---|---|
-| `billing_records` | `id`, `malo_id`, `lf_mp_id`, `product_code`, `category`, `rechnungsnummer`, `period_from/to`, `rechnung_json` (BO4E), `en16931_json` (model), `en16931_blocked`, `dokumentart` (`RECHNUNG`/`GEBUEHRENBESCHEID`), `bescheid_json`, `empfaenger_unternehmer`, `bo4e_version`, totals, `outcome` (`generated` → `dispatched` → `paid`/`partial`/`disputed`; `cancelled`), `risk_score/band/findings`, `released_by/at`, `reviewed_by/at`, `template_hash`, `billing_run_id` |
+| `billing_records` | `id`, `malo_id`, `lf_mp_id`, `product_code`, `category`, `rechnungsnummer`, `period_from/to`, `rechnung_json` (BO4E), `en16931_json` (model), `en16931_blocked`, `dokumentart` (`RECHNUNG`/`GEBUEHRENBESCHEID`), `bescheid_json`, `empfaenger_unternehmer`, `bo4e_version`, totals, `outcome` (`generated` → `dispatched` → `paid`/`partial`/`disputed`; `cancelled`), `risk_score/band/findings`, `released_by/at`, `reviewed_by/at`, `template_hash`, `billing_run_id`, `due_on` (§ 40c Abs. 2), `seal_sha256`, `verify_token_sha256`, `verify_revoked_at` |
 | `steuerzeilen` | One typed Strom-/Energiesteuer line per document: `steuer`, `art` (`REGELSATZ`/`ERMAESSIGUNG`/`BEFREIUNG`), `rechtsgrundlage`, `menge`, `einheit`, `satz_ct`, `betrag_eur`, the supply period — written by the statement that writes the `billing_records` row (a re-run draft's lines are replaced); a consolidated document carries none, its children do |
+| `unbilled_periods` | The § 40c watch: `(tenant, malo_id, period_from, period_to)`, `lf_mp_id`, `final_invoice`, `reason_code`, `message`, `due_on`, `attempts`, `settled_by/at`; closed and re-opened by triggers on `billing_records` |
 | `invoice_number_series` | `(tenant, series, year)` → `last_value`, allocated by upsert under a row lock |
 | `vpp_dispatch_ledger` | `tx_id` (PK), `tenant`, `record_id` |
 | `billing_run_log` | Monthly sweep audit |

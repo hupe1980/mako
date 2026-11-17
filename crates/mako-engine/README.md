@@ -60,8 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     let process = ctx.spawn::<Inbox>(TenantId::new(), WorkflowId::new("inbox", "FV2026-10-01"));
-    process.run(Receive { pid: 55001 }, RunOptions::new()).await?;
-    process.run(Receive { pid: 55001 }, RunOptions::new()).await?; // a redelivery: no-op
+    process.run(Receive { pid: 55001 }, RunOptions::system()).await?;
+    process.run(Receive { pid: 55001 }, RunOptions::system()).await?; // a redelivery: no-op
 
     assert_eq!(process.state().await?, vec![55001]);
     Ok(())

@@ -89,7 +89,7 @@ async fn a_comdis_is_refused() {
             bestellung_ref: None,
             rechnungstyp: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("a valid 31011 is accepted");
@@ -99,7 +99,7 @@ async fn a_comdis_is_refused() {
             InvoicCommand::ReceiveComdis {
                 comdis_ref: MessageRef::new("COM-1"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect_err("the AWH Sperrprozesse process publishes no COMDIS leg");
@@ -125,7 +125,7 @@ async fn a_foreign_pid_is_refused_on_both_legs() {
                 bestellung_ref: None,
                 rechnungstyp: None,
             },
-            RunOptions::new()
+            RunOptions::system()
         )
         .await
         .is_err(),
@@ -143,7 +143,7 @@ async fn a_foreign_pid_is_refused_on_both_legs() {
                 invoice_ref: MessageRef::new("INV-1"),
                 nachricht: "UNH+1+INVOIC:D:06A:UN:2.8e'UNT+2+1'".to_owned(),
             },
-            RunOptions::new()
+            RunOptions::system()
         )
         .await
         .is_err()

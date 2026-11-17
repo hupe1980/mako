@@ -403,7 +403,7 @@ async fn katalog_lieferbar(
 
 /// The makod command that answers each inbound PID, and the Marktrolle it runs
 /// under.
-const fn answer_command(pid: u32) -> Option<(&'static str, &'static str)> {
+pub(crate) const fn answer_command(pid: u32) -> Option<(&'static str, &'static str)> {
     match pid {
         17_007 => Some((
             mako_markt::commands::WIM_WERTEBESTELLUNG_BESTELLUNG_BEANTWORTEN,
@@ -1096,6 +1096,7 @@ async fn enqueue(
         ),
         window.expires_at,
         cfg.tenant.clone(),
+        "esa-module",
     );
     let address = answer_address(payload);
     // The Werteanfrage refusal carries no Antwortcode (the QUOTES 15003 has no

@@ -99,10 +99,13 @@
 
 pub mod config;
 mod daemon;
+/// A decision on a Freigabe rehearsed: the route's checks, nothing sent.
+pub mod entscheidungsprobe;
 /// The typed decision view over an approval-queue entry.
 pub mod freigabe;
 pub use daemon::Processd;
 pub mod handler;
+pub mod klaerfall;
 pub mod mcp_server;
 pub mod metrics;
 /// The process read model — every `de.mako.*` event projected per process.
@@ -140,3 +143,40 @@ pub mod eog_module;
 
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 pub mod neuanlage_module;
+
+/// Every command a module stores on a queue entry is one makod rehearses
+/// before a decision is marked (`entscheidungsprobe::makod_prueft`) — an
+/// answer outside `FREIGABE_ANTWORTEN` would make every approval of it an
+/// unchecked one, refused.
+#[cfg(all(test, feature = "integrated"))]
+mod freigabe_antworten_tests {
+    use mako_markt::commands::{self as c, FREIGABE_ANTWORTEN};
+
+    #[test]
+    fn every_command_a_freigabe_stores_is_a_freigabe_answer() {
+        let mut stored: Vec<&str> = Vec::new();
+        for pid in [44_001, 44_004, 55_004, 55_001, 55_077] {
+            let (a, r) = crate::nb_module::answer_commands(pid);
+            stored.extend([a, r]);
+        }
+        for p in crate::lf_module::lf_antwort_processes() {
+            stored.extend([p.bestaetigen, p.ablehnen]);
+        }
+        stored.extend([
+            c::WIM_GERAETEWECHSEL_BESTAETIGEN,
+            c::WIM_GERAETEWECHSEL_ABLEHNEN,
+            c::WIM_STEUERUNGSAUFTRAG_BESTAETIGEN,
+            c::WIM_STEUERUNGSAUFTRAG_ABLEHNEN,
+            c::WIM_PREISANFRAGE_ANGEBOT_SENDEN,
+            c::WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN,
+        ]);
+        for pid in [17_007, 17_008, 39_002, 35_003] {
+            if let Some((cmd, _)) = crate::esa_module::answer_command(pid) {
+                stored.push(cmd);
+            }
+        }
+        for cmd in stored {
+            assert!(FREIGABE_ANTWORTEN.contains(&cmd), "{cmd}");
+        }
+    }
+}

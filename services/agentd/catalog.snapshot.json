@@ -5,7 +5,7 @@
       "titel": "Marktprozesse erklären",
       "zweck": "Erklärt abgelehnte Anmeldungen, APERAK-Fehler und hängende Prozesse.",
       "version": "2.0.0",
-      "digest": "27f11306e835ee841a7b8092f73e11ee96e34d69e43e13b665b80189751382fa",
+      "digest": "e22d97e64f6e61b002c31c9a7f59538dd0a107e89df7dca395db12f190e29ec5",
       "ausloeser": [
         "de.mako.process.failed",
         "de.mako.antwortfrist.abgelaufen",
@@ -73,7 +73,7 @@
       "titel": "Assistent im Desk",
       "zweck": "Beantwortet eine Frage zum Kunden, zur Marktlokation, zum Prozess oder zur Entscheidung auf dem Bildschirm, jeden Satz mit seiner Quelle.",
       "version": "1.5.0",
-      "digest": "0a003eb49ef78bba5a518a9b66fe20a8b8d06dc3ec3c07409fa0fcc154156c34",
+      "digest": "e9334a5f7f5c135e8233a869aad81e727f594355ca465d54683e69cf2c24974d",
       "ausloeser": [],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -131,7 +131,7 @@
       "titel": "Einrichtung vorbelegen",
       "zweck": "Liest aus einem Satz über das Deployment die Antworten der Einrichtung vor — Rollen, MP-IDs, Bilanzkreise —, jede zur Bestätigung durch eine Person.",
       "version": "1.0.0",
-      "digest": "8c2332da3e950fe63f4a155799e7a2c744046554e0c50dc8e31b50cb7abeaf92",
+      "digest": "34699dded684ee4eeb69b6cfa379b1e239a4284f3983603e4133c227f951cb0e",
       "ausloeser": [],
       "modell": "anthropic/claude-haiku-4-5",
       "liest": [],
@@ -144,7 +144,7 @@
       "titel": "Rechnungseinwände",
       "zweck": "Prüft eine bestrittene Rechnung gegen die Zahlungsavise und schlägt die Korrektur der Abrechnung vor.",
       "version": "2.0.0",
-      "digest": "225c60d9d7f82a31fafee25fc05fa12b43792ab71dcf1d06e9f2e026b6c2b618",
+      "digest": "8d5bfdaa550582c095d3338955a9f459d1dd6d15c4a42cbaf25822e8626242a4",
       "ausloeser": [
         "de.invoic.receipt.disputed",
         "de.accounting.mahnung.issued"
@@ -197,7 +197,7 @@
       "titel": "Netzentgeltabrechnung",
       "zweck": "Überwacht Abrechnungsentwürfe des Netzbetreibers, überfällige Versände und Zahlungsbestätigungen.",
       "version": "2.0.0",
-      "digest": "9188bbff3ff5e2eeb9a427666c8c34a4ea5d4c5d978aa5bd4f3886c81f5b71fa",
+      "digest": "dd6d93289b14e8f29b576d0bb4459f0df18906a3f1d2a221aa966e9171547665",
       "ausloeser": [
         "de.netzbilanz.invoic.drafted",
         "de.netzbilanz.invoic.dispatched",
@@ -244,7 +244,7 @@
       "titel": "Zahlungsavise abgleichen",
       "zweck": "Ordnet eingehende Zahlungsavise offenen Rechnungen zu und nennt den nächsten Schritt bei Abweisungen.",
       "version": "2.0.0",
-      "digest": "c8df02782033abd21927102ba66292e11ff69b483e23eb7e3d099f65437cfbc4",
+      "digest": "ca1a737f2d8b2a25685ca82f6adab24bb792b01910d7b8a313f31e010a49a8b5",
       "ausloeser": [
         "de.invoic.payment.overdue",
         "de.invoic.receipt.*"
@@ -285,7 +285,7 @@
       "titel": "Auffällige Rechnungen",
       "zweck": "Sucht Rechnungen, die stark vom Verlauf der letzten Monate abweichen, und nennt die wahrscheinliche Ursache.",
       "version": "2.0.0",
-      "digest": "d3194b221337c6b87bb64f21655a0e9509b9c8e867fe0dc9cf7e83f94e5ad053",
+      "digest": "6cb7bb0101a39fdd7f129596740b3aa450d8ddceaec67327be59fe43979bb639",
       "ausloeser": [
         "de.billing.rechnung.erstellt"
       ],
@@ -325,7 +325,7 @@
       "titel": "Pflichtangaben der Rechnung",
       "zweck": "Prüft jede versandte Endkundenrechnung auf die gesetzlichen Pflichtangaben.",
       "version": "2.0.0",
-      "digest": "3bf28975235ab95aeeb3e2b48ef3952486d62f2d9b39f9ce3eabecdd22bdb5ca",
+      "digest": "241d800fd373bae494bcf9778adc513052a69e0519a8cf9013413fd9e0aa82c5",
       "ausloeser": [
         "de.billing.rechnung.erstellt"
       ],
@@ -361,7 +361,7 @@
       "titel": "Jahresabrechnung prüfen",
       "zweck": "Bereitet die Prüfung einer Schlussabrechnung aus Zählerständen, Tarif und Konto vor.",
       "version": "2.0.0",
-      "digest": "62eb31103a586389c719f30388fc8b7bb645f16299b4b998e4ad736b7976e3ca",
+      "digest": "7ea1bd4c307666df7ef6e8585d54d88b316c2d6ed125b0f6a96081863a15d26a",
       "ausloeser": [],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -403,7 +403,7 @@
       "titel": "EEG-Anlagen",
       "zweck": "Begleitet Förderende, Anschlussvermarktung und Abrechnungsfragen der Erzeugungsanlagen.",
       "version": "2.0.0",
-      "digest": "84dcf4b670f6b00f1267c5c5d682236b7c22b9678cf6a80b8f05191e3bb4225a",
+      "digest": "0dc3f91900dbe5ddcd95cc24c386823781aa150d3276640abf6a6807b8e98b62",
       "ausloeser": [
         "de.eeg.anlage.foerderung-auslaufend",
         "de.messwert.reading.direct.stored"
@@ -436,7 +436,7 @@
       "titel": "EEG-Pflichten",
       "zweck": "Prüft die Pflichtzahlungen und Vermarktungspflichten der Anlagen auf Verstöße.",
       "version": "2.0.0",
-      "digest": "0a5029ee996ceec757cf625b088846ac24d8f30a1e49f9956b60d67d8b4f6f88",
+      "digest": "ca5efce8d7bee12b9062992e8d30a44e3b0deebbf6a61d6318ed57d04b87b54f",
       "ausloeser": [
         "de.eeg.anlage.*",
         "de.eeg.verguetung.*",
@@ -476,7 +476,7 @@
       "titel": "Zahlungen und Mahnwesen",
       "zweck": "Gleicht Bankrückläufer mit dem Kundenkonto ab und nennt die nächste Mahnstufe.",
       "version": "2.0.0",
-      "digest": "5b36efadc37015370a303c8fc45dfec8b3f88b7f826b20bc550fb4df452c3b62",
+      "digest": "a31150094bf65df09bd807be7cb7464219ac73e5bb9c5602d17b2a12949466a8",
       "ausloeser": [
         "de.accounting.payment.due",
         "de.accounting.bankruecklast",
@@ -514,7 +514,7 @@
       "titel": "Gleichbehandlung im Netz",
       "zweck": "Vergleicht, wie schnell und automatisch Anmeldungen verbundener und fremder Lieferanten bearbeitet werden.",
       "version": "2.1.0",
-      "digest": "59c4e6472e39dfa36aec39c95334504a322937be5a0724b88ccbfe5c1d9d8111",
+      "digest": "44aa1919a2364612f502ff430029feb0e83037d564b0edf56542d902d7b1ebc3",
       "ausloeser": [
         "de.obs.stp.parity.alert"
       ],
@@ -550,7 +550,7 @@
       "titel": "Messstellenwechsel",
       "zweck": "Verfolgt Wechsel des Messstellenbetreibers und hängende Ableseaufträge.",
       "version": "2.0.0",
-      "digest": "047bdd3fc7a4b87ec36e1fa9e30fa3642f4d8a6dca182d1389717e30d110ad51",
+      "digest": "092343505cd052f81d279b17df228823311c82e7d299daa63ba92dd126a086c1",
       "ausloeser": [
         "de.messwert.reading.quality.warning",
         "de.messwert.reading.direct.stored",
@@ -594,7 +594,7 @@
       "titel": "Messwertqualität",
       "zweck": "Findet Lücken in Messwerten, liest ihre Qualität und nennt, welches Ersatzwertverfahren zulässig ist.",
       "version": "2.0.0",
-      "digest": "a6aa0b43b2b73938b04a640d4a647573591a3ee8c21ce6e19a7f4c48b6b68a27",
+      "digest": "5be2b50b9c031fe65724fffb69a43b7127ac0f79e68a8b0e32624e8d5fa56bcd",
       "ausloeser": [
         "de.messwert.reading.quality.warning",
         "de.mako.process.completed"
@@ -623,7 +623,7 @@
       "titel": "Lücken in den Netzdaten",
       "zweck": "Findet Marktlokationen, denen Netzzuordnung oder Netzvertrag fehlt, bevor eine Anmeldung daran scheitert.",
       "version": "2.0.0",
-      "digest": "a4e8c30ea8db6ad673d0389b701e736d8654d31511354a7f0121231dcc58f382",
+      "digest": "8b6868d88a3fd30eaefbba444b47ce1dbd1f16e617a47053764390fc453e7715",
       "ausloeser": [
         "de.markt.nb-contract.updated",
         "de.markt.malo.updated"
@@ -652,7 +652,7 @@
       "titel": "Dynamische Tarife",
       "zweck": "Findet Kunden mit intelligentem Messsystem, für die ein dynamischer Tarif in Frage kommt.",
       "version": "2.0.0",
-      "digest": "4be846997caa55c4a0b62a65edbaa9d3669685c19eb6429a64bb344716240684",
+      "digest": "22f68528ba2249d90d078eaf0db3896547bca1b5abdf879b4c9b78acdc7f8719",
       "ausloeser": [
         "de.billing.rechnung.erstellt",
         "de.mako.process.completed"
@@ -693,7 +693,7 @@
       "titel": "Verträge und Kunden",
       "zweck": "Wacht über Preisgarantien, Preisänderungsmitteilungen, auslaufende Verträge und hängende Anmeldungen.",
       "version": "2.1.0",
-      "digest": "8f629f9c49d4afc6e85dd7b32f251fbb6b27e8a301749f2c00794d2687e89cb2",
+      "digest": "20ba807440f50c0b1ddcb7179942fa78cb9d6eb4e48abbb51943e8ac9680b4fb",
       "ausloeser": [
         "de.vertrag.*",
         "de.mako.aperak.rejected",
@@ -749,7 +749,7 @@
       "titel": "Produktkatalog",
       "zweck": "Prüft den Produktkatalog auf fehlende Börsenpreise und eine veraltete Stromkennzeichnung.",
       "version": "2.0.0",
-      "digest": "538b3484c0e3a2af43e0509358e97159c2795962fa5d09482b7258c5487aa020",
+      "digest": "aee0bf003282eac66189fb74ccf60471d8579410fda6d5e3608fc9b208075d5b",
       "ausloeser": [
         "de.tarif.product.updated",
         "de.tarif.angebot.abgelaufen",
@@ -791,7 +791,7 @@
       "titel": "Entscheidungen erklären",
       "zweck": "Erklärt, welcher Prüfschritt eine Anmeldung abgelehnt hat, und verfolgt die Freigabewarteschlange.",
       "version": "2.0.0",
-      "digest": "74f4c227a91aa17ab9ed4315cfce82c24905783486fc682412fc5c1e6bb20754",
+      "digest": "39dc854c2aad3273a5f44c95d7cb1d5078b9abec42b0a66e6e6c36c061a23a97",
       "ausloeser": [
         "de.mako.process.initiated",
         "de.mako.aperak.rejected",
@@ -837,7 +837,7 @@
       "titel": "Sperraufträge",
       "zweck": "Verfolgt Sperr- und Entsperraufträge und meldet, was über dem gewünschten Termin liegt.",
       "version": "2.0.0",
-      "digest": "90fcf11c1a39e9777f9a8e577b56cf81b7e75376888ad6b7bd88971f429460b5",
+      "digest": "ef05770e76cfab1626c067b77a5a5736c1e6b8070fd77b6a81b05932b5e4f4c4",
       "ausloeser": [
         "de.accounting.sperrauftrag",
         "de.sperr.*",
@@ -875,7 +875,7 @@
       "titel": "Kundenbenachrichtigungen",
       "zweck": "Stößt Benachrichtigungen im Kundenportal an, etwa zur neuen Rechnung oder zum Tarifwechsel.",
       "version": "2.0.0",
-      "digest": "e513f363a5740d1267ba7bb23325122b756766260bb2d15ccd5eb772fa24a9ec",
+      "digest": "9578b5ba9f4f8b9cc295f73f61d5b36ea0c8c0990a24cec1c0a5a97c4230723f",
       "ausloeser": [
         "de.billing.rechnung.erstellt",
         "de.eeg.anlage.foerderung-auslaufend",
@@ -926,7 +926,7 @@
       "titel": "Bericht an die Bundesnetzagentur",
       "zweck": "Stellt die Kennzahlen für den jährlichen Bericht zur Gleichbehandlung zusammen.",
       "version": "2.1.0",
-      "digest": "660daeab0fb96de66f28755d45600238d05a8fd22426f8196fe0230fdafc9aaa",
+      "digest": "95be7263d50804301db0bf0c788fc9ecd1121878745629b033fdd06e90cd08d7",
       "ausloeser": [],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -960,7 +960,7 @@
       "titel": "Ersatzwerte",
       "zweck": "Empfiehlt für fehlende Messwerte das Ersatzwertverfahren, mit Begründung.",
       "version": "2.0.0",
-      "digest": "9b9c71ca77be1c034894540490c3f36e0941f596dfb798fd329663a93156e3dc",
+      "digest": "aaab3aee2fa29ae616d068ff5ba22b944976cd8fd00b319beeace5f8d9447f4a",
       "ausloeser": [
         "de.messwert.reading.quality.warning",
         "de.mako.process.completed"
@@ -989,7 +989,7 @@
       "titel": "Bilanzierung (MaBiS)",
       "zweck": "Überwacht die Summenzeitreihen und ihre Clearingfenster und erklärt fehlgeschlagene Lieferungen.",
       "version": "3.0.0",
-      "digest": "c5066dfd34cefb63b40d694148718d08e4bf7095a22fb008ea11b43a7d4e96f0",
+      "digest": "ff093eb739c733ef8cc50b6c2cc44701a380966490064762bf484da86c8a325a",
       "ausloeser": [
         "de.mabis.submission.failed",
         "de.mabis.korrekturbedarf.opened",
@@ -1035,7 +1035,7 @@
       "titel": "Smart-Meter-Gateways",
       "zweck": "Findet ablaufende Zertifikate, Kommunikationsfehler und stockende Rollouts der Gateways.",
       "version": "2.0.0",
-      "digest": "c4ab6282acb6577aa9947bc5a938450ac13a8ec4c6f3189cec6d8b784a54cca8",
+      "digest": "37d5345a333427d656fce1498249f83a1b418f272ba30dee5053ae2714912977",
       "ausloeser": [
         "de.messwert.cls.compliance-issue",
         "de.messwert.smgw.cert.expiry-warning",
@@ -1076,7 +1076,7 @@
       "titel": "Virtuelles Kraftwerk",
       "zweck": "Prüft die Abrechnung von Abrufen des virtuellen Kraftwerks auf Unstimmigkeiten.",
       "version": "2.0.0",
-      "digest": "e64f08e8985cf098c8926cccd81858a7523c209378645531b5c895b86e8db676",
+      "digest": "31e126f1c3d7dca5cc5eb14eea61095b09207fba420c0c5941dca87c4d9d4e70",
       "ausloeser": [
         "de.vpp.dispatch.confirmed",
         "de.vpp.settlement.berechnet"
@@ -1120,7 +1120,7 @@
       "titel": "Monatliche EEG-Abrechnung",
       "zweck": "Startet die monatliche Abrechnung aller Anlagen und meldet, was dabei auffällt.",
       "version": "2.0.0",
-      "digest": "2112a01094344e7fa70f3aab69af956e1a98a07fcdeda23067a9fddc8c009e38",
+      "digest": "c91f6d5f73498b2c3a155139e37610b19b165bf6eb106bd1dc46d96472cdb253",
       "ausloeser": [
         "de.eeg.settlement.batch-due",
         "de.eeg.compliance.*",

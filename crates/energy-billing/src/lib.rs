@@ -78,6 +78,9 @@ pub mod provider;
 pub mod providers;
 pub mod quantities;
 pub mod rates;
+/// Rechnung nachrechnen: every line and total of a stored invoice, recomputed.
+#[cfg(feature = "bo4e")]
+pub mod recompute;
 /// Verbrauchsteuerliche Begünstigungen — Befreiung, Ermäßigung, Entlastung.
 ///
 /// Only the first two change what a supplier invoices; the third is the

@@ -594,6 +594,10 @@ pub struct RenderApiRequest {
     /// `None` takes the deployment's `[policy] anrede`.
     #[serde(default)]
     pub anrede: Option<String>,
+    /// For INVOICE: the public page that recomputes the invoice (billingd's
+    /// `[nachrechnen]` link) — printed as text and as a QR code.
+    #[serde(default)]
+    pub nachrechnen_url: Option<String>,
 }
 
 impl RenderApiRequest {
@@ -766,10 +770,21 @@ pub async fn render_with_stored_template(
     // semantic model, a Textform document from its own view. Mixing them would
     // hand the template a dictionary whose every field lookup fails, with a
     // diagnostic that blamed the operator's layout for the caller's mistake.
+    if kind != TemplateKind::Invoice && req.nachrechnen_url.is_some() {
+        return Err(OutputError::unprocessable(
+            "NACHRECHNEN_ONLY_ON_AN_INVOICE",
+            "a Nachrechnen link recomputes an invoice; no other document carries one",
+        ));
+    }
     let data = match (kind, req.subject()?) {
         (TemplateKind::Invoice, RenderSubject::Model(model)) => {
-            serde_json::to_string(&crate::document::DocumentView::of(model))
-                .map_err(|e| OutputError::Internal(e.into()))?
+            let mut view = crate::document::DocumentView::of(model);
+            if let Some(url) = req.nachrechnen_url.as_deref() {
+                view = view
+                    .with_nachrechnen(url)
+                    .map_err(|e| OutputError::unprocessable("INVALID_NACHRECHNEN_URL", e))?;
+            }
+            serde_json::to_string(&view).map_err(|e| OutputError::Internal(e.into()))?
         }
         (TemplateKind::Invoice, RenderSubject::View(_)) => {
             return Err(OutputError::unprocessable(
@@ -960,6 +975,9 @@ pub struct IssueDocumentRequest {
     /// [`RenderApiRequest::attachment`].
     #[serde(default)]
     pub attachment: Option<RenderAttachment>,
+    /// [`RenderApiRequest::nachrechnen_url`].
+    #[serde(default)]
+    pub nachrechnen_url: Option<String>,
     /// [`RenderApiRequest::date`].
     pub date: String,
     /// [`RenderApiRequest::ident`].
@@ -1015,6 +1033,7 @@ impl IssueDocumentRequest {
             ident: std::mem::take(&mut self.ident),
             // An issue follows the deployment's setting; only a re-print pins.
             anrede: None,
+            nachrechnen_url: self.nachrechnen_url.take(),
         }
     }
 }

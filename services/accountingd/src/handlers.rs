@@ -41,9 +41,8 @@ use crate::{
     pg::{
         CreateMandateRequest, UpdateAccountRequest, create_dunning_case_announced, create_mandate,
         fetch_account, fetch_account_by_id, fetch_mandate, fetch_vorauszahlung,
-        jahresabschluss_already_settled, list_active_mandates, list_ledger, list_open_dunning,
-        list_overdue_accounts, record_jahresabschluss, resolve_dunning_case,
-        update_account_tenanted, upsert_account, upsert_vorauszahlung,
+        jahresabschluss_already_settled, list_active_mandates, list_ledger, record_jahresabschluss,
+        resolve_dunning_case, update_account_tenanted, upsert_account, upsert_vorauszahlung,
     },
     sepa::build_pain_008,
 };
@@ -98,7 +97,7 @@ fn refusal(e: impl Into<anyhow::Error>) -> ApiError {
 /// refusal is never answered `500`: a CloudEvent redelivered into the same
 /// refusal books nothing, and an operator sent to the log finds a request to
 /// correct, not an outage. Any other failure is `500`.
-fn ledger_failure(e: impl Into<anyhow::Error>) -> ApiError {
+pub(crate) fn ledger_failure(e: impl Into<anyhow::Error>) -> ApiError {
     let e = e.into();
     ledger_answer(&e).unwrap_or_else(|| ApiError::internal(e))
 }
@@ -209,7 +208,19 @@ pub async fn put_account_verbraucher(
     }
 }
 
-/// `GET /api/v1/accounts/{malo_id}/balance`  — current balance in ct (negative = credit)
+/// `GET /api/v1/accounts/{malo_id}/balance` — the open-items balance
+/// (`crate::reads::balance`, shared with MCP `get_balance`).
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}/balance",
+    tag = "accounts",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), AccountQuery),
+    responses(
+        (status = 200, description = "The balance", body = crate::reads::Kontostand),
+        (status = 403, description = "Cedar `read-account` refused"),
+        (status = 404, description = "`account_not_found`"),
+    ),
+)]
 pub async fn get_balance(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -217,25 +228,29 @@ pub async fn get_balance(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<crate::reads::Kontostand>, ApiError> {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return ApiError::forbidden(e.to_string()).into_response();
+        return Err(ApiError::forbidden(e.to_string()));
     }
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        Ok(Some(row)) => Json(serde_json::json!({
-            "malo_id": malo_id,
-            "balance_ct": row.balance_ct,
-            "balance_eur": format_ct_as_eur(row.balance_ct),
-            "status": if row.balance_ct > 0 { "overdue" } else if row.balance_ct < 0 { "credit" } else { "settled" },
-        }))
-        .into_response(),
-        Ok(None) => account_not_found(&malo_id),
-        Err(e) => ApiError::internal(e).into_response(),
-    }
+    crate::reads::balance(&pool, &cfg.tenant, &malo_id, q.lf_mp_id.as_deref())
+        .await
+        .map(Json)
 }
 
-/// `GET /api/v1/accounts/{malo_id}/ledger`  — paged ledger entries
+/// `GET /api/v1/accounts/{malo_id}/ledger` — the newest movements with the
+/// balance the window opens at (`crate::reads::ledger`, shared with MCP
+/// `list_ledger`).
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}/ledger",
+    tag = "accounts",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), LedgerQuery),
+    responses(
+        (status = 200, description = "The statement window", body = crate::reads::Kontoauszug),
+        (status = 403, description = "Cedar `read-account` refused"),
+        (status = 404, description = "`account_not_found`"),
+    ),
+)]
 pub async fn get_ledger(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -244,28 +259,20 @@ pub async fn get_ledger(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<LedgerQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<crate::reads::Kontoauszug>, ApiError> {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return ApiError::forbidden(e.to_string()).into_response();
+        return Err(ApiError::forbidden(e.to_string()));
     }
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        return account_not_found(&malo_id);
-    }
-    match list_ledger(
-        &ledger,
+    crate::reads::ledger(
         &pool,
+        &ledger,
         &cfg.tenant,
-        lf_mp_id,
         &malo_id,
-        &doubleentry::BalanceQuery::all(),
-        q.limit.unwrap_or(100).min(1000),
+        q.lf_mp_id.as_deref(),
+        q.limit,
     )
     .await
-    {
-        Ok(window) => Json(window).into_response(),
-        Err(e) => ledger_failure(e).into_response(),
-    }
+    .map(Json)
 }
 
 /// `GET /api/v1/accounts/{malo_id}/kontoauszug`  — account statement (portald-consumable)
@@ -507,8 +514,10 @@ pub async fn put_abschlag(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct AccountQuery {
+    /// The Lieferant's MP-ID the account is kept under; defaults to the tenant.
     pub lf_mp_id: Option<String>,
 }
 
@@ -522,9 +531,13 @@ pub struct KontoauszugQuery {
     pub to: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct LedgerQuery {
+    /// The Lieferant's MP-ID the account is kept under; defaults to the tenant.
     pub lf_mp_id: Option<String>,
+    /// Maximum movements, newest first (default 100, at most 1000); what is
+    /// cut off is folded into `opening_ct`.
     pub limit: Option<i64>,
 }
 
@@ -2260,69 +2273,110 @@ pub async fn get_bp_balance(
 
 // ── Offene Posten ─────────────────────────────────────────────────────────────
 
-/// `GET /api/v1/offene-posten`  — overdue accounts
+/// `GET /api/v1/offene-posten` — the accounts with an open balance, largest
+/// first (`crate::reads::overdue`, shared with MCP `list_overdue`). A
+/// tenant-wide book read, so Cedar `read-books`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/offene-posten",
+    tag = "books",
+    params(OffenePostenQuery),
+    responses(
+        (status = 200, description = "The accounts", body = crate::reads::UeberfaelligeKonten),
+        (status = 403, description = "Cedar `read-books` refused"),
+        (status = 422, description = "`invalid_min_balance`"),
+    ),
+)]
 pub async fn get_offene_posten(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Query(q): Query<OffenePostenQuery>,
-) -> impl IntoResponse {
-    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return ApiError::forbidden(e.to_string()).into_response();
+) -> Result<Json<crate::reads::UeberfaelligeKonten>, ApiError> {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return Err(ApiError::forbidden(e.to_string()));
     }
-    // parse min_balance_eur as a decimal string to avoid f64 rounding errors.
-    // e.g. "1.99" must produce 199 ct, not 198 ct from (1.99 * 100.0) as i64.
-    let min_ct: i64 = q
-        .min_balance_eur
-        .as_deref()
-        .and_then(|s| {
-            use rust_decimal::Decimal;
-            use std::str::FromStr;
-            Decimal::from_str(s).ok().map(|d| {
-                use rust_decimal::prelude::ToPrimitive as _;
-                (d * Decimal::from(100))
-                    .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
-                    .to_i64()
-                    .unwrap_or(1)
-            })
-        })
-        .unwrap_or(1);
-    match list_overdue_accounts(&pool, &cfg.tenant, min_ct, q.limit.unwrap_or(200).min(2000)).await
-    {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
-    }
+    crate::reads::overdue(&pool, &cfg.tenant, q.min_balance_eur.as_deref(), q.limit)
+        .await
+        .map(Json)
 }
 
 /// Query parameters for `GET /api/v1/offene-posten`.
 ///
 /// `min_balance_eur` is a **decimal string** (e.g. `"1.99"`) to avoid f64 rounding errors.
 /// Float query parameters in financial APIs can silently lose precision.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct OffenePostenQuery {
     /// Minimum balance in EUR, as a decimal string (e.g. `"1.99"`). Default: 1 ct minimum.
     pub min_balance_eur: Option<String>,
+    /// Maximum accounts (default 100, at most 1000).
     pub limit: Option<i64>,
 }
 
 // ── Dunning ───────────────────────────────────────────────────────────────────
 
-/// `GET /api/v1/dunning`  — open dunning cases
+/// `GET /api/v1/dunning` — the open dunning cases, newest Mahnung first
+/// (`crate::reads::dunning`, shared with MCP `list_dunning`).
+#[utoipa::path(
+    get,
+    path = "/api/v1/dunning",
+    tag = "books",
+    params(DunningQuery),
+    responses(
+        (status = 200, description = "The open cases", body = crate::reads::Mahnfaelle),
+        (status = 403, description = "Cedar `read-books` refused"),
+    ),
+)]
 pub async fn get_dunning(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Query(q): Query<DunningQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<crate::reads::Mahnfaelle>, ApiError> {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return ApiError::forbidden(e.to_string()).into_response();
+        return Err(ApiError::forbidden(e.to_string()));
     }
-    match list_open_dunning(&pool, &cfg.tenant, q.limit.unwrap_or(200).min(1000)).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => ApiError::internal(e).into_response(),
+    crate::reads::dunning(&pool, &cfg.tenant, q.limit)
+        .await
+        .map(Json)
+}
+
+/// `POST /api/v1/payments/match` — the accounts an incoming payment may
+/// belong to (`crate::reads::payment_match`, shared with MCP
+/// `suggest_payment_match`). Reads only; booking is the camt import or a
+/// manual Buchung.
+///
+/// A read posted as a body because it carries the payer's IBAN: in a query
+/// string the IBAN lands in every access log and trace span that records the
+/// URI, which is personal data no log may hold.
+#[utoipa::path(
+    post,
+    path = "/api/v1/payments/match",
+    tag = "payments",
+    request_body = crate::reads::PaymentMatchParams,
+    responses(
+        (status = 200, description = "The candidates", body = crate::reads::Zahlungszuordnung),
+        (status = 403, description = "Cedar `read-account` refused"),
+        (status = 422, description = "A body that is not a payment to match"),
+    ),
+)]
+pub async fn match_payment(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Extension(iban_key): Extension<Option<[u8; 32]>>,
+    Json(q): Json<crate::reads::PaymentMatchParams>,
+) -> Result<Json<crate::reads::Zahlungszuordnung>, ApiError> {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return Err(ApiError::forbidden(e.to_string()));
     }
+    crate::reads::payment_match(&pool, &cfg.tenant, iban_key.as_ref(), q)
+        .await
+        .map(Json)
 }
 
 /// Body of `POST /api/v1/dunning/{account_id}/escalate`.
@@ -2997,8 +3051,10 @@ pub async fn close_einwand(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct DunningQuery {
+    /// Maximum cases (default 100, at most 1000).
     pub limit: Option<i64>,
 }
 

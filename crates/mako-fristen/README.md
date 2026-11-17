@@ -35,6 +35,7 @@ assert_eq!(due, Date::from_calendar_date(2025, Month::January, 13).unwrap());
 | When does a consumer's Widerrufsfrist end? | `vorlauf::widerrufsfrist` — § 355 Abs. 2 BGB, § 356 Abs. 3 and 4 BGB, § 193 BGB |
 | When must the CONTRL / APERAK go out? | `contrl_due_at`, `aperak_strom_due_at`, `aperak_gas_folgeprozess_due_at`, `aperak_gas_initialprozess_due_at` |
 | Is this label a delivery window, owned by no workflow? | `is_delivery_window` |
+| By when is this invoice owed, and its credit paid out? | `vorlauf::abrechnung_faellig`, `vorlauf::guthaben_faellig` — § 40c Abs. 2 and 3 EnWG |
 | May this invoice go out other than as an E-Rechnung? | `e_rechnung` — § 27 Abs. 38 UStG |
 | May mako tax this Rechnungsempfänger as domestic? | `empfaengerland` — `DE` only; another Member State or a third country is refused |
 

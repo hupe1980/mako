@@ -1,0 +1,218 @@
+{
+  "recompute_invoice": {
+    "record_id": "b-1",
+    "rechnungsnummer": "R-2026-0042",
+    "malo_id": "51238696012",
+    "period_from": "2025-10-01",
+    "period_to": "2026-09-30",
+    "vorauszahlungen_eur": "1068.00",
+    "verdict": {
+      "matches": true,
+      "arithmetic_matches": true,
+      "seal_holds": true,
+      "mismatched_positions": [],
+      "storniert": false
+    },
+    "lines": [
+      {
+        "position": 1,
+        "text": "Arbeitspreis Ökostrom Klassik",
+        "quantity": "3200",
+        "unit": "kWh",
+        "unit_price_eur": "0.2240",
+        "stated_eur": "716.80",
+        "recomputed_eur": "716.80",
+        "difference_eur": "0.00",
+        "matches": true,
+        "formula": "3.200 kWh × 0,2240 €/kWh",
+        "rules": ["§ 40 Abs. 2 Nr. 6 EnWG"],
+        "price_source": "Produkt Ökostrom Klassik, Preisstand 01.06.2026",
+        "quantity_source": "Ablesung 30.09.2026 (Messwert) − Ablesung 30.09.2025 (Messwert)",
+        "estimated": false
+      },
+      {
+        "position": 2,
+        "text": "Grundpreis",
+        "quantity": "12",
+        "unit": "Monat",
+        "unit_price_eur": "11.90",
+        "stated_eur": "142.80",
+        "recomputed_eur": "142.80",
+        "difference_eur": "0.00",
+        "matches": true,
+        "formula": "12 Monate × 11,90 €",
+        "rules": [],
+        "price_source": "Produkt Ökostrom Klassik, Preisstand 01.06.2026",
+        "quantity_source": null,
+        "estimated": false
+      },
+      {
+        "position": 3,
+        "text": "Netzentgelt Arbeitspreis",
+        "quantity": "3200",
+        "unit": "kWh",
+        "unit_price_eur": "0.0812",
+        "stated_eur": "259.84",
+        "recomputed_eur": "259.84",
+        "difference_eur": "0.00",
+        "matches": true,
+        "formula": "3.200 kWh × 0,0812 €/kWh",
+        "rules": ["Preisblatt Netz 2026"],
+        "price_source": "Preisblatt Stadtwerke Musterstadt Netz, gültig ab 01.01.2026",
+        "quantity_source": "wie Position 1",
+        "estimated": false
+      }
+    ],
+    "totals": [
+      {
+        "kind": "NETTO",
+        "rate_percent": null,
+        "stated_eur": "1119.44",
+        "recomputed_eur": "1119.44",
+        "matches": true
+      },
+      {
+        "kind": "STEUER",
+        "rate_percent": "19",
+        "stated_eur": "212.69",
+        "recomputed_eur": "212.69",
+        "matches": true
+      },
+      {
+        "kind": "BRUTTO",
+        "rate_percent": null,
+        "stated_eur": "1332.13",
+        "recomputed_eur": "1332.13",
+        "matches": true
+      },
+      {
+        "kind": "ZU_ZAHLEN",
+        "rate_percent": null,
+        "stated_eur": "264.13",
+        "recomputed_eur": "264.13",
+        "matches": true
+      }
+    ],
+    "public_link": "https://portal.stadtwerke-musterstadt.example/nachrechnen/7Kq2fM"
+  },
+  "get_counterparty_record": {
+    "mp_id": "9800357000005",
+    "rolle": "NB",
+    "von": "2026-08-01",
+    "bis": "2026-11-04",
+    "erstellt_um": "2026-11-04T09:20:00Z",
+    "gezaehlt": 13,
+    "fristgerecht": 11,
+    "verspaetet": 1,
+    "unbeantwortet": 1,
+    "offen": 0,
+    "abgebrochen": 0,
+    "verspaetung": {
+      "median_minuten": 180,
+      "max_minuten": 180
+    },
+    "quote_fristgerecht": null,
+    "ablehnungen": [
+      {
+        "code": "A16",
+        "codeliste": "E_3005",
+        "bedeutung": "Die Marktlokation ist im Netzgebiet nicht bekannt.",
+        "anzahl": 1
+      }
+    ],
+    "ausserhalb": {
+      "ohne_frist": 0,
+      "schuldner_unbestimmt": 0
+    },
+    "prozesse": [
+      {
+        "process_id": "p-1",
+        "pid": 44001,
+        "kategorie": "verspaetet",
+        "gestartet_um": "2026-10-01T08:00:00Z",
+        "frist": "2026-10-07T21:59:59Z",
+        "beantwortet_um": "2026-10-08T00:59:59Z",
+        "verspaetung_minuten": 180,
+        "antwort_code": "A16",
+        "antwort_codeliste": "E_3005",
+        "abgelehnt": true
+      },
+      {
+        "process_id": "p-2",
+        "pid": 44001,
+        "kategorie": "fristgerecht",
+        "gestartet_um": "2026-10-12T08:00:00Z",
+        "frist": "2026-10-16T21:59:59Z",
+        "beantwortet_um": "2026-10-13T09:10:00Z",
+        "verspaetung_minuten": null,
+        "antwort_code": "E01",
+        "antwort_codeliste": "E_3005",
+        "abgelehnt": false
+      },
+      {
+        "process_id": "p-3",
+        "pid": 44004,
+        "kategorie": "unbeantwortet",
+        "gestartet_um": "2026-10-20T08:00:00Z",
+        "frist": "2026-10-23T21:59:59Z",
+        "beantwortet_um": null,
+        "verspaetung_minuten": null,
+        "antwort_code": null,
+        "antwort_codeliste": null,
+        "abgelehnt": false
+      }
+    ],
+    "definitionen": [
+      {
+        "begriff": "fristgerecht",
+        "definition": "beantwortet vor Ablauf der Antwortfrist, die mako_fristen für den Prozess berechnet hat"
+      },
+      {
+        "begriff": "verspaetet",
+        "definition": "beantwortet nach Ablauf der Antwortfrist"
+      },
+      {
+        "begriff": "unbeantwortet",
+        "definition": "die Antwortfrist ist abgelaufen, eine Antwort fehlt"
+      }
+    ]
+  },
+  "list_counterparties": {
+    "von": "2026-08-01",
+    "bis": "2026-11-04",
+    "gegenparteien": [
+      {
+        "mp_id": "9800357000005",
+        "rolle": "NB",
+        "gezaehlt": 13,
+        "verspaetet": 1,
+        "unbeantwortet": 1,
+        "offen": 0,
+        "ablehnungen": 1
+      },
+      {
+        "mp_id": "9900357000004",
+        "rolle": "NB",
+        "gezaehlt": 42,
+        "verspaetet": 0,
+        "unbeantwortet": 0,
+        "offen": 3,
+        "ablehnungen": 0
+      }
+    ],
+    "definitionen": []
+  },
+  "rehearse_decision": {
+    "id": "7b2e4c1a-9f3d-4e8b-a1c2-5d6e7f8a9b0c",
+    "freigeben": true,
+    "urteil": "besteht",
+    "command": "gpke.lieferbeginn.antworten",
+    "marktrolle": "NB",
+    "payload": {
+      "malo_id": "51238696012",
+      "antwortcode": "A51"
+    },
+    "body_sha256": "5f2c…",
+    "grund": null
+  }
+}

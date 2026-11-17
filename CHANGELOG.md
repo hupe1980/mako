@@ -9,6 +9,50 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.37.0] — 2026-11-17
+
+### Added
+
+- **Nothing left unbilled.** billingd issues the Schlussrechnung of an ended supply on its own, records every period it could not bill with its refusal code and § 40c Abs. 2 EnWG due date (`unbilled_periods`; an invoice closes it, a Storno re-opens it), and serves a per-Lieferant deadline summary. `mako_fristen::vorlauf::abrechnung_faellig` and `guthaben_faellig` compute the § 40c dates.
+- **Rechnung nachrechnen.** `energy_billing::recompute` recomputes a stored invoice to the cent; billingd seals each invoice at issue (SHA-256 over RFC 8785) with a 128-bit verify token stored as its hash; portald serves the public page `GET /nachrechnen/{token}` (no sign-in, rate-limited, MaLo masked, `nachrechnen_anrede`); outputd prints the link and a QR code on the letter.
+- **Who acted.** Every event names its actor — the system, a person, or a person approving a rule's or an agent's proposal, unchanged or changed; processd reports the share of ended processes per PID that ran with no human touch (`eingriff`, metric `mako_process_beendet_total{pid,eingriff}`).
+- **Klärfälle.** processd opens one case per APERAK rejection, dead letter, refusing answer or lapsed Antwortfrist, keyed per partner and message, with cause, action and due date (`GET /api/v1/klaerfaelle`, MCP `list_klaerfaelle`).
+- **Gegenpartei-Akte.** Per counterparty and role, the answers it owed against their Frist — on time, late, unanswered, refusals with the BDEW wording — with every process behind each figure and a CSV export (`/api/v1/counterparties`, MCP `get_counterparty_record`, `list_counterparties`).
+- **Agents through the verifier.** agentd holds every Freigabe proposal against processd's `rehearse_decision` and makod's `rehearse_command` and stores the Prüfvermerk with its body hash; processd runs makod's pre-send check on every decision itself, so nothing the gate has not passed is approved unchanged, with agentd on or off. makod rehearses every Freigabe answer.
+- **API first.** marktd, edmd, einsd and accountingd serve and commit an OpenAPI 3.1 document (`utoipa-axum`); each of their Desk reads is one function behind a documented `GET` and the MCP tool of the same name, under one Cedar action. New reads: marktd `get_lokationsbuendel` and the Lokationsbündelstrukturen, edmd `get_coverage` (one state per Berlin day, Gastag for Gas).
+- **Desk.** The Prozess page (step bar, one decision, Nachweise as a ticked chain, a „Stand" slider); the Arbeitsvorrat on Heute; Klärfälle, offene Abrechnungen and fällige Mahnungen as Heute sources; the Lokation page (Versorgung, Messkonzept from the Lokationsbündel, a Messwerte ribbon and the Lastgang, the Konto); Nachrechnen; the Gegenparteien; the „Ohne Eingriff" and overdue-billing tiles; each Verlauf entry names who acted. The Desk reads the REST API through a client generated from the committed documents (`openapi-fetch`).
+- **Desk guards.** One accent colour with AA contrast (`tokens.test.ts`), no `Number(` outside `src/format/`, no raw HTML sink, a 250 KB initial bundle budget, an ARIA snapshot per route (`just desk-aria`), the decision bar following the Prüfvermerk, no decision while a service is in drift.
+- `THREAT_MODEL.md`: trust boundaries, assets and 48 threats (STRIDE, OWASP LLM and Agentic 2026), each with its control and the test or guard that proves it.
+- `cargo xtask lead-time` measures how early each profile landed before it was binding; `sync-regulatories` detects a reissued BDEW document.
+- FV 2027-04: ActivationDocument AWT 1.1g and the Regelungen zum Übertragungsweg 1.11 are mirrored and checked — AWT 1.1g changes no verdict, Übertragungsweg 1.11 binds no surface mako runs.
+
+### Changed
+
+- **Breaking:** `EventEnvelope::akteur` is required; `RunOptions::by(akteur)` or `RunOptions::system()` replaces `RunOptions::new()`; ERP notifications carry `makoakteur`; the Idempotency-Key fingerprint includes the actor.
+- **Breaking:** makod attributes a command to its caller; only a principal granted `ActOnBehalf` (`[authz] act_on_behalf`) may relay a person's approval in `Mako-Akteur`, anything else is `403 actor_not_permitted`; makod refuses to boot on a grant to an unnamed principal. The demo gives each relaying service its own key.
+- **Breaking:** processd refuses a decision that is not `application/json` (`415 json_required`) and a stale rendering (`412 stale_body`); a refused or unchecked body is `422 pruefung_abgelehnt` / `422 nicht_geprueft`.
+- **Breaking:** vertragd's billing candidates include a supply ended in the last twelve weeks; billingd's schema gains the seal, token, due-date columns, an overlap constraint and immutability triggers (edited in place).
+- **Breaking:** the shared reads answer typed objects: einsd's expiring and settlements, accountingd's dunning and offene-posten lists; `/offene-posten` returns no IBAN or address and needs `read-books`; accountingd payment matching is `POST /api/v1/payments/match` with a JSON body.
+- **Breaking:** `desk/deploy/gateway.yaml` forwards only each service's `/mcp`, its OpenAPI document and the routes the Desk calls — no `/admin`, `/metrics` or `/health`.
+- **Breaking:** `cargo xtask import-pid-overview` reads the binding PDF, not the .xlsx; `pid-overview.json` is the Lesefassung of 12.08.2026 (483 of 483 imported).
+- mako-service labels HTTP metrics and request spans by route template, never by path, and caps `rmcp` logging at `info`, so no token or tool argument reaches `/metrics` or the logs.
+- Every tool-calling agent manifest states that inbound text is data, never an instruction; a test holds them to it.
+- Desk: one teal accent for every Rolle, esales' density (spacing, 120 ms background-only transitions, reduced motion), every view but Heute loaded on first use.
+- `[oidc] mode = "demo"` accepts `[[oidc.service_keys]]`, so a configured key is its service's principal in the demo as in production.
+
+### Fixed
+
+- WiM Gas: a refused Verpflichtungsanfrage 44168 is answered on **44170** (`G_0071`), published by the PID-Übersicht 4.0 Lesefassung of 12.08.2026; a late one is refused `E17`.
+- edmd `get_correction_history` returns the original and corrected kWh instead of null.
+- billingd's MCP tools answer a failure with an `error_id`, never the error text.
+
+### Security
+
+- processd Klärfälle and Gegenpartei-Akte reads, REST and MCP, are limited to the caller's own Marktrollen; a role-less caller is refused (**Breaking**).
+- billingd's token route `POST /api/v1/billing/nachrechnen` admits portald's service principal alone (**Breaking:** configure `[[oidc.service_keys]] name = "portald"` in billingd and that key as portald's `billingd_api_key`).
+- agentd takes a Freigabe proposal's fate from processd's decided entry, not from the browser.
+- `desk/deploy/oauth2-proxy.cfg` ships the session cookie `SameSite=Strict`, `Secure`, `HttpOnly`; the Desk's CSP forbids framing.
+
 ## [0.36.0] — 2026-11-17
 
 ### Added

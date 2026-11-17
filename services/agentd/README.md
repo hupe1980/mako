@@ -35,7 +35,7 @@ AGENTD_CONFIG=deploy/demo/agentd.toml cargo run -p agentd -- --check-config
 | `POST /api/v1/runs` | start a run (`Idempotency-Key`) |
 | `GET /api/v1/runs/{run}/antwort` · `/schritte` | the checked answer; its reads as Server-Sent Events |
 | `POST /api/v1/runs/{run}/stopp` · `/bewertung` | stop a run; record a person's verdict |
-| `GET /api/v1/hinweise`, `/api/v1/vorschlaege` | the Desk's worklist rows and waiting proposals |
+| `GET /api/v1/hinweise`, `/api/v1/vorschlaege` | the Desk's worklist rows and waiting proposals, each with its Prüfvermerk (processd `rehearse_decision`, makod `rehearse_command`) |
 | `GET /api/v1/agents`, `/api/v1/agents/catalog` | what runs here, for the Desk's Beipackzettel |
 | `POST /api/v1/erasure` | crypto-shred a case or forget a memory subject (GDPR Art. 17) |
 | `/api/v1/oversight/*` | agentplane's worklist, runs, cases and four-eyes decisions (with `[oidc]`) |

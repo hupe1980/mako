@@ -397,6 +397,18 @@ impl DeadLetterReason {
         }
     }
 
+    /// What an operator does about a dead letter of this reason — the cause
+    /// table a Klärfall reads ([`action_for_label`]).
+    ///
+    /// # Panics
+    ///
+    /// Never: every label [`Self::label`] spells has a row, which
+    /// `every_dead_letter_reason_has_an_action` pins.
+    #[must_use]
+    pub fn recommended_action(&self) -> crate::erc::ErcAction {
+        action_for_label(self.label()).expect("every label has a row")
+    }
+
     /// Return the [`AuditContext`] embedded in this reason, if present.
     ///
     /// `OutboxExhausted` does not carry an `AuditContext` because it refers
@@ -879,5 +891,58 @@ mod tests {
             context: AuditContext::now().with_pid(crate::ids::Pid::new(99)),
         };
         assert!(r.audit_context().is_some());
+    }
+}
+
+/// The action a dead letter of `label` ([`DeadLetterReason::label`]) calls
+/// for; `None` for a label no reason spells.
+///
+/// Every row escalates: a dead letter is a message mako could not place, and
+/// no row of this table can say which correction would place it. The reason
+/// names what to check.
+#[must_use]
+pub fn action_for_label(label: &str) -> Option<crate::erc::ErcAction> {
+    use crate::erc::ErcAction::EscalateToOperator;
+    let reason = match label {
+        "unknown_pid" => {
+            "no workflow of this deployment receives the PID — check the Marktrollen and the routing"
+        }
+        "unknown_conversation" => {
+            "no running process matches the message's reference — check whether the request was sent"
+        }
+        "version_mismatch" => "the message's format version is not one this deployment parses",
+        "duplicate_message" => "the message arrived before — confirm the first one was processed",
+        "processing_error" => "the workflow refused the message — read the detail",
+        "test_message" => "a test message (UNB DE0035 = 1) reached a production deployment",
+        "missing_interchange_party" => "the interchange names no sender or receiver",
+        "not_dispatchable" => "the message could not be handed to a workflow — read the detail",
+        "outbox_exhausted" => {
+            "delivery to the counterparty failed every attempt — check its AS4 endpoint"
+        }
+        _ => return None,
+    };
+    Some(EscalateToOperator { reason })
+}
+
+#[cfg(test)]
+mod action_table_tests {
+    /// Every label [`super::DeadLetterReason::label`] spells has a row; the
+    /// list is the `label` match, which a new variant extends at compile time.
+    #[test]
+    fn every_dead_letter_reason_has_an_action() {
+        for label in [
+            "unknown_pid",
+            "unknown_conversation",
+            "version_mismatch",
+            "duplicate_message",
+            "processing_error",
+            "test_message",
+            "missing_interchange_party",
+            "not_dispatchable",
+            "outbox_exhausted",
+        ] {
+            assert!(super::action_for_label(label).is_some(), "{label}");
+        }
+        assert!(super::action_for_label("no_such_reason").is_none());
     }
 }

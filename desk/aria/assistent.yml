@@ -1,0 +1,50 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Assistent" [level=1]
+  - paragraph: Was jede Fähigkeit liest, womit sie denkt, was sie tun darf und wie oft sie half — aus ihrer geprüften Beschreibung und dem, was der Assistent über ihre Läufe festhält.
+  - switch "Nur aktive" [checked]
+  - text: Nur aktive
+  - status:
+    - paragraph: Der Assistent liest nur.
+    - text: Keine Fähigkeit kann eine Marktnachricht senden, buchen oder Stammdaten ändern — was er vorschlägt, entscheidet und sendet ein Mensch.
+  - heading "Assistent im Desk" [level=2]
+  - paragraph: Beantwortet eine Frage zum Kunden, zur Marktlokation oder zum Prozess auf dem Bildschirm, jeden Satz mit seiner Quelle.
+  - text: aktiv liest nur startet auf deine Frage
+  - term: Modell
+  - definition: claude-sonnet-5 · anthropic
+  - term: Liest
+  - definition: Kundenverwaltung Marktkommunikation 2 Prozessüberwachung
+  - paragraph: desk-assistant · v1.0.0
+  - heading "Fristen-Wächter" [level=2]
+  - paragraph: Ordnet jeden Prozess nahe oder nach seiner Antwortfrist nach Dringlichkeit und nennt, wer antworten muss.
+  - text: aktiv liest nur startet bei 3 Ereignisarten
+  - term: Modell
+  - definition: regelbasiert, kein Modell
+  - term: Liest
+  - definition: Prozessüberwachung
+  - paragraph: deadline-alert-agent · v4.0.0
+  - heading "Marktprozesse erklären" [level=2]
+  - paragraph: Erklärt abgelehnte Anmeldungen, APERAK-Fehler und hängende Prozesse.
+  - text: aktiv liest nur startet bei 3 Ereignisarten
+  - term: Modell
+  - definition: claude-sonnet-5 · anthropic
+  - term: Liest
+  - definition: Marktkommunikation 4 Prozessüberwachung Marktstammdaten 2
+  - paragraph: mako-agent · v2.0.0
+  - heading "Entscheidungen erklären" [level=2]
+  - paragraph: Erklärt, welcher Prüfschritt eine Anmeldung abgelehnt hat, und verfolgt die Freigabewarteschlange.
+  - text: aktiv liest nur startet bei 3 Ereignisarten
+  - term: Modell
+  - definition: claude-sonnet-5 · anthropic
+  - term: Liest
+  - definition: Prozessüberwachung 4 Marktstammdaten 3
+  - paragraph: processd-agent · v2.0.0
+  - heading "Verträge und Kunden" [level=2]
+  - paragraph: Wacht über Preisgarantien, Preisänderungsmitteilungen, auslaufende Verträge und hängende Anmeldungen.
+  - text: aktiv liest nur startet bei 5 Ereignisarten
+  - term: Modell
+  - definition: claude-sonnet-5 · anthropic
+  - term: Liest
+  - definition: Kundenverwaltung 6 Marktkommunikation Prozessüberwachung Produktkatalog
+  - paragraph: vertragd-agent · v2.1.0

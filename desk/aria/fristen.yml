@@ -1,0 +1,7 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Fristen überschritten" [level=1]
+  - paragraph: Offene Prozesse nach ihrer Antwortfrist — die älteste zuerst, jede mit ihrer Fundstelle.
+  - paragraph: Keine Frist überschritten.
+  - text: Jeder offene Prozess liegt in seiner Antwortfrist.

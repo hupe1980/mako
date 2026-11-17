@@ -596,6 +596,7 @@ mod tests {
             payload: json!({}),
             verlauf: None,
             antwort: None,
+            akteur: crate::envelope::Akteur::System,
         }
     }
 

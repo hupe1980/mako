@@ -108,6 +108,11 @@ pub struct Freigabe {
     /// RFC 3339 in UTC.
     #[schemars(extend("format" = "date-time"))]
     pub decided_at: Option<String>,
+    /// The SHA-256 of the RFC 8785 canonical `{command, body}` the decision
+    /// dispatched — the hash `rehearse_decision` states as `body_sha256`, so a
+    /// proposal checked for that body went out unchanged exactly when they are
+    /// equal. `None` while pending and for a decision with no message.
+    pub gesendet_sha256: Option<String>,
 }
 
 /// A fact a decision states beside its code, under the body key `feld`.
@@ -335,6 +340,7 @@ impl Freigabe {
             created_at: rfc3339(entry.created_at),
             decided_by: entry.decided_by.clone(),
             decided_at: entry.decided_at.map(rfc3339),
+            gesendet_sha256: entry.gesendet_sha256.clone(),
         }
     }
 }
@@ -353,6 +359,7 @@ mod tests {
             "test".into(),
             time::macros::datetime!(2026-07-09 09:00 UTC),
             "t".into(),
+            "test-regel",
         )
         .with_commands(
             mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN,
@@ -437,6 +444,7 @@ mod tests {
             "x".into(),
             time::OffsetDateTime::UNIX_EPOCH,
             "t".into(),
+            "test-regel",
         )
         .with_commands(
             mako_markt::commands::WIM_GERAETEWECHSEL_BESTAETIGEN,
@@ -511,6 +519,7 @@ mod tests {
             "test".into(),
             time::macros::datetime!(2026-07-09 09:00 UTC),
             "t".into(),
+            "test-regel",
         )
         .with_commands(c::GELI_EOG_BESTAETIGEN, c::GELI_EOG_ABLEHNEN, Some("LF"))
         .with_answer_payload(serde_json::json!({ "abrechnungsintervall_monate": 12 }));
@@ -528,6 +537,7 @@ mod tests {
             "test".into(),
             time::macros::datetime!(2026-07-09 09:00 UTC),
             "t".into(),
+            "test-regel",
         )
         .with_commands(c::GPKE_EOG_BESTAETIGEN, c::GPKE_EOG_ABLEHNEN, Some("LF"));
         let f = Freigabe::from_entry(&strom);

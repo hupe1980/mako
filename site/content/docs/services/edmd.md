@@ -127,6 +127,11 @@ graph TB
 │  GET  /api/v1/forecast/{malo_id}                           ← § 40a Abs. 2 EnWG Schätzung      │
 │  GET  /api/v1/gas-quality/{malo_id}                        ← Brennwert + Zustandszahl         │
 │  GET  /api/v1/quality-assessments/{malo_id}                ← quality grade history            │
+│  GET  /api/v1/timeseries/{malo_id}                         ← typed series (+ MCP twin)        │
+│  GET  /api/v1/quality/{malo_id}                            ← quality verdict (+ MCP twin)     │
+│  GET  /api/v1/corrections/{malo_id}                        ← correction trail (+ MCP twin)    │
+│  GET  /api/v1/coverage/{malo_id}                           ← one state per day (+ MCP)        │
+│  GET  /api/v1/openapi.json                                 ← the document of these four       │
 │  GET  /api/v1/netzverlust                                  ← §22 EnWG grid-loss balance       │
 │  GET  /api/v1/confirmations                                ← § 60 Abs. 1 Bestätigungen        │
 │                                                                                               │
@@ -316,7 +321,7 @@ additionally require a market role (`mako_roles` claim). The policy is
 
 | Action group | Actions | Required role |
 |---|---|---|
-| Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp`, `read-policy`, `read-config` | any (tenant match) |
+| Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-corrections`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp`, `read-policy`, `read-config` | any (tenant match) |
 | Reading ingest | `write-meter-reads` (direct push, gas, IoT, ZSG, SMGW registry, virtual-meter configs) | `MSB`, `ADMIN` |
 | Series mutation | `write-timeseries` (bulk import, corrections, § 60 Abs. 1 Ersatzwerte), `write-quality-rescore` (rescore) | `MSB`, `NB`, `ADMIN` |
 | Field dispatch | `write-reading-order` (orders, §40b campaign) | `NB`, `MSB`, `ADMIN` |
@@ -327,13 +332,15 @@ additionally require a market role (`mako_roles` claim). The policy is
   gated by `read-archive-olap`.
 - `write-esa-typ2` is separate both ways: the ESA's SM-PKI gateway carries the
   `ESA` role, and it must not reach the authoritative store.
-- `read-corrections` and `write-corrections` are declared but no route checks
-  them: corrections are filed under `write-timeseries`, and their history is read
-  through MCP `get_correction_history`.
-- **MCP write tools keep the REST gate.** `/mcp` is admitted by `use-mcp`, but
-  `trigger_substitution` and `trigger_jahresablesung` additionally require
-  `write-timeseries` / `write-reading-order`, also for a configured `[mcp]` key,
-  which authorizes under its declared roles.
+- `write-corrections` is declared but no route checks it: corrections are filed
+  under `write-timeseries`. Their history is read under `read-corrections`
+  (`GET /api/v1/corrections/{malo_id}`, MCP `get_correction_history`).
+- **An MCP tool keeps its REST twin's gate.** `/mcp` is admitted by `use-mcp`,
+  but `trigger_substitution` and `trigger_jahresablesung` additionally require
+  `write-timeseries` / `write-reading-order`, and the shared reads their route's
+  read action (`get_timeseries`, `get_quality_warnings`, `get_coverage`:
+  `read-timeseries`; `get_correction_history`: `read-corrections`) — also for a
+  configured `[mcp]` key, which authorizes under its declared roles.
 - A `?tenant=` that differs from the authorised tenant is `403`.
 
 ### Signed CloudEvents
@@ -708,8 +715,8 @@ its Satz 2 lets the MSB do it outside the gateway meanwhile, for gas permanently
 version under the original reading's `sender_mp_id`, keyed on
 `(tenant, malo_id, dtm_from, obis_code_norm)` — so only the named register
 changes — and advances `allocation_version` to `CORRECTION`. The audit row and
-the value commit together. History: MCP `get_correction_history` or
-`meter_read_corrections`.
+the value commit together. History: `GET /api/v1/corrections/{malo_id}` and its
+MCP twin `get_correction_history` (`meter_read_corrections`).
 
 ### § 60 Abs. 1 MsbG confirmation loop {#confirmation-loop}
 
@@ -1600,24 +1607,49 @@ limit is refused.
 
 ---
 
+## Documented reads and the OpenAPI document
+
+Four reads are one function each (`src/reads.rs`) behind a documented REST
+route and an MCP tool with the same output type, so both doors return the same
+JSON and authorize with the same Cedar action. edmd serves the OpenAPI 3.1
+document of these routes at `GET /api/v1/openapi.json`; the committed copy is
+`services/edmd/openapi.json`, held to the served one by a test.
+
+| Route | MCP tool | Cedar | Answer |
+|---|---|---|---|
+| `GET /api/v1/timeseries/{malo_id}?from&to` | `get_timeseries` | `read-timeseries` | `Messwerte` — every register's intervals (RFC 3339 bounds, decimal-string quantity, quality, OBIS); at most 93 days |
+| `GET /api/v1/quality/{malo_id}?from&to` | `get_quality_warnings` | `read-timeseries` | `Qualitaetsbefund` — grade, gaps, coverage, outliers; `no_data` when nothing is stored |
+| `GET /api/v1/corrections/{malo_id}?from&to&limit` | `get_correction_history` | `read-corrections` | `Korrekturen` — the correction audit trail, newest first |
+| `GET /api/v1/coverage/{malo_id}?from&to&sparte` | `get_coverage` | `read-timeseries` | `Abdeckung` — one state per day, at most 366 days |
+
+**Coverage.** A day is judged per energy register seen anywhere in the range,
+by time rather than by slot count, so a 23- or 25-hour day and any grid read
+alike: any stretch of a register without a billable value (`FAULTY` and
+`UNKNOWN` are none) makes the day `fehlt`; a complete day holding an Ersatz- or
+Prognosewert is `ersatzwert`; else one with a `CORRECTED` value or a recorded
+correction is `korrigiert`; else `gemessen`. A Gas day is the Gastag, 06:00 to
+06:00 Berlin; every other Sparte's day is the Berlin calendar day. Days that
+have not ended are left out, and `bis` names the last day answered.
+
 ## MCP server tools
 
-`/mcp` (Streamable HTTP), Cedar `use-mcp`; the two write tools additionally need
-the REST write action.
+`/mcp` (Streamable HTTP), Cedar `use-mcp`; the two write tools and the four
+shared reads additionally need their REST twin's action.
 
 | Tool | Description |
 |------|-------------|
 | `get_policy` | The operator policy and posture the deployment runs under |
-| `get_timeseries` | Meter data for a MaLo in a date range |
+| `get_timeseries` | Meter data for a MaLo in a window, typed (`Messwerte`) |
+| `get_coverage` | One state per day — gemessen, ersatzwert, korrigiert, fehlt — typed (`Abdeckung`) |
 | `get_imbalance` | Mehr-/Mindermengen report (`metering::billing::imbalance::ImbalanceSaldo`; an unknown Sparte is refused) |
 | `get_billing_period` | `MeterBillingPeriod` |
 | `get_device_history` | MSB device history as narrative text |
-| `get_quality_warnings` | Quality grade and findings over a window, with the Sparte's preset |
+| `get_quality_warnings` | Quality grade and findings over a window, with the Sparte's preset, typed (`Qualitaetsbefund`) |
 | `list_reading_orders` | Reading orders for a MaLo |
 | `list_overdue_reading_orders` | § 40b Abs. 1 EnWG gaps, typed; `frist` is the end of the Berlin day `ausfuehrt_bis` |
 | `trigger_jahresablesung` | Launch or preview the annual campaign (`write-reading-order`) |
 | `trigger_substitution` | Generate and store § 60 Abs. 1 MsbG Ersatzwerte (`write-timeseries`) |
-| `get_correction_history` | Correction audit trail (§ 147 Abs. 1 AO / § 146 Abs. 4 AO) |
+| `get_correction_history` | Correction audit trail (§ 147 Abs. 1 AO / § 146 Abs. 4 AO), typed (`Korrekturen`) |
 | `validate_timeseries` | Validation over stored reads — the ingest pass; reports `rules_evaluated` / `rules_skipped` |
 | `get_quality_assessments` | Per-batch quality history |
 | `get_summenzeitreihe` | Monthly aggregated kWh for MaBiS |

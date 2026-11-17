@@ -37,6 +37,10 @@ Every path is prefixed `/api/v1/portal/{malo_id}`.
 | `GET /versorgung` | marktd |
 | `GET /vertrag` · `/kuendigungsfrist`, `POST /tarifwechsel` · `/kuendigen`, `GET\|PUT /kontakt` | vertragd |
 
+`GET /nachrechnen/{token}` (no prefix, no sign-in) is the public Rechnung-nachrechnen
+page: billingd's masked view of one invoice as HTML, 30 requests per minute per
+peer, addressed per `nachrechnen_anrede` (`sie` | `du`).
+
 Notice periods and tariff rules live in `vertragd`; `portald` relays its `422`,
 which names the rule applied.
 

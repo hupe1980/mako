@@ -201,7 +201,7 @@ export function VorschlagKarte({
               f.verworfen,
               // What became of a proposal is the assistant's quality signal;
               // a lost one costs nothing the person sees.
-              (keepalive) => schicksal(run, "dismissed", keepalive),
+              ({ keepalive }) => schicksal(run, "dismissed", keepalive),
               () => {
                 setWeg(false);
                 onVerwerfen?.(false);

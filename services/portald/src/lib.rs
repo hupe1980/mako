@@ -32,16 +32,24 @@
 //! verdict. Handlers receive the resulting [`auth::PortalAuthCtx`] by value, so
 //! a route cannot serve customer data without having asked.
 //!
+//! **One exception, by design:** `GET /nachrechnen/{token}` ([`nachrechnen`])
+//! serves the masked recomputation of one invoice without a customer session.
+//! The verify token printed on the invoice is the credential, and billingd's
+//! masked projection — no name, no address, the MaLo-ID masked — is all it
+//! reaches.
+//!
 //! | Module | Purpose |
 //! |---|---|
 //! | [`auth`] | The single customer-authorization gate |
 //! | [`clients`] | Thin upstream HTTP clients |
 //! | [`config`] | `portald.toml` shape |
 //! | [`handlers`] | Route handlers |
+//! | [`nachrechnen`] | The public, token-addressed Rechnung-nachrechnen page |
 //! | [`server`] | Router assembly + [`mako_service::Daemon`] impl |
 
 pub mod auth;
 pub mod clients;
 pub mod config;
 pub mod handlers;
+pub mod nachrechnen;
 pub mod server;

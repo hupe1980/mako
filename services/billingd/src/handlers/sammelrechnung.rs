@@ -239,6 +239,7 @@ pub async fn post_sammelrechnung(
                 total_netto_eur: site.invoice.netto_eur,
                 total_brutto_eur: site.invoice.brutto_eur,
                 steuerzeilen: &crate::steuerzeilen::aus_rechnung(&site.invoice),
+                due_on: None,
             },
         )
         .await;

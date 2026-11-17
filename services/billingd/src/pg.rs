@@ -72,6 +72,11 @@ pub struct BillingRecordRow {
     pub released_by: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub released_at: Option<OffsetDateTime>,
+    /// § 40c Abs. 2 EnWG: the last day the invoice may reach the customer.
+    /// `None` on a document the paragraph does not govern.
+    pub due_on: Option<Date>,
+    /// SHA-256 over the RFC 8785 canonical form of `rechnung_json` at issue.
+    pub seal_sha256: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -101,6 +106,9 @@ pub struct NewBillingRecord<'a> {
     /// are its children's. [`insert_correction_record`] does not read them: a
     /// Storno's lines are its original's, negated.
     pub steuerzeilen: &'a [crate::steuerzeilen::Steuerzeile],
+    /// § 40c Abs. 2 EnWG due date ([`mako_fristen::vorlauf::abrechnung_faellig`]);
+    /// `None` on a document the paragraph does not govern.
+    pub due_on: Option<Date>,
 }
 
 /// Why a record could not be written.
@@ -119,6 +127,18 @@ pub enum InsertError {
          and re-bill the released period"
     )]
     PeriodAlreadyIssued {
+        malo_id: String,
+        product_code: String,
+        period_from: Date,
+        period_to: Date,
+    },
+    /// Another live original of the MaLo, Lieferant and product already bills
+    /// some of these days.
+    #[error(
+        "MaLo {malo_id} product {product_code}: {period_from}..{period_to} overlaps a period \
+         another live invoice already bills; storno that one first"
+    )]
+    PeriodOverlaps {
         malo_id: String,
         product_code: String,
         period_from: Date,
@@ -204,8 +224,9 @@ pub async fn insert_billing_record(
         r"WITH rec AS (
           INSERT INTO billing_records
               (tenant, malo_id, lf_mp_id, product_code, category, rechnungsnummer,
-               period_from, period_to, rechnung_json, total_netto_eur, total_brutto_eur)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               period_from, period_to, rechnung_json, total_netto_eur, total_brutto_eur,
+               due_on)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $19)
           ON CONFLICT (malo_id, lf_mp_id, period_from, period_to, product_code, tenant)
               WHERE is_correction = false
                 AND sammelrechnung_id IS NULL
@@ -213,6 +234,7 @@ pub async fn insert_billing_record(
                 AND category <> 'VPP'
               DO UPDATE
           SET rechnungsnummer = EXCLUDED.rechnungsnummer,
+              due_on          = EXCLUDED.due_on,
               category        = EXCLUDED.category,
               rechnung_json   = EXCLUDED.rechnung_json,
               total_netto_eur = EXCLUDED.total_netto_eur,
@@ -268,6 +290,7 @@ pub async fn insert_billing_record(
     .bind(&z.einheit)
     .bind(&z.satz_ct)
     .bind(&z.betrag_eur)
+    .bind(rec.due_on)
     .fetch_optional(executor)
     .await
     .map_err(|e| {
@@ -278,6 +301,12 @@ pub async fn insert_billing_record(
             Some("br_unique_rechnungsnummer") => {
                 InsertError::DuplicateRechnungsnummer(rec.rechnungsnummer.to_owned())
             }
+            Some("br_no_overlapping_original") => InsertError::PeriodOverlaps {
+                malo_id: rec.malo_id.to_owned(),
+                product_code: rec.product_code.to_owned(),
+                period_from: rec.period_from,
+                period_to: rec.period_to,
+            },
             _ => InsertError::Other(anyhow::Error::new(e).context("insert_billing_record")),
         }
     })?;
@@ -752,6 +781,7 @@ pub async fn insert_sammelrechnung_record(
             total_netto_eur,
             total_brutto_eur,
             steuerzeilen: &[],
+            due_on: None,
         },
     )
     .await
@@ -1177,6 +1207,264 @@ pub async fn billing_record_exists_for_period(
     .await
     .context("billing_record_exists_for_period")?;
     Ok(row.is_some())
+}
+
+/// The original invoice a verify token belongs to, unless the token was revoked.
+///
+/// # Errors
+///
+/// A failed query.
+pub async fn fetch_by_verify_token(
+    pool: &PgPool,
+    tenant: &str,
+    token_sha256: &str,
+) -> anyhow::Result<Option<BillingRecordRow>> {
+    sqlx::query_as::<_, BillingRecordRow>(
+        "SELECT * FROM billing_records
+          WHERE tenant = $1 AND verify_token_sha256 = $2
+            AND verify_revoked_at IS NULL AND is_correction = false",
+    )
+    .bind(tenant)
+    .bind(token_sha256)
+    .fetch_optional(pool)
+    .await
+    .context("fetch_by_verify_token")
+}
+
+/// Revoke a record's verify token. `false` when the record has none, or is
+/// not this tenant's.
+///
+/// # Errors
+///
+/// A failed query.
+pub async fn revoke_verify_token(
+    pool: &PgPool,
+    tenant: &str,
+    id: Uuid,
+    revoked_by: &str,
+) -> anyhow::Result<bool> {
+    let done = sqlx::query(
+        "UPDATE billing_records
+            SET verify_revoked_by = COALESCE(verify_revoked_by, $3),
+                verify_revoked_at = COALESCE(verify_revoked_at, now()),
+                updated_at = now()
+          WHERE id = $1 AND tenant = $2 AND verify_token_sha256 IS NOT NULL",
+    )
+    .bind(id)
+    .bind(tenant)
+    .bind(revoked_by)
+    .execute(pool)
+    .await
+    .context("revoke_verify_token")?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// The last day billed by a live invoice for this MaLo and Lieferant.
+///
+/// What a Schlussrechnung starts after: the days before it are billed, so an
+/// Abschlussrechnung covers only the rest of the supply. A cancelled original
+/// and a Storno do not count — a Storno releases the period to be billed again.
+///
+/// # Errors
+///
+/// A failed query.
+pub async fn latest_billed_to(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    lf_mp_id: &str,
+) -> anyhow::Result<Option<Date>> {
+    sqlx::query_scalar(
+        "SELECT max(period_to) FROM billing_records
+         WHERE tenant = $1 AND malo_id = $2 AND lf_mp_id = $3
+           AND is_correction = false
+           AND outcome <> 'cancelled'
+           AND dokumentart = 'RECHNUNG'
+           AND sammelrechnung_id IS NULL",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .fetch_one(pool)
+    .await
+    .context("latest_billed_to")
+}
+
+/// A period the run attempted and did not bill (§ 40c Abs. 2 EnWG watch).
+#[derive(Debug, Clone, Copy)]
+pub struct NewUnbilledPeriod<'a> {
+    pub tenant: &'a str,
+    pub malo_id: &'a str,
+    pub lf_mp_id: &'a str,
+    pub period_from: Date,
+    pub period_to: Date,
+    /// The period ends with the supply and is owed an Abschlussrechnung.
+    pub final_invoice: bool,
+    /// The refusal's stable code.
+    pub reason_code: &'a str,
+    pub message: &'a str,
+    pub due_on: Date,
+}
+
+/// Record (or refresh) a period the run could not bill.
+///
+/// One statement, so it needs no transaction of its own. A later attempt that
+/// fails again refreshes the reason and counts the attempt; a row a Storno
+/// re-opened is open again until an invoice for the period is written, which
+/// the `billing_records_settle_unbilled` trigger observes.
+///
+/// # Errors
+///
+/// A failed query.
+pub async fn record_unbilled_period(
+    executor: impl sqlx::PgExecutor<'_>,
+    p: &NewUnbilledPeriod<'_>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"INSERT INTO unbilled_periods
+              (tenant, malo_id, lf_mp_id, period_from, period_to, final_invoice,
+               reason_code, message, due_on)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (tenant, malo_id, period_from, period_to) DO UPDATE
+          SET lf_mp_id      = EXCLUDED.lf_mp_id,
+              final_invoice = EXCLUDED.final_invoice,
+              reason_code   = EXCLUDED.reason_code,
+              message       = EXCLUDED.message,
+              due_on        = EXCLUDED.due_on,
+              attempts      = unbilled_periods.attempts + 1,
+              last_seen_at  = now(),
+              settled_by    = NULL,
+              settled_at    = NULL",
+    )
+    .bind(p.tenant)
+    .bind(p.malo_id)
+    .bind(p.lf_mp_id)
+    .bind(p.period_from)
+    .bind(p.period_to)
+    .bind(p.final_invoice)
+    .bind(p.reason_code)
+    .bind(p.message)
+    .bind(p.due_on)
+    .execute(executor)
+    .await
+    .context("record_unbilled_period")?;
+    Ok(())
+}
+
+/// One recorded unbilled period, as the Desk's Heute and the MCP tool read it.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, schemars::JsonSchema)]
+pub struct UnbilledPeriodRow {
+    pub malo_id: String,
+    pub lf_mp_id: String,
+    #[schemars(with = "String", extend("format" = "date"))]
+    pub period_from: Date,
+    #[schemars(with = "String", extend("format" = "date"))]
+    pub period_to: Date,
+    /// The period ends with the supply and is owed an Abschlussrechnung.
+    pub final_invoice: bool,
+    /// Stable refusal code — word it from the catalogue, never show it raw.
+    pub reason_code: String,
+    /// The refusal's developer message (for „Details").
+    pub message: String,
+    /// § 40c Abs. 2 EnWG: the last day the invoice may reach the customer.
+    #[schemars(with = "String", extend("format" = "date"))]
+    pub due_on: Date,
+    /// Days from today (Europe/Berlin) to `due_on`; negative once overdue.
+    pub days_left: i32,
+    pub attempts: i32,
+    /// The invoice that discharged the period; `None` while it is open.
+    #[schemars(with = "Option<String>", extend("format" = "uuid"))]
+    pub settled_by: Option<Uuid>,
+}
+
+/// The recorded unbilled periods of a tenant, the earliest due first.
+///
+/// `open_only` leaves out the ones an invoice has discharged.
+///
+/// # Errors
+///
+/// A failed query.
+pub async fn list_unbilled_periods(
+    pool: &PgPool,
+    tenant: &str,
+    open_only: bool,
+    limit: i64,
+) -> anyhow::Result<Vec<UnbilledPeriodRow>> {
+    sqlx::query_as(
+        r"SELECT malo_id, lf_mp_id, period_from, period_to, final_invoice, reason_code,
+                 message, due_on, (due_on - heute())::int AS days_left, attempts, settled_by
+            FROM unbilled_periods
+           WHERE tenant = $1 AND (NOT $2 OR settled_by IS NULL)
+           ORDER BY due_on, malo_id, period_from
+           LIMIT $3",
+    )
+    .bind(tenant)
+    .bind(open_only)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("list_unbilled_periods")
+}
+
+/// One Lieferant's § 40c Abs. 2 EnWG standing — the Überblick tile.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, schemars::JsonSchema)]
+pub struct DeadlineSummaryRow {
+    pub lf_mp_id: String,
+    /// Open unbilled periods still inside their deadline.
+    pub owed: i64,
+    /// Invoices issued on or before their `due_on` (Berlin date of issue).
+    pub issued_on_time: i64,
+    /// Invoices issued after their `due_on`.
+    pub issued_late: i64,
+    /// Open unbilled periods past their deadline.
+    pub overdue: i64,
+}
+
+/// Per Lieferant: invoices owed, issued on time, issued late and overdue.
+///
+/// Only invoices that carry a `due_on` count — a document § 40c does not
+/// govern has no deadline to be on time for.
+///
+/// # Errors
+///
+/// A failed query.
+pub async fn deadline_summary(
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<Vec<DeadlineSummaryRow>> {
+    sqlx::query_as(
+        r"WITH issued AS (
+              SELECT lf_mp_id,
+                     count(*) FILTER (
+                         WHERE (dispatched_at AT TIME ZONE 'Europe/Berlin')::date <= due_on)
+                         AS on_time,
+                     count(*) FILTER (
+                         WHERE (dispatched_at AT TIME ZONE 'Europe/Berlin')::date > due_on)
+                         AS late
+                FROM billing_records
+               WHERE tenant = $1 AND due_on IS NOT NULL AND is_correction = false
+                 AND dispatched_at IS NOT NULL
+                 AND outcome <> 'cancelled'
+               GROUP BY lf_mp_id),
+          open AS (
+              SELECT lf_mp_id,
+                     count(*) FILTER (WHERE due_on >= heute()) AS owed,
+                     count(*) FILTER (WHERE due_on < heute()) AS overdue
+                FROM unbilled_periods
+               WHERE tenant = $1 AND settled_by IS NULL
+               GROUP BY lf_mp_id)
+          SELECT COALESCE(i.lf_mp_id, o.lf_mp_id) AS lf_mp_id,
+                 COALESCE(o.owed, 0) AS owed,
+                 COALESCE(i.on_time, 0) AS issued_on_time,
+                 COALESCE(i.late, 0) AS issued_late,
+                 COALESCE(o.overdue, 0) AS overdue
+            FROM issued i FULL JOIN open o ON o.lf_mp_id = i.lf_mp_id
+           ORDER BY 1",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("deadline_summary")
 }
 
 /// Claim the monthly § 40b Abs. 3 Abrechnungsinformation for a MaLo.

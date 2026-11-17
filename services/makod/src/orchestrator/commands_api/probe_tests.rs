@@ -139,7 +139,13 @@ async fn a_failing_rehearsal_reports_the_doors_own_refusal_and_writes_nothing() 
     let body = abmeldung("E03");
 
     let real_state = lfg_state().await;
-    let real = dispatch_command(&real_state, "geli.lieferende.anmelden", &body).await;
+    let real = dispatch_command(
+        &real_state,
+        mako_engine::envelope::Akteur::System,
+        "geli.lieferende.anmelden",
+        &body,
+    )
+    .await;
     let Err(refused) = real else {
         panic!("the real door accepts {body}");
     };
@@ -175,7 +181,13 @@ async fn a_door_refusal_is_the_rehearsals_verdict() {
     let body = serde_json::json!({ "malo_id": MALO_ID, "process_date": "20261231" });
 
     let real_state = lfg_state().await;
-    let Err(refused) = dispatch_command(&real_state, "geli.lieferende.anmelden", &body).await
+    let Err(refused) = dispatch_command(
+        &real_state,
+        mako_engine::envelope::Akteur::System,
+        "geli.lieferende.anmelden",
+        &body,
+    )
+    .await
     else {
         panic!("the real door accepts {body}");
     };
@@ -212,7 +224,7 @@ async fn a_rolle_the_deployment_does_not_declare_is_refused_naming_it() {
 async fn a_command_without_a_pre_send_check_is_not_rehearsed() {
     let state = lfg_state().await;
     let refused =
-        zulassen(&state, "geli.lieferbeginn.bestaetigen", None).expect_err("no gated door");
+        zulassen(&state, "mabis.summenzeitreihe.uebermitteln", None).expect_err("no gated door");
     assert!(
         matches!(refused, ProbeRefusal::NotRehearsable(_)),
         "{refused:?}"
@@ -225,7 +237,7 @@ async fn a_command_without_a_pre_send_check_is_not_rehearsed() {
     assert!(matches!(
         rehearse(
             &state,
-            "geli.lieferbeginn.bestaetigen",
+            "mabis.summenzeitreihe.uebermitteln",
             "GNB".to_owned(),
             &abmeldung("ZT5")
         )
@@ -347,5 +359,158 @@ async fn the_http_route_answers_the_verdict_and_names_an_undeclared_rolle() {
         "an unknown field is refused"
     );
 
+    assert_untouched(&state).await;
+}
+
+// ── Freigabe answers ──────────────────────────────────────────────────────────
+
+/// processd rehearses every answer a Freigabe dispatches before it marks the
+/// decision taken; an answer makod cannot rehearse would leave every such
+/// approval unchecked — and therefore refused.
+#[test]
+fn every_freigabe_answer_is_rehearsable() {
+    for c in mako_markt::commands::FREIGABE_ANTWORTEN {
+        assert!(REHEARSABLE.contains(c), "{c} is not rehearsable");
+    }
+}
+
+const NB_MP_ID: &str = "9900357000004";
+const LFN_MP_ID: &str = "9905550000005";
+
+async fn nb_state() -> CommandsApiState {
+    let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+        .await
+        .expect("open in-memory SlateDB");
+    CommandsApiState {
+        tenant_id: TenantId::from_party_id(NB_MP_ID),
+        sender_party_id: NB_MP_ID.to_owned(),
+        configured_marktrollen: vec!["NB".to_owned(), "LF".to_owned(), "MSB".to_owned()],
+        max_body_bytes: 1_048_576,
+        snapshot_interval: 100,
+        cedar: Arc::new(CedarAuthorizer::unauthenticated().expect("infallible")),
+        snapshot_store: store.as_snapshot_store(),
+        malo_cache: Arc::new(SlateDbMaloCache::new(
+            store.clone(),
+            TenantId::from_party_id(NB_MP_ID),
+        )),
+        maloid_result_cache: MaloIdentResultCache::new(store.clone()),
+        store: Arc::new(store),
+        marktd_client: None,
+    }
+}
+
+/// The NB's process for an inbound 55001, as the ingest spawns it.
+async fn seed_anmeldung(state: &CommandsApiState) -> ProcessId {
+    als(
+        mako_engine::envelope::Akteur::System,
+        spawn_process::<GpkeSupplierChangeWorkflow>(
+            &state.store,
+            state.tenant_id,
+            WorkflowId::new("gpke-supplier-change", latest_format_version()),
+            mako_gpke::SupplierChangeCommand::ReceiveUtilmd {
+                pid: Pruefidentifikator::new(55_001).expect("PID"),
+                sender: MarktpartnerCode::new(LFN_MP_ID),
+                receiver: MarktpartnerCode::new(NB_MP_ID),
+                location_id: MaLo::new(MALO_ID),
+                document_date: "20260701".into(),
+                process_date: "20261001".into(),
+                transaktionsgrund: None,
+                transaktionsgrund_ergaenzung: None,
+                veraeusserungsform: None,
+                tranchengroesse_prozent: None,
+                vorgangsnummer: None,
+                produktpaket_id: Some("1".to_owned()),
+                kunde_name: None,
+                kunde_namensformat: None,
+                message_ref: mako_engine::types::MessageRef::new("MSG-001"),
+                bilanzierungsgebiet: None,
+                bilanzkreis: None,
+                bilanzierungsmethode: None,
+                fallgruppe: None,
+                validation_passed: true,
+                validation_errors: vec![],
+            },
+            &[],
+            &[MALO_ID],
+        ),
+    )
+    .await
+    .expect("seed the inbound Anmeldung")
+}
+
+/// What a process stream and the outbox hold, to compare before and after.
+async fn snapshot(state: &CommandsApiState) -> (usize, usize) {
+    let streams = state.store.list_streams(None).await.expect("list streams");
+    let mut events = 0;
+    for s in &streams {
+        events += state.store.load(s).await.expect("load stream").len();
+    }
+    (events, state.store.len().await.expect("outbox length"))
+}
+
+/// An answer door resumes a running process: rehearsed, it reports the
+/// verdict on the answer the run would send and leaves the process and the
+/// outbox as they were — the process stays answerable.
+#[tokio::test]
+async fn a_freigabe_answer_rehearses_on_its_process_and_writes_nothing() {
+    let state = nb_state().await;
+    seed_anmeldung(&state).await;
+    let before = snapshot(&state).await;
+
+    let body = serde_json::json!({
+        "malo_id": MALO_ID, "antwort_code": "A51", "antwort_codeliste": "E_0623",
+    });
+    let rolle = zulassen(&state, "gpke.lieferbeginn.bestaetigen", None).expect("rehearsable");
+    let probe = rehearse(&state, "gpke.lieferbeginn.bestaetigen", rolle, &body)
+        .await
+        .expect("the rehearsal runs");
+    assert_ne!(probe.stufe, Some(Stufe::Tuer), "{probe:#?}");
+    assert_eq!(probe.nachrichten.len(), 1, "{probe:#?}");
+    assert_eq!(probe.nachrichten[0].pruefidentifikator, Some(55_002));
+    assert_eq!(snapshot(&state).await, before, "a rehearsal wrote");
+
+    // A Bestätigung carrying an Ablehnungscode is the door's refusal.
+    let wrong = serde_json::json!({
+        "malo_id": MALO_ID, "antwort_code": "A01", "antwort_codeliste": "E_0623",
+    });
+    let probe = rehearse(&state, "gpke.lieferbeginn.bestaetigen", "NB".into(), &wrong)
+        .await
+        .expect("the rehearsal runs");
+    assert_eq!(probe.urteil, Urteil::Abgelehnt);
+    assert_eq!(probe.stufe, Some(Stufe::Tuer));
+    assert_eq!(snapshot(&state).await, before, "a rehearsal wrote");
+
+    // The real answer still goes through afterwards.
+    dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.bestaetigen",
+        &body,
+    )
+    .await
+    .expect("the process is still answerable");
+}
+
+/// Every Freigabe answer, rehearsed where no process awaits it, is the
+/// door's refusal — never an engine failure, never a write.
+#[tokio::test]
+async fn every_freigabe_answer_rehearses_without_a_process_and_writes_nothing() {
+    let state = nb_state().await;
+    for c in mako_markt::commands::FREIGABE_ANTWORTEN {
+        let desc = COMMAND_REGISTRY
+            .iter()
+            .find(|d| d.name == *c)
+            .expect("registered");
+        let rolle = desc.permitted_roles[0].as_code().to_owned();
+        let body = serde_json::json!({
+            "malo_id": MALO_ID, "melo_id": "DE0001000001234567890000000000001",
+            "tx_id": "TX-1", "antwort_code": "A01",
+        });
+        let probe = rehearse(&state, c, rolle, &body)
+            .await
+            .unwrap_or_else(|e| panic!("{c}: {}", e.sentence()));
+        assert_eq!(probe.urteil, Urteil::Abgelehnt, "{c}: {probe:#?}");
+        assert_eq!(probe.stufe, Some(Stufe::Tuer), "{c}: {probe:#?}");
+    }
     assert_untouched(&state).await;
 }

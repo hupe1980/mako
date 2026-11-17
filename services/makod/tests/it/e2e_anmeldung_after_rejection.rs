@@ -102,7 +102,7 @@ async fn reject(
             response_ref: mako_engine::types::MessageRef::new("NB-ANTWORT-1"),
             antwort: None,
         },
-        RunOptions::new(),
+        RunOptions::system(),
     )
     .await
     .expect("rejection is a legal transition from Pending");
@@ -127,9 +127,14 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
     let payload = anmeldung_55001();
 
     // ── First Anmeldung ───────────────────────────────────────────────────────
-    let first = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload)
-        .await
-        .expect("first Anmeldung is accepted");
+    let first = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.anmelden",
+        &payload,
+    )
+    .await
+    .expect("first Anmeldung is accepted");
     let DispatchOutcome::Spawned {
         process_id: first_id,
     } = first
@@ -140,7 +145,13 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
     // A second attempt while the first is still Pending is a genuine duplicate —
     // the NB has not answered yet, so two open Anmeldungen for one MaLo would be
     // a protocol error. This half of the guard must keep working.
-    let while_pending = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload).await;
+    let while_pending = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.anmelden",
+        &payload,
+    )
+    .await;
     assert!(
         matches!(
             while_pending,
@@ -179,7 +190,7 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
                     response_ref: mako_engine::types::MessageRef::new("NB-ANTWORT-1"),
                     antwort: None,
                 },
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .expect("the NB rejection is a legal transition from Pending");
@@ -188,12 +199,17 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
     // ── Corrected Anmeldung ───────────────────────────────────────────────────
     // `first_id`'s correlation entry outlives the process, so accepting this
     // depends on the guard reading the process state rather than the index.
-    let second = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload)
-        .await
-        .expect(
-            "after the NB rejected, a corrected Anmeldung must be accepted — \
+    let second = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.anmelden",
+        &payload,
+    )
+    .await
+    .expect(
+        "after the NB rejected, a corrected Anmeldung must be accepted — \
              the MaLo is not permanently blocked by the terminated process",
-        );
+    );
     let DispatchOutcome::Spawned {
         process_id: second_id,
     } = second
@@ -233,9 +249,14 @@ async fn a_follow_up_command_still_resolves_after_a_replacement_process_spawns()
 
     let DispatchOutcome::Spawned {
         process_id: first_id,
-    } = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload)
-        .await
-        .expect("first Anmeldung")
+    } = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.anmelden",
+        &payload,
+    )
+    .await
+    .expect("first Anmeldung")
     else {
         panic!("expected a spawn");
     };
@@ -244,9 +265,14 @@ async fn a_follow_up_command_still_resolves_after_a_replacement_process_spawns()
 
     let DispatchOutcome::Spawned {
         process_id: second_id,
-    } = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload)
-        .await
-        .expect("corrected Anmeldung")
+    } = dispatch_command(
+        &state,
+        mako_engine::envelope::Akteur::System,
+        "gpke.lieferbeginn.anmelden",
+        &payload,
+    )
+    .await
+    .expect("corrected Anmeldung")
     else {
         panic!("expected a spawn");
     };
@@ -271,6 +297,7 @@ async fn a_follow_up_command_still_resolves_after_a_replacement_process_spawns()
     // And the follow-up command resolves to it rather than failing ambiguous.
     let activated = dispatch_command(
         &state,
+        mako_engine::envelope::Akteur::System,
         "gpke.lieferbeginn.bestaetigen",
         &serde_json::json!({
             "malo_id":      MALO_ID,

@@ -576,8 +576,8 @@ async fn dispatch_invoice(
     // period happens to be. Inferring it from the day count made every short
     // period monthly — a ten-day move-out Schlussrechnung, entitled to six
     // weeks, was warned about after three.
-    let deadline_weeks = sect40c_deadline_weeks(req.schlussrechnung, req.monatliche_abrechnung);
-    let deadline = period_to + time::Duration::weeks(deadline_weeks);
+    let deadline_weeks = sect40c_art(req.schlussrechnung, req.monatliche_abrechnung).wochen();
+    let deadline = sect40c_due_on(req, period_to);
     let today = issue_date;
     if today > deadline {
         tracing::warn!(
@@ -1155,17 +1155,29 @@ pub(crate) async fn resolve_verbrauchshistorie(
     })
 }
 
-/// § 40c Abs. 2 EnWG — how many weeks after the period end the invoice is owed.
-///
-/// Six weeks for an Abrechnung, six for a Schlussrechnung (measured from the end
-/// of the Lieferverhältnis), and three where §40b Abs. 1 monthly billing applies.
-/// The short deadline follows the agreed **cadence**, not the length of the
-/// period being billed.
-const fn sect40c_deadline_weeks(schlussrechnung: bool, monatliche_abrechnung: bool) -> i64 {
-    if !schlussrechnung && monatliche_abrechnung {
-        3
+/// § 40c Abs. 2 EnWG — the last day the invoice for a period ending
+/// `period_to` may reach the customer; for a Schlussrechnung `period_to` is the
+/// last day of supply.
+pub(crate) fn sect40c_due_on(req: &CalculateRequest, period_to: time::Date) -> time::Date {
+    mako_fristen::vorlauf::abrechnung_faellig(
+        period_to,
+        sect40c_art(req.schlussrechnung, req.monatliche_abrechnung),
+    )
+}
+
+/// § 40c Abs. 2 EnWG — which deadline the invoice is owed under. The short
+/// one follows the agreed **cadence**, not the length of the period billed.
+const fn sect40c_art(
+    schlussrechnung: bool,
+    monatliche_abrechnung: bool,
+) -> mako_fristen::vorlauf::Abrechnungsart {
+    use mako_fristen::vorlauf::Abrechnungsart;
+    if schlussrechnung {
+        Abrechnungsart::Schlussrechnung
+    } else if monatliche_abrechnung {
+        Abrechnungsart::Monatlich
     } else {
-        6
+        Abrechnungsart::Turnus
     }
 }
 
@@ -1221,18 +1233,18 @@ mod termin_tests {
 
 #[cfg(test)]
 mod sect40c_tests {
-    use super::sect40c_deadline_weeks;
+    use super::sect40c_art;
 
     /// § 40c Abs. 2: six weeks is the rule.
     #[test]
     fn an_ordinary_abrechnung_has_six_weeks() {
-        assert_eq!(sect40c_deadline_weeks(false, false), 6);
+        assert_eq!(sect40c_art(false, false).wochen(), 6);
     }
 
     /// Three weeks only where §40b Abs. 1 monthly billing applies.
     #[test]
     fn monthly_billing_has_three_weeks() {
-        assert_eq!(sect40c_deadline_weeks(false, true), 3);
+        assert_eq!(sect40c_art(false, true).wochen(), 3);
     }
 
     /// A Schlussrechnung has six weeks from the end of the Lieferverhältnis,
@@ -1241,8 +1253,8 @@ mod sect40c_tests {
     /// three weeks early.
     #[test]
     fn a_schlussrechnung_keeps_six_weeks_even_on_a_monthly_contract() {
-        assert_eq!(sect40c_deadline_weeks(true, false), 6);
-        assert_eq!(sect40c_deadline_weeks(true, true), 6);
+        assert_eq!(sect40c_art(true, false).wochen(), 6);
+        assert_eq!(sect40c_art(true, true).wochen(), 6);
     }
 }
 

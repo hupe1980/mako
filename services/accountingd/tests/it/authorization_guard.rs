@@ -34,6 +34,9 @@ const HANDLERS: &str = include_str!("../../src/handlers.rs");
 /// input. Cross-checking the router is also strictly stronger: it is the thing
 /// that actually decides what is exposed.
 const MAIN: &str = include_str!("../../src/daemon.rs");
+/// The documented routes, mounted through `utoipa-axum`'s `routes!` — routed
+/// as surely as a `.route(…)` in the daemon.
+const OPENAPI: &str = include_str!("../../src/openapi.rs");
 /// The MCP surface, whose tools are authorized by `mcp_server::tool_action`
 /// rather than by a `cedar.check` in `handlers.rs`.
 const MCP: &str = include_str!("../../src/mcp_server.rs");
@@ -127,7 +130,8 @@ fn unauthenticated_by_design(handler: &str) -> Option<&'static str> {
 /// list.
 ///
 /// Routed means `daemon.rs` passes it to a method filter as
-/// `get(handlers::<name>)` / `post(handlers::<name>)` — the only definition of
+/// `get(handlers::<name>)` / `post(handlers::<name>)`, or `openapi.rs` mounts it
+/// as `routes!(handlers::<name>)` — the only definition of
 /// "reachable over HTTP" that cannot drift, since it reads the router itself.
 /// Matched with the closing parenthesis on purpose: a worker *calling* a
 /// function (`handlers::settle_jahresabschluss(pool, …)`) is not routing it,
@@ -142,7 +146,8 @@ fn handler_signatures() -> Vec<(String, String)> {
         let Some(end) = rest.find(") ->") else { break };
         let sig = rest[paren..end].to_owned();
         rest = &rest[end..];
-        if MAIN.contains(&format!("(handlers::{name})")) {
+        let routed = format!("(handlers::{name})");
+        if MAIN.contains(&routed) || OPENAPI.contains(&routed) {
             out.push((name, sig));
         }
     }

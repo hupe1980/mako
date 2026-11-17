@@ -53,6 +53,21 @@ export function formatInstant(at: Instant): string {
   return berlin().format(new Date(at));
 }
 
+const berlinDay = perSprache(
+  (locale) =>
+    new Intl.DateTimeFormat(locale, {
+      timeZone: BERLIN,
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }),
+);
+
+/** `03.11.2026` — the Berlin calendar day the instant falls on. */
+export function formatInstantDay(at: Instant): string {
+  return berlinDay().format(new Date(at));
+}
+
 /** `14:05` — the instant's Berlin wall-clock time. */
 export function formatBerlinTime(at: Instant): string {
   return berlinTime().format(new Date(at));
@@ -91,4 +106,54 @@ const berlinYmd = new Intl.DateTimeFormat("en-CA", {
 export function berlinDayNumber(ms: number): number {
   const [y = 0, m = 1, d = 1] = berlinYmd.format(ms).split("-").map(Number);
   return Date.UTC(y, m - 1, d) / 86_400_000;
+}
+
+/**
+ * Today in Berlin — the end of a view's default window (the Messwerte of the
+ * last 30 days). A window to look at, never a Frist: no deadline is derived
+ * from it.
+ */
+export function heuteBerlin(): BusinessDate {
+  return berlinYmd.format(Date.now()) as BusinessDate;
+}
+
+/** `day` moved by `tage` calendar days, as a business date. */
+export function tageVerschoben(day: BusinessDate, tage: number): BusinessDate {
+  const [y = 0, m = 1, d = 1] = day.split("-").map((x) => Number.parseInt(x, 10));
+  return new Date(Date.UTC(y, m - 1, d + tage)).toISOString().slice(0, 10) as BusinessDate;
+}
+
+/** Midnight in Berlin at the start of `day`, as the instant a REST window takes. */
+export function berlinMitternacht(day: BusinessDate): Instant {
+  const [y = 0, m = 1, d = 1] = day.split("-").map((x) => Number.parseInt(x, 10));
+  const utcMittag = Date.UTC(y, m - 1, d, 12);
+  const teile = new Intl.DateTimeFormat("en-US", {
+    timeZone: BERLIN,
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).format(utcMittag);
+  const versatzStunden = Number.parseInt(teile, 10) - 12;
+  return new Date(Date.UTC(y, m - 1, d) - versatzStunden * 3_600_000).toISOString() as Instant;
+}
+
+/** `03.11.` — a day of a ribbon, without its year. */
+export function formatTagKurz(day: BusinessDate): string {
+  const [, m, d] = day.split("-");
+  return sprache() === "en" ? `${d}/${m}` : `${d}.${m}.`;
+}
+
+/** An instant as the seconds since the epoch a chart's time axis plots — for drawing only. */
+export function alsAchsenzeit(at: Instant): number {
+  return Date.parse(at) / 1000;
+}
+
+/** A chart's axis seconds as a wall-clock in Berlin, the zone every Desk instant shows in. */
+export function berlinAchsenzeit(sekunden: number, tz: (d: Date, zone: string) => Date): Date {
+  return tz(new Date(sekunden * 1000), BERLIN);
+}
+
+/** Whole days from `von` to `bis` (now where open) — the width of a band, for drawing only. */
+export function tageZwischen(von: Instant, bis: Instant | null): number {
+  const ende = bis ? Date.parse(bis) : Date.now();
+  return Math.max(0, Math.round((ende - Date.parse(von)) / 86_400_000));
 }

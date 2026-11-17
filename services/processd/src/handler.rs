@@ -125,12 +125,40 @@ pub async fn handle_webhook(
     // projection and no deadline, and the process can then breach in silence.
     // A failed write is therefore not acknowledged — the fan-out redelivers,
     // and every module below is idempotent against a redelivery.
-    if let Err(err) = crate::obs::project::project(&state.obs, &event).await {
-        return mako_service::ApiError::internal(
-            anyhow::Error::from(err)
-                .context("processd obs: projection failed — fan-out will redeliver"),
-        )
-        .into_response();
+    match crate::obs::project::project(&state.obs, &event).await {
+        Ok(crate::obs::project::Projected::Beendet {
+            pid,
+            eingriff: Some(eingriff),
+        }) => crate::metrics::record_beendet(pid, eingriff),
+        Ok(_) => {}
+        Err(err) => {
+            return mako_service::ApiError::internal(
+                anyhow::Error::from(err)
+                    .context("processd obs: projection failed — fan-out will redeliver"),
+            )
+            .into_response();
+        }
+    }
+
+    // ── 2a'. Klärfälle ─────────────────────────────────────────────────────
+    // After the read model, whose deadline the case reads; not acknowledged on
+    // failure, and the upsert makes a redelivery attach instead of opening.
+    if let Some(signal) = crate::klaerfall::signal_of(&event) {
+        let at = event["time"]
+            .as_str()
+            .and_then(|s| {
+                time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
+            })
+            .unwrap_or_else(time::OffsetDateTime::now_utc);
+        if let Err(err) =
+            crate::klaerfall::open_or_attach(&state.pool, &state.tenant, &signal, at).await
+        {
+            return mako_service::ApiError::internal(
+                anyhow::Error::from(err)
+                    .context("processd: Klärfall write failed — fan-out will redeliver"),
+            )
+            .into_response();
+        }
     }
 
     // ── 2b. Sperr-/Entsperrauftrag queue (ORDERS 17115 / 17117) ───────────
@@ -519,6 +547,7 @@ pub async fn handle_webhook(
                     reason,
                     sa_expires_at,
                     state.tenant.clone(),
+                    "wim-steuerungsauftrag",
                 )
                 .with_commands(
                     mako_markt::commands::WIM_STEUERUNGSAUFTRAG_BESTAETIGEN,

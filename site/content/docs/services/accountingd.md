@@ -168,13 +168,18 @@ only when it carries a `reference_id`.
 Every `/api/v1/*` route requires a JWT and a Cedar action — see
 [Authorization](#authorization). `/webhook` is signature-authenticated instead.
 
+`GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of the routes marked
+**(OpenAPI)** below, committed as `services/accountingd/openapi.json`. Each is
+one read shared with an MCP tool (`src/reads.rs`): the route's documented
+response and the tool's `outputSchema` come from the same type.
+
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/webhook` | Inbound CloudEvents (billingd, einsd, invoicd), Standard Webhooks signature |
 | `GET/PUT` | `/api/v1/accounts/{malo_id}` | Account master data (IBAN, Abschlag, `billing_day`) |
 | `PUT` | `/api/v1/accounts/{malo_id}/verbraucher` | The § 13 BGB status, `{"verbraucher": true\|false\|null}` — vertragd's contract command only (Cedar `sync-verbraucher`, held to the principal `vertragd`) |
-| `GET` | `/api/v1/accounts/{malo_id}/balance` | Balance in ct; `overdue` / `credit` / `settled` |
-| `GET` | `/api/v1/accounts/{malo_id}/ledger` | Movements, newest first, with `opening_ct` |
+| `GET` | `/api/v1/accounts/{malo_id}/balance` | **(OpenAPI)** `Kontostand`: balance in ct and EUR, `status` `overdue` / `credit` / `settled`, the Abschlag |
+| `GET` | `/api/v1/accounts/{malo_id}/ledger` | **(OpenAPI)** `Kontoauszug`: movements, newest first, with `opening_ct` (`?limit=`, default 100, at most 1000) |
 | `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Statement for portald; `?from=&to=` returns `eroeffnungssaldo_ct` / `bewegung_ct` / `schlusssaldo_ct` |
 | `GET` | `/api/v1/accounts/{malo_id}/open-items` | Offene Posten after clearing |
 | `POST` | `/api/v1/accounts/{malo_id}/clear` | Run the FIFO Zahlungszuordnung |
@@ -193,14 +198,15 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `PUT` | `/api/v1/accounts/{malo_id}/business-partner` | Link to a `kunden_nr`; body `{ "kunden_nr" }` |
 | `GET` | `/api/v1/business-partners/{kunden_nr}/accounts` · `/balance` | A partner's accounts; consolidated balance |
 | `GET` | `/api/v1/aging` | Receivables in 0–30 / 31–60 / 61–90 / >90 day buckets |
-| `GET` | `/api/v1/offene-posten` | Overdue accounts; never an EEG plant account |
+| `GET` | `/api/v1/offene-posten` | **(OpenAPI)** `UeberfaelligeKonten`: overdue accounts, largest first; never an EEG plant account (`?min_balance_eur=&limit=`; Cedar `read-books`) |
 | `POST` | `/api/v1/periods/{period_id}/seal` | Festschreibung of every open month through `YYYY-MM`; no body |
 | `GET` | `/api/v1/periods/seals` | Sealed months, `sealed_through`, `verified` (a full `audit`) |
 | `POST` | `/api/v1/bookings/{key}/rebook` · `/discard` | Resolve a parked booking |
 | `GET` | `/api/v1/entries/{entry_id}/proof` | Merkle inclusion proof |
 | `GET` | `/api/v1/periods/{period_id}/balance-proof` | Closing balance of a Kontokorrent in a sealed period (`?malo_id=&lf_mp_id=`) |
 | `GET` | `/api/v1/entries/consistency-proof` | Append-only proof since `?since=<tree_size>` |
-| `GET` | `/api/v1/dunning` | Open dunning cases |
+| `GET` | `/api/v1/dunning` | **(OpenAPI)** `Mahnfaelle`: open dunning cases, newest first (`?limit=`) |
+| `POST` | `/api/v1/payments/match` | **(OpenAPI)** `Zahlungszuordnung`: the accounts a transfer may belong to (body `amount_ct`, `reference`, `iban`, `end_to_end_id`); a read posted as a body so no access log holds the IBAN; books nothing |
 | `POST` | `/api/v1/dunning/{account_id}/escalate` | Manual Mahnstufe; body `{ "stufe": 1–3, "due_days": ≥ 1 }`, both required |
 | `POST` | `/api/v1/dunning/{id}/resolve` | Resolve a case |
 | `POST` | `/api/v1/dunning/{id}/abwendung/angebot` | Record the Abwendungsvereinbarung offer (§ 41g Abs. 1 S. 2 EnWG) |
@@ -1112,10 +1118,10 @@ Every handler extracts `Claims` (a JWT) and checks one Cedar action from
 
 | Action | Covers | Roles |
 |---|---|---|
-| `read-account` | Account, balance, Kontoauszug, open items, Vorauszahlung, plans, interest, business-partner views | any caller of the tenant |
+| `read-account` | Account, balance, Kontoauszug, open items, Vorauszahlung, plans, interest, business-partner views, payment match | any caller of the tenant |
 | `read-banking` | Mandates, `Zahlungsinformation`, collection entries | `LF`, `MSB` |
 | `read-eeg-payouts` | EEG payout orders and their pain.001 XML, MCP `list_eeg_payouts` | **`NB`** |
-| `read-books` | Trial balance, aging, dunning list, seals, proofs | `LF`, `MSB` |
+| `read-books` | Trial balance, aging, Offene Posten, dunning list, seals, proofs | `LF`, `MSB` |
 | `write-account` | Account master data, Abschlag, Vorauszahlung, `Zahlungsinformation`, business-partner link | `LF`, `MSB` |
 | `post-entry` | Manual booking, clearing, reset, interest, reconcile | `LF`, `MSB` |
 | `manage-sepa` | Mandates, collection run, pain.002, pain.007 | `LF`, `MSB` |
@@ -1256,13 +1262,13 @@ authorizes as `User::"<key name>"` with the roles its `roles` list declares.
 | Tool | Description | Action |
 |---|---|---|
 | `get_policy` | The posture this deployment runs under | `read-policy` |
-| `get_balance` | Balance in ct | `read-account` |
+| `get_balance` | Balance in ct and EUR, with the Abschlag — typed (`Kontostand`), REST twin `GET /accounts/{malo_id}/balance` | `read-account` |
 | `get_vorauszahlung` | The BO4E `Vorauszahlung` of a MaLo — the body of `GET /api/v1/accounts/{malo_id}/vorauszahlung` | `read-account` |
-| `list_ledger` | Ledger entries of a MaLo | `read-account` |
-| `suggest_payment_match` | Match a transfer: exact resolution first, amount ranking as fallback | `read-account` |
+| `list_ledger` | The Kontoauszug of a MaLo: opening balance and movements with running balance, newest first — typed (`Kontoauszug`), REST twin `GET /accounts/{malo_id}/ledger` | `read-account` |
+| `suggest_payment_match` | Match a transfer: exact resolution first, amount ranking as fallback — typed (`Zahlungszuordnung`), REST twin `POST /payments/match` | `read-account` |
 | `trigger_jahresabschluss` | **Preview** of the annual settlement | `read-account` |
-| `list_dunning` | Open dunning cases | `read-books` |
-| `list_overdue` | Overdue accounts | `read-books` |
+| `list_dunning` | Open dunning cases with Mahnstufe, amount and due date — typed (`Mahnfaelle`), REST twin `GET /dunning` | `read-books` |
+| `list_overdue` | Accounts with an open balance, largest first — typed (`UeberfaelligeKonten`), REST twin `GET /offene-posten` | `read-books` |
 | `compute_bilanzielle_abgrenzung` | pRAP/aRAP for the HGB § 250 period close | `read-books` |
 | `list_parked_bookings` | Bookings the ledger refused for good, with what to do — typed (`outputSchema`), read by the Desk | `read-books` |
 | `get_parked_booking` | One parked booking by its key — what the assistant's proposal on it reads | `read-books` |

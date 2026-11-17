@@ -391,7 +391,7 @@ impl EngineError {
     /// ```rust,ignore
     /// // `run` already retries version conflicts; a caller retries what is transient.
     /// for attempt in 0..MAX_RETRIES {
-    ///     match process.run(cmd.clone(), RunOptions::new()).await {
+    ///     match process.run(cmd.clone(), RunOptions::system()).await {
     ///         Ok(result) => return Ok(result),
     ///         Err(e) if e.is_transient() => {
     ///             tokio::time::sleep(backoff(attempt)).await;

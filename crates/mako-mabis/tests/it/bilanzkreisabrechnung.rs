@@ -104,7 +104,7 @@ async fn erstaufschlag_settles_without_a_pruefmitteilung() {
     let process = make_process();
 
     process
-        .run(receive(1, true), RunOptions::new())
+        .run(receive(1, true), RunOptions::system())
         .await
         .expect("V1 accepted");
     // Kap. 3.8.3: a version inside the Erstaufschlag window is assigned
@@ -112,7 +112,7 @@ async fn erstaufschlag_settles_without_a_pruefmitteilung() {
     process
         .run(
             datenstatus(21_003, 1, Datenstatus::Abrechnungsdaten),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("Datenstatus accepted");
@@ -128,7 +128,7 @@ async fn erstaufschlag_settles_without_a_pruefmitteilung() {
     process
         .run(
             datenstatus(21_003, 1, Datenstatus::AbgerechneteDaten),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("final Datenstatus accepted");
@@ -152,20 +152,20 @@ async fn clearing_version_is_promoted_by_a_positive_pruefmitteilung() {
     let process = make_process();
 
     process
-        .run(receive(1, true), RunOptions::new())
+        .run(receive(1, true), RunOptions::system())
         .await
         .expect("V1");
     process
         .run(
             datenstatus(21_003, 1, Datenstatus::Abrechnungsdaten),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("V1 status");
     process
         .run(
             pruefmitteilung(1, "A02", Some("Summe weicht um 12 kWh ab")),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("negative check");
@@ -181,24 +181,24 @@ async fn clearing_version_is_promoted_by_a_positive_pruefmitteilung() {
 
     // The correction is a new version, filed in the Clearingphase.
     process
-        .run(receive(2, false), RunOptions::new())
+        .run(receive(2, false), RunOptions::system())
         .await
         .expect("V2");
     process
         .run(
             datenstatus(21_003, 2, Datenstatus::Pruefdaten),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("V2 status");
     process
-        .run(pruefmitteilung(2, "A03", None), RunOptions::new())
+        .run(pruefmitteilung(2, "A03", None), RunOptions::system())
         .await
         .expect("positive check");
     process
         .run(
             datenstatus(21_003, 2, Datenstatus::Abrechnungsdaten),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("promotion");
@@ -219,25 +219,25 @@ async fn clearing_version_is_promoted_by_a_positive_pruefmitteilung() {
 async fn a_repeated_or_lower_version_is_refused() {
     let process = make_process();
     process
-        .run(receive(3, true), RunOptions::new())
+        .run(receive(3, true), RunOptions::system())
         .await
         .expect("V3");
 
     assert!(
         process
-            .run(receive(3, false), RunOptions::new())
+            .run(receive(3, false), RunOptions::system())
             .await
             .is_err(),
         "the same version twice is a filing error, not a redelivery"
     );
     assert!(
         process
-            .run(receive(2, false), RunOptions::new())
+            .run(receive(2, false), RunOptions::system())
             .await
             .is_err()
     );
     process
-        .run(receive(4, false), RunOptions::new())
+        .run(receive(4, false), RunOptions::system())
         .await
         .expect("V4");
 }
@@ -251,13 +251,13 @@ async fn both_biko_datenstatus_pids_are_accepted() {
     for pid in [21_003_u32, 21_004] {
         let process = make_process();
         process
-            .run(receive(1, false), RunOptions::new())
+            .run(receive(1, false), RunOptions::system())
             .await
             .expect("V1");
         process
             .run(
                 datenstatus(pid, 1, Datenstatus::Pruefdaten),
-                RunOptions::new(),
+                RunOptions::system(),
             )
             .await
             .unwrap_or_else(|e| panic!("PID {pid} must carry a Datenstatus: {e}"));
@@ -274,7 +274,7 @@ async fn both_biko_datenstatus_pids_are_accepted() {
 async fn an_outbound_pruefmitteilung_pid_is_refused_as_an_inbound_message() {
     let process = make_process();
     process
-        .run(receive(1, true), RunOptions::new())
+        .run(receive(1, true), RunOptions::system())
         .await
         .expect("V1");
 
@@ -287,7 +287,7 @@ async fn an_outbound_pruefmitteilung_pid_is_refused_as_an_inbound_message() {
             message_ref: MessageRef::new("IN"),
         };
         assert!(
-            process.run(cmd, RunOptions::new()).await.is_err(),
+            process.run(cmd, RunOptions::system()).await.is_err(),
             "PID {pid} is outbound and must not be recorded as an arrival"
         );
     }
@@ -301,11 +301,11 @@ async fn an_outbound_pruefmitteilung_pid_is_refused_as_an_inbound_message() {
 async fn an_abgewiesene_pruefmitteilung_no_longer_stands() {
     let process = make_process();
     process
-        .run(receive(1, true), RunOptions::new())
+        .run(receive(1, true), RunOptions::system())
         .await
         .expect("V1");
     process
-        .run(pruefmitteilung(1, "A03", None), RunOptions::new())
+        .run(pruefmitteilung(1, "A03", None), RunOptions::system())
         .await
         .expect("check sent");
     process
@@ -317,7 +317,7 @@ async fn an_abgewiesene_pruefmitteilung_no_longer_stands() {
                 abweisungsgrund: Some("MaBiS-ZP für diesen Monat nicht aktiv".into()),
                 message_ref: MessageRef::new("IFTSTA-AB-1"),
             },
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("Abweisung accepted");
@@ -332,7 +332,7 @@ async fn an_abgewiesene_pruefmitteilung_no_longer_stands() {
 
     // Re-checking supersedes the Abweisung.
     process
-        .run(pruefmitteilung(1, "A03", None), RunOptions::new())
+        .run(pruefmitteilung(1, "A03", None), RunOptions::system())
         .await
         .expect("re-check");
     let state = process.state().await.expect("state loads");
@@ -349,12 +349,12 @@ async fn an_abgewiesene_pruefmitteilung_no_longer_stands() {
 async fn a_closed_settlement_takes_no_version_and_no_check() {
     let process = make_process();
     process
-        .run(receive(1, true), RunOptions::new())
+        .run(receive(1, true), RunOptions::system())
         .await
         .expect("V1");
     let close = |lauf| BillingCommand::CloseClearing { lauf };
     process
-        .run(close(Abrechnungslauf::Bka), RunOptions::new())
+        .run(close(Abrechnungslauf::Bka), RunOptions::system())
         .await
         .expect("BKA window closed");
     assert!(matches!(
@@ -362,7 +362,7 @@ async fn a_closed_settlement_takes_no_version_and_no_check() {
         BillingState::KbkaOffen(_)
     ));
     process
-        .run(close(Abrechnungslauf::Kbka), RunOptions::new())
+        .run(close(Abrechnungslauf::Kbka), RunOptions::system())
         .await
         .expect("KBKA window closed");
 
@@ -371,13 +371,13 @@ async fn a_closed_settlement_takes_no_version_and_no_check() {
 
     assert!(
         process
-            .run(receive(2, false), RunOptions::new())
+            .run(receive(2, false), RunOptions::system())
             .await
             .is_err()
     );
     assert!(
         process
-            .run(pruefmitteilung(1, "A03", None), RunOptions::new())
+            .run(pruefmitteilung(1, "A03", None), RunOptions::system())
             .await
             .is_err()
     );
@@ -403,7 +403,7 @@ async fn a_kategorie_c_series_is_refused() {
         biko_id: BikoId::new("10YDE-VE-------2"),
         message_ref: MessageRef::new("MSCONS-C"),
     };
-    assert!(process.run(cmd, RunOptions::new()).await.is_err());
+    assert!(process.run(cmd, RunOptions::system()).await.is_err());
 }
 
 /// A stream settles exactly one Summenzeitreihe; a second one belongs in its
@@ -412,7 +412,7 @@ async fn a_kategorie_c_series_is_refused() {
 async fn a_second_zeitreihe_is_refused_in_the_same_stream() {
     let process = make_process();
     process
-        .run(receive(1, true), RunOptions::new())
+        .run(receive(1, true), RunOptions::system())
         .await
         .expect("V1");
 
@@ -429,7 +429,7 @@ async fn a_second_zeitreihe_is_refused_in_the_same_stream() {
         biko_id: BikoId::new("10YDE-VE-------2"),
         message_ref: MessageRef::new("MSCONS-BK"),
     };
-    assert!(process.run(cmd, RunOptions::new()).await.is_err());
+    assert!(process.run(cmd, RunOptions::system()).await.is_err());
 }
 
 /// A Prüfmitteilung always refers to a version that was actually received
@@ -438,12 +438,12 @@ async fn a_second_zeitreihe_is_refused_in_the_same_stream() {
 async fn a_check_on_an_unknown_version_is_refused() {
     let process = make_process();
     process
-        .run(receive(1, true), RunOptions::new())
+        .run(receive(1, true), RunOptions::system())
         .await
         .expect("V1");
     assert!(
         process
-            .run(pruefmitteilung(2, "A03", None), RunOptions::new())
+            .run(pruefmitteilung(2, "A03", None), RunOptions::system())
             .await
             .is_err()
     );
@@ -461,20 +461,20 @@ async fn projection_tracks_the_highest_version_and_its_status() {
     );
 
     process
-        .run(receive(1, true), RunOptions::new())
+        .run(receive(1, true), RunOptions::system())
         .await
         .expect("V1");
     process
         .run(
             datenstatus(21_003, 1, Datenstatus::Abrechnungsdaten),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("V1 status");
     process
         .run(
             pruefmitteilung(1, "A02", Some("Abweichung")),
-            RunOptions::new(),
+            RunOptions::system(),
         )
         .await
         .expect("negative check");
@@ -497,7 +497,7 @@ async fn projection_tracks_the_highest_version_and_its_status() {
 
     // A new version clears the correction need and drops the stale status.
     process
-        .run(receive(2, false), RunOptions::new())
+        .run(receive(2, false), RunOptions::system())
         .await
         .expect("V2");
     let mut projection = BillingProjection::default();
@@ -521,7 +521,7 @@ async fn projection_tracks_the_highest_version_and_its_status() {
 async fn a_code_from_another_trees_codeliste_is_refused() {
     let process = make_process();
     process
-        .run(receive(1, true), RunOptions::new())
+        .run(receive(1, true), RunOptions::system())
         .await
         .expect("V1");
 
@@ -530,7 +530,7 @@ async fn a_code_from_another_trees_codeliste_is_refused() {
     assert_eq!(bg_szr().pruef_ebd(), Some("E_0062"));
 
     let err = process
-        .run(pruefmitteilung(1, "A06", None), RunOptions::new())
+        .run(pruefmitteilung(1, "A06", None), RunOptions::system())
         .await
         .expect_err("E_0062 does not publish A06");
     assert!(format!("{err}").contains("E_0062"), "{err}");

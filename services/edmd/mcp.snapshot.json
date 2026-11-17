@@ -117,7 +117,262 @@
         }
       }
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Korrektur": {
+          "description": "One retroactive correction of a stored interval (§ 147 Abs. 1 AO /\n§ 146 Abs. 4 AO, GoBD).",
+          "type": "object",
+          "properties": {
+            "correction_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "dtm_from": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "dtm_to": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "obis_code": {
+              "description": "The register corrected; absent when the correction named none.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "original_kwh": {
+              "type": "string",
+              "format": "decimal"
+            },
+            "original_quality": {
+              "$ref": "#/$defs/Messwertqualitaet"
+            },
+            "corrected_kwh": {
+              "type": "string",
+              "format": "decimal"
+            },
+            "corrected_quality": {
+              "$ref": "#/$defs/Messwertqualitaet"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "source": {
+              "description": "`MSCONS_UPDATE`, `OPERATOR`, `AUTO_SUBSTITUTE`, `IMSYS_DIRECT_PUSH` or\n`OTHER`.",
+              "type": "string"
+            },
+            "corrected_by": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "corrected_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "correction_id",
+            "dtm_from",
+            "dtm_to",
+            "obis_code",
+            "original_kwh",
+            "original_quality",
+            "corrected_kwh",
+            "corrected_quality",
+            "reason",
+            "source",
+            "corrected_by",
+            "corrected_at"
+          ]
+        },
+        "Messwertqualitaet": {
+          "description": "The quality of one stored value — the MSCONS Messwertstatus: `MEASURED`\n(Messwert), `ESTIMATED` (Prognosewert), `SUBSTITUTED` (Ersatzwert),\n`CALCULATED` (Rechenwert), `CORRECTED` (Nachbearbeitungswert),\n`PRELIMINARY` (vorläufig), `FAULTY` (fehlerhaft, not billable), `UNKNOWN`.\n\nThe variants carry no doc comment of their own: one would make schemars\ndescribe the enum as a `oneOf` of constants where utoipa writes an `enum`,\nand the two doors' schemas would differ.",
+          "type": "string",
+          "enum": [
+            "MEASURED",
+            "ESTIMATED",
+            "SUBSTITUTED",
+            "CALCULATED",
+            "CORRECTED",
+            "PRELIMINARY",
+            "FAULTY",
+            "UNKNOWN"
+          ]
+        }
+      },
+      "required": [
+        "malo_id",
+        "from",
+        "to",
+        "count",
+        "saturated",
+        "corrections"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        },
+        "from": {
+          "description": "Window over `corrected_at`.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "saturated": {
+          "description": "`limit` corrections matched: older ones may exist beyond the page.",
+          "type": "boolean"
+        },
+        "corrections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Korrektur"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "get_coverage",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "malo_id",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "malo_id": {
+          "description": "11-digit Marktlokations-ID.",
+          "type": "string"
+        },
+        "from": {
+          "description": "First day, `YYYY-MM-DD`.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Last day, `YYYY-MM-DD` (inclusive); at most 366 days.",
+          "type": "string"
+        },
+        "sparte": {
+          "description": "`STROM`, `GAS`, `WAERME` or `WASSER`; absent, the Sparte the MaLo's\nreadings are stored under.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Tag": {
+          "description": "One day of the ribbon.",
+          "type": "object",
+          "properties": {
+            "tag": {
+              "description": "The Berlin calendar day — for Gas the Gastag starting 06:00 that day.",
+              "type": "string",
+              "format": "date"
+            },
+            "zustand": {
+              "$ref": "#/$defs/Tageszustand"
+            }
+          },
+          "required": [
+            "tag",
+            "zustand"
+          ]
+        },
+        "Tageszustand": {
+          "description": "What a day of a Marktlokation's series holds: `gemessen` — every slot of\nevery energy register a measured value; `ersatzwert` — complete, with at\nleast one Ersatz- or Prognosewert; `korrigiert` — complete, no Ersatzwert,\nat least one corrected slot; `fehlt` — at least one slot of an energy\nregister without a billable value.",
+          "type": "string",
+          "enum": [
+            "gemessen",
+            "ersatzwert",
+            "korrigiert",
+            "fehlt"
+          ]
+        }
+      },
+      "required": [
+        "malo_id",
+        "sparte",
+        "von",
+        "bis",
+        "tage",
+        "gemessen",
+        "ersatzwert",
+        "korrigiert",
+        "fehlt"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        },
+        "sparte": {
+          "description": "`STROM`, `GAS`, `WAERME` or `WASSER` — Gas days are Gastage\n(06:00–06:00 Berlin), every other Sparte's calendar days.",
+          "type": "string"
+        },
+        "von": {
+          "description": "First day answered.",
+          "type": "string",
+          "format": "date"
+        },
+        "bis": {
+          "description": "Last day answered: the requested `to`, or the last day that has\nalready ended when `to` lies later. Before `von` when no requested day\nhas ended yet, and then `tage` is empty.",
+          "type": "string",
+          "format": "date"
+        },
+        "tage": {
+          "description": "One entry per day, oldest first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tag"
+          }
+        },
+        "gemessen": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "ersatzwert": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "korrigiert": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "fehlt": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      }
+    }
   },
   {
     "name": "get_device_history",
@@ -301,7 +556,111 @@
       },
       "type": "object"
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Note": {
+          "description": "A quality grade: `A` clean, `B` warnings, `C` errors an Ersatzwert\nrepairs, `F` blocking — the window is not billable as it stands.",
+          "type": "string",
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "F"
+          ]
+        }
+      },
+      "required": [
+        "malo_id",
+        "window_from",
+        "window_to",
+        "interval_count",
+        "grade",
+        "has_warnings",
+        "gaps_detected",
+        "zero_run_length",
+        "coverage_pct",
+        "intervals_consistent",
+        "expected_intervals",
+        "outlier_intervals",
+        "spike_intervals",
+        "algorithm"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        },
+        "window_from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "window_to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "interval_count": {
+          "description": "Intervals scored.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "grade": {
+          "$ref": "#/$defs/Note"
+        },
+        "has_warnings": {
+          "type": "boolean"
+        },
+        "gaps_detected": {
+          "description": "Slots of the window no interval delivered.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "zero_run_length": {
+          "description": "The longest run of zeros, in slots.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "coverage_pct": {
+          "description": "Delivered time inside the window over its length, in percent.",
+          "type": "string",
+          "format": "decimal"
+        },
+        "intervals_consistent": {
+          "description": "`false`: a slot delivered twice or a span off the grid kept the\ncontent rules from running.",
+          "type": "boolean"
+        },
+        "expected_intervals": {
+          "description": "Slots the window holds on the observed grid; absent without one.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "outlier_intervals": {
+          "description": "Interval starts flagged as statistical outliers.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "spike_intervals": {
+          "description": "Interval starts above the plant's physical capacity.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "algorithm": {
+          "description": "The validation that produced the verdict.",
+          "type": "string"
+        }
+      }
+    }
   },
   {
     "name": "get_summenzeitreihe",
@@ -358,16 +717,109 @@
           "type": "string"
         },
         "from": {
-          "description": "ISO 8601 start of the query range (inclusive).",
+          "description": "RFC 3339 start of the window (inclusive).",
           "type": "string"
         },
         "to": {
-          "description": "ISO 8601 end of the query range (inclusive).",
+          "description": "RFC 3339 end of the window; at most 93 days after `from`.",
           "type": "string"
         }
       }
     },
-    "outputSchema": null
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Messwert": {
+          "description": "One stored interval of a Marktlokation's series.",
+          "type": "object",
+          "properties": {
+            "dtm_from": {
+              "description": "Interval start.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "dtm_to": {
+              "description": "Interval end (exclusive).",
+              "type": "string",
+              "format": "date-time"
+            },
+            "quantity_kwh": {
+              "description": "The quantity in the Sparte's billing unit (kWh; m³ for water).",
+              "type": "string",
+              "format": "decimal"
+            },
+            "quality": {
+              "description": "The value's quality.",
+              "$ref": "#/$defs/Messwertqualitaet"
+            },
+            "obis_code": {
+              "description": "The register's OBIS-Kennzahl, when the delivery named one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "dtm_from",
+            "dtm_to",
+            "quantity_kwh",
+            "quality",
+            "obis_code"
+          ]
+        },
+        "Messwertqualitaet": {
+          "description": "The quality of one stored value — the MSCONS Messwertstatus: `MEASURED`\n(Messwert), `ESTIMATED` (Prognosewert), `SUBSTITUTED` (Ersatzwert),\n`CALCULATED` (Rechenwert), `CORRECTED` (Nachbearbeitungswert),\n`PRELIMINARY` (vorläufig), `FAULTY` (fehlerhaft, not billable), `UNKNOWN`.\n\nThe variants carry no doc comment of their own: one would make schemars\ndescribe the enum as a `oneOf` of constants where utoipa writes an `enum`,\nand the two doors' schemas would differ.",
+          "type": "string",
+          "enum": [
+            "MEASURED",
+            "ESTIMATED",
+            "SUBSTITUTED",
+            "CALCULATED",
+            "CORRECTED",
+            "PRELIMINARY",
+            "FAULTY",
+            "UNKNOWN"
+          ]
+        }
+      },
+      "required": [
+        "malo_id",
+        "from",
+        "to",
+        "count",
+        "readings"
+      ],
+      "type": "object",
+      "properties": {
+        "malo_id": {
+          "type": "string"
+        },
+        "from": {
+          "description": "Window start (inclusive).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "description": "Window end.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "count": {
+          "description": "How many intervals `readings` holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "readings": {
+          "description": "Every register's intervals, oldest first. Empty when nothing was\ndelivered for the window.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Messwert"
+          }
+        }
+      }
+    }
   },
   {
     "name": "list_overdue_reading_orders",

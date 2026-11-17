@@ -118,15 +118,15 @@ A handle to a specific workflow instance (one delivery point, one meter change, 
 let process = ctx.spawn::<MyWorkflow>(tenant_id, workflow_id);
 
 // Run: replay → handle → one atomic write of events, outbox, deadlines
-let ran = process.run(command, RunOptions::new()).await?;
+let ran = process.run(command, RunOptions::system()).await?;
 
 // A spawn: its Frist and its business key land in the same write.
 let ran = process
-    .run(command, RunOptions::new().deadlines(&frist).correlations(&keys))
+    .run(command, RunOptions::system().deadlines(&frist).correlations(&keys))
     .await?;
 
 // A fired deadline: the workflow's own on_deadline decides the command.
-let acted = process.run_timeout(&deadline, RunOptions::new()).await?;
+let acted = process.run_timeout(&deadline, RunOptions::system()).await?;
 
 // The write's own record — events, materialised outbox, deadlines:
 let (events, outbox) = (ran.events, ran.outbox);
@@ -196,6 +196,23 @@ let ctx   = EngineBuilder::new()
 `build()` is only callable when the `ES` type parameter implements `EventStore` — a missing store is a compile-time error.
 
 ---
+
+## Who acted
+
+Every `EventEnvelope` carries `akteur: Akteur`, with no default and no
+„unknown": `System` (an inbound message, a fired deadline, a module's own
+follow-up), `Person { principal }`, or `Freigabe { principal, vorschlag,
+unveraendert, dienst }` — a person approving a proposal (`Regel` or `Agent`),
+relayed by the authenticated service `dienst`. `Process::run` takes it from
+`RunOptions::by(akteur)` or `RunOptions::system()`; there is no actor-less
+constructor, and `run_timeout` stamps `System` whatever the options say. An
+envelope without the field does not deserialise.
+
+The principal stays in the event store. An outbox entry carries only the
+class (`OutboxMessage::akteur`, an `Eingriffsklasse`): the most human actor of
+the process up to and including the causing event, so a process's terminal
+notification states how it was handled even when the person's command
+enqueued none.
 
 ## Event payload design
 
@@ -624,7 +641,7 @@ the production `OutboxWorker` reads it, ready for `render_to_wire_bytes`:
 
 ```rust
 let outbox = self.process
-    .run(LfAnmeldungCommand::InitiateAnmeldung { .. }, RunOptions::new())
+    .run(LfAnmeldungCommand::InitiateAnmeldung { .. }, RunOptions::system())
     .await?
     .outbox;
 let wire = render_to_wire_bytes(&outbox[0], LFN_ID)?;
