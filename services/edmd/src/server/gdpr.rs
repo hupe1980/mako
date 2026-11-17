@@ -73,6 +73,21 @@ pub(crate) struct GdprErasureRequest {
     authorized_by: String,
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/gdpr/erasure/{malo_id}",
+    tag = "gdpr",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `GdprErasureRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn post_gdpr_erasure(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -408,7 +423,8 @@ mod pseudonym_tests {
 /// **Cedar action**: `read-gdpr-erasures` — the trail names no person, but it is
 /// the compliance record of an irreversible action, so it carries the audience
 /// that may perform one rather than every reader of the tenant's data.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct ErasureTrailQuery {
     since: Option<String>,
     until: Option<String>,
@@ -416,6 +432,19 @@ pub(crate) struct ErasureTrailQuery {
     limit: Option<i64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/gdpr/erasures",
+    tag = "gdpr",
+    params(ErasureTrailQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_gdpr_erasures(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

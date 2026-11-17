@@ -29,13 +29,11 @@ pub mod vertraege;
 
 use std::sync::Arc;
 
-use axum::{
-    Extension, Router,
-    routing::{delete, get, post, put},
-};
+use axum::{Extension, Router};
 use mako_service::{ApiError, ApiResult, Json, oidc::Claims};
 use serde::Serialize;
 use sqlx::PgPool;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 pub(crate) use mako_service::cedar::CedarEnforcer;
@@ -57,164 +55,135 @@ impl Ctx {
     }
 }
 
-/// The domain router. `mako_service::run` adds health, tracing and shutdown.
+/// The OpenAPI document's frame; every path comes from a handler's
+/// `#[utoipa::path]`, registered with its route in [`api`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    info(
+        title = "vertragd — Verträge und Kunden",
+        description = "REST API of `vertragd`: Kunden, Versorgungs- and Rahmenverträge, the online Vertragsschluss, the master data billing reads, and the webhook subscriptions to its `de.vertrag.*` CloudEvents."
+    ),
+    tags(
+        (name = "kunden", description = "Kunden, portal identities, DSGVO Auskunft and Löschung"),
+        (name = "vertraege", description = "Versorgungsverträge: Kündigung, Stornierung, Tarifwechsel, Preisgarantie, § 14a EnWG"),
+        (name = "rahmenvertraege", description = "B2B framework contracts"),
+        (name = "bestellungen", description = "Online Vertragsschluss: Rechtsdokumente, Bestellungen, Widerruf"),
+        (name = "stammdaten", description = "GGV-Betreiber, Aggregatorverträge, Messstellenverträge, dead-lettered outbound tasks"),
+        (name = "inbound", description = "Signed inbound CloudEvents (HMAC, no token)"),
+        (name = "webhooks", description = "Webhook endpoints, deliveries, replay and the event feed"),
+    )
+)]
+pub struct ApiDoc;
+
+/// Every `/api/v1` route, each registered with its document entry.
+///
+/// Handlers take their state as extensions ([`Ctx`], the Cedar enforcer),
+/// which [`router`] and `Vertragd::build` layer on.
+pub fn api() -> OpenApiRouter {
+    OpenApiRouter::with_openapi(<ApiDoc as utoipa::OpenApi>::openapi())
+        // ── Kunden ───────────────────────────────────────────────────────────
+        .routes(routes!(kunden::list_kunden, kunden::create_kunde))
+        .routes(routes!(kunden::get_kunde, kunden::update_kunde))
+        .routes(routes!(kunden::get_kunde_by_sub))
+        .routes(routes!(kunden::authenticate))
+        .routes(routes!(
+            kunden::upsert_identitaet,
+            kunden::list_identitaeten
+        ))
+        .routes(routes!(kunden::delete_identitaet))
+        .routes(routes!(kunden::get_person, kunden::put_person))
+        .routes(routes!(
+            kunden::get_zahlungsinformation,
+            kunden::put_zahlungsinformation
+        ))
+        .routes(routes!(kunden::gdpr_export))
+        .routes(routes!(kunden::anonymize))
+        .routes(routes!(kunden::portfolio))
+        .routes(routes!(
+            rahmenvertraege::list_by_kunde,
+            rahmenvertraege::create
+        ))
+        .routes(routes!(vertraege::list_by_kunde, vertraege::create))
+        // ── Rahmenverträge ───────────────────────────────────────────────────
+        .routes(routes!(rahmenvertraege::list))
+        .routes(routes!(rahmenvertraege::get))
+        .routes(routes!(rahmenvertraege::malos))
+        .routes(routes!(rahmenvertraege::kuendigen))
+        // ── Versorgungsverträge ──────────────────────────────────────────────
+        .routes(routes!(vertraege::list_open))
+        // The MaLo→product mapping, valid-time. billingd bills from it.
+        .routes(routes!(vertraege::malo_produkte))
+        // The § 14a EnWG module state, valid-time. billingd selects the
+        // Modul 1/2/3 reductions from it.
+        .routes(routes!(vertraege::malo_sect14a, vertraege::record_sect14a))
+        .routes(routes!(vertraege::billing_candidates))
+        .routes(routes!(vertraege::expiring))
+        .routes(routes!(vertraege::by_malo))
+        .routes(routes!(vertraege::get))
+        .routes(routes!(vertraege::kuendigen))
+        .routes(routes!(vertraege::kuendigungsfrist))
+        .routes(routes!(vertraege::widerruf_kuendigung))
+        .routes(routes!(vertraege::stornieren))
+        .routes(routes!(vertraege::tarifwechsel))
+        .routes(routes!(
+            vertraege::get_preisgarantie,
+            vertraege::put_preisgarantie
+        ))
+        // ── Online-Vertragsschluss ───────────────────────────────────────────
+        .routes(routes!(
+            bestellungen::get_rechtsdokument,
+            bestellungen::put_rechtsdokument
+        ))
+        .routes(routes!(bestellungen::bestellen))
+        .routes(routes!(bestellungen::annehmen))
+        .routes(routes!(bestellungen::ablehnen))
+        .routes(routes!(bestellungen::nachweis))
+        .routes(routes!(bestellungen::widerruf_bestellung))
+        .routes(routes!(bestellungen::widerruf_vertrag))
+        // ── Stammdaten & Betrieb ─────────────────────────────────────────────
+        .routes(routes!(
+            stammdaten::get_ggv_betreiber,
+            stammdaten::put_ggv_betreiber
+        ))
+        .routes(routes!(stammdaten::list_aggregatorvertraege))
+        .routes(routes!(stammdaten::put_aggregatorvertrag))
+        // § 9, § 10 MsbG Messstellenverträge — read by processd to answer a
+        // WiM Kündigung MSB out of `E_0200`.
+        .routes(routes!(
+            stammdaten::get_messstellenvertrag,
+            stammdaten::put_messstellenvertrag
+        ))
+        .routes(routes!(stammdaten::list_dead_tasks))
+        .routes(routes!(stammdaten::retry_dead_task))
+        // ── Inbound webhooks (HMAC-authenticated, not OIDC) ───────────────────
+        .routes(routes!(inbound::cloud_event))
+        .routes(routes!(inbound::angebot))
+}
+
+/// [`api`] and the webhook subscription routes, split into the router and the
+/// document `GET /api/v1/openapi.json` serves — what `Vertragd::build` mounts
+/// and `openapi.json` commits.
+pub fn documented(
+    subs: &mako_service::subscriptions::Subscriptions,
+) -> (Router, utoipa::openapi::OpenApi) {
+    api().merge(subs.router()).split_for_parts()
+}
+
+/// The domain router without the webhook subscriptions — what the tests that
+/// drive a handler mount. `Vertragd::build` mounts [`api`] beside the
+/// subscription routes and the served document.
 ///
 /// The Cedar enforcer is a parameter rather than a layer the caller adds
 /// afterwards: every handler extracts it, so a router built without one would
 /// answer 500 on every business route.
 pub fn router(ctx: Arc<Ctx>, enforcer: Arc<CedarEnforcer>) -> Router {
-    Router::new()
-        // ── Kunden ───────────────────────────────────────────────────────────
-        .route(
-            "/api/v1/kunden",
-            get(kunden::list_kunden).post(kunden::create_kunde),
-        )
-        .route(
-            "/api/v1/kunden/{id}",
-            get(kunden::get_kunde).put(kunden::update_kunde),
-        )
-        .route("/api/v1/kunden/by-sub/{sub}", get(kunden::get_kunde_by_sub))
-        .route("/api/v1/kunden/authenticate", get(kunden::authenticate))
-        .route(
-            "/api/v1/kunden/{id}/identitaeten",
-            post(kunden::upsert_identitaet).get(kunden::list_identitaeten),
-        )
-        .route(
-            "/api/v1/kunden/{id}/identitaeten/{sub}",
-            delete(kunden::delete_identitaet),
-        )
-        .route(
-            "/api/v1/kunden/{id}/person",
-            get(kunden::get_person).put(kunden::put_person),
-        )
-        .route(
-            "/api/v1/kunden/{id}/zahlungsinformation",
-            get(kunden::get_zahlungsinformation).put(kunden::put_zahlungsinformation),
-        )
-        .route("/api/v1/kunden/{id}/export", get(kunden::gdpr_export))
-        .route("/api/v1/kunden/{id}/anonymize", post(kunden::anonymize))
-        .route("/api/v1/kunden/{id}/portfolio", get(kunden::portfolio))
-        .route(
-            "/api/v1/kunden/{id}/rahmenvertraege",
-            get(rahmenvertraege::list_by_kunde).post(rahmenvertraege::create),
-        )
-        .route(
-            "/api/v1/kunden/{id}/vertraege",
-            get(vertraege::list_by_kunde).post(vertraege::create),
-        )
-        // ── Rahmenverträge ───────────────────────────────────────────────────
-        .route("/api/v1/rahmenvertraege", get(rahmenvertraege::list))
-        .route("/api/v1/rahmenvertraege/{id}", get(rahmenvertraege::get))
-        .route(
-            "/api/v1/rahmenvertraege/{id}/malos",
-            get(rahmenvertraege::malos),
-        )
-        .route(
-            "/api/v1/rahmenvertraege/{id}/kuendigen",
-            post(rahmenvertraege::kuendigen),
-        )
-        // ── Versorgungsverträge ──────────────────────────────────────────────
-        .route("/api/v1/vertraege", get(vertraege::list_open))
-        // The MaLo→product mapping, valid-time. billingd bills from it.
-        .route(
-            "/api/v1/malo/{malo_id}/produkte",
-            get(vertraege::malo_produkte),
-        )
-        // The § 14a EnWG module state, valid-time. billingd selects the
-        // Modul 1/2/3 reductions from it.
-        .route(
-            "/api/v1/malo/{malo_id}/sect14a",
-            get(vertraege::malo_sect14a).post(vertraege::record_sect14a),
-        )
-        .route(
-            "/api/v1/vertraege/billing-candidates",
-            get(vertraege::billing_candidates),
-        )
-        .route("/api/v1/vertraege/expiring", get(vertraege::expiring))
-        .route(
-            "/api/v1/vertraege/by-malo/{malo_id}",
-            get(vertraege::by_malo),
-        )
-        .route("/api/v1/vertraege/{id}", get(vertraege::get))
-        .route(
-            "/api/v1/vertraege/{id}/kuendigen",
-            post(vertraege::kuendigen),
-        )
-        .route(
-            "/api/v1/vertraege/{id}/kuendigungsfrist",
-            get(vertraege::kuendigungsfrist),
-        )
-        .route(
-            "/api/v1/vertraege/{id}/widerruf-kuendigung",
-            post(vertraege::widerruf_kuendigung),
-        )
-        .route(
-            "/api/v1/vertraege/{id}/stornieren",
-            post(vertraege::stornieren),
-        )
-        .route(
-            "/api/v1/vertraege/{id}/tarifwechsel",
-            post(vertraege::tarifwechsel),
-        )
-        .route(
-            "/api/v1/vertraege/{id}/preisgarantie",
-            get(vertraege::get_preisgarantie).put(vertraege::put_preisgarantie),
-        )
-        // ── Online-Vertragsschluss ───────────────────────────────────────────
-        .route(
-            "/api/v1/rechtsdokumente/{key}",
-            get(bestellungen::get_rechtsdokument).put(bestellungen::put_rechtsdokument),
-        )
-        .route("/api/v1/bestellungen", post(bestellungen::bestellen))
-        .route(
-            "/api/v1/bestellungen/{id}/annehmen",
-            post(bestellungen::annehmen),
-        )
-        .route(
-            "/api/v1/bestellungen/{id}/ablehnen",
-            post(bestellungen::ablehnen),
-        )
-        .route(
-            "/api/v1/bestellungen/{id}/nachweis",
-            get(bestellungen::nachweis),
-        )
-        .route(
-            "/api/v1/bestellungen/{id}/widerruf",
-            post(bestellungen::widerruf_bestellung),
-        )
-        .route(
-            "/api/v1/vertraege/{id}/widerruf",
-            post(bestellungen::widerruf_vertrag),
-        )
-        // ── Stammdaten & Betrieb ─────────────────────────────────────────────
-        .route(
-            "/api/v1/ggv/{ggv_id}/betreiber",
-            get(stammdaten::get_ggv_betreiber).put(stammdaten::put_ggv_betreiber),
-        )
-        .route(
-            "/api/v1/aggregatorvertraege",
-            get(stammdaten::list_aggregatorvertraege),
-        )
-        .route(
-            "/api/v1/aggregatorvertraege/{sr_id}",
-            put(stammdaten::put_aggregatorvertrag),
-        )
-        // § 9, § 10 MsbG Messstellenverträge — read by processd to answer a
-        // WiM Kündigung MSB out of `E_0200`.
-        .route(
-            "/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}",
-            get(stammdaten::get_messstellenvertrag).put(stammdaten::put_messstellenvertrag),
-        )
-        .route("/api/v1/outbound/dead", get(stammdaten::list_dead_tasks))
-        .route(
-            "/api/v1/outbound/dead/{id}/retry",
-            post(stammdaten::retry_dead_task),
-        )
-        // ── Inbound webhooks (HMAC-authenticated, not OIDC) ───────────────────
-        .route("/api/v1/events", post(inbound::cloud_event))
-        .route("/api/v1/webhooks/angebot", post(inbound::angebot))
-        .layer(Extension(ctx))
-        .layer(Extension(enforcer))
+    let (routes, _) = api().split_for_parts();
+    layered(routes, ctx, enforcer)
+}
+
+/// `routes` with the extensions every handler extracts.
+pub fn layered(routes: Router, ctx: Arc<Ctx>, enforcer: Arc<CedarEnforcer>) -> Router {
+    routes.layer(Extension(ctx)).layer(Extension(enforcer))
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────

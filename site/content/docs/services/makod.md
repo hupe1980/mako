@@ -210,8 +210,7 @@ webhook_secret_file = "/etc/makod/erp-webhook.secret"
 [marktd]
 # url                 = "http://marktd:8180"
 # api_key_file        = "/etc/makod/marktd.key"
-# webhook_url         = "http://makod:8080/webhooks/marktd"   # required with url
-# webhook_secret_file = "/etc/makod/marktd-webhook.secret"
+# webhook_secret_file = "/etc/makod/marktd-webhook.secret"   # the secret of makod's entry in marktd's [[subscriptions.endpoints]]
 
 [maloid]
 # partners              = ["9900000000001=https://partner-a.example/maloid"]
@@ -403,13 +402,14 @@ MaKo namespace
 ├── AdminPartnerRecord — attrs: tenant, gln (optional)
 ├── MetricsEndpoint · McpEndpoint · RechnungEndpoint
 ├── MigrationEndpoint · WebdiensteEndpoint · EinrichtungEndpoint
+├── FormatImpactEndpoint
 └── ProcessRecord      — attrs: tenant, workflow
 
 Actions
 ├── SubmitCommand · RehearseCommand · IngestEdifact
 ├── ActOnBehalf        — a service names a command's actor (never in the baseline)
 ├── ReadMetrics · UseMcp · ReadRechnung · AdminMigrations · UseWebdienste
-├── AdminEinrichtung
+├── AdminEinrichtung · ReadFormatImpact
 ├── ReadProcess        — evaluated per workflow (§ 6a EnWG role separation)
 ├── AdminMalo (group)    → AdminMaloRead / Write / Delete / Stats
 └── AdminPartner (group) → AdminPartnerRead / Write / Delete / Import
@@ -427,6 +427,7 @@ Actions
 | `ReadRechnung` | `GET /api/v1/invoic/{process_id}/rechnung` |
 | `AdminMigrations` | `POST /admin/migrations` — grant to a break-glass principal for the FV cutover only; `conservative.cedar` grants it to nobody |
 | `AdminEinrichtung` | `GET /admin/einrichtung`, `GET /admin/einrichtung/deployment`, `POST /admin/einrichtung/vorschlag`, `GET /api/v1/policy`, MCP `get_policy`, `einrichtung_checkliste` and `einrichtung_vorschlag` — read-only; `conservative.cedar` grants it to `erp-operator` and `admin-readonly` |
+| `ReadFormatImpact` | `GET /api/v1/format-candidates/{fv}/impact`, MCP `get_format_impact` — read-only; it lists the operator's exchanged messages, so `conservative.cedar` grants it to `erp-operator` and `admin-readonly`, as `ReadRechnung` |
 | `UseWebdienste` | every `:8090` route |
 | `ReadProcess` | MCP `get_process`, `get_process_history`, `list_overdue_deadlines`, `list_dead_letters`; carries the workflow name, so an NB principal can be kept off LF process state |
 
@@ -621,6 +622,18 @@ under `[erp] webhook_secret` — which is then required.
 It is a development and ERP-integration path; `MaloIdentCallback` messages still
 go to the MaLo-ID sender.
 
+### `[format_impact]` — the next Formatwechsel as a diff
+
+| TOML key | Default | Description |
+|---|---|---|
+| `format_impact.candidates_dir` | *(required in the section)* | The candidates tree `cargo xtask import-profiles --candidate` writes, `<type>/<fv>/{candidate,mig,ahb}.json` |
+| `format_impact.archive_dir` | *(required in the section)* | The operator's interchange archive, one interchange per file, named per Allgemeine Festlegungen 6.1d Kap. 2.12 |
+| `format_impact.window_days` | `90` | How many days back from today the report reads |
+
+Without the section, `GET /api/v1/format-candidates/{fv}/impact` and MCP
+`get_format_impact` answer `format_impact_not_configured`. Nothing read from the
+archive leaves the deployment.
+
 ### `[webdienste]` — BDEW API-Webdienste Strom
 
 `addr` and the trust keys describe the inbound `:8090` port; the `client_*` and
@@ -738,7 +751,7 @@ Cedar `UseMcp` action; unauthenticated requests are `401`.
 
 ### Tools
 
-`makod` ships **17 MCP tools**:
+`makod` ships **18 MCP tools**:
 
 | Tool | Annotations | Description |
 |---|---|---|
@@ -759,6 +772,7 @@ Cedar `UseMcp` action; unauthenticated requests are `401`.
 | `get_outbox_status` | `read_only` | Pending outbox count and oldest age — alert when stuck > 5 min |
 | `list_dead_letters` | `read_only` | Typed `{ dead_letters, gesamt }`: the 20 most recent dead letters, each with `rejected_at` (RFC 3339), `reason_label` and `reason_detail`, and how many the store holds in all (`outputSchema` declared) |
 | `get_format_version_coverage` | `read_only` | Per message type: `stable` or `transition`, and which releases are in force today |
+| `get_format_impact` | `read_only` | Same as `GET /api/v1/format-candidates/{fv}/impact` — which of the operator's own messages a candidate Formatversion would refuse; `format_impact_not_configured` without `[format_impact]` |
 
 `tool_inventory_tests` in `mcp_server.rs` pins this list.
 
@@ -775,6 +789,7 @@ the action its REST twin enforces:
 | `list_partners`, `get_partner` | `AdminPartnerRead` |
 | `get_process`, `get_process_history`, `list_overdue_deadlines` | `ReadProcess`, per workflow (`get_process` leaves out each process the caller may not read, and answers `not_found` when none remains; `get_process_history` answers a refused process `not_found`) |
 | `get_policy`, `einrichtung_checkliste`, `einrichtung_vorschlag` | `AdminEinrichtung` |
+| `get_format_impact` | `ReadFormatImpact` |
 | `list_dead_letters` | `ReadProcess` across workflows — a workflow-scoped principal is denied outright |
 | `list_commands`, `get_health`, `get_format_version_coverage`, `list_active_processes`, `get_outbox_status` | none — no tenant data |
 
@@ -871,12 +886,24 @@ All on the `--http-addr` port.
 | `GET` | `/admin/einrichtung` | Bearer · `AdminEinrichtung` | [Configuration findings](#einrichtung) — the `--check-config --json` body |
 | `GET` | `/admin/einrichtung/deployment` | Bearer · `AdminEinrichtung` | [Deployment checklist](#einrichtung) across `[[einrichtung.dienst]]` |
 | `GET` | `/api/v1/policy` | Bearer · `AdminEinrichtung` | The policy report: `[policy]`, `deployment.rollen`, every `allow_*` posture |
+| `GET` | `/api/v1/format-candidates/{fv}/impact` | Bearer · `ReadFormatImpact` | Which archived messages a candidate Formatversion would refuse — JSON, or CSV on `?format=csv` / `Accept: text/csv`; `503 format_impact_not_configured` without `[format_impact]` |
 | `GET` | `/metrics` | Bearer · `ReadMetrics` | Prometheus |
 | `POST` | `/mcp` | Bearer · `UseMcp` | [MCP server](#mcp-server) |
 | `GET` | `/api/v1/openapi.json` | public | OpenAPI 3.1 document — open it in any Swagger UI or Redoc |
 | `GET` | `/health/live` · `/health/ready` · `/health` | public | [Probes](#health-checks) |
 
-The OpenAPI document is generated from the handler annotations.
+Every `/api/v1` route is mounted through `OpenApiRouter` with its document
+entry, and `services/makod/openapi.json` commits the document
+(`tests/it/openapi_coverage.rs` holds it to the routes);
+the [HTTP APIs](@/docs/reference/api.md) page publishes it.
+
+makod mounts no `/api/v1/webhooks/*` routes and no `GET /api/v1/events` feed:
+it keeps no PostgreSQL, and its ERP notifications already leave through one
+durable channel — the SlateDB outbox the `OutboxErpWorker` drains, signed
+with Standard Webhooks under `[erp] webhook_secret`. In a deployment
+`[erp] webhook_url` names marktd's `[webhook] inbound_path`; marktd's ingest
+enqueues each event on its `event_outbox`, and an integrator subscribes to
+makod's `de.mako.*` events at marktd's `/api/v1/webhooks/endpoints`.
 
 ### `POST /edifact`
 
@@ -1833,14 +1860,16 @@ A command whose `malo_id` is not cached is `422 malo_not_found`.
 ### MaLo cache follows marktd
 
 With `[marktd] url` set, the cache follows marktd's durable fan-out instead of
-waiting to be pushed:
+waiting to be pushed. makod registers nothing: marktd names makod as an entry
+of its `[[subscriptions.endpoints]]` (see
+[marktd's fan-out](@/docs/services/marktd.md#fan-out)).
 
 | Step | What happens |
 |---|---|
-| Subscription | At startup makod registers subscriber `makod` for `de.markt.malo.updated` at `[marktd] webhook_url` (required with `url`; the HTTP port must be open) |
-| Backfill | makod reads marktd's whole MaLo list (`GET /api/v1/malos`, pages of 500) into the cache. `/health/ready` answers `503 not_ready:malo_backfill` until subscription and backfill have succeeded; both retry with backoff up to 60 s |
+| Endpoint | marktd's `makod` entry: `url` `http://makod:8080/webhooks/marktd`, `event_types` `de.markt.malo.updated`, `secret` makod's `[marktd] webhook_secret`. The HTTP port must be open |
+| Backfill | makod reads marktd's whole MaLo list (`GET /api/v1/malos`, pages of 500) into the cache. `/health/ready` answers `503 not_ready:malo_backfill` until the backfill has succeeded; it retries with backoff up to 60 s |
 | Delivery | `POST /webhooks/marktd`, verified against `[marktd] webhook_secret` (Standard Webhooks; unsigned accepted only without a secret). makod reads the record back with `GET /api/v1/malos/{malo_id}` and upserts it; a `404` drops the entry |
-| Failure | A read or cache write that fails answers `503`, so marktd redelivers with backoff and dead-letters after its budget (`/admin/fanout/dlq` on marktd) |
+| Failure | A read or cache write that fails answers `503`, so marktd redelivers with backoff and dead-letters after its budget — listed on marktd's `GET /api/v1/webhooks/endpoints/{id}/deliveries?status=failed` and replayable there |
 
 The cache record takes the NB and MSB from the Rollenzuordnungen valid today
 (`NB`/`GNB`, `MSB`/`GMSB`); a record without an NB is attributed to the
@@ -2253,7 +2282,7 @@ boot consumes the same preflight output.
 | Config file | Schema parses; no unknown key; no secret both inline and by file |
 | `[[party]]` | MP-ID format, one code per Marktrolle, no mixed Strom+Gas entry (Kap. 2.13) |
 | `[deployment] rollen` | Declared; each role has exactly one `[[party]]` MP-ID and no MP-ID names an undeclared role |
-| `[marktd]` | `webhook_url` set with `url`, and the HTTP port open for it |
+| `[marktd]` | With `url`, the HTTP port open for marktd's deliveries |
 | Profiles | Every module has an active `edi-energy` profile for each of its message types |
 | Adapter coverage | Every adapter registry accepts every format version the profile registry declares |
 | Dispatch completeness | Every workflow the `PidRouter` reaches has an ingest dispatch arm |
@@ -2317,7 +2346,7 @@ durable for the next start.
 | Worker | Interval | Purpose |
 |--------|----------|---------|
 | **OutboxWorker** | continuous, exponential backoff | Delivers EDIFACT via AS4 (or the webhook substitute) and MaLo callbacks |
-| **OutboxErpWorker** | continuous (with `--erp-webhook-url`) | POSTs CloudEvents to the ERP webhook |
+| **OutboxErpWorker** | continuous (with `--erp-webhook-url`) | POSTs CloudEvents to the ERP webhook — in a deployment, marktd's `[webhook] inbound_path`, which relays them to its webhook subscribers |
 | **DeadlineScheduler** | `--deadline-poll-interval-secs` (30 s) | Dispatches due deadlines |
 | **MabisZpRegister projection** | `--projection-checkpoint-interval` | Folds the MaBiS-ZP lifecycle into the set of activated Zählpunkte |
 | **retention-purge-worker** | daily | Evicts AS4 dedup entries after 8 days (`asx-rs` 0.19 requires at least 7) and spent `Idempotency-Key` records |
@@ -2336,7 +2365,15 @@ outcomes.
 | A delivery window (APERAK, CONTRL) | No workflow is consulted; the outbox worker discharges it on delivery, so firing means a miss | `ERROR REGULATORY ALERT: delivery window expired …`, `makod_delivery_window_missed_total` |
 | A label not in the workflow's `DEADLINE_LABELS`, or a workflow with no driver in this build | Nothing acts | `ERROR deadline fired under a label its workflow does not own` |
 | An owned label whose window is closed (the answer went out or came in) | Nothing acts | nothing |
-| An owned label whose window is open | The Festlegung's outcome for the silence, or `FristAbgelaufen` where it gives none | `WARN Frist lapsed with its window still open`; the workflow's `de.mako.antwortfrist.abgelaufen` where it carries one |
+| An owned label whose window is open | The Festlegung's outcome for the silence, or `FristAbgelaufen` where it gives none | `WARN Frist lapsed with its window still open`; for a label in the workflow's `FRIST_LABELS`, `de.mako.antwortfrist.abgelaufen` in the same write (the workflow's own notice where it builds one) — a label in `SCHEDULE_LABELS` announces nothing |
+
+Each owned label is a Frist (`Workflow::FRIST_LABELS`) or a schedule
+(`Workflow::SCHEDULE_LABELS`); `tests/it/deadline_labels.rs` refuses a label in
+neither, with a ratchet over the workflows not yet classified. A lapse is not a
+completion: `makod_process_completed_total` counts the process when it ends.
+Every `de.mako.process.completed` carries the Antwortcode its write recorded
+(`antwortcode`, `codeliste`, from the event envelope) unless the payload names
+its own — processd opens a refusal Klärfall from it.
 
 The ingest dispatcher opens every inbound message's APERAK window itself, on a
 spawn and on a resume (APERAK AHB 1.1 Kap. 2.4.1, Kap. 2.3.1):

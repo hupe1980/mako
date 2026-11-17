@@ -14,7 +14,10 @@ export type Ziel =
   | { to: "/freigaben"; search: { id: string } }
   | { to: "/prozess"; search: { key: string } }
   | { to: "/fristen"; search: { id: string } }
-  | { to: "/kunde/$id"; params: { id: string } };
+  | { to: "/kunde/$id"; params: { id: string } }
+  | { to: "/klaerfall/$id"; params: { id: string } }
+  | { to: "/zahlungen" }
+  | { to: "/anlage/$trId"; params: { trId: string } };
 
 export interface Eintrag {
   /** Unique across sources: one process reached by two sources is one item. */
@@ -60,6 +63,9 @@ export const QUELLE_IDS = [
   "geparkt",
   "abrechnungen",
   "mahnungen",
+  "zahlungen",
+  "guthaben",
+  "anlagen",
   "hinweise",
 ] as const;
 
@@ -80,6 +86,12 @@ export const OHNE_WARUM: Partial<Record<QuelleId, string>> = {
     "Der Assistent liest die Rechnungsprüfung nicht; zur MaLo nennte er nicht, warum die Rechnung angehalten ist.",
   gehalten:
     "Der Assistent liest die offenen Prüfschritte nicht; warum die Rechnung gehalten ist, steht schon in der Zeile.",
+  zahlungen:
+    "Der Assistent liest die Zahlungen nicht; den Vorschlag, welches Konto passt, machen die Kundenkonten selbst.",
+  anlagen:
+    "Der Assistent liest die EEG-Abrechnung nicht; was der Anlage fehlt, steht schon in der Zeile.",
+  guthaben:
+    "Der Assistent liest die Guthaben nicht; Betrag und Fälligkeit stehen schon in der Zeile.",
   mahnungen:
     "Der Assistent liest das Mahnwesen nicht; Stufe und offener Betrag stehen schon in der Zeile.",
   abrechnungen:

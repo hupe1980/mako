@@ -30,6 +30,16 @@ fn open_series(
 /// `GET /api/v1/archive/status`
 ///
 /// Returns archive statistics and the 20 most recent batches.
+#[utoipa::path(
+    get,
+    path = "/api/v1/archive/status",
+    tag = "archive",
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_archive_status(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -63,7 +73,8 @@ pub(crate) async fn get_archive_status(
     .into_response()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct ArchiveOlapParams {
     /// RFC 3339 start (inclusive).
     from: Option<String>,
@@ -80,6 +91,18 @@ pub(crate) struct ArchiveOlapParams {
 ///
 /// This is the primary endpoint for MMM aggregation over archived data.
 /// For recent data (< 12 months) use `/api/v1/billing-period/{malo_id}`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/archive/olap/{malo_id}",
+    tag = "archive",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), ArchiveOlapParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_archive_olap(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -146,7 +169,8 @@ pub(crate) async fn get_archive_olap(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct PortfolioParams {
     from: Option<String>,
     to: Option<String>,
@@ -184,6 +208,18 @@ pub(crate) fn default_portfolio_limit() -> usize {
 /// `limit` bounds **measuring points**. The scan itself is bounded separately,
 /// and `truncated` says when that bound was reached — a capped list that looks
 /// complete is how a partial portfolio gets mistaken for the whole one.
+#[utoipa::path(
+    get,
+    path = "/api/v1/archive/portfolio",
+    tag = "archive",
+    params(PortfolioParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_archive_portfolio(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -438,6 +474,18 @@ fn batches_to_arrow_ipc(
 ///
 /// Raw time-series export from the Iceberg cold tier.
 /// Returns up to `limit` archived reads in chronological order.
+#[utoipa::path(
+    get,
+    path = "/api/v1/archive/timeseries/{malo_id}",
+    tag = "archive",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), ArchiveOlapParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_archive_timeseries(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -557,6 +605,20 @@ pub(crate) enum SqlOutputFormat {
     ArrowIpc,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/query/sql",
+    tag = "archive",
+    request_body(content = serde_json::Value, description = "A `SqlQueryRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn post_sql_query(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

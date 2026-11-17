@@ -709,6 +709,7 @@ pub(crate) fn erp_event(msg: &mako_engine::outbox::OutboxMessage) -> Option<ErpE
     };
 
     Some(ErpEvent {
+        payload: payload_with_antwort(msg, &event_type),
         idempotency_key: msg.message_id.to_string(),
         event_type,
         process_id: msg.process_id,
@@ -717,12 +718,37 @@ pub(crate) fn erp_event(msg: &mako_engine::outbox::OutboxMessage) -> Option<ErpE
         causation_id: msg.causation_event_id,
         pid: extract_pid(&msg.payload),
         payload_schema: msg.payload_schema.as_deref().map(str::to_owned),
-        payload: msg.payload.clone(),
         occurred_at: occurred_at(msg),
         workflow_name: msg.workflow_name.clone(),
         trace_context: msg.trace_context.clone(),
         akteur: msg.akteur,
     })
+}
+
+/// The notification's `data`: the outbox payload, and on a completion the
+/// Antwortcode the process ended on — `antwortcode` and `codeliste`, read once
+/// here from the event envelope ([`OutboxMessage::antwort`]) so no workflow
+/// has to restate it. A payload that already names a code keeps its own.
+///
+/// processd opens a refusal Klärfall from exactly these two keys.
+///
+/// [`OutboxMessage::antwort`]: mako_engine::outbox::OutboxMessage::antwort
+fn payload_with_antwort(
+    msg: &mako_engine::outbox::OutboxMessage,
+    event_type: &ErpEventType,
+) -> serde_json::Value {
+    let mut payload = msg.payload.clone();
+    if let (ErpEventType::ProcessCompleted, Some(antwort), Some(data)) =
+        (event_type, msg.antwort.as_ref(), payload.as_object_mut())
+        && !data.contains_key("antwortcode")
+    {
+        data.insert("antwortcode".into(), antwort.code.clone().into());
+        if let Some(liste) = &antwort.codeliste {
+            data.entry("codeliste")
+                .or_insert_with(|| liste.clone().into());
+        }
+    }
+    payload
 }
 
 /// The CloudEvent JSON `WebhookErpAdapter` posts for `event`.
@@ -736,11 +762,16 @@ pub(crate) fn cloud_event_json(event: &ErpEvent) -> serde_json::Value {
 /// `None` for events that are progress notifications rather than endings
 /// (`ProcessInitiated`, `ContrlReceived`, `AperakAccepted` — an accepted APERAK
 /// acknowledges receipt, it does not end the process).
+///
+/// A lapsed Antwortfrist is no ending either: the process stays open for a
+/// late answer (`FristAbgelaufen` keeps what was outstanding), so counting the
+/// notice would count a running process as completed and count it again when
+/// it does end. A workflow that ends on the lapse reports that end with its
+/// own `ProcessCompleted` or `ProcessFailed`.
 fn terminal_outcome(event: &ErpEventType) -> Option<ProcessOutcome> {
     match event {
         ErpEventType::ProcessCompleted => Some(ProcessOutcome::Accepted),
         ErpEventType::AperakRejected { .. } => Some(ProcessOutcome::Rejected),
-        ErpEventType::AntwortfristAbgelaufen => Some(ProcessOutcome::Timeout),
         ErpEventType::ProcessFailed { .. } => Some(ProcessOutcome::Cancelled),
         _ => None,
     }
@@ -884,6 +915,121 @@ mod tests {
         }
     }
 
+    fn completion(
+        antwort: Option<mako_engine::envelope::Antwortcode>,
+        payload: serde_json::Value,
+    ) -> serde_json::Value {
+        use mako_engine::ids::{
+            ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId,
+        };
+        let mut msg = mako_engine::outbox::OutboxMessage::new(
+            StreamId::new("process/t/p"),
+            ProcessId::new(),
+            TenantId::new(),
+            CorrelationId::new(),
+            ConversationId::new(),
+            EventId::new(),
+            "ProcessCompleted",
+            "9900357000004",
+            payload,
+        );
+        msg.antwort = antwort;
+        super::erp_event(&msg).expect("an ERP event").payload
+    }
+
+    /// The Antwortcode a process ended on rides its completion, read from
+    /// the envelope — whatever the workflow put in its payload; a payload that
+    /// names its own code keeps it.
+    #[test]
+    fn a_completion_carries_the_envelopes_antwortcode() {
+        let a02 = mako_engine::envelope::Antwortcode::new("A02", Some("E_0622"));
+        let data = completion(Some(a02.clone()), serde_json::json!({ "pid": 55_003 }));
+        assert_eq!(data["antwortcode"], "A02");
+        assert_eq!(data["codeliste"], "E_0622");
+        let own = completion(
+            Some(a02),
+            serde_json::json!({ "antwortcode": "Z12", "codeliste": "E_0607" }),
+        );
+        assert_eq!(
+            (own["antwortcode"].as_str(), own["codeliste"].as_str()),
+            (Some("Z12"), Some("E_0607"))
+        );
+        let none = completion(None, serde_json::json!({}));
+        assert!(none.get("antwortcode").is_none());
+    }
+
+    /// makod's ERP notifications reach webhook subscribers through marktd:
+    /// makod keeps no PostgreSQL, so its `[erp] webhook_url` names marktd's
+    /// `[webhook] inbound_path`, and marktd's ingest enqueues each event on its
+    /// `event_outbox`, which the shared subscription module fans out. What
+    /// makod sends must therefore be what that ingest accepts: a Standard
+    /// Webhooks signature `webhook::verify_request` admits under the shared
+    /// secret, a body that reads as an `InboundMakoEvent`, and `webhook-id`
+    /// equal to the CloudEvent `id`, the key a subscriber deduplicates on.
+    #[tokio::test]
+    async fn makods_erp_notification_is_what_marktds_ingest_accepts() {
+        use mako_engine::erp::ErpAdapter as _;
+        use mako_engine::ids::{
+            ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId,
+        };
+
+        type Seen = (axum::http::HeaderMap, axum::body::Bytes);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Seen>();
+        let app = axum::Router::new().route(
+            "/inbound",
+            axum::routing::post(
+                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                    let tx = tx.clone();
+                    async move {
+                        tx.send((headers, body))
+                            .expect("the test holds the receiver");
+                        axum::http::StatusCode::ACCEPTED
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let msg = mako_engine::outbox::OutboxMessage::new(
+            StreamId::new("process/t/p"),
+            ProcessId::new(),
+            TenantId::new(),
+            CorrelationId::new(),
+            ConversationId::new(),
+            EventId::new(),
+            "ProcessCompleted",
+            "9900357000004",
+            serde_json::json!({ "pid": 55_002 }),
+        );
+        let event = super::erp_event(&msg).expect("an ERP event");
+        let key = event.idempotency_key.clone();
+        let secret = "marktd-inbound-secret";
+        super::WebhookErpAdapter::new(
+            format!("http://{addr}/inbound"),
+            Some(secrecy::SecretString::from(secret.to_owned())),
+        )
+        .notify(event)
+        .await
+        .expect("delivered");
+
+        let (headers, body) = rx.recv().await.expect("one delivery");
+        let id = mako_service::webhook::verify_request(Some(secret.as_bytes()), &headers, &body)
+            .expect("marktd's verifier admits the signature");
+        assert_eq!(
+            id.as_ref().map(mako_service::webhook::WebhookId::as_str),
+            Some(key.as_str())
+        );
+        let inbound: mako_markt::cloudevents::InboundMakoEvent =
+            serde_json::from_slice(&body).expect("marktd's ingest reads the body");
+        assert_eq!(inbound.id, key);
+        assert_eq!(inbound.specversion, "1.0");
+        assert_eq!(inbound.makopid, Some(55_002));
+    }
+
     /// The GaBi Gas notification must land on the type `gabi-gas-agent`
     /// subscribes to, not merely on *some* type.
     #[test]
@@ -924,7 +1070,7 @@ mod terminal_outcome_tests {
     }
 
     #[test]
-    fn the_four_endings_map_to_their_outcomes() {
+    fn the_three_endings_map_to_their_outcomes() {
         assert_eq!(
             terminal_outcome(&ErpEventType::ProcessCompleted),
             Some(ProcessOutcome::Accepted)
@@ -934,14 +1080,20 @@ mod terminal_outcome_tests {
             Some(ProcessOutcome::Rejected)
         );
         assert_eq!(
-            terminal_outcome(&ErpEventType::AntwortfristAbgelaufen),
-            Some(ProcessOutcome::Timeout)
-        );
-        assert_eq!(
             terminal_outcome(&ErpEventType::ProcessFailed {
                 reason: "regulatory timeout".into()
             }),
             Some(ProcessOutcome::Cancelled)
+        );
+    }
+
+    /// A lapse on a process that keeps running is no completion: the
+    /// process stays open for a late answer and is counted when it ends.
+    #[test]
+    fn a_lapse_that_continues_counts_no_completion() {
+        assert_eq!(
+            terminal_outcome(&ErpEventType::AntwortfristAbgelaufen),
+            None
         );
     }
 

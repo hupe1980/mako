@@ -83,7 +83,8 @@ fn opt_date(field: &str, s: Option<&str>) -> Result<Option<time::Date>, ApiError
 }
 
 /// Query parameters for graph endpoints.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct GraphQuery {
     /// Point-in-time filter (`YYYY-MM-DD`). Omit for all edges regardless of validity.
     pub at: Option<String>,
@@ -96,6 +97,18 @@ pub struct GraphQuery {
 /// Recursively traverses the MaKo location graph starting at the given `MaLo-ID`.
 /// Returns all reachable edges (MaLo → MeLo → NeLo → SR/TR) ordered by depth.
 /// Pass `?at=YYYY-MM-DD` to filter to edges valid on a specific date.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malos/{id}/lokationen",
+    tag = "lokationszuordnung",
+    params(("id" = String, Path, description = "Identifier of the resource"), GraphQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_malo_lokationen(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
@@ -161,6 +174,18 @@ pub struct StrukturView {
 /// projected from the typed location graph, together with its structural
 /// integrity status (a bundle can be transiently incomplete mid-Einzug, so this
 /// reports `valid: false` rather than failing the request).
+#[utoipa::path(
+    get,
+    path = "/api/v1/malos/{id}/buendel",
+    tag = "lokationszuordnung",
+    params(("id" = String, Path, description = "Identifier of the resource"), GraphQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_malo_buendel(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
@@ -203,6 +228,18 @@ pub async fn get_malo_buendel(
 ///
 /// Recursively traverses the location graph starting at the given `MeLo-ID`.
 /// Returns all reachable edges ordered by depth.
+#[utoipa::path(
+    get,
+    path = "/api/v1/melos/{id}/lokationen",
+    tag = "lokationszuordnung",
+    params(("id" = String, Path, description = "Identifier of the resource"), GraphQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_melo_lokationen(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
@@ -226,6 +263,18 @@ pub async fn get_melo_lokationen(
 /// `PUT /api/v1/lokationszuordnungen`
 ///
 /// Upserts a directed edge in the location graph.  Idempotent.
+#[utoipa::path(
+    put,
+    path = "/api/v1/lokationszuordnungen",
+    tag = "lokationszuordnung",
+    request_body(content = serde_json::Value, description = "`UpsertEdgeRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_lokationszuordnung(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
@@ -322,6 +371,17 @@ pub async fn put_lokationszuordnung(
 /// `DELETE /api/v1/lokationszuordnungen/{von_id}/{nach_id}`
 ///
 /// Hard-deletes all temporal variants of an edge pair.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/lokationszuordnungen/{von_id}/{nach_id}",
+    tag = "lokationszuordnung",
+    params(("von_id" = String, Path, description = "Lokation the edge starts at"), ("nach_id" = String, Path, description = "Lokation the edge ends at")),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn delete_lokationszuordnung(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,

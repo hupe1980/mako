@@ -110,11 +110,14 @@ fn the_policy_grants_no_action_the_code_never_checks() {
     // (`mako_service::mcp_auth::McpAuth::authenticate`), so it is granted here
     // but checked one crate over rather than in a marktd handler; so are
     // `read-policy` and `read-config`, checked by
-    // `mako_service::einrichtung::router`.
+    // `mako_service::einrichtung::router`, and `manage-subscription` and
+    // `read-events`, checked by `mako_service::subscriptions`' routes.
     let enforced_elsewhere: BTreeSet<String> = [
         "use-mcp".to_owned(),
         "read-policy".to_owned(),
         "read-config".to_owned(),
+        "manage-subscription".to_owned(),
+        "read-events".to_owned(),
     ]
     .into();
 

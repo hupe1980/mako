@@ -35,13 +35,19 @@ pub struct ProductdConfig {
     /// token; only the public comparison feed is unauthenticated.
     pub oidc: Option<mako_service::oidc::OidcConfig>,
 
-    /// ERP webhook URL for `de.tarif.product.updated` notifications.
+    /// The ERP webhook: the subscription endpoint `default`, which receives
+    /// every CloudEvent productd emits, and the receiver of the contract
+    /// request an accepted Angebot owes (`vertragd`'s `/api/v1/webhooks/angebot`).
     pub erp_webhook_url: Option<String>,
 
-    /// HMAC-SHA256 secret for outbound webhook signing.
-    /// When absent, the signature headers are omitted from outbound
-    /// CloudEvent webhooks.  Required in production.
+    /// The `default` endpoint's signing secret (Standard Webhooks). When
+    /// absent, deliveries to it are unsigned. Required in production.
     pub erp_hmac_secret: Option<String>,
+
+    /// `[subscriptions]` — webhook endpoints registered through the API:
+    /// retention of the event feed, and the loopback admission of `just dev`.
+    #[serde(default)]
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
 
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:PRODUCTD_MCP_API_KEY"`.
@@ -109,6 +115,7 @@ impl ProductdConfig {
         if let Err(e) = self.check_auth_posture() {
             out.push(Befund::aus_fehler("oidc", e).bereich(Bereich::Zugriff));
         }
+        out.extend(self.subscriptions.befunde());
         out
     }
 

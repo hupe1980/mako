@@ -129,6 +129,13 @@ pub fn ereignis(art: Art, id: &str) -> String {
     format!("vorschlag:{}:{id}", art.key())
 }
 
+/// The admission event id of the one follow-up proposal a refused proposal
+/// gets ([`Plane::vorschlag_nachbessern`]).
+#[must_use]
+pub fn nachbesserung(art: Art, id: &str) -> String {
+    format!("{}:nachbesserung", ereignis(art, id))
+}
+
 /// The entry ids of a listing of `art`, and whether the page was full.
 #[must_use]
 pub fn eintraege(art: Art, output: &Value) -> (Vec<String>, bool) {
@@ -183,10 +190,23 @@ pub async fn tick(plane: &Plane, art: Art, client: &dyn ToolClient) -> Result<us
         }
     }
     // Every concluded proposal gets its Prüfvermerk here, before a person
-    // opens it: reading the proposal stores the verdict on its run once.
+    // opens it: reading the proposal stores the verdict on its run once. A
+    // refusal gets one follow-up run carrying it; reading never starts one.
     for id in &ids {
-        if let Err(e) = plane.vorschlag_of(art, id, PRUEFLESER).await {
-            warn!(art = art.key(), entry = %id, error = %e, "agentd vorschlaege: the proposal was not checked");
+        match plane.vorschlag_of(art, id, PRUEFLESER).await {
+            Ok(Some(answer)) => {
+                let refusal = answer.pruefvermerk.as_ref().and_then(|v| v.ablehnung());
+                if let Some(stufe) = refusal
+                    && let Some(a) = plane.vorschlag_nachbessern(art, id, stufe).await
+                    && a.fresh
+                {
+                    info!(art = art.key(), entry = %id, run = %a.run_id, "agentd vorschlaege: refused proposal asked again");
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                warn!(art = art.key(), entry = %id, error = %e, "agentd vorschlaege: the proposal was not checked");
+            }
         }
     }
     Ok(fresh)

@@ -81,9 +81,37 @@ pub struct EdmdMcpState {
     pub marktd_api_key: secrecy::SecretString,
     /// The operator policy and posture this deployment runs under.
     pub policy: Arc<mako_service::policy::PolicyReport>,
+    /// The webhook subscriptions on edmd's `event_outbox` — the same module the
+    /// `/api/v1/webhooks/*` routes serve.
+    pub subscriptions: mako_service::subscriptions::Subscriptions,
 }
 
 // ── Tool parameters ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookEndpointsParams {
+    /// Rows per page, 1–200; 50 when absent.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page; absent for the first.
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookDeliveriesParams {
+    /// The endpoint's id (UUID).
+    pub endpoint_id: String,
+    /// `all`, `pending`, `delivered` or `failed`; every delivery when absent.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Rows per page, 1–200; 50 when absent.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page; absent for the first.
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetTimeseriesParams {
@@ -441,6 +469,60 @@ impl EdmdMcpHandler {
         ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// `list_webhook_endpoints` — the agent twin of
+    /// `GET /api/v1/webhooks/endpoints`.
+    #[tool(
+        description = "List the webhook endpoints edmd delivers its CloudEvents to, ordered by name, one page at a time: `default` is the configured ERP webhook, the others were registered under /api/v1/webhooks/endpoints. Same read as GET /api/v1/webhooks/endpoints.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
+    )]
+    async fn list_webhook_endpoints(
+        &self,
+        Parameters(p): Parameters<ListWebhookEndpointsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        mako_service::mcp::answer(self.state.subscriptions.list_endpoints(None, &page).await)
+    }
+
+    /// `list_webhook_deliveries` — the agent twin of
+    /// `GET /api/v1/webhooks/endpoints/{id}/deliveries`.
+    #[tool(
+        description = "List the deliveries of one webhook endpoint, newest first, one page at a time, optionally only `pending`, `delivered` or `failed` ones: each names the event, its attempts, the last error and when it was delivered or dead-lettered. Same read as GET /api/v1/webhooks/endpoints/{id}/deliveries.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Delivery>>()
+    )]
+    async fn list_webhook_deliveries(
+        &self,
+        Parameters(p): Parameters<ListWebhookDeliveriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let status = match p.status {
+            None => mako_service::subscriptions::DeliveryFilter::All,
+            Some(raw) => {
+                serde_json::from_value(serde_json::Value::String(raw.clone())).map_err(|_| {
+                    McpError::invalid_params(
+                        format!(
+                            "status {raw:?} is not one of `all`, `pending`, `delivered`, `failed`"
+                        ),
+                        None,
+                    )
+                })?
+            }
+        };
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        mako_service::mcp::answer(
+            self.state
+                .subscriptions
+                .list_deliveries(None, &p.endpoint_id, status, &page)
+                .await,
+        )
     }
 
     /// Read meter data time-series for a MaLo in a given date-time range.
@@ -1843,6 +1925,9 @@ fn tool_action(body: &[u8]) -> Option<&'static str> {
         "trigger_jahresablesung" => Some("write-reading-order"),
         "get_timeseries" | "get_quality_warnings" | "get_coverage" => Some("read-timeseries"),
         "get_correction_history" => Some("read-corrections"),
+        "list_webhook_endpoints" | "list_webhook_deliveries" => {
+            Some(mako_service::subscriptions::MANAGE)
+        }
         _ => None,
     }
 }
@@ -1929,6 +2014,13 @@ mod auth_gate_tests {
             tool_action(&call("get_correction_history")),
             Some("read-corrections")
         );
+        for tool in ["list_webhook_endpoints", "list_webhook_deliveries"] {
+            assert_eq!(
+                tool_action(&call(tool)),
+                Some("manage-subscription"),
+                "{tool}"
+            );
+        }
     }
 
     #[test]
@@ -1976,6 +2068,24 @@ mod contract_tests {
         let value = serde_json::to_value(sample).expect("the sample serializes");
         mako_service::mcp::conformance::assert_structured_output(&tools(), tool, &value);
         mako_service::mcp::conformance::assert_rest_twin(&tools(), tool, &documented(), path);
+    }
+
+    /// The webhook list tools declare the page the REST reads document.
+    #[test]
+    fn the_webhook_list_tools_are_twins_of_the_rest_reads() {
+        let doc = documented();
+        mako_service::mcp::conformance::assert_rest_twin(
+            &tools(),
+            "list_webhook_endpoints",
+            &doc,
+            "/api/v1/webhooks/endpoints",
+        );
+        mako_service::mcp::conformance::assert_rest_twin(
+            &tools(),
+            "list_webhook_deliveries",
+            &doc,
+            "/api/v1/webhooks/endpoints/{id}/deliveries",
+        );
     }
 
     #[test]

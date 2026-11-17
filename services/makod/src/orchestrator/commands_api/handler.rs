@@ -64,12 +64,20 @@ fn command_actor(
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-/// Build the ERP commands router: the command door and its rehearsal.
-pub fn router(state: Arc<CommandsApiState>) -> Router {
+/// The command doors as a plain router, for the unit tests.
+#[cfg(test)]
+pub(crate) fn router(state: Arc<CommandsApiState>) -> axum::Router {
+    routes(state).into()
+}
+
+/// The command door and its rehearsal, each with its document entry.
+pub fn routes<S: Clone + Send + Sync + 'static>(
+    state: Arc<CommandsApiState>,
+) -> utoipa_axum::router::OpenApiRouter<S> {
     let max_body = state.max_body_bytes;
-    Router::new()
-        .route("/api/v1/commands", post(handle_command))
-        .route("/api/v1/probe/{command}", post(super::probe::handle_probe))
+    utoipa_axum::router::OpenApiRouter::new()
+        .routes(utoipa_axum::routes!(handle_command))
+        .routes(utoipa_axum::routes!(super::probe::handle_probe))
         .layer(DefaultBodyLimit::max(max_body))
         .with_state(state)
 }

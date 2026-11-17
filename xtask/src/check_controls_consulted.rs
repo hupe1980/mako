@@ -116,21 +116,11 @@ const ROLE_COLUMNS: &[(&str, &str, Site)] = &[
     ),
     (
         "marktd",
-        "marktrole",
-        Site::At("services/marktd/src/fanout.rs", "row.marktrole.as_deref()"),
-    ),
-    (
-        "marktd",
         "marktrolle",
         Site::At(
             "services/marktd/src/handlers/partner.rs",
             "record.marktrolle == Some(",
         ),
-    ),
-    (
-        "marktd",
-        "roles",
-        Site::At("services/marktd/src/pg/subscription.rs", "= ANY(roles)"),
     ),
     (
         "marktd",

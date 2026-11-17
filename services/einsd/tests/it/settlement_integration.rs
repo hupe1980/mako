@@ -311,7 +311,7 @@ async fn receipt_upsert_matches_the_partial_unique_index() {
                        WHERE is_correction = false DO UPDATE
                    SET status = EXCLUDED.status, settled_at = now()";
 
-    for status in ["berechnet", "foerderung_beendet"] {
+    for status in ["calculated", "foerderung_beendet"] {
         sqlx::query(upsert)
             .bind(uuid::Uuid::new_v4())
             .bind(TENANT)
@@ -350,7 +350,7 @@ async fn a_correction_may_coexist_with_the_receipt_it_corrects() {
                 einspeisemenge_kwh, settlement_eur, status, is_correction,
                 correction_of, correction_reason)
              VALUES ($1, 'P1', $2, 2026, 7, 'VERGUETUNG', 100, 8.11,
-                     'berechnet', $3, $4, $5)",
+                     'calculated', $3, $4, $5)",
         )
         .bind(id)
         .bind(TENANT)
@@ -948,7 +948,7 @@ async fn an_incomplete_year_is_provisional_and_names_the_gaps() {
             "INSERT INTO settlement_receipts
                (id, tr_id, tenant, billing_year, billing_month, settlement_model,
                 einspeisemenge_kwh, settlement_eur, pflichtzahlung_eur, status)
-             VALUES ($1, 'P1', $2, 2026, $3, 'VERGUETUNG', 100, 8.11, $4::numeric, 'berechnet')",
+             VALUES ($1, 'P1', $2, 2026, $3, 'VERGUETUNG', 100, 8.11, $4::numeric, 'calculated')",
         )
         .bind(uuid::Uuid::new_v4())
         .bind(TENANT)
@@ -988,7 +988,7 @@ async fn a_complete_year_is_final() {
             "INSERT INTO settlement_receipts
                (id, tr_id, tenant, billing_year, billing_month, settlement_model,
                 einspeisemenge_kwh, settlement_eur, verlaengerungsanspruch_qh, status)
-             VALUES ($1, 'P1', $2, 2026, $3, 'VERGUETUNG', 100, 8.11, 4, 'berechnet')",
+             VALUES ($1, 'P1', $2, 2026, $3, 'VERGUETUNG', 100, 8.11, 4, 'calculated')",
         )
         .bind(uuid::Uuid::new_v4())
         .bind(TENANT)
@@ -1031,7 +1031,7 @@ async fn a_correction_does_not_double_count_its_month() {
                (id, tr_id, tenant, billing_year, billing_month, settlement_model,
                 einspeisemenge_kwh, settlement_eur, status, is_correction, correction_of)
              VALUES ($1, 'P1', $2, 2026, 3, 'VERGUETUNG', 100, 8.11,
-                     'berechnet', $3, $4)",
+                     'calculated', $3, $4)",
         )
         .bind(id)
         .bind(TENANT)

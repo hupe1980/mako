@@ -11,7 +11,7 @@ records `makod`'s process events and fans them out; `processd` decides.
 |---|---|
 | **Port** | 8180 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL 15+ with `btree_gist`; validity is half-open `[valid_from, valid_to)` under `EXCLUDE` constraints |
-| **MCP** | 22 tools, 4 prompts at `/mcp` |
+| **MCP** | 24 tools, 4 prompts at `/mcp` |
 | **Emits** | `de.markt.*` (e.g. `versorgung.changed`, `malo.updated`) and relayed `de.mako.*`, HMAC-signed, from `urn:mako:marktd:tenant:{tenant}` |
 | **Consumes** | `de.mako.*` from `makod` at `[webhook] inbound_path` (HMAC) |
 | **Depends on** | makod |
@@ -35,7 +35,7 @@ MARKTD_CONFIG=deploy/demo/marktd.toml cargo run -p marktd -- --check-config
 | `/api/v1/preisblaetter/{nb_mp_id}`, `-messung`, `-ka`, `-dienstleistung`, `-hardware` | Price sheets |
 | `/api/v1/referenzreihen/{reihe}/werte` · `/wert` · `/import` | Published figures billing reads; `422 referenzwert_fehlt` when missing |
 | `/api/v1/esa/…` | ESA consent and framework |
-| `/api/v1/subscriptions`, `/admin/fanout/dlq` | Fan-out subscribers and dead letters |
+| `/api/v1/webhooks/**`, `GET /api/v1/events` | Webhook endpoints (in-cluster receivers as `[[subscriptions.endpoints]]`), deliveries, replay, the event feed |
 
 Every `GET` returns `rubo4e::current` types and every `PUT` passes the BO4E
 gate. The full table is the operator guide's [Endpoints](https://hupe1980.github.io/mako/docs/services/marktd/#endpoints);

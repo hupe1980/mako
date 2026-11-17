@@ -31,7 +31,7 @@ import {
   tageVerschoben,
   tageZwischen,
 } from "../format/date";
-import { alsMesswert, formatCent } from "../format/money";
+import { alsMesswert, formatCent, formatDecimal } from "../format/money";
 import { eintrag, useT } from "../i18n";
 
 // The windows the page looks at. A view's default, not a Frist: the services
@@ -496,6 +496,11 @@ export function LokationView() {
         },
       }),
   });
+  // The generating side of the bündel: einsd's plants on this MaLo, each opening its Anlage page.
+  const erzeugung = useQuery({
+    queryKey: [rolle, "rest", "einsd", "anlagen", id],
+    queryFn: () => lesen("einsd", "/svc/einsd/api/v1/anlagen", { query: { malo_id: id } }),
+  });
   const strukturen = useQuery({
     queryKey: [rolle, "rest", "marktd", "lokationsbuendelstrukturen"],
     queryFn: () => lesen("marktd", "/svc/marktd/api/v1/lokationsbuendelstrukturen", {}),
@@ -644,6 +649,28 @@ export function LokationView() {
         </Panel>
       </div>
 
+      {(erzeugung.data ?? []).length > 0 && (
+        <Panel className="px-6 py-5">
+          <h2 className="m-0 mb-2 text-headline">{k.erzeugung}</h2>
+          <ul aria-label={k.erzeugung} className="m-0 flex list-none flex-col gap-1 p-0">
+            {(erzeugung.data ?? []).map((a) => (
+              <li key={a.tr_id} className="text-body">
+                <Link
+                  to="/anlage/$trId"
+                  params={{ trId: a.tr_id }}
+                  className="focus-ring rounded-[4px] text-accent underline underline-offset-2"
+                >
+                  {t.anlage.titel(
+                    eintrag(t.anlage.erzeugungsart, a.erzeugungsart),
+                    formatDecimal(a.leistung_kwp),
+                  )}
+                </Link>
+                <span className="ml-2 text-caption text-text-2">{a.tr_id}</span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
       {rolle === "lieferant" && <KontoPanel malo={id} />}
     </Page>
   );

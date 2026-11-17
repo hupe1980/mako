@@ -157,3 +157,11 @@ export function tageZwischen(von: Instant, bis: Instant | null): number {
   const ende = bis ? Date.parse(bis) : Date.now();
   return Math.max(0, Math.round((ende - Date.parse(von)) / 86_400_000));
 }
+
+/** Last month in Berlin as `[year, month]` — the month a settlement list is asked for. */
+export function vormonat(): [number, number] {
+  const [y = 0, m = 1] = heuteBerlin()
+    .split("-")
+    .map((x) => Number.parseInt(x, 10));
+  return m === 1 ? [y - 1, 12] : [y, m - 1];
+}

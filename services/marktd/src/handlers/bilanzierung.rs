@@ -45,7 +45,8 @@ use crate::pg::PgBilanzierungRepository;
 /// Extension alias — concrete type so AFIT dispatches statically.
 pub type BilanzierungRepoExt = Arc<PgBilanzierungRepository>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct AtQuery {
     /// Point-in-time instant (RFC 3339) or date (`YYYY-MM-DD`). Defaults to now.
     pub at: Option<String>,
@@ -69,6 +70,19 @@ fn parse_at(s: &str) -> Result<OffsetDateTime, String> {
 /// Every typed column is then derived from the **typed** object by
 /// [`BilanzierungRecord::from_bo4e`], and what is stored is the canonical
 /// round-trip rather than the request body.
+#[utoipa::path(
+    put,
+    path = "/api/v1/malos/{malo_id}/bilanzierung",
+    tag = "bilanzierung",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "`Bo4e<rubo4e::current::Bilanzierung>`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_bilanzierung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -97,6 +111,18 @@ pub async fn put_bilanzierung(
 }
 
 /// `GET /api/v1/malos/{malo_id}/bilanzierung?at=<rfc3339|date>` — point-in-time.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malos/{malo_id}/bilanzierung",
+    tag = "bilanzierung",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), AtQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_bilanzierung_at(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -130,6 +156,18 @@ pub async fn get_bilanzierung_at(
 }
 
 /// `GET /api/v1/malos/{malo_id}/bilanzierung/history` — full temporal history.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malos/{malo_id}/bilanzierung/history",
+    tag = "bilanzierung",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_bilanzierung_history(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

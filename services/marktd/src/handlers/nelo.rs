@@ -205,6 +205,19 @@ fn default_size() -> u32 {
 /// Body must be a valid `rubo4e::current::Netzlokation` JSON object (camelCase).
 /// Returns 422 on wrong `_typ` or invalid enum values.
 /// Supply `If-Match` header for optimistic concurrency; omit for unconditional upsert.
+#[utoipa::path(
+    put,
+    path = "/api/v1/nelos/{id}",
+    tag = "nelo",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    request_body = NeLoUpsertRequest,
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_nelo(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
@@ -303,6 +316,18 @@ pub async fn put_nelo(
 ///
 /// Retrieve a single NeLo. Returns a typed `NetzlokationResponse` with the
 /// full `rubo4e::current::Netzlokation` BO4E payload in the `data` field.
+#[utoipa::path(
+    get,
+    path = "/api/v1/nelos/{id}",
+    tag = "nelo",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_nelo(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
@@ -341,6 +366,17 @@ pub async fn get_nelo(
 /// GET /api/v1/nelos
 ///
 /// List NeLos for this tenant.  Pass `?nb_mp_id=<GLN>` to filter by Netzbetreiber.
+#[utoipa::path(
+    get,
+    path = "/api/v1/nelos",
+    tag = "nelo",
+    params(NeLoListQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_nelos(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,

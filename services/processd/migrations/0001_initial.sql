@@ -310,7 +310,7 @@ CREATE INDEX nf_tenant_status ON neuanlage_faelle (tenant, status);
 -- ── process_projections — the process read model ──────────────────────────────
 --
 -- One row per business process, updated on every de.mako.* CloudEvent received
--- from marktd, and rebuildable from marktd's replay log (GET /admin/events)
+-- from marktd, and rebuildable from marktd's event feed (GET /api/v1/events)
 -- through the same projection function.
 --
 -- Regulatory: the affiliate/third-party columns produce evidence for the
@@ -620,8 +620,9 @@ CREATE INDEX so_iftsta_open   ON sperr_orders (tenant, iftsta_faellig_am)
 CREATE TABLE klaerfaelle (
     id              UUID        PRIMARY KEY,
     tenant          TEXT        NOT NULL,
-    -- The message the signal concerns, `process:<id>` for a refusal or a
-    -- lapse, `dead-letter:<id>` for a dead letter that names no message.
+    -- The message the signal concerns; `process:<id>` for a refusal, a lapse
+    -- or a Freigabe; `dead-letter:<reason>` for a dead letter that names no
+    -- message, so a flood of them from one partner is one case.
     message_ref     TEXT        NOT NULL,
     -- The MP-ID that sent the signal (the APERAK's or the dead letter's
     -- sender); null for a signal about a process, which names no sender.
@@ -634,7 +635,7 @@ CREATE TABLE klaerfaelle (
     -- Every origin attached, the first one first.
     origins         TEXT[]      NOT NULL
         CHECK (cardinality(origins) > 0
-               AND origins <@ ARRAY['aperak','dead_letter','refusal','frist_missed']::text[]),
+               AND origins <@ ARRAY['aperak','dead_letter','refusal','frist_missed','operator_decision']::text[]),
     -- The first cause stands; a later signal attaches, it does not rewrite.
     ursache_code    TEXT        NOT NULL,
     ursache_liste   TEXT        NOT NULL,
@@ -646,6 +647,54 @@ CREATE TABLE klaerfaelle (
     occurrences     INTEGER     NOT NULL DEFAULT 1,
     opened_at       TIMESTAMPTZ NOT NULL,
     last_signal_at  TIMESTAMPTZ NOT NULL,
-    UNIQUE NULLS NOT DISTINCT (tenant, partner_mp_id, message_ref)
+    -- An approval_queue row's expires_at: the Frist less the operator's
+    -- headroom, kept apart from the Frist itself (due_at is read from the
+    -- read model).
+    operator_window_ends_at TIMESTAMPTZ,
+    -- The person working the case; the owner is the Marktrolle regardless.
+    assignee        TEXT,
+    -- The authenticated principal that resolved or dispatched the case.
+    decided_by      TEXT,
+    closed_at       TIMESTAMPTZ,
+    CHECK ((state = 'open') = (closed_at IS NULL))
 );
+-- One OPEN case per key: once a case is closed, the next signal for the same
+-- message opens a new one rather than counting into a closed case.
+CREATE UNIQUE INDEX klaerfaelle_key ON klaerfaelle (tenant, partner_mp_id, message_ref)
+    NULLS NOT DISTINCT WHERE state = 'open';
 CREATE INDEX klaerfaelle_open ON klaerfaelle (tenant, opened_at) WHERE state = 'open';
+
+-- Every step taken on a case, by the authenticated principal: assign,
+-- resolve and dispatch each append a row; a dispatch journals the proposed
+-- command beside the one sent and the reason an override needs.
+CREATE TABLE klaerfall_verlauf (
+    id              BIGSERIAL   PRIMARY KEY,
+    klaerfall_id    UUID        NOT NULL REFERENCES klaerfaelle (id),
+    tenant          TEXT        NOT NULL,
+    at              TIMESTAMPTZ NOT NULL,
+    akteur          TEXT        NOT NULL,
+    schritt         TEXT        NOT NULL
+        CHECK (schritt IN ('assign','resolve','dispatch')),
+    vorgeschlagen   TEXT,
+    befehl          TEXT,
+    begruendung     TEXT,
+    assignee        TEXT
+);
+CREATE INDEX klaerfall_verlauf_case ON klaerfall_verlauf (tenant, klaerfall_id, at);
+
+-- One row per `Idempotency-Key` a decision route has seen (`POST
+-- /api/v1/queue/{id}/approve|reject`, `POST /api/v1/klaerfaelle/{id}/dispatch`):
+-- the fingerprint of the request it came with and the first answer, which a
+-- resend with the same request is given again. `status` is NULL while the
+-- first request is still being decided. Rows older than a day are pruned on
+-- the next claim.
+CREATE TABLE decision_idempotency (
+    tenant       TEXT        NOT NULL,
+    key          TEXT        NOT NULL,
+    fingerprint  TEXT        NOT NULL,
+    status       SMALLINT,
+    content_type TEXT,
+    response     BYTEA,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, key)
+);

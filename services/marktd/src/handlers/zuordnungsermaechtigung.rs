@@ -27,6 +27,18 @@ use crate::pg::PgZuordnungsermaechtigungRepository;
 /// `GET /api/v1/zuordnungsermaechtigungen/{lf_mp_id}` — every Ermächtigung,
 /// active or ended, naming the Lieferant. An empty list is an answer: no BKV
 /// has authorised it.
+#[utoipa::path(
+    get,
+    path = "/api/v1/zuordnungsermaechtigungen/{lf_mp_id}",
+    tag = "zuordnungsermaechtigung",
+    params(("lf_mp_id" = String, Path, description = "13-digit MP-ID of the Lieferant")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn list_zuordnungsermaechtigungen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

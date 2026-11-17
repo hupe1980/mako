@@ -1,10 +1,12 @@
-//! edmd's documented REST reads and the OpenAPI 3.1 document describing them.
+//! edmd's OpenAPI 3.1 document and the router that mounts every `/api/v1` route
+//! with its entry.
 //!
-//! Every route here is mounted through `utoipa-axum`'s `OpenApiRouter`, so it
-//! cannot exist without its document entry; the document is served at
+//! Every `/api/v1` route is mounted through `utoipa-axum`'s `OpenApiRouter`,
+//! so it cannot exist without its document entry; the document is served at
 //! `GET /api/v1/openapi.json` and committed as `services/edmd/openapi.json`.
-//! Each handler authorizes, then calls the shared read in [`crate::reads`] the
-//! MCP tool of the same name calls, under the same Cedar action.
+//! The reads defined here authorize, then call the shared read in
+//! [`crate::reads`] the MCP tool of the same name calls, under the same Cedar
+//! action.
 
 use std::sync::Arc;
 
@@ -14,6 +16,7 @@ use axum::{
 };
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
+use mako_service::subscriptions::Subscriptions;
 use mako_service::{ApiError, ApiResult, Json};
 use serde::Deserialize;
 use utoipa::{IntoParams, OpenApi};
@@ -27,9 +30,26 @@ use crate::reads::{self, Abdeckung, Korrekturen, Messwerte, Qualitaetsbefund};
 #[openapi(
     info(
         title = "edmd — Energiedatenmanagement",
-        description = "Meter data of the Marktlokationen: the version-resolved series, its quality, corrections and per-day coverage. Describes the routes edmd mounts through its documented router."
+        description = "Meter data of the Marktlokationen: ingest, the version-resolved series, its quality, corrections and coverage, reading orders, the archive, and webhook subscriptions on the events edmd emits. Describes every /api/v1 route edmd serves."
     ),
-    tags((name = "messwerte", description = "Meter data reads"))
+    tags(
+        (name = "messwerte", description = "Meter data reads and corrections"),
+        (name = "lastgang", description = "Lastgang, Zeitreihe, energy and Summenzeitreihe reads"),
+        (name = "zaehlerstandsgang", description = "Zählerstandsgang push and read"),
+        (name = "billing", description = "Deliveries, imbalance and billing periods"),
+        (name = "ingest", description = "Direct, bulk, IoT and substitute-value ingest"),
+        (name = "quality", description = "Quality scoring, assessments, gas quality and confirmations"),
+        (name = "esa", description = "ESA Werte nach Typ 2"),
+        (name = "reading-orders", description = "Ablesesteuerung and the Jahresablesung"),
+        (name = "virtual", description = "Virtual meters"),
+        (name = "forecast", description = "Annual forecast and Netzverlust"),
+        (name = "surveillance", description = "Delivery surveillance"),
+        (name = "archive", description = "Cold-tier archive and analytical SQL"),
+        (name = "sharing", description = "Energy sharing allocation"),
+        (name = "gdpr", description = "Art. 17 DSGVO erasure"),
+        (name = "smgw", description = "§14a SMGW session registry"),
+        (name = "webhooks", description = "Webhook endpoints and deliveries on edmd's event outbox"),
+    )
 )]
 struct ApiDoc;
 
@@ -209,32 +229,50 @@ pub async fn get_coverage(
     .map(Json)
 }
 
-/// The documented routes and their document.
-pub fn routes() -> (axum::Router<HandlerState>, utoipa::openapi::OpenApi) {
+/// Every `/api/v1` route edmd serves and the document describing them: the
+/// reads here, the server's routes (`server::api_routes`) and the
+/// webhook subscriptions on edmd's `event_outbox`.
+pub fn routes(
+    subscriptions: &Subscriptions,
+) -> (axum::Router<HandlerState>, utoipa::openapi::OpenApi) {
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(get_timeseries))
         .routes(routes!(get_quality))
         .routes(routes!(get_corrections))
         .routes(routes!(get_coverage))
+        .merge(crate::server::api_routes())
+        .merge(subscriptions.router())
         .split_for_parts()
 }
 
 /// The OpenAPI document edmd serves at `GET /api/v1/openapi.json`.
 #[must_use]
 pub fn document() -> utoipa::openapi::OpenApi {
-    routes().1
+    routes(&unconnected_subscriptions()).1
+}
+
+/// A subscription module whose pool never connects: the document is a
+/// property of the routes' types, not of a database. Without a lifetime or
+/// idle timeout the lazy pool spawns no maintenance task, so this runs
+/// outside a Tokio runtime too.
+fn unconnected_subscriptions() -> Subscriptions {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_lifetime(None)
+        .idle_timeout(None)
+        .connect_lazy("postgres://unused@127.0.0.1:1/unused")
+        .expect("a lazy pool over a well-formed URL opens no connection");
+    Subscriptions::new(
+        pool,
+        <crate::Edmd as mako_service::Daemon>::NAME,
+        "",
+        mako_service::subscriptions::SubscriptionsConfig::default(),
+    )
 }
 
 /// The documented routes plus `GET /api/v1/openapi.json`.
-pub fn router() -> axum::Router<HandlerState> {
-    let (router, doc) = routes();
-    router.route(
-        "/api/v1/openapi.json",
-        axum::routing::get(move || {
-            let doc = doc.clone();
-            async move { axum::Json(doc) }
-        }),
-    )
+pub fn router(subscriptions: &Subscriptions) -> axum::Router<HandlerState> {
+    let (router, doc) = routes(subscriptions);
+    router.merge(mako_service::openapi::serve(doc))
 }
 
 #[cfg(test)]
@@ -244,20 +282,7 @@ mod tests {
     /// their clients from the committed file.
     #[test]
     fn the_openapi_document_matches_the_committed_one() {
-        let doc = serde_json::to_value(super::document()).expect("the document serializes");
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("openapi.json");
-        if let Err(e) = mako_service::mcp_snapshot::compare_json(&doc, &path) {
-            panic!("{e}");
-        }
-    }
-
-    /// `GET /api/v1/corrections/{malo_id}` lives here while the `POST` of the
-    /// same path stays on the server's router; the two merge into one path.
-    #[test]
-    fn the_documented_get_merges_beside_an_undocumented_post() {
-        async fn post() {}
-        let _ = axum::Router::<crate::handler::HandlerState>::new()
-            .route("/api/v1/corrections/{malo_id}", axum::routing::post(post))
-            .merge(super::router());
+        mako_service::openapi::assert_committed(&super::document(), &path);
     }
 }

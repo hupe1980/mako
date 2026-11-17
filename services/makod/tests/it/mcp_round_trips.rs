@@ -67,6 +67,7 @@ async fn app() -> axum::Router {
             tenant: TENANT.to_owned(),
             zertifikate: None,
         }),
+        format_impact: None,
     });
     mcp_server::router(state, tokio_util::sync::CancellationToken::new())
 }

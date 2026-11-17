@@ -6,14 +6,15 @@
 //! ```
 //!
 //! marktd is the estate's hub: makod, edmd, processd and the rest publish to
-//! it, and it fans every event out to its subscribers, signed with each
-//! subscriber's own secret (Standard Webhooks). `listen` registers one
-//! subscription for every event type with a fresh secret, verifies each
-//! delivery with `mako_service::webhook::verify_request` — the check every
-//! service runs — and removes the subscription on Ctrl-C.
+//! it, and it fans every event out to its webhook endpoints, signed with each
+//! endpoint's own secret (Standard Webhooks). `listen` registers one endpoint
+//! for every event type (`POST /api/v1/webhooks/endpoints`), keeps the
+//! `whsec_` secret marktd answers with, verifies each delivery with
+//! `mako_service::webhook::verify_request` — the check every service runs —
+//! and removes the endpoint on Ctrl-C.
 //!
 //! `--host` is how marktd reaches this machine: `127.0.0.1` by default, which
-//! `just dev`'s marktd admits (`[webhook] allow_loopback_subscribers`), and
+//! `just dev`'s marktd admits (`[subscriptions] allow_loopback`), and
 //! `host.docker.internal` when marktd runs in `just demo`'s network. A
 //! `TOKEN` in the environment is sent as the bearer (`just demo`'s edge
 //! needs none; it answers as the admin persona).
@@ -75,7 +76,11 @@ struct Receiver {
 }
 
 async fn receive(State(r): State<Arc<Receiver>>, headers: HeaderMap, body: Bytes) -> StatusCode {
-    match verified(r.secret.as_bytes(), &headers, &body) {
+    match verified(
+        &mako_service::webhook::signing_key(&r.secret),
+        &headers,
+        &body,
+    ) {
         Ok(event) => {
             let field = |k: &str| event.get(k).and_then(Value::as_str).unwrap_or("");
             println!(
@@ -101,16 +106,11 @@ async fn receive(State(r): State<Arc<Receiver>>, headers: HeaderMap, body: Bytes
     }
 }
 
-/// Subscribe, print each verified delivery, and remove the subscription on
-/// Ctrl-C (or after the first delivery with `--once`).
+/// Register an endpoint, print each verified delivery, and remove the
+/// endpoint on Ctrl-C (or after the first delivery with `--once`).
 pub async fn run(args: &[String]) -> anyhow::Result<()> {
     let args = parse(args)?;
-    let id = format!("listen-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
-    let secret = format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
+    let name = format!("listen-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
     let url = format!("http://{}:{}/", args.host, args.port);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", args.port))
@@ -119,17 +119,16 @@ pub async fn run(args: &[String]) -> anyhow::Result<()> {
 
     let http = reqwest::Client::new();
     let token = std::env::var("TOKEN").ok().filter(|t| !t.is_empty());
-    let subscription = format!("{}/api/v1/subscriptions/{id}", args.marktd);
-    let mut put = http.put(&subscription).json(&json!({
-        "webhook_url": url,
-        "webhook_secret": secret,
+    let endpoints = format!("{}/api/v1/webhooks/endpoints", args.marktd);
+    let mut post = http.post(&endpoints).json(&json!({
+        "name": name,
+        "url": url,
         "event_types": [],
-        "active": true,
     }));
     if let Some(t) = &token {
-        put = put.bearer_auth(t);
+        post = post.bearer_auth(t);
     }
-    let answer = put.send().await.with_context(|| {
+    let answer = post.send().await.with_context(|| {
         format!(
             "marktd is not reachable at {} — is the estate running?",
             args.marktd
@@ -138,9 +137,20 @@ pub async fn run(args: &[String]) -> anyhow::Result<()> {
     if !answer.status().is_success() {
         let status = answer.status();
         let body = answer.text().await.unwrap_or_default();
-        anyhow::bail!("marktd refused the subscription ({status}): {body}");
+        anyhow::bail!("marktd refused the endpoint ({status}): {body}");
     }
-    println!("👂 every event of the estate, at {url} (subscription {id}); Ctrl-C to stop");
+    let created: Value = answer.json().await.context("marktd's answer is not JSON")?;
+    let secret = created["secret"]
+        .as_str()
+        .context("marktd's answer carries no secret")?
+        .to_owned();
+    let endpoint = format!(
+        "{endpoints}/{}",
+        created["endpoint"]["id"]
+            .as_str()
+            .context("marktd's answer carries no endpoint id")?
+    );
+    println!("👂 every event of the estate, at {url} (endpoint {name}); Ctrl-C to stop");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let receiver = Arc::new(Receiver {
@@ -159,19 +169,37 @@ pub async fn run(args: &[String]) -> anyhow::Result<()> {
         })
         .await;
 
-    let mut delete = http.delete(&subscription);
-    if let Some(t) = &token {
-        delete = delete.bearer_auth(t);
-    }
-    match delete.send().await {
-        Ok(a) if a.status().is_success() => println!("\n👋 subscription {id} removed"),
-        Ok(a) => eprintln!(
-            "\nmarktd kept subscription {id} ({}) — remove it with DELETE {subscription}",
-            a.status()
-        ),
-        Err(e) => eprintln!("\nsubscription {id} not removed: {e} — DELETE {subscription}"),
+    match remove(&http, token.as_deref(), &endpoint).await {
+        Ok(()) => println!("\n👋 endpoint {name} removed"),
+        Err(e) => eprintln!("\nendpoint {name} not removed: {e} — DELETE {endpoint}"),
     }
     served.context("the receiver stopped")
+}
+
+/// Delete `endpoint` under the version it now has: a delete names the ETag it
+/// read, so an endpoint changed meanwhile is not removed blind.
+async fn remove(http: &reqwest::Client, token: Option<&str>, endpoint: &str) -> anyhow::Result<()> {
+    let with_token = |req: reqwest::RequestBuilder| match token {
+        Some(t) => req.bearer_auth(t),
+        None => req,
+    };
+    let read = with_token(http.get(endpoint))
+        .send()
+        .await?
+        .error_for_status()?;
+    let etag = read
+        .headers()
+        .get(reqwest::header::ETAG)
+        .context("marktd answered without an ETag")?
+        .clone();
+    with_token(
+        http.delete(endpoint)
+            .header(reqwest::header::IF_MATCH, etag),
+    )
+    .send()
+    .await?
+    .error_for_status()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -196,6 +224,17 @@ mod tests {
         let body = br#"{"type":"de.markt.malo.updated","subject":"51238696012","data":{}}"#;
         let event = verified(b"s3cret", &signed(b"s3cret", body), body).expect("verifies");
         assert_eq!(event["type"], "de.markt.malo.updated");
+    }
+
+    /// marktd issues a `whsec_` secret and signs with the key it encodes; the
+    /// receiver derives the same key.
+    #[test]
+    fn a_delivery_signed_with_the_issued_secret_verifies() {
+        let secret = "whsec_c2VjcmV0LWtleS1ieXRlcw==";
+        let key = mako_service::webhook::signing_key(secret);
+        assert_eq!(key, b"secret-key-bytes");
+        let body = br#"{"type":"de.markt.malo.updated","data":{}}"#;
+        assert!(verified(&key, &signed(&key, body), body).is_ok());
     }
 
     #[test]

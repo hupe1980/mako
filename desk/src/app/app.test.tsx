@@ -1351,7 +1351,7 @@ describe("the Desk", () => {
       if (
         url.startsWith("/svc/invoicd/api/") ||
         url.startsWith("/svc/billingd/api/") ||
-        url.startsWith("/svc/accountingd/api/")
+        (url.startsWith("/svc/accountingd/api/") && init?.method === "POST")
       ) {
         opts.posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
         return opts.antwort?.(url) ?? new Response(null, { status: 204 });
@@ -2342,6 +2342,67 @@ describe("the Desk", () => {
           ]);
         if (url === "/svc/agentd/api/v1/agents/catalog") return Response.json({ faehigkeiten: [] });
         if (url.startsWith("/svc/agentd/")) return Response.json({});
+        // accountingd's money is read over REST.
+        if (url.startsWith("/svc/accountingd/api/v1/payments/unmatched"))
+          return Response.json({
+            count: 1,
+            saturated: false,
+            payments: [
+              {
+                payment_id: "pay-1",
+                amount_ct: 4210,
+                amount_eur: "42.10",
+                bank_transaction_id: "b-1",
+                end_to_end_id: null,
+                iban_masked: "DE89 •••• 3000",
+                is_return: false,
+                received_at: "2031-01-02T08:00:00Z",
+                reference: "Kd 10042 Abschlag",
+                source: "camt053",
+                value_date: "2031-01-02",
+              },
+            ],
+          });
+        if (url === "/svc/einsd/api/v1/anlagen/ohne-mastr")
+          return Response.json({
+            count: 1,
+            total_monthly_penalty_eur: "10.00",
+            regulatory_note: "",
+            plants: [
+              {
+                tr_id: "TR-1",
+                malo_id: "51238696012",
+                eeg_gesetz: 2023,
+                erzeugungsart: "SOLAR",
+                leistung_kwp: "9.8",
+                monthly_penalty_eur: "10.00",
+                regime: "eeg",
+              },
+            ],
+          });
+        if (url.startsWith("/svc/einsd/api/v1/anlagen/"))
+          return Response.json({ count: 0, horizon_days: 90, plants: [], unsettled_count: 0 });
+        if (url.startsWith("/svc/accountingd/api/v1/credit-payouts"))
+          return Response.json({
+            count: 1,
+            overdue_count: 1,
+            saturated: false,
+            payouts: [
+              {
+                payout_id: "po-1",
+                amount_ct: 1200,
+                amount_eur: "12.00",
+                due_on: "2031-01-01",
+                lf_mp_id: "9905550000010",
+                malo_id: "51238696012",
+                overdue: true,
+                rechnungsdatum: "2030-12-01",
+                rechnungsnummer: "R-1",
+                status: "offen",
+              },
+            ],
+          });
+        if (!init?.body) return Response.json({});
         const m = JSON.parse(String(init?.body));
         const name = m.method === "tools/call" ? m.params.name : null;
         const result = name ? { structuredContent: zeilen[name] ?? {} } : {};

@@ -131,7 +131,7 @@ graph TB
 │  GET  /api/v1/quality/{malo_id}                            ← quality verdict (+ MCP twin)     │
 │  GET  /api/v1/corrections/{malo_id}                        ← correction trail (+ MCP twin)    │
 │  GET  /api/v1/coverage/{malo_id}                           ← one state per day (+ MCP)        │
-│  GET  /api/v1/openapi.json                                 ← the document of these four       │
+│  GET  /api/v1/openapi.json                                 ← the document of every /api/v1    │
 │  GET  /api/v1/netzverlust                                  ← §22 EnWG grid-loss balance       │
 │  GET  /api/v1/confirmations                                ← § 60 Abs. 1 Bestätigungen        │
 │                                                                                               │
@@ -239,12 +239,12 @@ api_key = "env:EDMD_MARKTD_API_KEY"   # required
 
 [webhook]
 inbound_secret     = "env:EDMD_INBOUND_SECRET"     # verifies marktd's deliveries
-erp_webhook_url    = "https://erp.example/events"  # outbound CloudEvent target
+erp_webhook_url    = "https://erp.example/events"  # outbound CloudEvent target: the endpoint `default`
 erp_webhook_secret = "env:EDMD_ERP_WEBHOOK_SECRET" # signs them
 
-[subscription]
-webhook_url   = "http://edmd:8380/webhook"  # set → registers with marktd, retrying until it accepts
-subscriber_id = "edmd"                       # default
+[subscriptions]                       # endpoints registered under /api/v1/webhooks/endpoints
+retention_days = 30                   # default — delivered events kept for replay and the feed
+allow_loopback = false                # default — true admits http/loopback endpoints (dev only)
 
 [oidc]
 issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -290,11 +290,15 @@ hot tier and the subject registry (10, tagged `edmd-meterstore`), and one shared
 Iceberg catalog metadata pool of up to 4 — `meter_reads`, `esa_typ2_reads` and
 `meter_readings` are three tables of one `MeterCatalog`.
 
-**marktd subscription.** With `subscription.webhook_url` set, edmd registers for
-`de.mako.process.completed` and `de.markt.malo.updated` at startup. Verify:
+**What marktd delivers.** edmd registers nothing: marktd delivers to edmd's
+entry in its own `[[subscriptions.endpoints]]` — `url`
+`http://edmd:8380/webhook`, `event_types` `de.mako.process.completed` and
+`de.markt.malo.updated`, `secret` the `[webhook] inbound_secret` above (see
+[marktd's fan-out](@/docs/services/marktd.md#fan-out)). Verify its deliveries:
 
 ```bash
-curl -s http://marktd:8180/api/v1/subscriptions/edmd -H "Authorization: Bearer <token>" | jq .
+curl -s http://marktd:8180/api/v1/webhooks/endpoints -H "Authorization: Bearer <token>" \
+  | jq '.items[] | select(.name == "edmd")'
 ```
 
 ---
@@ -339,14 +343,21 @@ additionally require a market role (`mako_roles` claim). The policy is
   but `trigger_substitution` and `trigger_jahresablesung` additionally require
   `write-timeseries` / `write-reading-order`, and the shared reads their route's
   read action (`get_timeseries`, `get_quality_warnings`, `get_coverage`:
-  `read-timeseries`; `get_correction_history`: `read-corrections`) — also for a
-  configured `[mcp]` key, which authorizes under its declared roles.
+  `read-timeseries`; `get_correction_history`: `read-corrections`;
+  `list_webhook_endpoints`, `list_webhook_deliveries`: `manage-subscription`) —
+  also for a configured `[mcp]` key, which authorizes under its declared roles.
+- `manage-subscription` (`/api/v1/webhooks/*`) and `read-events`
+  (`GET /api/v1/events`) need `ADMIN`: an endpoint receives every event edmd
+  emits, so registering one is an outbound data-export decision.
 - A `?tenant=` that differs from the authorised tenant is `403`.
 
 ### Signed CloudEvents
 
 Every CloudEvent edmd emits goes through the transactional outbox
-(`event_outbox`) and, with `webhook.erp_webhook_secret` set, carries
+(`event_outbox`) and is fanned out to every active webhook endpoint: `default`
+is `webhook.erp_webhook_url`, the others are registered under
+`/api/v1/webhooks/endpoints` (each with its own `whsec_` secret). A delivery to
+`default`, with `webhook.erp_webhook_secret` set, carries
 [Standard Webhooks](https://www.standardwebhooks.com/) headers (`webhook-id`,
 `webhook-timestamp`, `webhook-signature: v1,<base64>`, HMAC-SHA256 over
 `{id}.{timestamp}.{body}`). Without the secret the transport is the trust
@@ -1490,8 +1501,9 @@ curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" -H "Authorization
 ## CloudEvents emitted
 
 Eleven types from `mako_events::messwert`, all through the transactional outbox
-(retried with backoff, dead-lettered on exhaustion). Emission does not depend on
-`erp_webhook_url`: without one, events accumulate in `event_outbox`.
+(retried with backoff, dead-lettered on exhaustion), delivered to every active
+webhook endpoint. Emission does not depend on an endpoint: without one, events
+accumulate in `event_outbox`, where `GET /api/v1/events` serves them.
 
 | Type | Raised by | When |
 |---|---|---|
@@ -1612,7 +1624,8 @@ limit is refused.
 Four reads are one function each (`src/reads.rs`) behind a documented REST
 route and an MCP tool with the same output type, so both doors return the same
 JSON and authorize with the same Cedar action. edmd serves the OpenAPI 3.1
-document of these routes at `GET /api/v1/openapi.json`; the committed copy is
+document of every `/api/v1` route — these four, the rest of the surface and the
+webhook routes — at `GET /api/v1/openapi.json`; the committed copy is
 `services/edmd/openapi.json`, held to the served one by a test.
 
 | Route | MCP tool | Cedar | Answer |
@@ -1633,8 +1646,9 @@ have not ended are left out, and `bis` names the last day answered.
 
 ## MCP server tools
 
-`/mcp` (Streamable HTTP), Cedar `use-mcp`; the two write tools and the four
-shared reads additionally need their REST twin's action.
+`/mcp` (Streamable HTTP), Cedar `use-mcp`; the two write tools, the four
+shared reads and the two webhook lists additionally need their REST twin's
+action.
 
 | Tool | Description |
 |------|-------------|
@@ -1655,6 +1669,8 @@ shared reads additionally need their REST twin's action.
 | `get_summenzeitreihe` | Monthly aggregated kWh for MaBiS |
 | `get_annual_forecast` | § 40a Abs. 2 EnWG Verbrauchsschätzung |
 | `get_gas_quality` | PID 13007 Brennwert + Zustandszahl |
+| `list_webhook_endpoints` | The webhook endpoints, a page (`Page<Endpoint>`) — twin of `GET /api/v1/webhooks/endpoints` (`manage-subscription`) |
+| `list_webhook_deliveries` | One endpoint's deliveries, newest first (`Page<Delivery>`) — twin of `GET /api/v1/webhooks/endpoints/{id}/deliveries` (`manage-subscription`) |
 
 Prompts: `analyze-consumption`, `submit-mscons`, `quality-assessment`,
 `jahresablesung-workflow`, `reading-order-lifecycle`.

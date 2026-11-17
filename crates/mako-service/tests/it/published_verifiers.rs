@@ -215,27 +215,39 @@ fn every_printed_verifier_accepts_a_real_delivery_and_refuses_a_tampered_one() {
     assert!(
         verifiers
             .iter()
-            .any(|(at, _)| at.starts_with("site/content/docs/services/marktd.md")),
-        "the marktd guide prints a verifier; the extraction must find it"
+            .any(|(at, _)| at.starts_with("site/content/docs/architecture/erp-integration.md")),
+        "the ERP integration page prints the verifier; the extraction must find it"
     );
 
-    let secret = "whsec-test-secret";
+    // A secret the subscription module issues (`whsec_` + base64 key, signed
+    // with the decoded key) and a plain one: a printed verifier must hold for
+    // both, or an integrator copying it rejects every real delivery.
+    let issued = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
     let id = "de.markt.malo.updated/3f2b0c1e-7a4d-4e5f-9b8a-1c2d3e4f5a6b";
     let ts = time::OffsetDateTime::now_utc().unix_timestamp();
     let body = br#"{"specversion":"1.0","type":"de.markt.malo.updated"}"#;
-    let headers: Vec<(&str, String)> =
-        mako_service::webhook::headers(secret.as_bytes(), id, ts, body).into();
 
     let mut tampered = body.to_vec();
     tampered[2] ^= 0x01;
 
     let mut wrong = Vec::new();
-    for (at, verifier) in &verifiers {
-        if !python_accepts(verifier, secret, &headers, body) {
-            wrong.push(format!("{at}: refuses a delivery `webhook::sign` produced"));
-        }
-        if python_accepts(verifier, secret, &headers, &tampered) {
-            wrong.push(format!("{at}: accepts a delivery whose body was changed"));
+    for secret in [issued, "plain-test-secret"] {
+        let headers: Vec<(&str, String)> = mako_service::webhook::headers(
+            &mako_service::webhook::signing_key(secret),
+            id,
+            ts,
+            body,
+        )
+        .into();
+        for (at, verifier) in &verifiers {
+            if !python_accepts(verifier, secret, &headers, body) {
+                wrong.push(format!(
+                    "{at}: refuses a delivery `webhook::sign` produced for `{secret}`"
+                ));
+            }
+            if python_accepts(verifier, secret, &headers, &tampered) {
+                wrong.push(format!("{at}: accepts a delivery whose body was changed"));
+            }
         }
     }
     assert!(

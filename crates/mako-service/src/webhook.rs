@@ -162,6 +162,34 @@ pub fn sign(secret: &[u8], id: &str, timestamp: i64, body: &[u8]) -> String {
     )
 }
 
+/// The HMAC key a configured or issued secret stands for.
+///
+/// A Standard Webhooks secret is `whsec_` followed by the key in base64, and
+/// the key is the decoded bytes — what every published verifier library
+/// signs with. Any other secret is its own bytes.
+#[must_use]
+pub fn signing_key(secret: &str) -> Vec<u8> {
+    secret
+        .strip_prefix("whsec_")
+        .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok())
+        .unwrap_or_else(|| secret.as_bytes().to_vec())
+}
+
+/// The `webhook-signature` value for several secrets: one `v1,` signature per
+/// secret, space-separated, in the order given.
+///
+/// A secret rotation keeps the previous secret active for a stated period;
+/// signing with both lets a receiver still holding the old one verify while it
+/// switches over.
+#[must_use]
+pub fn sign_all<S: AsRef<[u8]>>(secrets: &[S], id: &str, timestamp: i64, body: &[u8]) -> String {
+    secrets
+        .iter()
+        .map(|s| sign(s.as_ref(), id, timestamp, body))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The three headers an outbound request carries.
 ///
 /// Returned together because sending two of the three produces a request that
@@ -286,6 +314,44 @@ pub fn verify_request_only(
 mod tests {
     use super::*;
     use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+
+    /// A `whsec_` secret signs with its decoded key; any other with its bytes.
+    #[test]
+    fn a_whsec_secret_signs_with_its_decoded_key() {
+        assert_eq!(signing_key("whsec_AQID"), vec![1, 2, 3]);
+        assert_eq!(signing_key("plain"), b"plain".to_vec());
+        assert_eq!(signing_key("whsec_%%"), b"whsec_%%".to_vec());
+    }
+
+    /// Two active secrets give two signatures, and a receiver holding either
+    /// one verifies.
+    #[test]
+    fn two_active_secrets_give_two_signatures() {
+        let header = sign_all(
+            &[b"old".as_slice(), b"new".as_slice()],
+            "id-1",
+            1_700_000_000,
+            b"{}",
+        );
+        assert_eq!(header.split(' ').count(), 2, "{header}");
+        assert!(header.split(' ').all(|s| s.starts_with("v1,")));
+        for secret in [b"old".as_slice(), b"new".as_slice()] {
+            assert!(verify_signature(
+                secret,
+                "id-1",
+                1_700_000_000,
+                b"{}",
+                &header
+            ));
+        }
+        assert!(!verify_signature(
+            b"other",
+            "id-1",
+            1_700_000_000,
+            b"{}",
+            &header
+        ));
+    }
 
     fn now() -> i64 {
         time::OffsetDateTime::now_utc().unix_timestamp()

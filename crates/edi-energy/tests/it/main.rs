@@ -4,6 +4,8 @@
 
 mod answer_pid_names;
 mod builder_writer_guard;
+#[cfg(feature = "utilmd")]
+mod candidate;
 mod charset;
 mod condition_anchoring;
 mod conformance;

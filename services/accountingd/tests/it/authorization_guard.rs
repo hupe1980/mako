@@ -131,9 +131,9 @@ fn unauthenticated_by_design(handler: &str) -> Option<&'static str> {
 ///
 /// Routed means `daemon.rs` passes it to a method filter as
 /// `get(handlers::<name>)` / `post(handlers::<name>)`, or `openapi.rs` mounts it
-/// as `routes!(handlers::<name>)` — the only definition of
-/// "reachable over HTTP" that cannot drift, since it reads the router itself.
-/// Matched with the closing parenthesis on purpose: a worker *calling* a
+/// in a `routes!(handlers::<name>, …)` — the only definition of "reachable
+/// over HTTP" that cannot drift, since it reads the router itself. Matched with
+/// the closing parenthesis or the comma on purpose: a worker *calling* a
 /// function (`handlers::settle_jahresabschluss(pool, …)`) is not routing it,
 /// and a bare-name match cannot tell the two apart.
 fn handler_signatures() -> Vec<(String, String)> {
@@ -147,7 +147,8 @@ fn handler_signatures() -> Vec<(String, String)> {
         let sig = rest[paren..end].to_owned();
         rest = &rest[end..];
         let routed = format!("(handlers::{name})");
-        if MAIN.contains(&routed) || OPENAPI.contains(&routed) {
+        let in_routes = [format!("handlers::{name})"), format!("handlers::{name},")];
+        if MAIN.contains(&routed) || in_routes.iter().any(|r| OPENAPI.contains(r.as_str())) {
             out.push((name, sig));
         }
     }

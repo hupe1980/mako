@@ -1202,6 +1202,11 @@ impl From<sqlx::Error> for AcceptError {
     }
 }
 
+/// The outbox target of the contract request an accepted Angebot owes:
+/// delivered to the ERP webhook alone by `daemon::angebot_worker`, which
+/// writes the receiver's answer back, and not fanned out to subscribers.
+pub const ANGEBOT_TARGET: &str = "angebot-vertrag";
+
 /// Transition Angebot to ANGENOMMEN.
 ///
 /// Validates that `gueltig_bis >= today` **and** that the quotation has been
@@ -1273,7 +1278,7 @@ pub async fn accept_angebot(
     .await?;
     let row = row.ok_or(AcceptError::Wettlauf)?;
     if let Some(ce) = angenommen(&row) {
-        mako_service::outbox::enqueue(&mut tx, &ce).await?;
+        mako_service::outbox::enqueue_to(&mut tx, ANGEBOT_TARGET, &ce).await?;
     }
     tx.commit().await?;
     Ok(row)

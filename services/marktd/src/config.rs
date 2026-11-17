@@ -36,8 +36,13 @@
 //! [webhook]
 //! inbound_path   = "/api/v1/mako/events"
 //! inbound_secret = "env:MAKOD_WEBHOOK_SECRET"
-//! delivery_timeout_secs = 10
-//! max_retry_attempts    = 3
+//!
+//! # An in-cluster receiver of marktd's events.
+//! [[subscriptions.endpoints]]
+//! name        = "makod"
+//! url         = "http://makod:8080/webhooks/marktd"
+//! secret      = "env:MAKOD_MARKTD_WEBHOOK_SECRET"
+//! event_types = ["de.markt.malo.updated"]
 //!
 //! [mcp]
 //! path = "/mcp"
@@ -67,6 +72,11 @@ pub struct Config {
     pub makod: MakodConfig,
     #[serde(default)]
     pub webhook: WebhookConfig,
+    /// `[subscriptions]` — who receives marktd's events: the in-cluster
+    /// receivers as `[[subscriptions.endpoints]]`, integrators through
+    /// `/api/v1/webhooks/endpoints`.
+    #[serde(default)]
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
     #[serde(default)]
     pub mcp: McpConfig,
     /// Automated monthly MMMA Gas / MMM Strom price import. When omitted or
@@ -143,17 +153,6 @@ pub struct WebhookConfig {
     pub inbound_path: String,
     /// HMAC-SHA256 shared secret.  Use `"env:MAKOD_WEBHOOK_SECRET"`.
     pub inbound_secret: Option<String>,
-    #[serde(default = "default_delivery_timeout_secs")]
-    pub delivery_timeout_secs: u64,
-    #[serde(default = "default_max_retry_attempts")]
-    pub max_retry_attempts: u32,
-    /// Admit a subscriber on a loopback host (`127.0.0.0/8`, `::1`,
-    /// `localhost`). Every service of `just dev` runs on this machine and
-    /// listens on loopback, so its subscriptions name loopback endpoints; any
-    /// other deployment leaves it off, and a private or link-local host stays
-    /// refused either way. Reported as a warning finding.
-    #[serde(default)]
-    pub allow_loopback_subscribers: bool,
 }
 
 impl Default for WebhookConfig {
@@ -161,21 +160,12 @@ impl Default for WebhookConfig {
         Self {
             inbound_path: default_inbound_path(),
             inbound_secret: None,
-            delivery_timeout_secs: default_delivery_timeout_secs(),
-            max_retry_attempts: default_max_retry_attempts(),
-            allow_loopback_subscribers: false,
         }
     }
 }
 
 fn default_inbound_path() -> String {
     "/api/v1/mako/events".to_owned()
-}
-fn default_delivery_timeout_secs() -> u64 {
-    10
-}
-fn default_max_retry_attempts() -> u32 {
-    3
 }
 
 // ── MCP server ────────────────────────────────────────────────────────────────

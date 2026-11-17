@@ -6,11 +6,16 @@
 //! upserts or drops its [`SlateDbMaloCache`] entry. The event carries only the
 //! record's `version`, so the read is what makes the cache current.
 //!
+//! marktd delivers to [`WEBHOOK_PATH`] through makod's endpoint in its
+//! `[[subscriptions.endpoints]]`, signed with that endpoint's `secret` — the
+//! `[marktd] webhook_secret` makod verifies with. makod registers nothing.
+//!
 //! **Why a subscription, not a push or a read-through.** A push from `marktd`
 //! after its commit cannot be retried by anything, so a makod that is down at
 //! that moment keeps answering MaLo-ID identifications to counterparties from a
 //! stale record. The fan-out retries a failed delivery with backoff and
-//! dead-letters it after its budget (`marktd` `/admin/fanout/dlq`), so the
+//! dead-letters it after its budget (marktd's
+//! `/api/v1/webhooks/endpoints/{id}/deliveries`, replayable there), so the
 //! handler answers `503` whenever the read fails, and the redelivery does the
 //! rest. A read-through on every lookup would instead put `marktd`'s
 //! availability inside every answer makod gives a counterparty, which is what
@@ -18,9 +23,9 @@
 //!
 //! **Startup backfill.** A fresh makod (or one whose fan-out deliveries ran out
 //! while it was away) reads `marktd`'s whole MaLo list before `/health/ready`
-//! answers `200`. The subscription is registered first, so a change during the
-//! backfill is delivered afterwards; and a record the webhook has already
-//! applied at a newer `version` is not overwritten by an older backfill page.
+//! answers `200`. A change during the backfill is delivered afterwards, and a
+//! record the webhook has already applied at a newer `version` is not
+//! overwritten by an older backfill page.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -48,12 +53,10 @@ use crate::party_registry::MpIdRegistry;
 /// The path `marktd` posts the fan-out to.
 pub const WEBHOOK_PATH: &str = "/webhooks/marktd";
 
-/// The subscriber id makod registers under.
-pub const SUBSCRIBER_ID: &str = "makod";
-
-/// The fan-out event types makod subscribes to. `marktd` has no MaLo delete
-/// endpoint; a record that disappears answers `404` to the read, and the entry
-/// is dropped.
+/// The fan-out event types makod reads — the `event_types` of makod's
+/// endpoint in marktd's `[[subscriptions.endpoints]]`. `marktd` has no MaLo
+/// delete endpoint; a record that disappears answers `404` to the read, and
+/// the entry is dropped.
 pub const EVENT_TYPES: &[&str] = &[mako_events::markt::MALO_UPDATED];
 
 /// Backfill page size — `marktd` caps `size` at 500.
@@ -189,8 +192,6 @@ pub struct MaloSync {
     http: reqwest::Client,
     base_url: String,
     api_key: SecretString,
-    /// makod's own webhook URL, as `marktd` reaches it.
-    webhook_url: String,
     /// Standard Webhooks secret `marktd` signs deliveries with. `None`
     /// accepts unsigned deliveries (development).
     webhook_secret: Option<SecretString>,
@@ -209,7 +210,6 @@ impl MaloSync {
         http: reqwest::Client,
         base_url: impl Into<String>,
         api_key: SecretString,
-        webhook_url: impl Into<String>,
         webhook_secret: Option<SecretString>,
         cache: SlateDbMaloCache,
         registry: Arc<MpIdRegistry>,
@@ -218,7 +218,6 @@ impl MaloSync {
             http,
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             api_key,
-            webhook_url: webhook_url.into(),
             webhook_secret,
             cache,
             registry,
@@ -295,39 +294,6 @@ impl MaloSync {
         Ok(())
     }
 
-    /// Register makod's subscription with `marktd`.
-    ///
-    /// # Errors
-    ///
-    /// [`SyncError::Marktd`] when `marktd` refuses or is unreachable. Unlike a
-    /// subscription that only logs its failure, this one is retried by the
-    /// caller and keeps readiness down until it is in place.
-    pub async fn subscribe(&self) -> Result<(), SyncError> {
-        let url = format!("{}/api/v1/subscriptions/{SUBSCRIBER_ID}", self.base_url);
-        let body = serde_json::json!({
-            "webhook_url": self.webhook_url,
-            "webhook_secret": self.webhook_secret.as_ref().map(|s| s.expose_secret().to_owned()),
-            "event_types": EVENT_TYPES,
-            "active": true,
-        });
-        let resp = self
-            .http
-            .put(&url)
-            .bearer_auth(self.api_key.expose_secret())
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| SyncError::Marktd(e.to_string()))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(SyncError::Marktd(format!(
-                "PUT {url} answered {status}: {text}"
-            )));
-        }
-        Ok(())
-    }
-
     /// Read every MaLo from `marktd` into the cache.
     ///
     /// Returns the number of records cached.
@@ -373,8 +339,8 @@ impl MaloSync {
         }
     }
 
-    /// Subscribe, then backfill, retrying both until they succeed or
-    /// `shutdown` fires; `ready` is opened once both have.
+    /// Backfill, retrying until it succeeds or `shutdown` fires; `ready` is
+    /// opened once it has.
     pub async fn run_startup(
         self: Arc<Self>,
         ready: crate::health::ReadinessGate,
@@ -382,15 +348,11 @@ impl MaloSync {
     ) {
         let mut delay = Duration::from_secs(2);
         loop {
-            let attempt = async {
-                self.subscribe().await?;
-                self.backfill().await
-            };
-            match attempt.await {
+            match self.backfill().await {
                 Ok(n) => {
                     info!(
                         cached = n,
-                        "malo sync: subscribed to marktd and backfilled the MaLo cache"
+                        "malo sync: backfilled the MaLo cache from marktd"
                     );
                     ready.open();
                     return;
@@ -398,7 +360,7 @@ impl MaloSync {
                 Err(e) => warn!(
                     error = %e,
                     retry_in_secs = delay.as_secs(),
-                    "malo sync: marktd subscription or backfill failed; /health/ready stays 503"
+                    "malo sync: marktd backfill failed; /health/ready stays 503"
                 ),
             }
             tokio::select! {
@@ -415,8 +377,8 @@ impl MaloSync {
 /// `POST /webhooks/marktd` — the fan-out delivery endpoint.
 ///
 /// Authenticated by the Standard Webhooks signature `marktd` sends, not by a
-/// bearer token: the fan-out holds a signing secret per subscriber and no
-/// makod credential.
+/// bearer token: marktd holds a signing secret per endpoint and no makod
+/// credential.
 pub fn router(sync: Arc<MaloSync>) -> Router {
     Router::new()
         .route(WEBHOOK_PATH, post(handle_webhook))

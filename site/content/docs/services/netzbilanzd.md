@@ -1098,17 +1098,16 @@ Reconcile month-end against `zu_zahlen`, not the gross.
 
 ## Background workers
 
-All three run only when `erp_webhook_url` is set, and stop promptly on shutdown:
+Both alerts stop promptly on shutdown:
 
 | Worker | Interval | Emits |
 |---|---|---|
-| Transactional outbox drain | continuous | every `de.netzbilanz.*` event, signed, with retry and dead-lettering |
 | Undispatched-draft alert | 1 h (`dispatch_alert_interval_secs`) | `de.netzbilanz.invoic.dispatch-overdue` — two clocks: a draft older than `dispatch_stale_hours`, **or** one whose own `due_date` falls inside that window |
 | Kostenblatt deadline alert | 1 d (`kostenblatt_alert_interval_secs`) | `de.netzbilanz.kostenblatt.deadline-approaching` on days 10–14 with pending records |
 
-With `[mabis]`, a fourth worker runs regardless of `erp_webhook_url`: the MaBiS scheduler,
-which wakes every five minutes and files the previous Bilanzierungsmonat at `run_hour_utc` on
-the `erstaufschlag_werktag`, skipping a period that already has a live run.
+With `[mabis]`, the MaBiS scheduler runs as well: it wakes every five minutes and files the
+previous Bilanzierungsmonat at `run_hour_utc` on the `erstaufschlag_werktag`, skipping a period
+that already has a live run.
 
 The overdue alert skips drafts the checker disputed (blocked, not overdue).
 
@@ -1132,11 +1131,20 @@ of the change they describe.
 Inbound REMADV events arrive on `POST /api/v1/webhooks/remadv`, HMAC-verified against
 `inbound_secret`, and are idempotent.
 
+## Webhooks
+
+netzbilanzd mounts the shared [webhook subscriptions](@/docs/architecture/erp-integration.md#webhook-subscriptions):
+every event above reaches each endpoint registered through `/api/v1/webhooks/endpoints`
+whose filter matches, and `erp_webhook_url` is the endpoint `default`. Managing endpoints and
+reading `GET /api/v1/events` are the operator's (`ADMIN`) alone. Every `/api/v1` route,
+these and the MaBiS ones included, is in `GET /api/v1/openapi.json`, committed as
+`services/netzbilanzd/openapi.json`; the MaBiS routes answer only with `[mabis]`.
+
 ---
 
 ## MCP server
 
-At `/mcp` (Streamable HTTP), behind OIDC (`use-mcp`) or `[mcp] api_key`. **Read-only**, thirteen
+At `/mcp` (Streamable HTTP), behind OIDC (`use-mcp`) or `[mcp] api_key`. **Read-only**, fifteen
 tools:
 
 | Tool | Purpose |
@@ -1154,6 +1162,8 @@ tools:
 | `list_failed_submissions` | MaBiS: failed runs, newest first, with `attempt_count` and `error_msg` |
 | `get_submission_run` | MaBiS: one run by UUID (version as RFC 3339) |
 | `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (Kap. 9.8.1 obligations), typed (`Korrekturbedarf`) |
+| `list_webhook_endpoints` | the webhook endpoints — the twin of `GET /api/v1/webhooks/endpoints` |
+| `list_webhook_deliveries` | one endpoint's deliveries — the twin of `GET /api/v1/webhooks/endpoints/{id}/deliveries` |
 
 Settling, dispatching, rejecting, correcting and filing a Summenzeitreihe live on REST, where
 the action is attributable to an operator. `agentd`'s `mabis-agent` reads the four MaBiS tools.
@@ -1175,7 +1185,7 @@ Seven prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`
 | MCP | `[oidc]` or `[mcp] api_key` | the tenant's whole invoice register and its Redispatch cost sheets |
 | `POST /api/v1/webhooks/remadv` | `inbound_secret` HMAC over the raw body | a forged REMADV marking an invoice paid, or disputing one that was not |
 
-`services/netzbilanzd/policies/netzbilanzd.cedar` states 16 actions in seven grants:
+`services/netzbilanzd/policies/netzbilanzd.cedar` states 18 actions in eight grants:
 
 | Grant | Actions | Requires |
 |---|---|---|
@@ -1185,6 +1195,7 @@ Seven prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`
 | MaBiS — reading run state | `read-mabis-run` | a matching tenant — run history discloses which Bilanzierungsgebiete a tenant settles |
 | MaBiS — recording what the BIKO said | `record-biko-response` | a matching tenant — it states what arrived and files nothing, so the relaying ingest identity holds no filing power |
 | MaBiS — filing a Summenzeitreihe | `trigger-mabis-run` | `NB` or `UENB` — the roles that aggregate a Bilanzierungsgebiet; an acked filing cannot be withdrawn |
+| Webhook subscriptions | `manage-subscription`, `read-events` | `ADMIN` — an endpoint exports every matching invoice event, and its test delivery probes the target |
 | MCP | `use-mcp` | a matching tenant; the tools are read-only by construction |
 | Operator policy and configuration findings — `GET /api/v1/policy`, `GET /admin/einrichtung` | `read-policy`, `read-config` | a matching tenant; both read-only and free of secrets |
 
@@ -1206,6 +1217,7 @@ makod_api_key  = "env:NETZBILANZD_MAKOD_API_KEY"
 edmd_url       = "http://edmd:8380"
 edmd_api_key   = "env:NETZBILANZD_EDMD_API_KEY"
 
+# The webhook endpoint `default`; endpoints registered through the API join it.
 erp_webhook_url    = "http://erp:9000/webhooks/mako"
 erp_webhook_secret = "env:NETZBILANZD_WEBHOOK_SECRET"
 inbound_secret     = "env:NETZBILANZD_INBOUND_SECRET"

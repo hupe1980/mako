@@ -616,6 +616,9 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
     type Command = LfAnmeldungCommand;
 
     const DEADLINE_LABELS: &'static [&'static str] = &[NB_RESPONSE_WINDOW_LABEL];
+    /// The NB's answer to the Anmeldung is owed by its Antwortfrist; a lapse
+    /// is the NB's breach.
+    const FRIST_LABELS: &'static [&'static str] = &[NB_RESPONSE_WINDOW_LABEL];
 
     /// Deadline compensation for the NB/LFA answer window.
     ///

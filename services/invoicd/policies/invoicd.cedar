@@ -58,3 +58,22 @@ permit(
     context.principal_tenant == context.resource_tenant &&
     context.principal_roles.containsAny(["ESA", "LF", "NB"])
 };
+
+// ── Webhooks: an operator capability ─────────────────────────────────────────
+//
+// An endpoint receives every receipt event that matches its filter — invoice
+// outcomes, Zahlungsziele, the market partners — so registering one is an
+// outbound data-export decision, and a test delivery reports the target's HTTP
+// status, which makes it a network probe. The event feed
+// (`GET /api/v1/events`) discloses the same. ADMIN alone.
+permit(
+    principal,
+    action in [
+        Action::"manage-subscription",
+        Action::"read-events"
+    ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("ADMIN")
+};

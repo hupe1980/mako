@@ -7,11 +7,10 @@
 //!
 //! ## Why a refresher and not a query per scrape
 //!
-//! The previous handler ran three `COUNT(*)` statements — over
-//! `event_delivery`, `subscriptions`, and `processed_events` — inside the
-//! request. A Prometheus scrape every 15 s therefore meant three sequential
-//! scans every 15 s against tables that grow with traffic, and a slow database
-//! turned a scrape into a hung request. Sampling on a timer decouples the two:
+//! A `COUNT(*)` per scrape over `webhook_deliveries`, `webhook_endpoints`,
+//! `event_outbox` and `processed_events` would run four scans every 15 s
+//! against tables that grow with traffic, and a slow database would turn a
+//! scrape into a hung request. Sampling on a timer decouples the two:
 //! scrapes are always instant, and the sample rate is a knob rather than a
 //! function of how many Prometheus replicas point at the service.
 
@@ -40,16 +39,16 @@ fn gauges() -> (
         DLQ_DEPTH.get_or_init(|| {
             register_int_gauge!(
                 "marktd_fanout_dlq_depth",
-                "Fan-out deliveries that exhausted their retries and were dead-lettered. \
-                 Non-zero means a subscriber is not receiving market events (§ 147 AO / GoBD: \
-                 they are retained, never dropped) — inspect via GET /admin/fanout/dlq."
+                "Webhook deliveries that exhausted their retries and were dead-lettered. \
+                 Non-zero means an endpoint is not receiving market events — list them on \
+                 GET /api/v1/webhooks/endpoints/{id}/deliveries?status=failed and replay."
             )
             .expect("marktd_fanout_dlq_depth registration")
         }),
         ACTIVE_SUBSCRIPTIONS.get_or_init(|| {
             register_int_gauge!(
                 "marktd_active_subscriptions",
-                "Active webhook subscriptions receiving the durable fan-out."
+                "Active webhook endpoints receiving the durable fan-out."
             )
             .expect("marktd_active_subscriptions registration")
         }),
@@ -97,9 +96,10 @@ async fn sample(pool: &PgPool) {
     // them together, so splitting them would only add latency and let the
     // values disagree about which instant they describe.
     let row: Result<(i64, i64, i64, i64), _> = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM event_delivery WHERE dead_lettered_at IS NOT NULL),
-                (SELECT count(*) FROM subscriptions   WHERE active),
-                (SELECT count(*) FROM event_log       WHERE fanned_out_at IS NULL),
+        "SELECT (SELECT count(*) FROM webhook_deliveries WHERE dead_lettered_at IS NOT NULL),
+                (SELECT count(*) FROM webhook_endpoints  WHERE active),
+                (SELECT count(*) FROM event_outbox
+                  WHERE kind = 'cloudevent' AND upstream IS NULL AND fanned_out_at IS NULL),
                 (SELECT count(*) FROM processed_events)",
     )
     .fetch_one(pool)

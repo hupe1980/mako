@@ -10,8 +10,8 @@ through `makod`. It handles PIDs 31001–31009 and 31011; 31010
 |---|---|
 | **Port** | 8280 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `invoic_receipts`, `leistungsnachweise`, `invoic_dlq` |
-| **MCP** | 9 tools, 4 prompts at `/mcp` |
-| **Emits** | `de.invoic.receipt.settled`, `de.invoic.receipt.disputed`, `de.invoic.payment.overdue` to the ERP webhook |
+| **MCP** | 11 tools, 4 prompts at `/mcp` |
+| **Emits** | `de.invoic.receipt.settled`, `de.invoic.receipt.disputed`, `de.invoic.payment.overdue` to the ERP (the webhook endpoint `default`) and every registered endpoint |
 | **Consumes** | `de.mako.process.initiated` from `marktd` at `POST /webhook` (HMAC) |
 | **Depends on** | `makod` (answer commands, the Rechnung), `marktd` (Preisblätter, MMM prices, ESA-Angebote) |
 
@@ -33,6 +33,8 @@ INVOICD_CONFIG=deploy/demo/invoicd.toml cargo run -p invoicd -- --check-config
 | `GET /api/v1/disputes` · `/overdue-remadv` · `/zahlungsstatus/{malo_id}` | disputes, missing REMADV, payment state |
 | `POST /api/v1/receipts/{id}/confirm-payment` · `/dispatch-answer` · `/resolve-dispute` | the Lieferant's decisions |
 | `POST /api/v1/receipts/{id}/feststellungen` · `/api/v1/leistungsnachweise` | the statements that decide a held invoice |
+| `/api/v1/webhooks/endpoints/**` · `GET /api/v1/events` | webhook endpoints, deliveries, replay, the event feed |
+| `GET /api/v1/openapi.json` | the OpenAPI document; `openapi.json` here is its committed copy |
 
 Each route's Cedar action is in the guide's
 [Routes and authorization](https://hupe1980.github.io/mako/docs/services/invoicd/#routes-and-authorization).
@@ -41,8 +43,9 @@ Each route's Cedar action is in the guide's
 
 `[identity]` `tenant` and `marktrolle` (`lieferant`, `netzbetreiber` or `esa`
 — the role this deployment receives invoices in); `[makod]` and `[marktd]`
-`url` / `api_key`; `[webhook] inbound_secret`; `[subscription] webhook_url`;
-`[erp] webhook_url` / `hmac_secret`; `[database]`, `[oidc]`. `[check]` holds the
+`url` / `api_key`; `[webhook] inbound_secret`; `[erp] webhook_url` /
+`hmac_secret` (the webhook endpoint `default`); `[subscriptions]
+retention_days`; `[database]`, `[oidc]`. `[check]` holds the
 tolerances and `auto_dispute_threshold_eur`. invoicd has no `[policy]` reading.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/invoicd/)

@@ -110,7 +110,7 @@ async fn stub_upstreams(verdict: StatusCode) -> String {
     format!("http://{addr}")
 }
 
-async fn app(vertragd_verdict: StatusCode) -> axum::Router {
+pub(super) async fn app(vertragd_verdict: StatusCode) -> axum::Router {
     let base = stub_upstreams(vertragd_verdict).await;
     let toml_src = format!(
         r#"
@@ -129,7 +129,7 @@ marktd_url      = "{base}"
         .expect("router builds")
 }
 
-async fn call(
+pub(super) async fn call(
     app: &axum::Router,
     method: &Method,
     path: &str,
@@ -248,28 +248,50 @@ async fn mcp_is_not_served() {
 
 /// The table above must not drift behind the router.
 ///
-/// A method handler added to `server::router` and not listed here would be
-/// covered by none of the assertions above — the silent half of the failure
-/// this file exists to prevent. Handlers are counted, not `.route(` calls, so a
-/// path serving two methods needs two entries.
+/// An operation added to the API and not listed here would be covered by none
+/// of the assertions above — the silent half of the failure this file exists to
+/// prevent. Every `/api/v1` route is mounted through `openapi::api_router`, so
+/// the document's operations are the router's: each must have an entry here,
+/// with the same method and a path its template matches.
 #[test]
 fn the_route_table_covers_the_router() {
-    let src = include_str!("../../src/server.rs");
-    let declared: usize = [
-        "get(handlers::",
-        "put(handlers::",
-        "post(handlers::",
-        "delete(handlers::",
-        "patch(handlers::",
-    ]
-    .iter()
-    .map(|m| src.matches(m).count())
-    .sum();
-    assert_eq!(
-        declared,
-        routes().len(),
-        "server::router declares {declared} method handlers but the guard lists {} — \
-         every customer-scoped handler must be exercised here",
-        routes().len()
+    let doc = portald::openapi::document();
+    let paths = doc["paths"].as_object().expect("a paths object");
+    let table = routes();
+    let mut operations = 0usize;
+    let mut missing = Vec::new();
+    for (template, item) in paths {
+        for method in ["get", "post", "put", "delete", "patch"] {
+            if item.get(method).is_none() {
+                continue;
+            }
+            operations += 1;
+            let covered = table.iter().any(|(m, path, _)| {
+                m.as_str().eq_ignore_ascii_case(method) && matches_template(template, path)
+            });
+            if !covered {
+                missing.push(format!("{} {template}", method.to_uppercase()));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "these operations are served but not exercised here: {missing:#?}"
     );
+    assert_eq!(
+        operations,
+        table.len(),
+        "the API serves {operations} operations but the guard lists {}",
+        table.len()
+    );
+}
+
+/// `path` is an instance of the OpenAPI path `template`.
+fn matches_template(template: &str, path: &str) -> bool {
+    let t: Vec<&str> = template.split('/').collect();
+    let p: Vec<&str> = path.split('/').collect();
+    t.len() == p.len()
+        && t.iter()
+            .zip(&p)
+            .all(|(t, p)| (t.starts_with('{') && t.ends_with('}')) || t == p)
 }

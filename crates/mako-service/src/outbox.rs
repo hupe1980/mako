@@ -49,9 +49,21 @@ use crate::cloudevent::CloudEvent;
 /// The `pending` partial index gates on `delivered_at IS NULL` (not on the
 /// attempt count) so a delivery that succeeds on its final retry is never
 /// mistaken for a dead-letter.
+///
+/// `txid` and `seq` order the rows as they commit: a reader that admits only
+/// rows whose `txid` is below the oldest transaction still running
+/// ([`COMMITTED_BELOW`]) and walks `(txid, seq)` never meets a row committing
+/// later behind its position — which `seq` alone allows, because a sequence
+/// value is taken at the insert and not at the commit. `ordering_key` names
+/// the aggregate an event is about (its `subject`, unless the emitter names
+/// another): deliveries of one key to one endpoint arrive in that order.
+/// `fanned_out_at` is set when `mako_service::subscriptions` has snapshotted the
+/// matching endpoints.
 pub const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS event_outbox (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    seq              BIGSERIAL   NOT NULL UNIQUE,
+    txid             BIGINT      NOT NULL DEFAULT (pg_current_xact_id()::text::bigint),
     event_id         TEXT        NOT NULL UNIQUE,
     kind             TEXT        NOT NULL DEFAULT 'cloudevent'
                                  CHECK (kind IN ('cloudevent', 'command')),
@@ -63,6 +75,8 @@ CREATE TABLE IF NOT EXISTS event_outbox (
     delivered_at     TIMESTAMPTZ,
     dead_lettered_at TIMESTAMPTZ,
     last_error       TEXT,
+    ordering_key     TEXT,
+    fanned_out_at    TIMESTAMPTZ,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- A command names the upstream it is owed to. An event names one only
     -- when it goes to a receiver other than the service's default webhook.
@@ -73,6 +87,12 @@ CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (next_attempt_at
     WHERE delivered_at IS NULL AND dead_lettered_at IS NULL;
 CREATE INDEX IF NOT EXISTS event_outbox_dead ON event_outbox (dead_lettered_at)
     WHERE dead_lettered_at IS NOT NULL;
+-- The fan-out's queue and the event feed: CloudEvents for the subscribers,
+-- in commit order.
+CREATE INDEX IF NOT EXISTS event_outbox_unfanned ON event_outbox (txid, seq)
+    WHERE fanned_out_at IS NULL AND kind = 'cloudevent' AND upstream IS NULL;
+CREATE INDEX IF NOT EXISTS event_outbox_feed ON event_outbox (txid, seq)
+    WHERE kind = 'cloudevent' AND upstream IS NULL;
 -- Wake the drain worker the moment an enqueued event becomes visible.
 --
 -- The notification is raised by the database, not by the producer, and that is
@@ -99,6 +119,11 @@ CREATE TRIGGER event_outbox_notify
     AFTER INSERT ON event_outbox
     REFERENCING NEW TABLE AS inserted
     FOR EACH STATEMENT EXECUTE FUNCTION event_outbox_notify();";
+
+/// The SQL bound below which every `txid` belongs to a finished transaction:
+/// `txid < (…)` admits a row only once nothing that could still commit a row
+/// before it is running.
+pub const COMMITTED_BELOW: &str = "(pg_snapshot_xmin(pg_current_snapshot())::text::bigint)";
 
 /// The `LISTEN` channel [`SCHEMA`]'s trigger raises on.
 ///
@@ -134,14 +159,31 @@ pub async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
 ///
 /// Returns `sqlx::Error` if the envelope cannot be encoded or the insert fails.
 pub async fn enqueue(conn: &mut sqlx::PgConnection, event: &CloudEvent) -> Result<(), sqlx::Error> {
+    enqueue_ordered(conn, event, event.subject.as_deref()).await
+}
+
+/// [`enqueue`], ordering deliveries by `ordering_key` instead of the event's
+/// `subject`: events of one key reach each endpoint in the order they commit,
+/// events of other keys — and events with none — never wait for them.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` if the envelope cannot be encoded or the insert fails.
+pub async fn enqueue_ordered(
+    conn: &mut sqlx::PgConnection,
+    event: &CloudEvent,
+    ordering_key: Option<&str>,
+) -> Result<(), sqlx::Error> {
     let envelope = serde_json::to_value(event).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
     sqlx::query(
-        "INSERT INTO event_outbox (event_id, ce_type, envelope) VALUES ($1, $2, $3)
+        "INSERT INTO event_outbox (event_id, ce_type, envelope, ordering_key)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (event_id) DO NOTHING",
     )
     .bind(&event.id)
     .bind(&event.ce_type)
     .bind(envelope)
+    .bind(ordering_key.filter(|k| !k.is_empty()))
     .execute(conn)
     .await?;
     Ok(())
@@ -282,6 +324,31 @@ impl Default for OutboxConfig {
             retention: Duration::from_hours(720),
         }
     }
+}
+
+/// A `LISTEN` connection beside `pool`, never out of it.
+///
+/// A listener holds its connection for the worker's life, so one taken from
+/// the service pool is a connection no request and no drain can have: a
+/// service running as many listening workers as `[database] pool_size` has
+/// none left, and every request and every drain then waits out the acquire
+/// timeout. The connection is opened with the pool's own options
+/// (`application_name` included) in a pool of one, which is what
+/// `PgListener::connect` does for a URL and what lets `recv` reconnect.
+///
+/// # Errors
+///
+/// The connection cannot be opened.
+pub(crate) async fn own_listener(pool: &PgPool) -> Result<sqlx::postgres::PgListener, sqlx::Error> {
+    let own = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .max_lifetime(None)
+        .idle_timeout(None)
+        .connect_with((*pool.connect_options()).clone())
+        .await?;
+    let mut listener = sqlx::postgres::PgListener::connect_with(&own).await?;
+    listener.ignore_pool_close_event(true);
+    Ok(listener)
 }
 
 /// Await the next `event_outbox` notification.
@@ -493,9 +560,9 @@ impl OutboxWorker {
     /// trigger rather than by the producer, so it arrives on the producer's
     /// COMMIT and never on a snapshot without the row.
     ///
-    /// The listener holds one pooled connection for the worker's life. If it
-    /// cannot be opened the worker says so once and runs on the poll alone —
-    /// slower, never wrong.
+    /// The listener holds a connection of its own beside the pool for the
+    /// worker's life, never one of the pool's. If it cannot be opened the worker says
+    /// so once and runs on the poll alone — slower, never wrong.
     pub async fn run(self, shutdown: CancellationToken) {
         let mut interval = tokio::time::interval(self.cfg.poll_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -504,7 +571,7 @@ impl OutboxWorker {
         let mut prune = tokio::time::interval(Duration::from_hours(1));
         prune.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         prune.reset();
-        let mut listener = match sqlx::postgres::PgListener::connect_with(&self.pool).await {
+        let mut listener = match own_listener(&self.pool).await {
             Ok(mut l) => match l.listen(NOTIFY_CHANNEL).await {
                 Ok(()) => Some(l),
                 Err(e) => {

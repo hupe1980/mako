@@ -157,6 +157,66 @@ export interface MarktdTools {
       size: number;
     };
   };
+  list_webhook_deliveries: {
+    input: {
+      /**
+       * The endpoint's id.
+       */
+      endpoint_id: string;
+      /**
+       * `all` (default), `pending`, `delivered` or `failed`.
+       */
+      status?: string | null;
+      /**
+       * Rows per page, 1–200; 50 when absent.
+       */
+      limit?: number | null;
+      /**
+       * The `next_cursor` of the previous page.
+       */
+      cursor?: string | null;
+    };
+    output: {
+      /**
+       * The rows of this page, in the list's order.
+       */
+      items: Delivery[];
+      /**
+       * The cursor of the next page; absent on the last.
+       */
+      next_cursor: string | null;
+      /**
+       * How many rows the whole list holds, where the list counts them.
+       */
+      total_estimate?: TotalEstimate | null;
+    };
+  };
+  list_webhook_endpoints: {
+    input: {
+      /**
+       * Rows per page, 1–200; 50 when absent.
+       */
+      limit?: number | null;
+      /**
+       * The `next_cursor` of the previous page.
+       */
+      cursor?: string | null;
+    };
+    output: {
+      /**
+       * The rows of this page, in the list's order.
+       */
+      items: Endpoint[];
+      /**
+       * The cursor of the next page; absent on the last.
+       */
+      next_cursor: string | null;
+      /**
+       * How many rows the whole list holds, where the list counts them.
+       */
+      total_estimate?: TotalEstimate | null;
+    };
+  };
   partner_namen: {
     input: {
       /**
@@ -299,6 +359,130 @@ export interface VersorgungsStatusHistoryResponse {
   valid_from: Instant;
 }
 /**
+ * One event to one endpoint.
+ */
+export interface Delivery {
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key: string | null;
+  /**
+   * `pending`, `delivered` or `dead_lettered`.
+   */
+  status: "pending" | "delivered" | "dead_lettered";
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status: number | null;
+  /**
+   * The last attempt's failure.
+   */
+  last_error: string | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at: Instant | null;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface TotalEstimate {
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface Endpoint {
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `config` or `api`.
+   */
+  owner: "config" | "api";
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner: string | null;
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at: Instant | null;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+}
+/**
  * One Marktpartner's name.
  */
 export interface PartnerName {
@@ -313,4 +497,4 @@ export interface PartnerName {
 export const marktdUntyped = ["get_correlation","get_malo","get_melo","get_melo_standorteigenschaften","get_nb_contract","get_nb_energiemix","get_partner","get_policy","get_preisblatt","get_referenzwert","get_rollenzuordnung","get_steuerbare_ressource","get_technische_ressource","get_versorgungsstatus","list_malo","list_partners","list_pricat_versions","list_referenzreihen"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const marktdOberflaeche: Record<string, string> = {"get_lokationsbuendel":"62d812b6","get_versorgung_at":"befc8caa","get_versorgungsstatus_history":"53cfd007","partner_namen":"3a65fea4"};
+export const marktdOberflaeche: Record<string, string> = {"get_lokationsbuendel":"62d812b6","get_versorgung_at":"befc8caa","get_versorgungsstatus_history":"53cfd007","list_webhook_deliveries":"e1d7bb7c","list_webhook_endpoints":"aa9442dc","partner_namen":"3a65fea4"};

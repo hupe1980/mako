@@ -63,7 +63,8 @@ pub(crate) struct CompleteReadingOrderRequest {
     pub abgelesen_am: Option<time::OffsetDateTime>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct ListReadingOrdersQuery {
     pub malo_id: Option<String>,
     pub status: Option<String>,
@@ -94,6 +95,20 @@ pub(crate) struct ReadingOrderRow {
 }
 
 /// `POST /api/v1/reading-orders` — schedule a meter reading.
+#[utoipa::path(
+    post,
+    path = "/api/v1/reading-orders",
+    tag = "reading-orders",
+    request_body(content = serde_json::Value, description = "A `CreateReadingOrderRequest`"),
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn create_reading_order(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -162,6 +177,18 @@ pub(crate) async fn create_reading_order(
 }
 
 /// `GET /api/v1/reading-orders?malo_id=&status=&anlass=&limit=`
+#[utoipa::path(
+    get,
+    path = "/api/v1/reading-orders",
+    tag = "reading-orders",
+    params(ListReadingOrdersQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn list_reading_orders(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -200,6 +227,19 @@ pub(crate) async fn list_reading_orders(
 }
 
 /// `GET /api/v1/reading-orders/{id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/reading-orders/{id}",
+    tag = "reading-orders",
+    params(("id" = uuid::Uuid, Path, description = "Reading order id")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 404, description = "Not found", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_reading_order(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -242,6 +282,22 @@ pub(crate) async fn get_reading_order(
 ///
 /// The order row keeps its copy: it is the record of what this Auftrag returned,
 /// which is a different fact from what the register held at an instant.
+#[utoipa::path(
+    put,
+    path = "/api/v1/reading-orders/{id}/complete",
+    tag = "reading-orders",
+    params(("id" = uuid::Uuid, Path, description = "Reading order id")),
+    request_body(content = serde_json::Value, description = "A `CompleteReadingOrderRequest`"),
+    responses(
+        (status = 204, description = "Done, no body"),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 404, description = "Not found", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn complete_reading_order(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -411,6 +467,19 @@ pub(crate) async fn complete_reading_order(
 }
 
 /// `PUT /api/v1/reading-orders/{id}/cancel`
+#[utoipa::path(
+    put,
+    path = "/api/v1/reading-orders/{id}/cancel",
+    tag = "reading-orders",
+    params(("id" = uuid::Uuid, Path, description = "Reading order id")),
+    responses(
+        (status = 204, description = "Done, no body"),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 404, description = "Not found", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn cancel_reading_order(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -470,6 +539,22 @@ pub(crate) const ABLESEHINDERNIS_GRUENDE: [&str; 7] = [
 /// failed one still is. A failed JAHRESABLESUNG past its deadline remains a
 /// § 40b Abs. 1 EnWG gap, so it keeps appearing in `list_overdue_reading_orders`
 /// until it is re-dispatched or the quantity is estimated under §40a EnWG.
+#[utoipa::path(
+    put,
+    path = "/api/v1/reading-orders/{id}/fail",
+    tag = "reading-orders",
+    params(("id" = uuid::Uuid, Path, description = "Reading order id")),
+    request_body(content = serde_json::Value, description = "A `FailReadingOrderRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 404, description = "Not found", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn fail_reading_order(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

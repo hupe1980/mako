@@ -54,6 +54,21 @@ pub struct RechtsdokumentInput {
 /// `PUT /api/v1/rechtsdokumente/{art}` — register a version of an operator
 /// legal document (§ 312i Abs. 1 Satz 1 Nr. 4 BGB). Append-only: the same bytes return the version
 /// already held, new bytes are a new version.
+#[utoipa::path(
+    put,
+    path = "/api/v1/rechtsdokumente/{key}",
+    tag = "bestellungen",
+    params(("key" = String, Path, description = "`PUT`: the Rechtsdokument's Art; `GET`: its SHA-256")),
+    request_body(content = serde_json::Value, description = "`RechtsdokumentInput`"),
+    responses(
+        (status = 201, body = serde_json::Value),
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_rechtsdokument(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -96,6 +111,18 @@ pub async fn put_rechtsdokument(
 }
 
 /// `GET /api/v1/rechtsdokumente/{sha256}` — the bytes an order's hash names.
+#[utoipa::path(
+    get,
+    path = "/api/v1/rechtsdokumente/{key}",
+    tag = "bestellungen",
+    params(("key" = String, Path, description = "`PUT`: the Rechtsdokument's Art; `GET`: its SHA-256")),
+    responses(
+        (status = 200, description = "The document's bytes, under its media type"),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn get_rechtsdokument(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -130,6 +157,19 @@ pub async fn get_rechtsdokument(
 /// documents' commands and the `de.vertrag.bestellung.*` events commit in one
 /// transaction (`201`). Under `"mit_annahme"` the order is stored
 /// `EINGEGANGEN` and the contract waits for `…/annehmen` (`202`).
+#[utoipa::path(
+    post,
+    path = "/api/v1/bestellungen",
+    tag = "bestellungen",
+    request_body(content = serde_json::Value, description = "`BestellungInput`"),
+    responses(
+        (status = 201, body = serde_json::Value),
+        (status = 202, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn bestellen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -833,6 +873,20 @@ pub struct AnnahmeInput {
 
 /// `POST /api/v1/bestellungen/{id}/annehmen` — the operator accepts an order
 /// under `mit_annahme`; the contract comes about now.
+#[utoipa::path(
+    post,
+    path = "/api/v1/bestellungen/{id}/annehmen",
+    tag = "bestellungen",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`AnnahmeInput`"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn annehmen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -881,6 +935,20 @@ pub struct AblehnungInput {
 
 /// `POST /api/v1/bestellungen/{id}/ablehnen` — the operator refuses an order
 /// under `mit_annahme`; no contract, no Anmeldung.
+#[utoipa::path(
+    post,
+    path = "/api/v1/bestellungen/{id}/ablehnen",
+    tag = "bestellungen",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`AblehnungInput`"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn ablehnen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -940,6 +1008,18 @@ async fn offene_bestellung(
 
 /// `GET /api/v1/bestellungen/{id}/nachweis` — the Bestellnachweis's canonical
 /// bytes, the stored hash and the hash recomputed from the bytes.
+#[utoipa::path(
+    get,
+    path = "/api/v1/bestellungen/{id}/nachweis",
+    tag = "bestellungen",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn nachweis(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1022,6 +1102,20 @@ impl WiderrufKanal {
 
 /// `POST /api/v1/vertraege/{id}/widerruf` — a consumer's Widerruf of an
 /// online contract (US2).
+#[utoipa::path(
+    post,
+    path = "/api/v1/vertraege/{id}/widerruf",
+    tag = "bestellungen",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`WiderrufInput`"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn widerruf_vertrag(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1040,6 +1134,21 @@ pub async fn widerruf_vertrag(
 /// `POST /api/v1/bestellungen/{id}/widerruf` — the Widerruf of an order: an
 /// accepted one withdraws its contract, one not yet accepted closes
 /// `WIDERRUFEN` with no contract and no Anmeldung.
+#[utoipa::path(
+    post,
+    path = "/api/v1/bestellungen/{id}/widerruf",
+    tag = "bestellungen",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`WiderrufInput`"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 201, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn widerruf_bestellung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RolleProvider } from "../app/rollen";
 import { createDeskRouter } from "../app/router";
@@ -67,10 +67,11 @@ function stub() {
         if (tool === "processd/list_pending_approvals")
           result = {
             structuredContent: {
-              freigaben: [
-                freigabe("b", "2026-10-01T08:00:00Z"),
-                freigabe("a", "2026-09-22T08:00:00Z"),
-              ],
+              // processd answers by Marktrolle: these wait on the NB alone.
+              freigaben:
+                m.params.arguments?.marktrolle === "NB"
+                  ? [freigabe("b", "2026-10-01T08:00:00Z"), freigabe("a", "2026-09-22T08:00:00Z")]
+                  : [],
               count: 2,
               saturated: false,
             },
@@ -195,5 +196,21 @@ describe("the Arbeitsvorrat on Heute", () => {
     expect(item?.textContent).toContain("fällig am 21.01.2031");
     expect(item?.textContent).toContain("seit 2 Tagen überfällig");
     localStorage.removeItem("mako-desk.rolle");
+  });
+});
+
+describe("a Rolle switch (SR-046)", () => {
+  it("leaves no row of the Rolle left on screen", async () => {
+    stub();
+    await open("/heute");
+    // A Netz Freigabe is on screen.
+    expect((await screen.findAllByText("Anmeldung a")).length).toBeGreaterThan(0);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "2", ctrlKey: true }));
+    });
+    await waitFor(() => expect(document.documentElement.dataset.rolle).toBe("lieferant"));
+    // None of the Netz Rolle's data stays in the DOM after the switch.
+    await waitFor(() => expect(screen.queryAllByText("Anmeldung a")).toHaveLength(0));
+    expect(document.body.textContent).not.toContain("Anmeldung b");
   });
 });

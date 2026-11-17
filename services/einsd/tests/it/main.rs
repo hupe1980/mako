@@ -6,6 +6,7 @@ mod authorization_guard;
 mod demo_config;
 mod mcp_round_trips;
 mod mutating_tools;
+mod openapi_coverage;
 mod router_builds;
 mod schema_code_guard;
 mod seed_payloads;

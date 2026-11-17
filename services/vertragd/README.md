@@ -11,8 +11,8 @@ speaks no EDIFACT: Anmeldung and Kündigung reach the market through `processd`.
 |---|---|
 | **Port** | 9780 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL, `public` schema (`migrations/0001_schema.sql`) |
-| **MCP** | 20 tools, 4 prompts at `/mcp` |
-| **Emits** | `de.vertrag.*` (contract lifecycle, Bestellung, Widerruf) through the transactional outbox |
+| **MCP** | 22 tools, 4 prompts at `/mcp` |
+| **Emits** | `de.vertrag.*` (contract lifecycle, Bestellung, Widerruf) through the transactional outbox, to every matching webhook endpoint |
 | **Consumes** | `de.mako.*` process outcomes at `POST /api/v1/events`; `de.tarif.angebot.angenommen` at `POST /api/v1/webhooks/angebot` |
 | **Depends on** | processd, accountingd, edmd, outputd, productd |
 
@@ -37,6 +37,8 @@ just test-vertragd-db
 | `POST /api/v1/vertraege/{id}/widerruf` | Widerruf of an online contract |
 | `GET /api/v1/malo/{malo_id}/produkte`, `GET\|POST /malo/{malo_id}/sect14a` | Product and § 14a module slices `billingd` bills from |
 | `/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`, `/aggregatorvertraege`, `/ggv/{ggv_id}/betreiber` | Other customer contracts |
+| `/api/v1/webhooks/endpoints` (+ `/{id}`, `/rotate-secret`, `/test`, `/deliveries`, `/replay`), `GET /api/v1/events` | Webhook subscriptions and the event feed |
+| `GET /api/v1/openapi.json` | The OpenAPI document, committed as `openapi.json` |
 
 A Kündigung or Tarifwechsel that misses its Frist is refused `422` with
 `fruehestens` and the `rechtsgrundlage`.
@@ -45,7 +47,8 @@ A Kündigung or Tarifwechsel that misses its Frist is refused `422` with
 
 `tenant`, `lf_mp_id`, `processd_url`, `accountingd_url`, `edmd_url` (each with
 an `_api_key`), `inbound_secret` (the only authentication on the two webhook
-routes), `erp_webhook_url` / `erp_hmac_secret`, `outputd_url`, `[absender]
+routes), `erp_webhook_url` / `erp_hmac_secret` (the webhook endpoint `default`),
+`[subscriptions] retention_days`, `outputd_url`, `[absender]
 name` (the § 126b BGB declarant), `[database]`, `[oidc]`. `productd_url`,
 `outputd_url` and `[absender] name` are required once `[policy]
 vertragsschluss` is set.

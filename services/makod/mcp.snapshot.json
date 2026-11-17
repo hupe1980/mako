@@ -1400,6 +1400,27 @@
     }
   },
   {
+    "name": "get_format_impact",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "fv"
+      ],
+      "properties": {
+        "fv": {
+          "description": "The candidate Formatversion's directory name, fv<yyyymmdd> or fv<yyyymmdd>_gas (e.g. fv20270401)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": null
+  },
+  {
     "name": "get_format_version_coverage",
     "annotations": {
       "readOnlyHint": true,

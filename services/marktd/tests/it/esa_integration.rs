@@ -649,12 +649,12 @@ async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
         "the lapsed consent is a sweep candidate"
     );
 
-    // Sweep 1 — the event INSERT fails. `event_log` is renamed away, which is
+    // Sweep 1 — the event INSERT fails. `event_outbox` is renamed away, which is
     // what a lost event looks like from inside the transaction.
-    sqlx::query("ALTER TABLE event_log RENAME TO event_log_away")
+    sqlx::query("ALTER TABLE event_outbox RENAME TO event_outbox_away")
         .execute(&pool)
         .await
-        .expect("rename event_log away");
+        .expect("rename event_outbox away");
     {
         let mut tx = pool.begin().await.unwrap();
         let claimed = PgEinwilligungRepository::claim_expired(&mut tx, id, today, TENANT)
@@ -662,15 +662,15 @@ async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
             .expect("claim")
             .expect("the lapsed consent is claimable");
         assert_eq!(claimed.id, id);
-        marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed))
+        marktd::outbox::enqueue(&mut tx, &widerrufen_event(&claimed))
             .await
-            .expect_err("the event INSERT must fail with event_log gone");
+            .expect_err("the event INSERT must fail with event_outbox gone");
         tx.rollback().await.expect("roll back the failed sweep");
     }
-    sqlx::query("ALTER TABLE event_log_away RENAME TO event_log")
+    sqlx::query("ALTER TABLE event_outbox_away RENAME TO event_outbox")
         .execute(&pool)
         .await
-        .expect("restore event_log");
+        .expect("restore event_outbox");
 
     // The consent is exactly as it was: still open, and still a candidate.
     let after = repo
@@ -695,7 +695,7 @@ async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
         .await
         .expect("claim")
         .expect("still claimable");
-    marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed))
+    marktd::outbox::enqueue(&mut tx, &widerrufen_event(&claimed))
         .await
         .expect("enqueue");
     tx.commit().await.expect("commit");
@@ -714,7 +714,7 @@ async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
         "a closed consent is not swept twice"
     );
     let events: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM event_log WHERE ce_type = $1 AND envelope->'data'->>'grund' = $2",
+        "SELECT count(*) FROM event_outbox WHERE ce_type = $1 AND envelope->'data'->>'grund' = $2",
     )
     .bind(mako_events::markt::EINWILLIGUNG_WIDERRUFEN)
     .bind(marktd::consent_lifecycle::GRUND_ABGELAUFEN)
@@ -742,7 +742,7 @@ async fn abbestellungen(pool: &PgPool) -> Vec<(String, String)> {
 
 async fn widerrufen_events(pool: &PgPool, grund: &str) -> i64 {
     sqlx::query_scalar(
-        "SELECT count(*) FROM event_log WHERE ce_type = $1 AND envelope->'data'->>'grund' = $2",
+        "SELECT count(*) FROM event_outbox WHERE ce_type = $1 AND envelope->'data'->>'grund' = $2",
     )
     .bind(mako_events::markt::EINWILLIGUNG_WIDERRUFEN)
     .bind(grund)
@@ -767,7 +767,7 @@ async fn a_widerruf_whose_event_fails_stays_revocable() {
         .await
         .unwrap();
 
-    sqlx::query("ALTER TABLE event_log RENAME TO event_log_away")
+    sqlx::query("ALTER TABLE event_outbox RENAME TO event_outbox_away")
         .execute(&pool)
         .await
         .unwrap();
@@ -775,7 +775,7 @@ async fn a_widerruf_whose_event_fails_stays_revocable() {
         repo.revoke(TENANT, id).await.is_err(),
         "the Widerruf fails with its event"
     );
-    sqlx::query("ALTER TABLE event_log_away RENAME TO event_log")
+    sqlx::query("ALTER TABLE event_outbox_away RENAME TO event_outbox")
         .execute(&pool)
         .await
         .unwrap();

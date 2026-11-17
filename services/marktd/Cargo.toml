@@ -43,9 +43,6 @@ mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "m
 rmcp               = { workspace = true }
 schemars           = { workspace = true }
 reqwest            = { workspace = true }
-# Bounded-concurrent fan-out delivery (`for_each_concurrent`) so one slow
-# subscriber cannot stall a whole batch on the single-threaded worker.
-futures            = { version = "0.3", default-features = false, features = ["std"] }
 rust_decimal       = { workspace = true }
 # The Referenzreihen import is idempotent on the file's SHA-256.
 sha2               = "0.10"
@@ -56,7 +53,7 @@ prometheus         = "0.14"
 sqlx               = { workspace = true, features = ["rust_decimal"] }
 
 [dev-dependencies]
-tower          = "0.5"
+tower          = { workspace = true }
 http-body-util = "0.1"
 mako-service = { workspace = true, features = ["testing"] }
 testcontainers = { workspace = true }

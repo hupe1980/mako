@@ -15,6 +15,8 @@
 --   payment_plans        — Zahlungsvereinbarung (structured installment agreements)
 --   payment_plan_installments — individual installments per plan
 --   bank_import_log      — CAMT.054 deduplication (bank transaction IDs already imported)
+--   unmatched_payments   — bank lines no account claimed, until an operator assigns them
+--   credit_payouts       — a Schlussrechnung's Guthaben owed back (§ 40c Abs. 3 EnWG)
 --   anonymization_log    — GDPR Art. 17 erasure audit trail (INSERT-only)
 --   auto_dunning_runs    — daily auto-dunning idempotency + audit
 --   eeg_belege           — the EEG settlement receipts einsd announced, per receipt chain
@@ -1306,6 +1308,76 @@ COMMENT ON TABLE bank_import_log IS
 
 CREATE INDEX bil_tenant      ON bank_import_log (tenant, imported_at DESC);
 CREATE INDEX bil_value_date  ON bank_import_log (tenant, value_date DESC);
+
+-- ── Unzugeordnete Zahlungen ──────────────────────────────────────────────────
+--
+-- A booked bank line the resolution ladder attributes to no account. It is
+-- money in the bank account against a receivable that stays open, so it is
+-- kept until an operator assigns it (`POST /api/v1/payments/{id}/assign`,
+-- which books it and closes the row in one transaction) or a later import of
+-- the same line resolves it. Not in `bank_import_log`: a re-import must try the
+-- ladder again, and the ledger key `bank:{bank_transaction_id}` keeps the
+-- booking single whichever door books it.
+CREATE TABLE unmatched_payments (
+    payment_id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant              TEXT        NOT NULL,
+    bank_transaction_id TEXT        NOT NULL,
+    -- The Kontokorrent sign the booking takes: negative for a Zahlungseingang,
+    -- positive for a Rücklastschrift.
+    ledger_ct           BIGINT      NOT NULL CHECK (ledger_ct <> 0),
+    value_date          DATE        NOT NULL,
+    reference           TEXT        NOT NULL,
+    end_to_end_id       TEXT,
+    -- Country code and the last four characters only: enough to recognise the
+    -- payer's account, not enough to be one.
+    iban_masked         TEXT,
+    source              TEXT        NOT NULL CHECK (source IN ('flat', 'camt052', 'camt053', 'camt054')),
+    received_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    assigned_at         TIMESTAMPTZ,
+    malo_id             TEXT,
+    lf_mp_id            TEXT,
+    ledger_entry_id     UUID,
+    -- The operator's subject, or `import` when a later import resolved it.
+    assigned_by         TEXT,
+    CHECK ((assigned_at IS NULL) = (ledger_entry_id IS NULL)),
+    CHECK ((assigned_at IS NULL) = (malo_id IS NULL)),
+    UNIQUE (tenant, bank_transaction_id)
+);
+
+CREATE INDEX up_open ON unmatched_payments (tenant, value_date) WHERE assigned_at IS NULL;
+
+-- ── Guthaben aus Schlussrechnung (§ 40c Abs. 3 EnWG) ─────────────────────────
+--
+-- A Schlussrechnung that ends in a Guthaben owes the customer that amount
+-- „binnen zwei Wochen" (`mako_fristen::vorlauf::guthaben_faellig`). One row per
+-- invoice — keyed on (tenant, rechnungsnummer), so a redelivered event raises
+-- no second item — cancelled by the invoice's Storno and closed by the payout,
+-- which books it in the same transaction.
+CREATE TABLE credit_payouts (
+    payout_id       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant          TEXT        NOT NULL,
+    rechnungsnummer TEXT        NOT NULL,
+    malo_id         TEXT        NOT NULL,
+    lf_mp_id        TEXT        NOT NULL,
+    amount_ct       BIGINT      NOT NULL CHECK (amount_ct > 0),
+    rechnungsdatum  DATE        NOT NULL,
+    due_on          DATE        NOT NULL CHECK (due_on >= rechnungsdatum),
+    status          TEXT        NOT NULL DEFAULT 'open'
+                                CHECK (status IN ('open', 'paid', 'cancelled')),
+    source_ce_id    TEXT        NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    closed_at       TIMESTAMPTZ,
+    -- The Storno event that cancelled it, or the payout booking that paid it.
+    storno_ce_id    TEXT,
+    ledger_entry_id UUID,
+    paid_by         TEXT,
+    CHECK ((status = 'open') = (closed_at IS NULL)),
+    CHECK ((status = 'paid') = (ledger_entry_id IS NOT NULL)),
+    CHECK ((status = 'cancelled') = (storno_ce_id IS NOT NULL)),
+    UNIQUE (tenant, rechnungsnummer)
+);
+
+CREATE INDEX cp_open ON credit_payouts (tenant, due_on) WHERE status = 'open';
 
 
 -- Every ledger entry accountingd books, stored whole in the transaction of the

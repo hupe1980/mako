@@ -129,7 +129,7 @@ credential.
 
 ## Authorization
 
-`policies/vertragd.cedar` states 33 actions over two kinds of principal:
+`policies/vertragd.cedar` states 35 actions over two kinds of principal:
 **operators** (staff and peer services) carry a market role — `LF`, `MSB`, `ESA`
 or `ADMIN`; **portal customers** carry none. Two actions are customer-scoped and
 need no role: `authenticate-portal-identity` and `read-own-portal-identity`
@@ -140,7 +140,7 @@ market role and a matching tenant.
 > IdP that puts a market role on a customer token makes that customer an operator
 > of this service, with reach across every customer in the tenant.
 
-### The 33 actions
+### The 35 actions
 
 Each is checked with `authorize(&enforcer, &claims, …)` in its handler; the
 policy reads only `context.*`. A denial is a `403`.
@@ -177,6 +177,8 @@ policy reads only `context.*`. A denial is a `403`.
 | `use-mcp` | the whole `/mcp` surface, gated once by the shared `McpAuth` middleware rather than per tool |
 | `read-policy` | `GET /api/v1/policy` — the operator policy report, checked by the shared `mako_service::einrichtung` router |
 | `read-config` | `GET /admin/einrichtung` — the configuration findings, checked by the same router |
+| `manage-subscription` | `/api/v1/webhooks/endpoints/**` and the MCP tools `list_webhook_endpoints` / `list_webhook_deliveries` — LF and ADMIN only, checked by the shared `mako_service::subscriptions` routes |
+| `read-events` | `GET /api/v1/events` — the outbox as a feed, checked by the same module |
 
 ᶜ = customer-scoped: tenant equality only, no market role.
 
@@ -666,7 +668,7 @@ AO; `anonymization_log` records what, by whom and why.
 | Worker | Cadence | What it does |
 |---|---|---|
 | Outbound | per `mako_service::outbox` | One command worker each for processd, edmd and accountingd |
-| Outbox | per `mako_service::outbox` | Delivers `de.vertrag.*` to the ERP webhook |
+| Webhooks | per `mako_service::subscriptions` | Fans `de.vertrag.*` out to every matching webhook endpoint, `default` (the ERP) included |
 | Preisanpassung | daily | Sends the § 41 Abs. 5 notice for every scheduled Tarifwechsel whose notice is still owed, issues it as a document where `outputd` is configured, and logs at `ERROR` every change that took effect **without** its notice |
 | Auto-renewal | daily | Announces the extension once per term, then applies it |
 | Ablauf | daily | Ends supply whose Lieferende has passed and closes the contract behind it; announces a term or price guarantee running out, once per date |
@@ -723,7 +725,8 @@ A **consumer** contract becomes **unbefristet** with at most a month's notice
 
 ## CloudEvents emitted
 
-Fifteen `de.vertrag.*` types, all through `event_outbox` and all HMAC-signed.
+Fifteen `de.vertrag.*` types, all through `event_outbox` and all signed per
+[Standard Webhooks](https://www.standardwebhooks.com/).
 Each carries the `tenantid` and `correlationid` extensions. The eleven contract
 events carry `subject` = the Vertrags-UUID and `correlationid` repeats it, so a
 consumer can join every event of one contract without parsing `data`. The four
@@ -754,6 +757,19 @@ by its own reference.
 
 Subscribe to `de.vertrag.kuendigung` and `de.vertrag.kuendigung-widerrufen`
 together, or a revoked termination stays acted on.
+
+### Webhooks
+
+vertragd delivers these events through the shared subscription module:
+`erp_webhook_url` (signed with `erp_hmac_secret`) is the endpoint `default`,
+and an integrator registers further endpoints, rotates their secrets, reads the
+delivery log, replays a window and pages `GET /api/v1/events` on vertragd's own
+port — the routes, signatures, ordering and retention are described once in
+[Webhook subscriptions](@/docs/architecture/erp-integration.md#webhook-subscriptions).
+Events of one contract share their `subject`, so they reach an endpoint in
+commit order. `[subscriptions] retention_days` (default 30) bounds replay;
+`allow_loopback` admits `http` and loopback receivers for `just dev` and is
+reported as a warning.
 
 ## § 40b EnWG billing cadence
 
@@ -838,7 +854,7 @@ outputd_url     = "http://outputd:9880"
 # productd_url     = "http://productd:9080"
 # productd_api_key = "env:VERTRAGD_PRODUCTD_KEY"
 
-erp_webhook_url = "http://erp:8000/events"
+erp_webhook_url = "http://erp:8000/events"     # the webhook endpoint `default`
 erp_hmac_secret = "env:VERTRAGD_ERP_HMAC_SECRET"
 inbound_secret  = "env:VERTRAGD_INBOUND_SECRET"
 
@@ -866,6 +882,9 @@ audience = "vertragd"
 # api_key       = "env:VERTRAGD_MCP_API_KEY"
 # api_key_roles = ["LF"]
 
+# [subscriptions]                # see Webhooks
+# retention_days = 30
+
 # [policy]                       # see [policy] vertragsschluss
 # vertragsschluss = "mit_bestellung"
 # lieferbeginn_in_widerrufsfrist = "nur_auf_verlangen"
@@ -879,7 +898,7 @@ they differ in a shared install.
 
 ## MCP
 
-20 read-only tools and 4 prompts at `/mcp`, behind OIDC or an `[mcp]` key. `compute_kuendigungsfrist` returns the earliest lawful end date for
+22 read-only tools and 4 prompts at `/mcp`, behind OIDC or an `[mcp]` key. `compute_kuendigungsfrist` returns the earliest lawful end date for
 **every** termination reason with the rule that produced it;
 `check_mako_trigger_status` distinguishes a registration still waiting in the
 outbound queue from one the NB has not answered. `search_kunden` finds a
@@ -888,6 +907,8 @@ the MaLo-ID of a Lieferstelle — at most 20 hits, answered from a trigram index
 (`kunden.suchtext`), so a keystroke reads no table scan however many customers
 the tenant holds. `kunden_zu_malos` names the customers of up to 200
 MaLos in one statement — how a worklist page names its rows.
+`list_webhook_endpoints` and `list_webhook_deliveries` are the agent twins of
+the REST reads of the same name and need `manage-subscription`.
 
 ## Related
 

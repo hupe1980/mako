@@ -64,6 +64,9 @@ mod report;
 
 /// Fluent builder APIs for constructing EDI@Energy messages.
 pub mod builders;
+/// A Konsultationsfassung loaded beside the binding profiles, and the
+/// verdict comparison that lists the messages it would refuse.
+pub mod candidate;
 /// Concrete EDI@Energy message type structs, one sub-module per message type.
 pub mod messages;
 /// The loaded MIG/AHB profiles: message structure, Prüfschablonen, Bedingungen.

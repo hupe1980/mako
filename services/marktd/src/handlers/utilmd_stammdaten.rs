@@ -50,7 +50,8 @@ use crate::pg::PgUtilmdStammdatenRepository;
 pub type UtilmdStammdatenRepoExt = Arc<PgUtilmdStammdatenRepository>;
 
 /// `?stichtag=` of the read.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub struct StichtagQuery {
     /// The date the record is resolved for (`YYYY-MM-DD`). Required: an
@@ -107,6 +108,18 @@ fn malo_id(raw: &str) -> ApiResult<MaloId> {
 }
 
 /// `GET /api/v1/malos/{malo_id}/utilmd-stammdaten?stichtag=YYYY-MM-DD`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malos/{id}/utilmd-stammdaten",
+    tag = "utilmd-stammdaten",
+    params(("id" = String, Path, description = "Identifier of the resource"), StichtagQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_utilmd_stammdaten(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -132,6 +145,19 @@ pub async fn get_utilmd_stammdaten(
 }
 
 /// `PUT /api/v1/malos/{malo_id}/netznutzungsdaten` — store one dated row.
+#[utoipa::path(
+    put,
+    path = "/api/v1/malos/{id}/netznutzungsdaten",
+    tag = "utilmd-stammdaten",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    request_body(content = serde_json::Value, description = "`PutNetznutzungsdatenBody`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_netznutzungsdaten(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

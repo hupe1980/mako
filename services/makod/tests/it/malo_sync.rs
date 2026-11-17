@@ -21,7 +21,7 @@ use axum::{
     body::Body,
     extract::{Path, State},
     http::{Request, StatusCode},
-    routing::{get, put},
+    routing::get,
 };
 use mako_engine::store_slatedb::SlateDbStore;
 use makod::config::PartyConfig;
@@ -38,13 +38,11 @@ const MSB_OLD: &str = "9900001000001";
 const MSB_NEW: &str = "9900001000002";
 const SECRET: &str = "marktd-fanout-secret";
 
-/// The stand-in marktd: one MaLo record, a failure budget for its reads, and
-/// the subscriptions it was asked to register.
+/// The stand-in marktd: one MaLo record and a failure budget for its reads.
 #[derive(Default)]
 struct Marktd {
     record: Option<Value>,
     fail_reads: usize,
-    subscriptions: Vec<Value>,
 }
 
 type Shared = Arc<Mutex<Marktd>>;
@@ -81,21 +79,10 @@ async fn list_malos(State(m): State<Shared>) -> Json<Value> {
     Json(json!({ "items": items, "total": items.len(), "page": 0, "size": 500 }))
 }
 
-async fn put_subscription(
-    State(m): State<Shared>,
-    Path(id): Path<String>,
-    Json(mut body): Json<Value>,
-) -> Json<Value> {
-    body["subscriber_id"] = json!(id);
-    m.lock().expect("mock lock").subscriptions.push(body);
-    Json(json!({ "version": 1 }))
-}
-
 async fn spawn_marktd(state: Shared) -> String {
     let app = Router::new()
         .route("/api/v1/malos", get(list_malos))
         .route("/api/v1/malos/{id}", get(get_malo))
-        .route("/api/v1/subscriptions/{id}", put(put_subscription))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -132,7 +119,6 @@ async fn harness() -> Harness {
         reqwest::Client::new(),
         url,
         SecretString::from("marktd-key"),
-        "http://makod:8080/webhooks/marktd",
         Some(SecretString::from(SECRET)),
         cache.clone(),
         registry,
@@ -223,19 +209,7 @@ async fn a_change_made_while_makod_was_down_reaches_the_cache_on_startup() {
         .await;
 
     assert_eq!(h.cached_msb().await.as_deref(), Some(MSB_NEW));
-    assert_eq!(
-        ready().await,
-        StatusCode::OK,
-        "ready once subscribed and backfilled"
-    );
-    let subs = h.marktd.lock().expect("mock lock").subscriptions.clone();
-    assert_eq!(subs.len(), 1);
-    assert_eq!(subs[0]["subscriber_id"], "makod");
-    assert_eq!(
-        subs[0]["event_types"],
-        json!([mako_events::markt::MALO_UPDATED])
-    );
-    assert_eq!(subs[0]["webhook_secret"], SECRET);
+    assert_eq!(ready().await, StatusCode::OK, "ready once backfilled");
 }
 
 /// A delivery whose record read fails answers 503 — the fan-out redelivers —

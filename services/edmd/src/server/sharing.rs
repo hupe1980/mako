@@ -306,6 +306,21 @@ pub async fn community_participations(
 /// `404` when no community names the MaLo, and `422` when two do: one invoice
 /// credits one community's allocation, and picking either would credit the
 /// wrong one.
+#[utoipa::path(
+    get,
+    path = "/api/v1/sharing/participants/{malo_id}/allocation",
+    tag = "sharing",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), LastgangParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 404, description = "Not found", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_participant_allocation(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -401,6 +416,18 @@ pub(crate) async fn get_participant_allocation(
 /// 07.07.2026, Az. BK6-06-009, endorsing the Dienstleistungsmodell), so this
 /// computes the attribution on demand from stored reads and stored rules rather
 /// than implementing a mandated exchange.
+#[utoipa::path(
+    get,
+    path = "/api/v1/sharing/{community_id}/allocation",
+    tag = "sharing",
+    params(("community_id" = String, Path, description = "Energy-sharing community id"), LastgangParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_sharing_allocation(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -518,7 +545,8 @@ pub(crate) async fn get_sharing_allocation(
 // ── §42c EnWG Energy-Sharing readiness report ─────────────────────────────────
 
 /// Query parameters for `GET /api/v1/sharing/readiness`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SharingReadinessParams {
     /// The Berlin calendar month to assess, `YYYY-MM`. Defaults to the last
@@ -568,6 +596,19 @@ pub(crate) struct SharingReadinessItem {
 /// observed grid, billable quarter-hours against the quarter-hours the month
 /// holds (2 972, 2 976 or 2 980 across DST). A register that is not one series
 /// is insufficient, with the defect as its reason.
+#[utoipa::path(
+    get,
+    path = "/api/v1/sharing/readiness",
+    tag = "sharing",
+    params(SharingReadinessParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_sharing_readiness(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

@@ -899,6 +899,12 @@ Re-running overwrites the initial receipt (after snapshotting it to
 | `sanctioned` | § 52 Abs. 1 EEG ≤ 2021 — EUR 0 |
 | `kein_anspruch` | No § 19 Abs. 1 claim: § 21 Abs. 1 Satz 1 Nr. 1 (> 100 kW on the Einspeisevergütung) or § 39i Abs. 1 (biogas over its Getreide-/Mais-Höchstanteil). Terminal on the same facts |
 | `fassung_nicht_tabelliert` | A recorded reduction under an EEG Fassung not tabled, or a plant commissioned after 31.12.2026, for which no Fassung is tabled; retried |
+| `gehalten` | `[policy] beihilfe_politik = "halten"`: computed, not paid, until an approval covers the period |
+
+The column's `CHECK` lists exactly these (plus `unknown` for a status the
+library adds later), pinned both ways to `pg::RECEIPT_STATUSES`. No status says
+a Gutschrift was paid: the payout is accountingd's, read from its
+`GET /api/v1/eeg/payouts?tr_id=` (MCP `list_eeg_payouts`).
 
 **Partial months (§ 25).** `billing_days_fraction` is derived when `null`: from a
 mid-month commissioning `(days_in_month − day + 1) / days_in_month`, to a
@@ -1089,7 +1095,7 @@ Mitteilung is mako's JSON shape.
 | `PUT/GET` | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}` | Anlage 1 Marktwert, `art` = `monat` \| `jahr` |
 | `GET` | `/api/v1/marktwert/{year}/nachbewertung` | Months on a provisional Jahresmarktwert |
 | `POST` | `/api/v1/verguetungssatz-lookup` | Rate lookup |
-| `GET` | `/api/v1/openapi.json` | OpenAPI 3.1 document of the reads above that carry a response type |
+| `GET` | `/api/v1/openapi.json` | OpenAPI 3.1 document of every `/api/v1` route above |
 | `GET` | `/api/v1/policy` | Operator policy report (`read-policy`) |
 | `GET` | `/admin/einrichtung` | Configuration findings and policy (`read-config`) |
 | `POST` | `/mcp` | MCP (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session) |

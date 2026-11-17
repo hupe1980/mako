@@ -20,6 +20,7 @@
 //! | `einvoice` | EN 16931 semantic model — built, stored, and rendered to CII / UBL |
 //! | `error` | `BillingError` — the one coded JSON error envelope every route answers with |
 //! | `handlers` | Axum HTTP handlers |
+//! | `openapi` | The OpenAPI document and the documented `/api/v1` router |
 //! | `pg` | PostgreSQL persistence |
 //! | `risk` | Deterministic release scoring |
 //! | `mcp_server` | MCP server (11 read-only tools, 6 prompts) |
@@ -42,6 +43,7 @@ pub mod error;
 pub mod gebuehrenbescheid;
 pub mod handlers;
 pub mod nachrechnen;
+pub mod openapi;
 pub mod pg;
 pub mod risk;
 pub mod steuerzeilen;

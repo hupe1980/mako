@@ -452,11 +452,17 @@ pub struct BillingdConfig {
     /// `outputd` bearer token.
     pub outputd_api_key: Option<String>,
 
-    /// ERP webhook URL — receives `de.billing.rechnung.erstellt` CloudEvents.
+    /// ERP webhook URL — the webhook endpoint `default`: receives every
+    /// CloudEvent billingd emits (`de.billing.rechnung.erstellt`, …).
     pub erp_webhook_url: Option<String>,
 
-    /// HMAC-SHA256 secret for signing outbound webhooks.
+    /// Standard Webhooks secret the `default` endpoint is signed with.
     pub erp_hmac_secret: Option<String>,
+
+    /// `[subscriptions]` — how long emitted events stay replayable, and whether
+    /// an endpoint registered through the API may be a loopback address.
+    #[serde(default)]
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
 
     /// Seller name for XRechnung generation (BG-4, BT-27). Defaults to tenant ID.
     pub seller_name: Option<String>,

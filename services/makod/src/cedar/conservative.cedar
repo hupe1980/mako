@@ -156,6 +156,22 @@ permit(
   resource  is MaKo::EinrichtungEndpoint
 );
 
+// ── Format impact: which of the operator's own messages a candidate
+// Formatversion would refuse (`GET /api/v1/format-candidates/{fv}/impact`, MCP
+// `get_format_impact`). Read-only; it lists exchanged messages, so the same
+// principals as the Rechnung read.
+permit(
+  principal == MaKo::Principal::"erp-operator",
+  action    == MaKo::Action::"ReadFormatImpact",
+  resource  is MaKo::FormatImpactEndpoint
+);
+
+permit(
+  principal == MaKo::Principal::"admin-readonly",
+  action    == MaKo::Action::"ReadFormatImpact",
+  resource  is MaKo::FormatImpactEndpoint
+);
+
 // ── Migrations: a deliberate operator action, granted to no standing principal.
 // Grant MaKo::Action::"AdminMigrations" to a dedicated break-glass principal
 // in your site policy for the FV-cutover window, then remove it.

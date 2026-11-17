@@ -278,7 +278,7 @@ fn counterparty_is_affiliate(
 /// PIDs whose answer the operator's network arm owes a Lieferant.
 ///
 /// Derived from the Antwortfrist table, so it cannot drift from the Festlegung.
-fn is_nb_answered_lieferanten_process(pid: u32) -> bool {
+pub(crate) fn is_nb_answered_lieferanten_process(pid: u32) -> bool {
     use mako_fristen::antwort::Family;
     mako_fristen::antwort::antwort_obligation(pid).is_some_and(|o| {
         o.answered_by == "NB" && matches!(o.family, Family::Gpke | Family::GeliGas)

@@ -38,10 +38,14 @@ reqwest      = { workspace = true }
 anyhow       = "1"
 secrecy      = "0.10"
 futures      = "0.3"
+# The OpenAPI document served at `GET /api/v1/openapi.json` and committed as
+# `openapi.json`; `utoipa-axum` mounts a route and its entry in one call.
+utoipa       = { workspace = true }
+utoipa-axum  = { workspace = true }
 
 [dev-dependencies]
 mako-service = { workspace = true, features = ["testing"] }
-tower          = "0.5"
+tower          = { workspace = true }
 http-body-util = "0.1"
 toml           = { version = "0.8", default-features = false, features = ["parse"] }
 

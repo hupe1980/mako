@@ -4,19 +4,55 @@ import type { Stand } from "./dokument";
 /** Each document the Desk was generated against: its `info.version` and fingerprint. */
 export const STAND: Record<string, Stand> = {
   "accountingd": {
-    "version": "0.37.0",
-    "abdruck": "c8641629"
+    "version": "0.38.0",
+    "abdruck": "52cc38b1"
+  },
+  "agentd": {
+    "version": "0.38.0",
+    "abdruck": "ad85bc41"
+  },
+  "billingd": {
+    "version": "0.38.0",
+    "abdruck": "4dc42a76"
   },
   "edmd": {
-    "version": "0.37.0",
-    "abdruck": "104dd38d"
+    "version": "0.38.0",
+    "abdruck": "fe3220ae"
   },
   "einsd": {
-    "version": "0.37.0",
-    "abdruck": "b0236bf5"
+    "version": "0.38.0",
+    "abdruck": "a3ca99f2"
+  },
+  "invoicd": {
+    "version": "0.38.0",
+    "abdruck": "2b9d916a"
+  },
+  "makod": {
+    "version": "0.38.0",
+    "abdruck": "3757998a"
   },
   "marktd": {
-    "version": "0.37.0",
-    "abdruck": "f374d9f1"
+    "version": "0.38.0",
+    "abdruck": "c50afffe"
+  },
+  "netzbilanzd": {
+    "version": "0.38.0",
+    "abdruck": "b2cca993"
+  },
+  "portald": {
+    "version": "0.38.0",
+    "abdruck": "c4fbe178"
+  },
+  "processd": {
+    "version": "0.38.0",
+    "abdruck": "f13c5ec3"
+  },
+  "productd": {
+    "version": "0.38.0",
+    "abdruck": "4bd8d9d6"
+  },
+  "vertragd": {
+    "version": "0.38.0",
+    "abdruck": "f4bdc905"
   }
 };

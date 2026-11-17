@@ -46,6 +46,23 @@ struct SitePriced {
 /// occupying `br_unique_original`, so the retry cannot succeed either, and a
 /// dropped link would leave the children counted alongside the bundle that
 /// already contains them. The GGV endpoint has the same shape.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/sammelrechnung/{rahmenvertrag_id}",
+    tag = "billing",
+    params(
+        ("rahmenvertrag_id" = String, Path, description = "The Rahmenvertrag billed with rechnungsstellung SAMMEL"),
+    ),
+    request_body(content = serde_json::Value, description = "`SammelrechnungRequest`: the period"),
+    responses(
+        (status = 201, description = "The consolidated document and its per-site records", body = serde_json::Value),
+        (status = 400, description = "Malformed period", body = crate::openapi::Problem),
+        (status = 403, description = "Cedar `run-billing` refused", body = crate::openapi::Problem),
+        (status = 409, description = "The period already carries an issued document, or the number is in use", body = crate::openapi::Problem),
+        (status = 422, description = "Well-formed, but it cannot be billed as asked — the code names the rule", body = crate::openapi::Problem),
+        (status = 502, description = "An upstream service the calculation reads did not answer", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_sammelrechnung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -362,6 +379,22 @@ pub struct SubmitB2gRequest {
 /// orders up to EUR 1 000 are exempt (§ 3 Abs. 3 ERechV). The 2027/2028 dates
 /// belong to the separate **B2B** mandate in § 14 UStG and have nothing to do
 /// with this endpoint.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/{id}/submit-b2g",
+    tag = "documents",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    request_body(content = serde_json::Value, description = "`SubmitB2gRequest`: the portal, the Leitweg-ID and the public buyer"),
+    responses(
+        (status = 202, description = "The XRechnung is queued for the ERP to transmit", body = serde_json::Value),
+        (status = 403, description = "Cedar `submit-b2g` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+        (status = 422, description = "The document violates the XRechnung rules", body = crate::openapi::Problem),
+        (status = 503, description = "No ERP webhook is configured (`NO_ERP_WEBHOOK`)", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_submit_b2g(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -473,6 +506,20 @@ pub async fn post_submit_b2g(
 /// Directive 2014/55/EU. CII is what German receivers overwhelmingly expect
 /// (XRechnung, ZUGFeRD); UBL is what a cross-border PEPPOL receiver usually
 /// wants, which is the reason both endpoints exist.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/{id}/ubl",
+    tag = "documents",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    responses(
+        (status = 200, description = "PEPPOL BIS Billing 3.0 UBL 2.1 rendered from the stored model", content_type = "application/xml", body = String),
+        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+        (status = 422, description = "No stored EN 16931 model, or one that does not render", body = crate::openapi::Problem),
+    )
+)]
 pub async fn get_ubl(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,

@@ -23,6 +23,21 @@ use crate::{
 /// A Rahmenvertrag sets shared pricing, notice periods and billing terms for N
 /// Versorgungsverträge below it — the model for portfolio customers with many
 /// delivery points.
+#[utoipa::path(
+    post,
+    path = "/api/v1/kunden/{id}/rahmenvertraege",
+    tag = "rahmenvertraege",
+    operation_id = "create_rahmenvertrag",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`CreateRahmenvertragInput`"),
+    responses(
+        (status = 201, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn create(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -41,13 +56,27 @@ pub async fn create(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListQuery {
     pub status: Option<String>,
     pub limit: Option<i64>,
 }
 
 /// `GET /api/v1/rahmenvertraege` — operator list view.
+#[utoipa::path(
+    get,
+    path = "/api/v1/rahmenvertraege",
+    tag = "rahmenvertraege",
+    operation_id = "list_rahmenvertraege",
+    params(ListQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn list(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -67,6 +96,19 @@ pub async fn list(
 }
 
 /// `GET /api/v1/kunden/{id}/rahmenvertraege`
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/{id}/rahmenvertraege",
+    tag = "rahmenvertraege",
+    operation_id = "list_rahmenvertraege_by_kunde",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn list_by_kunde(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -82,6 +124,19 @@ pub async fn list_by_kunde(
 }
 
 /// `GET /api/v1/rahmenvertraege/{id}` — with its child supply contracts.
+#[utoipa::path(
+    get,
+    path = "/api/v1/rahmenvertraege/{id}",
+    tag = "rahmenvertraege",
+    operation_id = "get_rahmenvertrag",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn get(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -108,6 +163,19 @@ pub async fn get(
 /// Each row carries the component's own `product_code`, which is what billingd
 /// prices; the `rechnungsempfaenger` block is the **Rahmenvertrag holder**,
 /// because a Sammelrechnung bills them rather than any one site's customer.
+#[utoipa::path(
+    get,
+    path = "/api/v1/rahmenvertraege/{id}/malos",
+    tag = "rahmenvertraege",
+    operation_id = "list_rahmenvertrag_malos",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn malos(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -144,6 +212,21 @@ pub async fn malos(
 /// the customer, the Vertragsart and the agreed period differ per site — so a
 /// date that is lawful for most sites terminates those and reports the rest
 /// rather than terminating none or terminating all unlawfully.
+#[utoipa::path(
+    post,
+    path = "/api/v1/rahmenvertraege/{id}/kuendigen",
+    tag = "rahmenvertraege",
+    operation_id = "kuendigen_rahmenvertrag",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`KuendigungInput`"),
+    responses(
+        (status = 202, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn kuendigen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

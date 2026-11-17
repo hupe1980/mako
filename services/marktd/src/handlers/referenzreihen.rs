@@ -19,6 +19,16 @@ use crate::referenzreihen::{
 };
 
 /// `GET /api/v1/referenzreihen`
+#[utoipa::path(
+    get,
+    path = "/api/v1/referenzreihen",
+    tag = "referenzreihen",
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_referenzreihen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -32,6 +42,18 @@ pub async fn list_referenzreihen(
 }
 
 /// `GET /api/v1/referenzreihen/{reihe}/werte`
+#[utoipa::path(
+    get,
+    path = "/api/v1/referenzreihen/{reihe}/werte",
+    tag = "referenzreihen",
+    params(("reihe" = String, Path, description = "Referenzreihe name"), WerteQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_werte(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -56,6 +78,18 @@ pub async fn get_werte(
 }
 
 /// `GET /api/v1/referenzreihen/{reihe}/wert`
+#[utoipa::path(
+    get,
+    path = "/api/v1/referenzreihen/{reihe}/wert",
+    tag = "referenzreihen",
+    params(("reihe" = String, Path, description = "Referenzreihe name"), WerteQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_wert(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -81,6 +115,19 @@ pub async fn get_wert(
 }
 
 /// `POST /api/v1/referenzreihen/{reihe}/import`
+#[utoipa::path(
+    post,
+    path = "/api/v1/referenzreihen/{reihe}/import",
+    tag = "referenzreihen",
+    params(("reihe" = String, Path, description = "Referenzreihe name"), ImportQuery),
+    request_body(content = String, content_type = "application/octet-stream", description = "The published file itself, in the `format` the query names"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn post_import(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

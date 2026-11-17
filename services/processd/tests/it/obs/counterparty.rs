@@ -193,10 +193,6 @@ mod db_scenarios {
         if let Some(db) = cfg["database"].as_table_mut() {
             db.remove("migration_url");
         }
-        cfg["subscription"]
-            .as_table_mut()
-            .expect("[subscription]")
-            .remove("webhook_url");
         let app = mako_service::build_for_test_on::<processd::Processd>(
             cfg.try_into().expect("a processd configuration"),
             pool.clone(),

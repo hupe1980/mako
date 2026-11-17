@@ -365,6 +365,7 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
         format_version: None,
         trace_context: mako_engine::trace_ctx::current().map(Into::into),
         akteur: befehls_akteur()?.klasse(),
+        antwort: None,
     };
     state
         .store

@@ -11,7 +11,7 @@ Summenzeitreihen (MSCONS 13003) with the BIKO through `makod`.
 |---|---|
 | **Port** | 8680 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — invoice drafts and numbering, Kostenblätter, MaBiS submission runs |
-| **MCP** | 13 tools, 7 prompts at `/mcp` |
+| **MCP** | 15 tools, 7 prompts at `/mcp` |
 | **Emits** | `de.netzbilanz.invoic.*`, `de.netzbilanz.kostenblatt.*`, `de.mabis.submission.failed`, `de.mabis.korrekturbedarf.opened` |
 | **Consumes** | REMADV CloudEvents at `POST /api/v1/webhooks/remadv` |
 | **Depends on** | `marktd` (MaLo, MaBiS-Zählpunkte, KAV Grenzpreis Strom), `makod` (dispatch), `edmd` (energy, MaBiS Lastgänge) |
@@ -35,6 +35,8 @@ NETZBILANZD_CONFIG=deploy/demo/netzbilanzd.toml cargo run -p netzbilanzd -- --ch
 | `/api/v1/redispatch/kostenblatt`, `/ausfallarbeit/*` | Redispatch 2.0 |
 | `POST /api/v1/mabis/sync`, `GET /api/v1/mabis/runs` | MaBiS Summenzeitreihen (with `[mabis]`) |
 | `POST /api/v1/webhooks/remadv` | inbound REMADV, HMAC-verified |
+| `/api/v1/webhooks/endpoints` (+ `/deliveries`, `/replay`, `/test`), `GET /api/v1/events` | Webhook subscriptions and the event feed (`ADMIN`) |
+| `GET /api/v1/openapi.json` | The OpenAPI document, committed as `openapi.json` |
 
 The request body and its response are in the operator guide's
 [Settling an invoice](https://hupe1980.github.io/mako/docs/services/netzbilanzd/#settling-an-invoice).
@@ -49,7 +51,9 @@ Referenzreihe `kav_grenzpreis_strom`; a Gas position states
 `allow_insecure_no_auth = true` in dev) and `zahlungsziel_werktage` — required,
 at least 10 (GPKE Teil 2 Kap. 3.3.2 Nr. 1, S. 90). `[mabis]` (`sender_mp_id`,
 `receiver_mp_id`, a Y-type EIC `bilanzierungsgebiet_id`) switches the BIKO
-filing on. netzbilanzd has no `[policy]` section.
+filing on. `erp_webhook_url`/`erp_webhook_secret` name the webhook endpoint
+`default`; `[subscriptions]` sets `retention_days` and, for `just dev`,
+`allow_loopback`. netzbilanzd has no `[policy]` section.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/netzbilanzd/)
 covers Umsatzsteuer, § 14a EnWG, Abschläge, corrections, Mehr-/Mindermengen,

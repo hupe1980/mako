@@ -5,7 +5,7 @@ weight = 3
 
 [extra]
 translated_from = "content/docs/guide/desk/index.md"
-source_sha256 = "13895e4a52bec732dc4709c943281231e09287e45a7f93a4ef8e3438616044f2"
+source_sha256 = "cab78b0b93a96f54b37d171bd562eb6c4ecbe78709189bc468113c75305d9f6a"
 
 +++
 **mako Desk** ist deine Arbeitsoberfläche im Betrieb. Er liest die MCP-Tools
@@ -567,6 +567,29 @@ CSV herunter.
 [![Die Akte einer Gegenpartei: Kennzahlen, Ablehnungen mit Wortlaut, die Prozesse, Export als Nachweis](gegenpartei-light.png)](gegenpartei-light.png)
 [![Die Akte einer Gegenpartei: Kennzahlen, Ablehnungen mit Wortlaut, die Prozesse, Export als Nachweis](gegenpartei-dark.png)](gegenpartei-dark.png)
 
+## Klärfälle, Zahlungen, Anlagen
+
+Ein **Klärfall** in Heute öffnet seine eigene Seite: die Ursache im Wortlaut
+der Liste, die ihren Code definiert, woher er kommt, wann er fällig ist, und
+sein Verlauf. Schlägt die Prozessüberwachung eine Korrektur vor, ist die eine
+Aktion „Korrigieren & senden" — ein anderer erlaubter Befehl verlangt eine
+Begründung —, sonst „Erledigt" mit Begründung oder „Zuweisen". Jede Aktion
+wird wie jede Entscheidung zum Rückgängigmachen gehalten, und eine Ablehnung
+steht in Worten da.
+
+**Zahlungen** listet für den Lieferanten jede Zahlung, die kein Konto
+genommen hat — jede mit dem Konto, das die Kundenkonten vorschlagen, und einer
+Taste, <kbd>A</kbd>, um sie zuzuordnen — und jedes überfällige Guthaben mit
+„Ausgezahlt". Beides sind Zeilen des Arbeitsvorrats. Eine IBAN erscheint nur
+so, wie der Dienst sie maskiert.
+
+Eine **Anlage**-Seite — geöffnet über die „Erzeugung" einer Marktlokation
+oder eine Zeile im Arbeitsvorrat von Netz (kein MaStR-Eintrag, Förderende
+naht, im Vormonat nicht abgerechnet) — zeigt die Angaben der EEG-Abrechnung
+mit dem Förderende groß und die zwölf zuletzt abgerechneten Monate,
+ausgezahlt, wo die Kundenkonten es sagen; ein Monat öffnet seine Abrechnung
+mit der Rechtsgrundlage jeder Position.
+
 ## Der Lieferant beginnt beim Kunden
 
 **Kunden** findet einen Kunden: Tippe den Anfang eines beliebigen Worts eines
@@ -598,6 +621,32 @@ Freigabe — und wird dort beantwortet.
 
 [![Die Befehlspalette übergibt eine Frage an den Assistenten](palette-fragen-light.png)](palette-fragen-light.png)
 [![Die Befehlspalette übergibt eine Frage an den Assistenten](palette-fragen-dark.png)](palette-fragen-dark.png)
+
+## Zustellungen: wer die Ereignisse bekommt
+
+**Zustellungen** ist die Webhook-Oberfläche jedes Dienstes, der eine hat —
+Prozessüberwachung, Marktstammdaten, Kundenverwaltung, Messwerte,
+Rechnungseingang, Abrechnung, Netzentgelte und Produktkatalog —, gelesen und geschrieben über
+die Abonnement-API des Dienstes selbst (siehe
+[Webhook subscriptions](@/docs/architecture/erp-integration.md#webhook-subscriptions));
+der Desk speichert davon nichts. Du wählst den Dienst; seine Endpunkte stehen
+mit URL und der Angabe, ob sie aktiv sind, in der Liste. Ein Endpunkt aus
+`[[subscriptions.endpoints]]` des Dienstes trägt **aus der Konfiguration, nur
+lesen**: Er ändert sich in der TOML, nicht hier.
+
+Öffnest du einen Endpunkt, siehst du seine Zustellungen — jede mit Ereignistyp,
+dem Status des Dienstes und dem letzten HTTP-Statuscode, der Laufzeit und
+**Erneut senden**. **Testereignis senden** zeigt die Antwort sofort, **Letzten
+Tag erneut senden** plant alles seit gestern Mitternacht (Europe/Berlin) erneut
+ein, und **Schlüssel erneuern** gibt einen neuen Signaturschlüssel aus, während
+der bisherige noch 24 Stunden mitsigniert. Einen neuen Endpunkt legst du unter
+der Liste an; seinen Signaturschlüssel siehst du genau einmal, mit einem Knopf
+zum Kopieren — der Dienst gibt ihn nie wieder heraus. Ob du das alles darfst,
+entscheidet der Dienst über Cedar (`manage-subscription`); eine Ablehnung kommt
+mit ihrem Grund.
+
+[![Zustellungen: ein konfigurierter Endpunkt nur lesbar und die Zustellungen des Portals mit Statuscode, Laufzeit und erneutem Senden](zustellungen-light.png)](zustellungen-light.png)
+[![Zustellungen: ein konfigurierter Endpunkt nur lesbar und die Zustellungen des Portals mit Statuscode, Laufzeit und erneutem Senden](zustellungen-dark.png)](zustellungen-dark.png)
 
 ## Einrichtung: bereit für den Produktivstart
 

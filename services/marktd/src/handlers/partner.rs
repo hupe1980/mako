@@ -35,7 +35,8 @@ use utoipa::ToSchema;
 use super::preisblatt::PriCatRepoExt;
 use super::{Claims, IntoMdmResponse as _};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct PartnerQuery {
     pub marktrolle: Option<String>,
     pub sparte: Option<String>,
@@ -102,6 +103,19 @@ pub struct PartnerUpsertRequest {
 }
 
 /// `PUT /api/v1/partners/:gln`
+#[utoipa::path(
+    put,
+    path = "/api/v1/partners/{mp_id}",
+    tag = "partner",
+    params(("mp_id" = String, Path, description = "13-digit MP-ID of the Marktpartner")),
+    request_body = PartnerUpsertRequest,
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_partner(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -207,7 +221,7 @@ pub async fn put_partner(
             .with_extensions(EventExtensions {
                 ..Default::default()
             });
-            if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+            if let Err(e) = crate::outbox::enqueue(&mut tx, &evt).await {
                 return ApiError::internal(
                     anyhow::Error::from(e)
                         .context(format!("partner: durable enqueue for partner {lf_mp_id}")),
@@ -273,6 +287,18 @@ pub async fn put_partner(
     }
 }
 /// `GET /api/v1/partners/:gln`
+#[utoipa::path(
+    get,
+    path = "/api/v1/partners/{mp_id}",
+    tag = "partner",
+    params(("mp_id" = String, Path, description = "13-digit MP-ID of the Marktpartner")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_partner(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -339,6 +365,17 @@ pub async fn get_partner(
 }
 
 /// `GET /api/v1/partners`
+#[utoipa::path(
+    get,
+    path = "/api/v1/partners",
+    tag = "partner",
+    params(PartnerQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_partners(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -386,6 +423,18 @@ pub async fn list_partners(
 /// `makoadresse` and `display_name` → `geschaeftspartner.organisationsname`.
 ///
 /// Returns 404 when the partner is not registered.
+#[utoipa::path(
+    get,
+    path = "/api/v1/partners/{mp_id}/marktteilnehmer",
+    tag = "partner",
+    params(("mp_id" = String, Path, description = "13-digit MP-ID of the Marktpartner")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_partner_marktteilnehmer(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -432,6 +481,18 @@ pub async fn get_partner_marktteilnehmer(
 /// static config.
 ///
 /// Returns 404 when the partner is not registered or has no AS4 addresses.
+#[utoipa::path(
+    get,
+    path = "/api/v1/partners/{mp_id}/as4-address",
+    tag = "partner",
+    params(("mp_id" = String, Path, description = "13-digit MP-ID of the Marktpartner")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_as4_address(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

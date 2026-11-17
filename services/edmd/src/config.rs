@@ -21,10 +21,6 @@
 //! erp_webhook_url    = "http://erp:9000/hooks/edmd"
 //! erp_webhook_secret = "env:EDMD_ERP_WEBHOOK_SECRET"  # signs outbound events
 //!
-//! [subscription]
-//! webhook_url   = "http://edmd:8380/webhook"
-//! subscriber_id = "edmd"
-//!
 //! # Cold tier. The `storage_uri` scheme picks the warehouse backend (file /
 //! # memory / s3 / gs / abfss); meterstore owns tiering through its watermark.
 //! # [archive]
@@ -248,8 +244,10 @@ pub struct Config {
     pub marktd: MarktdConfig,
     #[serde(default)]
     pub webhook: WebhookConfig,
+    /// `[subscriptions]` — the outbound webhook endpoints integrators register
+    /// on edmd's own `event_outbox` (`/api/v1/webhooks/*`, `/api/v1/events`).
     #[serde(default)]
-    pub subscription: SubscriptionConfig,
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
     /// MCP server authentication. Supports OIDC + API-key fallback, or dev mode.
@@ -516,12 +514,15 @@ pub struct WebhookConfig {
     /// Use `"env:EDMD_INBOUND_SECRET"`.
     pub inbound_secret: Option<String>,
     /// ERP webhook URL for outbound CloudEvents (`de.messwert.reading.direct.stored`,
-    /// `de.messwert.reading.quality.warning`). Omit to disable outbound notifications.
+    /// `de.messwert.reading.quality.warning`): the webhook endpoint `default`.
+    /// Omit to deliver only to the endpoints registered under
+    /// `/api/v1/webhooks/endpoints`.
     pub erp_webhook_url: Option<String>,
     /// Shared secret for signing **outbound** CloudEvents with an
     /// Standard Webhooks headers over the body, so the ERP receiver
     /// can authenticate every edmd-originated event (the counterpart to
     /// `inbound_secret`). Omit to send unsigned, trusting the transport.
+    /// Use `"env:EDMD_ERP_WEBHOOK_SECRET"`.
     pub erp_webhook_secret: Option<String>,
 }
 
@@ -707,28 +708,6 @@ impl Default for SurveillanceConfig {
             coverage_window_days: surveillance_default_coverage_days(),
             sweep_interval_secs: surveillance_default_interval_secs(),
             max_events_per_sweep: surveillance_default_max_events(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SubscriptionConfig {
-    /// URL that `marktd` will POST events to.
-    pub webhook_url: String,
-    #[serde(default = "default_subscriber_id")]
-    pub subscriber_id: String,
-}
-
-fn default_subscriber_id() -> String {
-    "edmd".to_owned()
-}
-
-impl Default for SubscriptionConfig {
-    fn default() -> Self {
-        Self {
-            webhook_url: "http://edmd:8380/webhook".to_owned(),
-            subscriber_id: default_subscriber_id(),
         }
     }
 }

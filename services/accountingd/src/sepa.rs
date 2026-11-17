@@ -138,7 +138,9 @@ pub fn camt_posting_ct(
 /// **partially** filled address is an error rather than a silent omission,
 /// because an address someone entered and the bank never received is a
 /// failure nobody sees.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 #[serde(deny_unknown_fields)]
 pub struct AddressParts {
     /// `TwnNm` — required whenever any part is set.

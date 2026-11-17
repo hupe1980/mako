@@ -1,0 +1,4 @@
+{
+  "_comment": "Konsultationsfassungen imported as candidates, never binding: `cargo xtask import-profiles --candidate <type>/<fv>` reads the named consultation PDFs from the document mirror and writes <type>/<fv>/{mig,ahb,candidate}.json. They live outside crates/edi-energy/profiles/ because build.rs embeds every directory there as a selectable Release; they are loaded at runtime only. `against` is the binding Formatversion a candidate is compared with.",
+  "candidates": {}
+}

@@ -22,6 +22,18 @@ use crate::state::AppState;
 /// `404` when marktd holds no such MaLo; `422` naming the reason when the
 /// MaLo has no address with a PLZ, the PLZ is not in the table, or it lies in
 /// more than one Land — a Land is never guessed.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malos/{id}/bundesland",
+    tag = "bundesland",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_malo_bundesland(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

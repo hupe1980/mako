@@ -144,6 +144,21 @@ it**. Whether it was received is the residual of its ledger entry after FIFO
 clearing. `GET /api/v1/accounts/{malo_id}/abschlaege` lists the received,
 unabsorbed advances a settling invoice may deduct, oldest first, with their rate.
 
+### Guthaben aus Schlussrechnung (§ 40c Abs. 3 EnWG)
+
+A `de.billing.rechnung.erstellt` with `schlussrechnung: true` whose `zuZahlen` is
+negative owes the customer a Guthaben, paid out „binnen zwei Wochen". accountingd
+raises one `credit_payouts` row for it, keyed on (tenant, Rechnungsnummer) so a
+redelivered event raises none, due by `mako_fristen::vorlauf::guthaben_faellig`
+of the Rechnungsdatum. A Schlussrechnung with a Guthaben and no readable
+Rechnungsdatum is refused `422 credit_without_due_date` before anything is
+booked. The invoice's Storno (`is_correction`, `originalRechnungsnummer`)
+cancels an open item. `POST /api/v1/credit-payouts/{payout_id}/paid` books the
+transfer as a `ZAHLUNG` debit of the Guthaben (key `credit-payout:{payout_id}`)
+and closes the item in one transaction; a second payout is `409`. An open item
+past `due_on` is `overdue` in `GET /api/v1/credit-payouts` and MCP
+`list_credit_payouts` — the Desk's Heute source.
+
 ### Idempotency keys
 
 | Key | Written by |
@@ -154,7 +169,8 @@ unabsorbed advances a settling invoice may deduct, oldest first, with their rate
 | `verzugspauschale:{entry_id}` | the § 288 Abs. 5 BGB Pauschale, per Entgeltforderung |
 | `verzugspauschale-anrechnung:{case_id}` | its Satz-3 Anrechnung, per dunning step |
 | `interest:{malo}:{from}:{to}` | a § 288 BGB charge |
-| `bank:{txn}` | every bank import |
+| `bank:{txn}` | every bank import, and the assignment of an unmatched line |
+| `credit-payout:{payout_id}` | the payout of a Schlussrechnung's Guthaben |
 | `jahresabschluss:{malo}:{year}` | the annual settlement |
 | `manual:{uuid}` | `POST /buchen` without `reference_id` |
 
@@ -168,10 +184,11 @@ only when it carries a `reference_id`.
 Every `/api/v1/*` route requires a JWT and a Cedar action — see
 [Authorization](#authorization). `/webhook` is signature-authenticated instead.
 
-`GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of the routes marked
-**(OpenAPI)** below, committed as `services/accountingd/openapi.json`. Each is
-one read shared with an MCP tool (`src/reads.rs`): the route's documented
-response and the tool's `outputSchema` come from the same type.
+`GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of every `/api/v1`
+route below, committed as `services/accountingd/openapi.json`. The routes marked
+**(OpenAPI)** answer a typed body; each read among them is shared with an MCP
+tool: the route's documented response and the tool's `outputSchema` come from
+the same type.
 
 | Method | Path | Description |
 |---|---|---|
@@ -227,7 +244,12 @@ response and the tool's `outputSchema` come from the same type.
 | `POST` | `/api/v1/sepa/camt029` | Apply the bank's answer to a recall |
 | `POST` | `/api/v1/payments/import/camt053` · `camt054` · `camt052` | Bank statements |
 | `POST` | `/api/v1/payments/import` | Flat JSON bank export |
-| `GET` | `/api/v1/eeg/payouts` · `/{payout_id}` | EEG payout orders (`?year=&month=&malo_id=&status=`); one with its pain.001; `NB` (`read-eeg-payouts`) |
+| `GET` | `/api/v1/payments/unmatched` | **(OpenAPI)** `UnzugeordneteZahlungen`: bank lines no account claimed, oldest first, the IBAN masked (`?limit=`; Cedar `read-books`) |
+| `POST` | `/api/v1/payments/{payment_id}/assign` | **(OpenAPI)** Book an unmatched line to an account and close it, one transaction; body `{ "malo_id", "lf_mp_id"? }`; `409 payment_already_assigned` (Cedar `import-payments`) |
+| `GET` | `/api/v1/credit-payouts` | **(OpenAPI)** `Guthabenauszahlungen`: Guthaben from Schlussrechnungen, `due_on`, `overdue` (`?status=open\|paid\|cancelled&overdue=true&malo_id=&limit=`; Cedar `read-books`) |
+| `POST` | `/api/v1/credit-payouts/{payout_id}/paid` | **(OpenAPI)** Book the transfer of a Guthaben and close its item, one transaction; body `{ "paid_on", "reference"? }`; `409 credit_payout_not_open` (Cedar `post-entry`) |
+| `GET` | `/api/v1/eeg/payouts` | **(OpenAPI)** `EegAuszahlungen`: EEG payout orders, newest first (`?tr_id=&malo_id=&year=&month=&status=&payment_type=&limit=`); `NB` (`read-eeg-payouts`) |
+| `GET` | `/api/v1/eeg/payouts/{payout_id}` | One payout order with its pain.001; `NB` (`read-eeg-payouts`) |
 | `POST` | `/api/v1/eeg/payouts/run` | Pay a billing month's receipt chains, Vergütung and Marktprämie, what each has outstanding (`billing_year`, `billing_month` required) |
 | `GET` | `/api/v1/eeg/rueckforderungen` | Receipt chains paid beyond their current receipt, with the amount owed back |
 | `POST` | `/api/v1/eeg/rueckzahlungen` | Record an operator's repayment of one; `409` on a second the same day |
@@ -671,7 +693,7 @@ Response: `{ "accepted", "deduplicated", "skipped", "unmatched", "malformed",
 | | Meaning | Action |
 |---|---|---|
 | `malformed` | Bad IBAN, amount or date (`warn`) | Fix the export |
-| `unmatched` | No account claims it (`warn`) | Reconcile by hand |
+| `unmatched` | No account claims it (`warn`) | Kept in `unmatched_payments`; assign it |
 | `failed` | Lookup or ledger write errored (`error`) | Not applied — retry |
 
 **Only `BOOK` entries post.** `INFO`, `PDNG` and `FUTR` are counted `not_booked`;
@@ -698,6 +720,18 @@ the Verwendungszweck, matched against the generated
 
 A reference naming two customers resolves to nothing and counts `unresolved` —
 alert on it.
+
+**Unmatched lines are kept.** Every booked line no rung attributes — flat or
+camt — is stored in `unmatched_payments` (amount in the Kontokorrent sign, value
+date, Verwendungszweck, `EndToEndId`, the IBAN masked to `DE…3000`, the door).
+`GET /api/v1/payments/unmatched` (MCP `list_unmatched_payments`) lists the open
+ones; `POST /api/v1/payments/match` proposes an account; `POST
+/api/v1/payments/{payment_id}/assign` books the line as `ZAHLUNG` or
+`BANKRUECKLAST` under the key `bank:{bank_transaction_id}`, writes its
+`bank_import_log` row and its `de.accounting.payment.imported` /
+`.bankruecklast` (`matched_by: "manual"`) and closes the line in one
+transaction. A later import that resolves the same line closes it in its own
+booking's transaction; an assigned line imported again is a duplicate.
 
 **Batches.** `NtryDtls/Btch/PmtInfId` is stored on `bank_import_log` and counted
 as `batches_matched`; a booking whose `EndToEndId` names a collection sets that
@@ -1101,6 +1135,8 @@ Emitted through the outbox to `erp_webhook_url`:
 | `ecb_base_rates` | Bundesbank Basiszinssatz series |
 | `payment_plans` · `payment_plan_installments` | Zahlungsvereinbarungen |
 | `bank_import_log` | Deduplication for all four import doors; `UNIQUE (tenant, bank_transaction_id)` |
+| `unmatched_payments` | Booked bank lines no account claimed, until assigned; `UNIQUE (tenant, bank_transaction_id)`, `source` `flat`/`camt052`/`camt053`/`camt054` |
+| `credit_payouts` | A Schlussrechnung's Guthaben owed back (§ 40c Abs. 3 EnWG): `due_on`, `status` `open`/`paid`/`cancelled`; `UNIQUE (tenant, rechnungsnummer)` |
 | `dunning_cases` · `dunning_locks` · `forderungs_einwaende` · `auto_dunning_runs` | Dunning state, Mahnsperren, Einwände, run guard |
 | `jahresabschluss_runs` | One per `(tenant, malo_id, billing_year)`; `annual_bill_ct` |
 | `account_audit_log` | Insert-only master-data change log with `operator_sub` |
@@ -1253,7 +1289,7 @@ service](@/docs/architecture/_index.md#what-metrics-carries-on-every-service).
 
 ## MCP server
 
-`accountingd` exposes **18 tools** at `/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session), the
+`accountingd` exposes **20 tools** at `/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session), the
 contract pinned by `services/accountingd/mcp.snapshot.json`. Every
 tool is authorized by `mcp_server::tool_action` against the Cedar action its
 REST twin enforces; a tool without a mapping is refused. An `[mcp]` key
@@ -1273,7 +1309,9 @@ authorizes as `User::"<key name>"` with the roles its `roles` list declares.
 | `list_parked_bookings` | Bookings the ledger refused for good, with what to do — typed (`outputSchema`), read by the Desk | `read-books` |
 | `get_parked_booking` | One parked booking by its key — what the assistant's proposal on it reads | `read-books` |
 | `list_sepa_collections` | Collections and their status | `read-banking` |
-| `list_eeg_payouts` | EEG payout orders by plant and billing month (`year`, `month`, `malo_id`, `status`) | `read-eeg-payouts` |
+| `list_unmatched_payments` | Bank lines no account claimed — typed (`UnzugeordneteZahlungen`), REST twin `GET /payments/unmatched` | `read-books` |
+| `list_credit_payouts` | Guthaben from Schlussrechnungen and which are overdue — typed (`Guthabenauszahlungen`), REST twin `GET /credit-payouts` | `read-books` |
+| `list_eeg_payouts` | EEG payout orders by plant and billing month (`tr_id`, `malo_id`, `year`, `month`, `status`, `payment_type`) — typed (`EegAuszahlungen`), REST twin `GET /eeg/payouts` | `read-eeg-payouts` |
 | `update_abschlag` | Change the monthly advance | `write-account` |
 | `import_payments` | Flat bank-export import | `import-payments` |
 | `run_sepa_collection` | Build a pain.008 for two days out without archiving it | `manage-sepa` |

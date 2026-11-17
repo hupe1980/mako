@@ -226,30 +226,6 @@ pub async fn makod_prueft(
     }
 }
 
-/// A decision changes the market, so its request must be one a cross-site
-/// form cannot send: `Content-Type: application/json` — which a browser sends
-/// cross-origin only after a CORS preflight — and nothing else, even on an
-/// empty body.
-///
-/// # Errors
-///
-/// `415 json_required`.
-pub fn nur_json(headers: &axum::http::HeaderMap) -> Result<(), mako_service::ApiError> {
-    let json = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(';').next())
-        .is_some_and(|m| m.trim().eq_ignore_ascii_case("application/json"));
-    if json {
-        Ok(())
-    } else {
-        Err(mako_service::ApiError::UnsupportedMediaType(
-            "a decision is posted as application/json".to_owned(),
-        )
-        .with_code("json_required"))
-    }
-}
-
 /// Parameters for `rehearse_decision`.
 #[derive(Debug, serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -557,29 +533,5 @@ mod tests {
         )
         .await;
         assert_eq!(status, 502);
-    }
-
-    /// A cross-site form posts `text/plain` or a form encoding; only JSON
-    /// decides.
-    #[test]
-    fn a_decision_that_is_not_json_is_refused() {
-        let mut h = axum::http::HeaderMap::new();
-        assert!(nur_json(&h).is_err(), "no content type");
-        h.insert(
-            axum::http::header::CONTENT_TYPE,
-            "text/plain".parse().unwrap(),
-        );
-        let refused = nur_json(&h).expect_err("text/plain");
-        assert_eq!(
-            refused.status(),
-            axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "a body of the wrong media type is 415, not a malformed body"
-        );
-        assert_eq!(refused.code(), Some("json_required"));
-        h.insert(
-            axum::http::header::CONTENT_TYPE,
-            "application/json; charset=utf-8".parse().unwrap(),
-        );
-        assert!(nur_json(&h).is_ok());
     }
 }

@@ -1,0 +1,55 @@
+{
+  "specialist": "desk-assistant",
+  "event_type": "manual",
+  "expected_citations": [],
+  "provenance": "synthetic",
+  "id": "freigabe-unklar",
+  "event": {
+    "frage": "Was schlägst du vor?",
+    "freigabe": "f-55001"
+  },
+  "tool_results": {
+    "processd/get_queue_entry": [
+      {
+        "id": "f-55001",
+        "process_id": "123e4567-e89b-12d3-a456-426614174000",
+        "pid": 55001,
+        "malo_id": "51238696012",
+        "marktrolle": "NB",
+        "grund": "Eskaliert: die Marktlokation ist im Netz nicht bekannt",
+        "art": "eskalation",
+        "antwort": null,
+        "codes_freigeben": null,
+        "codes_ablehnen": null,
+        "fakten_freigeben": [],
+        "fakten_ablehnen": [],
+        "kann_freigeben": false,
+        "kann_ablehnen": false,
+        "status": "Pending"
+      }
+    ],
+    "makod/get_process_history": [
+      {
+        "process_id": "123e4567-e89b-12d3-a456-426614174000",
+        "entries": [
+          {
+            "sequence": 1,
+            "recorded_at": "2026-11-16T08:12:00Z",
+            "event_type": "AnmeldungEingegangen",
+            "richtung": "eingang",
+            "pid": 55001,
+            "message_ref": "ANM-0001",
+            "antwortcode": null,
+            "codeliste": null,
+            "bedeutung": null,
+            "akteur": "system"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "label": "insufficient-evidence",
+    "findings": []
+  }
+}

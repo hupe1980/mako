@@ -22,6 +22,7 @@ pub mod attest;
 pub mod beleg;
 pub mod calendar;
 pub mod einrichtung;
+pub mod eval;
 pub mod keys;
 pub mod label;
 pub mod metrics;

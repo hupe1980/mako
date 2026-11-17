@@ -337,6 +337,29 @@ pub trait Workflow: Send + Sync + 'static {
     /// [`Process::run_timeout`]: crate::process::Process::run_timeout
     const DEADLINE_LABELS: &'static [&'static str] = &[];
 
+    /// The labels of [`Self::DEADLINE_LABELS`] that are business **Fristen**:
+    /// an answer or a Meldung owed by a date, whose lapse is a breach somebody
+    /// is in.
+    ///
+    /// When one fires and [`Workflow::on_deadline`] acts on it — its window
+    /// was still open — [`Process::run_timeout`] enqueues the
+    /// `AntwortfristAbgelaufen` ERP notice ([`crate::erp::LAPSE_NOTICE`]) in
+    /// the same write, unless the workflow enqueues its own. So every Frist a
+    /// workflow classifies here announces its lapse, without each workflow
+    /// building the notice.
+    ///
+    /// [`Process::run_timeout`]: crate::process::Process::run_timeout
+    const FRIST_LABELS: &'static [&'static str] = &[];
+
+    /// The labels of [`Self::DEADLINE_LABELS`] that **schedule** a step — a
+    /// Lieferbeginn's activation, a Sperr execution date, a nomination timer —
+    /// rather than bound an answer. Their firing is the process going on, and
+    /// a lapse notice on one would report a breach nobody is in.
+    ///
+    /// Every label is a Frist or a schedule; makod's `deadline_labels` guard
+    /// holds each workflow to one or the other.
+    const SCHEDULE_LABELS: &'static [&'static str] = &[];
+
     /// Whether this workflow decides the APERAK of a received message on a
     /// **later** command rather than on the run that receives it.
     ///
@@ -725,6 +748,8 @@ pub(crate) struct AppendExtras<'a> {
     /// Enqueued when the output records events and enqueues no message of
     /// its type.
     pub acknowledgement: Option<&'a PendingOutbox>,
+    /// The lapse notice of a fired Frist; enqueued like `acknowledgement`.
+    pub lapse: Option<&'a PendingOutbox>,
     /// Stamped on every event.
     pub akteur: &'a Akteur,
 }
@@ -788,13 +813,14 @@ where
         .iter()
         .map(|event| ctx.new_event(event, extras.akteur.clone()))
         .collect::<Result<Vec<NewEvent>, EngineError>>()?;
-    if let Some(ack) = extras.acknowledgement
-        && !output
+    for ack in [extras.acknowledgement, extras.lapse].into_iter().flatten() {
+        if !output
             .outbox
             .iter()
             .any(|o| o.message_type == ack.message_type)
-    {
-        output.outbox.push(ack.clone());
+        {
+            output.outbox.push(ack.clone());
+        }
     }
     if let Some(received_at) = extras.received_at {
         for pending in &mut output.outbox {

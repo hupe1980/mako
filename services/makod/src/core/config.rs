@@ -141,6 +141,11 @@ pub struct ConfigFile {
     /// `GET /admin/einrichtung` `GET /admin/einrichtung/deployment` folds into
     /// one checklist.
     pub einrichtung: Option<EinrichtungConfig>,
+    /// `[format_impact]` — where the candidate Formatversionen and the
+    /// operator's interchange archive are, for
+    /// `GET /api/v1/format-candidates/{fv}/impact`. Absent: the route answers
+    /// `format_impact_not_configured`.
+    pub format_impact: Option<crate::format_impact::FormatImpactConfig>,
 }
 
 /// `[einrichtung]` — the daemons of this deployment the readiness checklist
@@ -742,11 +747,9 @@ pub struct MarktdConfig {
     pub api_key: Option<String>,
     /// Path to a file holding the `marktd` API key. Preferred over `api_key`.
     pub api_key_file: Option<PathBuf>,
-    /// makod's own fan-out endpoint as `marktd` reaches it, e.g.
-    /// `"http://makod:8080/webhooks/marktd"`. Required with `url`: the MaLo
-    /// cache follows `marktd` through this subscription.
-    pub webhook_url: Option<String>,
-    /// Standard Webhooks secret `marktd` signs its deliveries to makod with.
+    /// Standard Webhooks secret `marktd` signs its deliveries to makod with —
+    /// the `secret` of makod's endpoint in marktd's
+    /// `[[subscriptions.endpoints]]`.
     pub webhook_secret: Option<String>,
     /// Path to a file holding `webhook_secret`. Preferred over the inline form.
     pub webhook_secret_file: Option<PathBuf>,

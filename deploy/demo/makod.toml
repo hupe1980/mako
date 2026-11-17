@@ -61,11 +61,11 @@ roles = ["GNB", "LFG", "GMSB"]
 webhook_url    = "http://marktd:8180/api/v1/events"
 webhook_secret = "dev-webhook-secret"
 
-# The MaLo-Ident cache follows marktd's durable fan-out.
+# The MaLo-Ident cache follows marktd: marktd delivers to makod's endpoint in
+# deploy/demo/marktd.toml, at /webhooks/marktd.
 [marktd]
-url         = "http://marktd:8180"
-api_key     = "dev-marktd-key"
-webhook_url = "http://makod:8080/webhooks/marktd"
+url     = "http://marktd:8180"
+api_key = "dev-marktd-key"
 
 # No AS4 key material in the demo ([party.as4] unset): outbound EDIFACT is not
 # delivered, and the AS4 listener does not start.

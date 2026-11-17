@@ -57,7 +57,7 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 sqlx = { workspace = true, features = ["rust_decimal"] }
 tokio = { version = "1", features = ["full", "test-util"] }
-tower = { version = "0.5", features = ["util"] }
+tower = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [lints]

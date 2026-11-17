@@ -29,12 +29,8 @@ own_mp_id = "9900000000003"
 url     = "http://marktd:8180"
 api_key = "dev-marktd-key"
 
-[subscription]
-webhook_url   = "http://edmd:8380/webhook"
-subscriber_id = "edmd-demo"
-
-# edmd registers its subscription with marktd under this secret, so each
-# delivery of marktd's fan-out is signed and verified.
+# marktd delivers its fan-out to edmd's endpoint in deploy/demo/marktd.toml,
+# signed with this secret, which edmd verifies.
 [webhook]
 inbound_secret = "dev-edmd-webhook-secret"
 

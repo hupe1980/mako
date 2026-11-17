@@ -89,15 +89,6 @@ pub enum MdmError {
         detail: String,
     },
 
-    /// A downstream call to an ERP webhook failed.
-    #[error("webhook delivery failed (subscriber={subscriber_id}): {reason}")]
-    WebhookDelivery {
-        /// ID of the ERP subscriber the delivery was for.
-        subscriber_id: String,
-        /// Why the delivery failed.
-        reason: String,
-    },
-
     /// Unexpected internal storage or I/O error.
     #[error("internal: {0}")]
     Internal(String),
@@ -118,7 +109,7 @@ impl MdmError {
             Self::VersionConflict { .. } => 412,
             Self::MakodConflict { .. } => 409,
             Self::Forbidden { .. } => 403,
-            Self::MakodSync(_) | Self::WebhookDelivery { .. } | Self::Internal(_) => 500,
+            Self::MakodSync(_) | Self::Internal(_) => 500,
         }
     }
 
@@ -135,7 +126,6 @@ impl MdmError {
             Self::Unprocessable { .. } => "unprocessable",
             Self::MakodConflict { .. } => "makod_conflict",
             Self::MakodSync(_) => "makod_sync_failed",
-            Self::WebhookDelivery { .. } => "webhook_delivery_failed",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -152,9 +142,7 @@ impl MdmError {
             Self::Forbidden { .. } => "Forbidden",
             Self::Unprocessable { .. } => "Unprocessable Content",
             Self::MakodConflict { .. } => "Command Conflict",
-            Self::MakodSync(_) | Self::WebhookDelivery { .. } | Self::Internal(_) => {
-                "Internal Server Error"
-            }
+            Self::MakodSync(_) | Self::Internal(_) => "Internal Server Error",
         }
     }
 }

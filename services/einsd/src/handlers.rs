@@ -628,6 +628,17 @@ pub async fn enqueue_batch_due_ce(
 // ── EEG Anlage CRUD ───────────────────────────────────────────────────────────
 
 /// `POST /api/v1/anlagen`  — Register or replace a plant.
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen",
+    tag = "anlagen",
+    request_body(content = serde_json::Value, description = "`AnlageUpsertRequest`: the plant to register or replace"),
+    responses(
+        (status = 201, description = "Registered"),
+        (status = 403, description = "Cedar `write-anlage` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn post_anlage(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -646,6 +657,20 @@ pub async fn post_anlage(
 }
 
 /// `PUT /api/v1/anlagen/{tr_id}`  — Update an existing plant.
+#[utoipa::path(
+    put,
+    path = "/api/v1/anlagen/{tr_id}",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    request_body(content = serde_json::Value, description = "`AnlageUpsertRequest`: the plant's new state; the path's `tr_id` wins over the body's"),
+    responses(
+        (status = 204, description = "Updated"),
+        (status = 403, description = "Cedar `write-anlage` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_anlage(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -683,6 +708,19 @@ pub async fn put_anlage(
 /// `404` means the Marktlokation is not in this NB's EEG-/KWKG-Register — which
 /// is not the same as „Nicht-EEG-Marktlokation", so `processd` escalates rather
 /// than assuming.
+#[utoipa::path(
+    get,
+    path = "/api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform",
+    tag = "anlagen",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+    ),
+    responses(
+        (status = 200, description = "The Veräußerungsform, the Ausfallvergütung flag and the Direktvermarktungspflicht", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-anlage` refused", body = ApiError),
+        (status = 404, description = "The Marktlokation is not in this register, or its settlement model is no Veräußerungsform (`NO_VERAEUSSERUNGSFORM`)", body = ApiError),
+    )
+)]
 pub async fn get_veraeusserungsform_by_malo(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -795,6 +833,22 @@ pub fn veraeusserungsform_of(settlement_model: &str) -> Option<&'static str> {
 }
 
 /// `GET /api/v1/anlagen`  — List plants with optional filters.
+#[utoipa::path(
+    get,
+    path = "/api/v1/anlagen",
+    tag = "anlagen",
+    params(
+        ("malo_id" = Option<String>, Query, description = "Only plants on this Marktlokation"),
+        ("erzeugungsart" = Option<String>, Query, description = "Only plants of this Erzeugungsart"),
+        ("settlement_model" = Option<String>, Query, description = "Only plants settled under this model"),
+        ("status" = Option<String>, Query, description = "Only plants in this status"),
+        ("limit" = Option<i64>, Query, description = "At most this many plants"),
+    ),
+    responses(
+        (status = 200, description = "The plants", body = Vec<crate::pg::AnlageRow>),
+        (status = 403, description = "Cedar `read-anlage` refused", body = ApiError),
+    )
+)]
 pub async fn get_anlagen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -813,6 +867,19 @@ pub async fn get_anlagen(
 }
 
 /// `DELETE /api/v1/anlagen/{tr_id}`  — Decommission (set status = 'abgemeldet').
+#[utoipa::path(
+    delete,
+    path = "/api/v1/anlagen/{tr_id}",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    responses(
+        (status = 204, description = "Decommissioned (status `abgemeldet`)"),
+        (status = 403, description = "Cedar `write-anlage` refused", body = ApiError),
+        (status = 404, description = "No active plant under that TR-ID", body = ApiError),
+    )
+)]
 pub async fn delete_anlage(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -836,15 +903,17 @@ pub async fn delete_anlage(
 // ── Settlement ────────────────────────────────────────────────────────────────
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SettleTriggerRequest {
     /// Einspeisemenge kWh for the billing month.
     /// When absent, `einsd` will return `status = "no_data"`.
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub einspeisemenge_kwh: Option<Decimal>,
     /// Override EPEX monthly average ct/kWh (only for DIREKTVERMARKTUNG /
     /// POST_EEG_SPOT).  When absent, the value stored in `epex_monthly_prices`
     /// is used automatically.
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub epex_avg_ct_kwh: Option<Decimal>,
     /// §13a EnWG (Redispatch 2.0) — kWh curtailed by the NB this billing month.
     ///
@@ -852,6 +921,7 @@ pub struct SettleTriggerRequest {
     /// (§19 Abs. 2 EEG 2023: §51 Negativpreisregel does NOT apply to EInsMan kWh).
     /// Pass the total curtailed kWh from MSCONS IFTSTA messages in this period.
     #[serde(default)]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub einspeisemanagement_kwh: Option<Decimal>,
     /// §51 EEG 2023 — kWh fed in during negative-spot-price intervals.
     ///
@@ -863,6 +933,7 @@ pub struct SettleTriggerRequest {
     /// `negative_price_quarter_hours` (§51a), which extends the Förderzeitraum for
     /// the same intervals.
     #[serde(default)]
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub kwh_during_negative_epex: Option<Decimal>,
     /// §51a EEG 2023 — quarter-hours during which the EPEX price was negative
     /// AND the plant's §51 threshold was met.
@@ -880,6 +951,23 @@ pub struct SettleTriggerRequest {
 ///
 /// Trigger monthly EEG settlement for one plant.  Idempotent — re-running
 /// overwrites the previous result for the same (tr_id, year, month).
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/settle/{year}/{month}",
+    tag = "settlements",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("month" = i16, Path, description = "Abrechnungsmonat, 1–12"),
+    ),
+    request_body = SettleTriggerRequest,
+    responses(
+        (status = 200, description = "The settlement result", body = serde_json::Value),
+        (status = 403, description = "Cedar `run-settlement` refused", body = ApiError),
+        (status = 404, description = "No plant under that TR-ID", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn post_settle(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -919,18 +1007,20 @@ pub async fn post_settle(
 
 // ── EPEX monthly prices ───────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EpexPriceBody {
+    #[schema(value_type = String, format = "decimal")]
     pub avg_ct_kwh: Decimal,
     pub source: Option<String>,
 }
 
 // ── Anlage 1 Marktwert prices ──────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MarktwertBody {
+    #[schema(value_type = String, format = "decimal")]
     pub avg_ct_kwh: Decimal,
     /// Required for a Monatsmarktwert (Anlage 1 Nr. 3); refused for a
     /// Jahresmarktwert (Nr. 4), which is one figure per year.
@@ -942,7 +1032,8 @@ pub struct MarktwertBody {
     pub source: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct MarktwertQuery {
     /// The month, for a Monatsmarktwert. Omitted for a Jahresmarktwert.
     pub billing_month: Option<i16>,
@@ -965,6 +1056,23 @@ pub struct MarktwertQuery {
 /// a running estimate during the year and the binding figure after it. Every
 /// month settled on a provisional figure is listed by
 /// `GET /api/v1/marktwert/{year}/nachbewertung`.
+#[utoipa::path(
+    put,
+    path = "/api/v1/marktwert/{year}/{art}/{erzeugungsart}",
+    tag = "marktdaten",
+    params(
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("art" = String, Path, description = "`monat` (Anlage 1 Nr. 3) or `jahr` (Nr. 4)"),
+        ("erzeugungsart" = String, Path, description = "`SOLAR`, `WIND_ONSHORE`, `WIND_OFFSHORE`, a Nr. 3.2 technology, or `DEFAULT`"),
+    ),
+    request_body = MarktwertBody,
+    responses(
+        (status = 204, description = "Stored"),
+        (status = 400, description = "An unknown `art`, or a month that does not fit the series", body = ApiError),
+        (status = 403, description = "Cedar `write-marktdaten` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_marktwert(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1015,6 +1123,23 @@ pub async fn put_marktwert(
 }
 
 /// `GET /api/v1/marktwert/{year}/{art}/{erzeugungsart}` (`?billing_month=`)
+#[utoipa::path(
+    get,
+    path = "/api/v1/marktwert/{year}/{art}/{erzeugungsart}",
+    tag = "marktdaten",
+    params(
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("art" = String, Path, description = "`monat` (Anlage 1 Nr. 3) or `jahr` (Nr. 4)"),
+        ("erzeugungsart" = String, Path, description = "`SOLAR`, `WIND_ONSHORE`, `WIND_OFFSHORE`, a Nr. 3.2 technology, or `DEFAULT`"),
+        MarktwertQuery,
+    ),
+    responses(
+        (status = 200, description = "The Marktwert", body = serde_json::Value),
+        (status = 400, description = "An unknown `art`", body = ApiError),
+        (status = 403, description = "Cedar `read-marktdaten` refused", body = ApiError),
+        (status = 404, description = "None recorded", body = ApiError),
+    )
+)]
 pub async fn get_marktwert(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1057,6 +1182,18 @@ pub async fn get_marktwert(
 /// `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`. It
 /// writes the correction *beside* the original receipt, which stays live and
 /// unchanged — a § 147 AO Buchungsbeleg is amended, not overwritten.
+#[utoipa::path(
+    get,
+    path = "/api/v1/marktwert/{year}/nachbewertung",
+    tag = "marktdaten",
+    params(
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+    ),
+    responses(
+        (status = 200, description = "Every month of the year settled on a provisional Jahresmarktwert", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-marktdaten` refused", body = ApiError),
+    )
+)]
 pub async fn get_marktwert_nachbewertung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1092,6 +1229,21 @@ fn marktwertserie_aus_pfad(art: &str) -> Option<eeg_billing::Marktwertserie> {
 }
 
 /// `PUT /api/v1/epex-monthly/{year}/{month}`
+#[utoipa::path(
+    put,
+    path = "/api/v1/epex-monthly/{year}/{month}",
+    tag = "marktdaten",
+    params(
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("month" = i16, Path, description = "Abrechnungsmonat, 1–12"),
+    ),
+    request_body = EpexPriceBody,
+    responses(
+        (status = 204, description = "Stored"),
+        (status = 403, description = "Cedar `write-marktdaten` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_epex_price(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1112,7 +1264,7 @@ pub async fn put_epex_price(
 }
 
 /// One EPEX spot interval in the bulk-load request body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SpotPriceEntry {
     /// Interval start, RFC 3339 (UTC).
@@ -1121,6 +1273,7 @@ pub struct SpotPriceEntry {
     #[serde(default = "default_spot_resolution")]
     pub resolution_min: i16,
     /// Price ct/kWh (may be negative).
+    #[schema(value_type = String, format = "decimal")]
     pub price_ct_kwh: Decimal,
 }
 
@@ -1133,6 +1286,17 @@ fn default_spot_resolution() -> i16 {
 /// Body: `{ "source": "epex-day-ahead", "prices": [ {delivery_start, resolution_min, price_ct_kwh}, … ] }`.
 /// einsd overlays a plant's ¼h feed-in against these to derive the §51
 /// Negativpreisregel reduction.
+#[utoipa::path(
+    put,
+    path = "/api/v1/epex-spot",
+    tag = "marktdaten",
+    request_body = SpotPriceLoadBody,
+    responses(
+        (status = 200, description = "The number of intervals stored", body = serde_json::Value),
+        (status = 403, description = "Cedar `write-marktdaten` refused", body = ApiError),
+        (status = 422, description = "A `delivery_start` that is not RFC 3339, or a refusal", body = ApiError),
+    )
+)]
 pub async fn put_epex_spot(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1169,7 +1333,7 @@ pub async fn put_epex_spot(
 }
 
 /// Bulk spot-price load request body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SpotPriceLoadBody {
     #[serde(default)]
@@ -1178,6 +1342,20 @@ pub struct SpotPriceLoadBody {
 }
 
 /// `GET /api/v1/epex-monthly/{year}/{month}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/epex-monthly/{year}/{month}",
+    tag = "marktdaten",
+    params(
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("month" = i16, Path, description = "Abrechnungsmonat, 1–12"),
+    ),
+    responses(
+        (status = 200, description = "The EPEX monthly average", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-marktdaten` refused", body = ApiError),
+        (status = 404, description = "None recorded for the month", body = ApiError),
+    )
+)]
 pub async fn get_epex_price(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1207,32 +1385,36 @@ pub async fn get_epex_price(
 // ── Repowering (§3 Nr. 30 i.V.m. §25 EEG 2023) ───────────────────────────────
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/repowering`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RepoweringRequest {
     /// ISO 8601 date when the new components were commissioned.
     /// The Förderendedatum is reset to `repowering_datum + 20 years`.
     pub repowering_datum: String,
     /// New installed capacity in kWp (may differ from original).
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub leistung_kwp_neu: Option<Decimal>,
     /// New Vergütungssatz at the repowering date (ct/kWh).
     /// When absent, auto-lookup via `eeg_verguetungssaetze` table.
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub verguetungssatz_ct_neu: Option<Decimal>,
 }
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/wind-reevaluation`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WindReevaluationRequest {
     /// Year after commissioning from which the adjusted AW takes effect: 6, 11 or 16.
     pub wirksam_ab_jahr: i16,
     /// Gütefaktor recomputed from the measured 5-year Standortertrag.
+    #[schema(value_type = String, format = "decimal")]
     pub guetefaktor: Decimal,
     /// Korrekturfaktor certified by the Gutachten (§36h Abs. 3 Nr. 2).
     ///
     /// The Netzbetreiber settles on the certified value, so it is accepted
     /// rather than derived. Omit it to interpolate the Anlage 2 Nr. 7 table
     /// from `guetefaktor`.
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub korrekturfaktor: Option<Decimal>,
 }
 
@@ -1245,6 +1427,21 @@ pub struct WindReevaluationRequest {
 /// response flags whether the reviewed five-year period must be reconciled
 /// (§36h Abs. 2 Satz 2: recomputed Gütefaktor deviates > 2 pp) — run that as a
 /// `§147 AO` correction settlement (interest EURIBOR-12M + 1 pp).
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/wind-reevaluation",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    request_body = WindReevaluationRequest,
+    responses(
+        (status = 200, description = "Recorded, with whether the reviewed period must be reconciled", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 404, description = "No plant under that TR-ID", body = ApiError),
+        (status = 422, description = "`wirksam_ab_jahr` other than 6, 11 or 16", body = ApiError),
+    )
+)]
 pub async fn post_wind_reevaluation(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1312,6 +1509,22 @@ pub async fn post_wind_reevaluation(
 /// this endpoint for it.
 ///
 /// Idempotent: re-posting with the same date is safe.
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/repowering",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    request_body = RepoweringRequest,
+    responses(
+        (status = 200, description = "The plant's new Inbetriebnahme, Förderende and Vergütungssatz", body = serde_json::Value),
+        (status = 400, description = "A date that does not parse", body = ApiError),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 404, description = "No plant under that TR-ID", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn post_repowering(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1404,10 +1617,11 @@ pub async fn post_repowering(
 // ── Vergütungssatz lookup ─────────────────────────────────────────────────────
 
 /// Request body for `POST /api/v1/verguetungssatz-lookup`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VerguetungssatzLookupRequest {
     pub erzeugungsart: String,
+    #[schema(value_type = String, format = "decimal")]
     pub leistung_kwp: Decimal,
     /// ISO 8601 Inbetriebnahmedatum.
     pub inbetriebnahme: String,
@@ -1421,7 +1635,7 @@ pub struct VerguetungssatzLookupRequest {
 // ── MaStR registration confirmation ──────────────────────────────────────────
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/mastr-registrierung`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MastrRegistrierungRequest {
     /// MaStR Registrierungsnummer (format: `SEE000000000000`, `EEE000000000000`, etc.).
@@ -1451,6 +1665,21 @@ pub struct MastrRegistrierungRequest {
 /// ## CloudEvent emitted
 ///
 /// `de.eeg.anlage.mastr-registriert` — signals ERP to release pending Vergütung.
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/mastr-registrierung",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    request_body = MastrRegistrierungRequest,
+    responses(
+        (status = 204, description = "Registration confirmed"),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 404, description = "No plant under that TR-ID", body = ApiError),
+        (status = 422, description = "A `mastr_datum` that does not parse", body = ApiError),
+    )
+)]
 pub async fn post_mastr_registrierung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1540,6 +1769,17 @@ pub async fn post_mastr_registrierung(
 /// Returns the applicable EEG feed-in tariff rate for a plant.
 /// Used during Anlage registration to auto-populate `verguetungssatz_ct`
 /// without requiring the operator to manually look up BNetzA tables.
+#[utoipa::path(
+    post,
+    path = "/api/v1/verguetungssatz-lookup",
+    tag = "marktdaten",
+    request_body = VerguetungssatzLookupRequest,
+    responses(
+        (status = 200, description = "The applicable rate", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-marktdaten` refused", body = ApiError),
+        (status = 422, description = "No seeded rate matches", body = ApiError),
+    )
+)]
 pub async fn post_verguetungssatz_lookup(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1588,10 +1828,11 @@ pub async fn post_verguetungssatz_lookup(
 // ── Batch settlement (POST /api/v1/settle/{year}/{month}) ────────────────────
 
 /// Request body for `POST /api/v1/settle/{year}/{month}`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BatchSettleRequest {
     /// EPEX monthly average ct/kWh.  When absent, uses stored `epex_monthly_prices`.
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub epex_avg_ct_kwh: Option<Decimal>,
     /// Dry-run mode — calculates but does not persist or emit CloudEvents.
     #[serde(default)]
@@ -1609,6 +1850,20 @@ pub struct BatchSettleRequest {
 /// `edmd_url` is configured.
 ///
 /// Returns a summary with per-plant results and aggregate totals.
+#[utoipa::path(
+    post,
+    path = "/api/v1/settle/{year}/{month}",
+    tag = "settlements",
+    params(
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("month" = i16, Path, description = "Abrechnungsmonat, 1–12"),
+    ),
+    request_body = BatchSettleRequest,
+    responses(
+        (status = 200, description = "Per-plant results and totals", body = serde_json::Value),
+        (status = 403, description = "Cedar `run-settlement` refused", body = ApiError),
+    )
+)]
 pub async fn post_batch_settle(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1764,13 +2019,14 @@ pub async fn post_batch_settle(
 // ── §24 EEG 2023 — Zusammenlegung ────────────────────────────────────────────
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/zusammenlegen`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ZusammenlegungRequest {
     /// TR-ID of the parent (surviving) plant.
     pub parent_tr_id: String,
     /// Combined installed capacity in kWp after merger.
     /// When absent, the parent's capacity is unchanged.
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub combined_leistung_kwp: Option<Decimal>,
     /// §24 Abs. 1 Satz 1 Nr. 1, second limb — the two plants are in
     /// *unmittelbarer räumlicher Nähe* although they do not share a
@@ -1804,6 +2060,22 @@ pub struct ZusammenlegungRequest {
 /// This is distinct from Repowering: Zusammenlegung is an administrative merger,
 /// not a hardware replacement, so there is no new commissioning date and no new
 /// Förderdauer.
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/zusammenlegen",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the child plant, merged into `parent_tr_id`"),
+    ),
+    request_body = ZusammenlegungRequest,
+    responses(
+        (status = 200, description = "Merged", body = serde_json::Value),
+        (status = 400, description = "Child and parent are the same plant", body = ApiError),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 404, description = "No plant under that TR-ID", body = ApiError),
+        (status = 422, description = "§ 24 Abs. 1 EEG 2023 does not deem the two one plant", body = ApiError),
+    )
+)]
 pub async fn post_zusammenlegen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1849,7 +2121,7 @@ pub async fn post_zusammenlegen(
 // ── §21b EEG 2023 — Veräußerungsform Wechsel ─────────────────────────────────
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VeraeusserungsformWechselRequest {
     /// The Veräußerungsform to switch to: `"VERGUETUNG"` (Einspeisevergütung,
@@ -1860,6 +2132,7 @@ pub struct VeraeusserungsformWechselRequest {
     /// For Direktvermarktung switches: the Direktvermarkter's MP-ID.
     pub direktvermarkter_mp_id: Option<String>,
     /// For Direktvermarktung switches: the agreed Anzulegender Wert ct/kWh.
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub direktverm_aw_ct: Option<rust_decimal::Decimal>,
 }
 
@@ -1887,6 +2160,22 @@ pub struct VeraeusserungsformWechselRequest {
 ///
 /// On success: updates `settlement_model`, `direktverm_mp_id`, `direktverm_aw_ct`,
 /// and `last_veraeusserungsform_switch` on the plant record.
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/switch-veraeusserungsform",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    request_body = VeraeusserungsformWechselRequest,
+    responses(
+        (status = 200, description = "Switched", body = serde_json::Value),
+        (status = 400, description = "A date that does not parse", body = ApiError),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 404, description = "No plant under that TR-ID", body = ApiError),
+        (status = 422, description = "§§ 21–21c EEG 2023 refuse the switch", body = ApiError),
+    )
+)]
 pub async fn post_switch_veraeusserungsform(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2136,14 +2425,18 @@ fn build_veraeusserungsform_ce(
 // ── § 147 AO / GoBD — Correction Settlement ───────────────────────────────────────
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CorrectionSettleRequest {
     /// Corrected Einspeisemenge kWh.
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub einspeisemenge_kwh: Option<rust_decimal::Decimal>,
     /// Corrected EPEX average ct/kWh (for Direktvermarktung / Post-EEG).
+    #[schema(value_type = Option<String>, format = "decimal")]
     pub epex_avg_ct_kwh: Option<rust_decimal::Decimal>,
-    /// Reason for the correction.
+    /// Reason for the correction: an `eeg_billing::scheme::CorrectionReason`
+    /// token in SCREAMING_SNAKE_CASE.
+    #[schema(value_type = String, example = "METER_DATA_CORRECTED")]
     pub reason: eeg_billing::scheme::CorrectionReason,
     /// Free-text explanation for audit trail.
     pub reason_detail: Option<String>,
@@ -2164,6 +2457,23 @@ pub struct CorrectionSettleRequest {
 ///
 /// The correction stores `SettlementType::Correction { original_id, reason }` for
 /// traceability per § 147 AO / GoBD.
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction",
+    tag = "settlements",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("month" = i16, Path, description = "Abrechnungsmonat, 1–12"),
+    ),
+    request_body = CorrectionSettleRequest,
+    responses(
+        (status = 200, description = "The correction receipt", body = serde_json::Value),
+        (status = 403, description = "Cedar `correct-settlement` refused", body = ApiError),
+        (status = 404, description = "No plant under that TR-ID", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn post_correction_settle(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2254,6 +2564,20 @@ pub async fn post_correction_settle(
 /// always agrees with what was actually settled. An incomplete year yields
 /// `status = "vorlaeufig"` and names the months still missing rather than
 /// presenting a partial sum as if it were the year.
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/jahresabrechnung/{year}",
+    tag = "settlements",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+    ),
+    responses(
+        (status = 200, description = "The annual reconciliation over the stored receipts", body = serde_json::Value),
+        (status = 403, description = "Cedar `run-settlement` refused", body = ApiError),
+        (status = 404, description = "No plant under that TR-ID", body = ApiError),
+    )
+)]
 pub async fn post_jahresabrechnung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2307,6 +2631,22 @@ fn marktd_unavailable() -> Response {
 
 /// `POST /api/v1/enfg/ledger/{year}/{month}` — book the month's EnFG ledger
 /// from the payments `accountingd` reports as made.
+#[utoipa::path(
+    post,
+    path = "/api/v1/enfg/ledger/{year}/{month}",
+    tag = "enfg",
+    params(
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("month" = i16, Path, description = "Abrechnungsmonat, 1–12"),
+    ),
+    responses(
+        (status = 200, description = "The booked ledger rows", body = serde_json::Value),
+        (status = 403, description = "Cedar `build-enfg-ledger` refused", body = ApiError),
+        (status = 422, description = "A month outside 1–12, or a refusal (`enfg_refused`)", body = ApiError),
+        (status = 502, description = "accountingd or marktd failed", body = ApiError),
+        (status = 503, description = "accountingd_url or marktd_url is not configured", body = ApiError),
+    )
+)]
 pub async fn post_enfg_ledger(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2357,6 +2697,20 @@ pub async fn post_enfg_ledger(
 }
 
 /// `GET /api/v1/enfg/ledger/{year}/{month}` — the booked EnFG ledger rows.
+#[utoipa::path(
+    get,
+    path = "/api/v1/enfg/ledger/{year}/{month}",
+    tag = "enfg",
+    params(
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("month" = i16, Path, description = "Abrechnungsmonat, 1–12"),
+    ),
+    responses(
+        (status = 200, description = "The booked ledger rows", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-enfg` refused", body = ApiError),
+        (status = 422, description = "A month outside 1–12", body = ApiError),
+    )
+)]
 pub async fn get_enfg_ledger(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2384,6 +2738,21 @@ pub async fn get_enfg_ledger(
 /// `GET /api/v1/enfg/mitteilung/{year}/{month}` — the § 50 Nr. 1 EnFG
 /// Mitteilung with the § 72 Abs. 1, 2 EEG 2023 items; every item mako does
 /// not hold is named in `nicht_gehalten` and carries no figure.
+#[utoipa::path(
+    get,
+    path = "/api/v1/enfg/mitteilung/{year}/{month}",
+    tag = "enfg",
+    params(
+        ("year" = i16, Path, description = "Abrechnungsjahr"),
+        ("month" = i16, Path, description = "Abrechnungsmonat, 1–12"),
+    ),
+    responses(
+        (status = 200, description = "The § 50 Nr. 1 EnFG Mitteilung", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-enfg` refused", body = ApiError),
+        (status = 422, description = "A month outside 1–12, or a refusal (`enfg_refused`)", body = ApiError),
+        (status = 503, description = "marktd_url is not configured", body = ApiError),
+    )
+)]
 pub async fn get_enfg_mitteilung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2603,7 +2972,7 @@ mod calendar_tests {
 // law and live in `eeg_billing::aw_reductions`.
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegionalnachweisRequest {
     /// Register reference of the issued Regionalnachweis (§79a EEG).
@@ -2615,11 +2984,12 @@ pub struct RegionalnachweisRequest {
 }
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StromsteuerbefreiungRequest {
     /// The exemption granted, in ct/kWh. Capped at the §3 StromStG full rate of
     /// 2,05 ct/kWh — an exemption cannot exceed the tax it exempts from.
+    #[schema(value_type = String, format = "decimal")]
     pub befreiung_ct_kwh: Decimal,
     /// Which StromStG provision it rests on, e.g. `"§9 Abs. 1 Nr. 1 StromStG"`.
     pub rechtsgrundlage: String,
@@ -2628,7 +2998,7 @@ pub struct StromsteuerbefreiungRequest {
 }
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Sect54DefektRequest {
     /// Abs. 1 — Zahlungsberechtigung applied for after the 18th Kalendermonat.
@@ -2650,7 +3020,7 @@ pub struct Sect54DefektRequest {
 }
 
 /// Request body for closing a §54 defect period.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Sect54NachweisRequest {
     /// Last day the defect applied — §54 Abs. 3 Satz 2/3.
@@ -2666,6 +3036,21 @@ pub struct Sect54NachweisRequest {
 /// file.
 ///
 /// **Cedar action**: `manage-lifecycle`
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    request_body = RegionalnachweisRequest,
+    responses(
+        (status = 201, description = "Recorded", body = serde_json::Value),
+        (status = 400, description = "A period that does not parse or runs backwards", body = ApiError),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn post_regionalnachweis(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2715,6 +3100,22 @@ pub async fn post_regionalnachweis(
 /// one overlapping a later row is refused (`422`).
 ///
 /// **Cedar action**: `manage-lifecycle`
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    request_body = StromsteuerbefreiungRequest,
+    responses(
+        (status = 200, description = "An existing record answered", body = serde_json::Value),
+        (status = 201, description = "Recorded", body = serde_json::Value),
+        (status = 400, description = "A period that does not parse or runs backwards", body = ApiError),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn post_stromsteuerbefreiung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2767,6 +3168,21 @@ pub async fn post_stromsteuerbefreiung(
 /// data-entry error, which the schema rejects.
 ///
 /// **Cedar action**: `manage-lifecycle`
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    request_body = Sect54DefektRequest,
+    responses(
+        (status = 201, description = "Recorded", body = serde_json::Value),
+        (status = 400, description = "No defect set, or a period that does not parse or runs backwards", body = ApiError),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn post_sect54_defekt(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2823,6 +3239,23 @@ pub async fn post_sect54_defekt(
 /// what the §147 AO audit trail has to keep.
 ///
 /// **Cedar action**: `manage-lifecycle`
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+        ("id" = uuid::Uuid, Path, description = "The § 54 record"),
+    ),
+    request_body = Sect54NachweisRequest,
+    responses(
+        (status = 200, description = "Closed", body = serde_json::Value),
+        (status = 400, description = "A date that does not parse", body = ApiError),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 404, description = "No such record", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn post_sect54_nachweis_erbracht(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2855,7 +3288,8 @@ pub async fn post_sect54_nachweis_erbracht(
 }
 
 /// Query for `GET /api/v1/anlagen/{tr_id}/aw-reduktionen`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct AwReduktionenQuery {
     /// The date to evaluate; today when absent.
     pub on: Option<String>,
@@ -2869,6 +3303,20 @@ pub struct AwReduktionenQuery {
 /// without settling again.
 ///
 /// **Cedar action**: `read-anlage`
+#[utoipa::path(
+    get,
+    path = "/api/v1/anlagen/{tr_id}/aw-reduktionen",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+        AwReduktionenQuery,
+    ),
+    responses(
+        (status = 200, description = "The §§ 53b–54 reductions in force on the day", body = serde_json::Value),
+        (status = 400, description = "An `on` that does not parse", body = ApiError),
+        (status = 403, description = "Cedar `read-anlage` refused", body = ApiError),
+    )
+)]
 pub async fn get_aw_reduktionen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2919,6 +3367,15 @@ fn parse_period(
 // ── Einspeiser (Anlagenbetreiber) ─────────────────────────────────────────────
 
 /// `GET /api/v1/einspeiser` — list the tenant's operators.
+#[utoipa::path(
+    get,
+    path = "/api/v1/einspeiser",
+    tag = "einspeiser",
+    responses(
+        (status = 200, description = "Every operator, listed under `einspeiser`", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-einspeiser` refused", body = ApiError),
+    )
+)]
 pub async fn list_einspeiser(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2938,6 +3395,19 @@ pub async fn list_einspeiser(
 }
 
 /// `GET /api/v1/einspeiser/{einspeiser_id}` — one operator.
+#[utoipa::path(
+    get,
+    path = "/api/v1/einspeiser/{einspeiser_id}",
+    tag = "einspeiser",
+    params(
+        ("einspeiser_id" = String, Path, description = "The operator's identity"),
+    ),
+    responses(
+        (status = 200, description = "The operator", body = crate::pg_einspeiser::Einspeiser),
+        (status = 403, description = "Cedar `read-einspeiser` refused", body = ApiError),
+        (status = 404, description = "No such operator", body = ApiError),
+    )
+)]
 pub async fn get_einspeiser(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2962,6 +3432,20 @@ pub async fn get_einspeiser(
 ///
 /// The § 19 UStG election lives here and nowhere else, so one call switches the
 /// VAT on every future Gutschrift issued to this operator's plants at once.
+#[utoipa::path(
+    put,
+    path = "/api/v1/einspeiser/{einspeiser_id}",
+    tag = "einspeiser",
+    params(
+        ("einspeiser_id" = String, Path, description = "The operator's identity"),
+    ),
+    request_body = crate::pg_einspeiser::UpsertEinspeiser,
+    responses(
+        (status = 204, description = "Stored"),
+        (status = 400, description = "A refusal", body = ApiError),
+        (status = 403, description = "Cedar `write-einspeiser` refused", body = ApiError),
+    )
+)]
 pub async fn put_einspeiser(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2985,7 +3469,7 @@ pub async fn put_einspeiser(
 // ── §52 Abs. 1 EEG 2023 — the Pflichtverstoß register ────────────────────────
 
 /// Body of `POST /api/v1/anlagen/{tr_id}/pflichtverstoesse`.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PflichtverstossAnlegenRequest {
     /// The §52 Abs. 1 Nummer, as `eeg_billing::SanktionsTyp` names it —
@@ -3007,7 +3491,7 @@ pub struct PflichtverstossAnlegenRequest {
 }
 
 /// Body of `PUT /api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben`.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PflichtverstossBehobenRequest {
     /// Day the obligation was met, ISO 8601. Must not precede `beginn`.
@@ -3032,6 +3516,18 @@ fn parse_sanktionstyp(s: &str) -> Result<eeg_billing::SanktionsTyp, ApiError> {
 /// Every §52 Abs. 1 breach recorded against the plant, newest first — open and
 /// cured alike, because §52 Abs. 3 Satz 1 Nr. 1's reduction „wirkt zurück bis
 /// zum Beginn" and a settled month may still have to be corrected.
+#[utoipa::path(
+    get,
+    path = "/api/v1/anlagen/{tr_id}/pflichtverstoesse",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    responses(
+        (status = 200, description = "Every § 52 Abs. 1 breach recorded against the plant, newest first", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-anlage` refused", body = ApiError),
+    )
+)]
 pub async fn get_pflichtverstoesse(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -3081,6 +3577,22 @@ pub async fn get_pflichtverstoesse(
 /// breach the plant record still shows.
 ///
 /// `409` when one of that Nummer is already open — cure it first.
+#[utoipa::path(
+    post,
+    path = "/api/v1/anlagen/{tr_id}/pflichtverstoesse",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+    ),
+    request_body = PflichtverstossAnlegenRequest,
+    responses(
+        (status = 201, description = "Recorded", body = serde_json::Value),
+        (status = 400, description = "A `typ` that is no § 52 Abs. 1 Nummer, or a date that does not parse", body = ApiError),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 409, description = "A breach of that Nummer is already open", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn post_pflichtverstoss(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -3140,6 +3652,23 @@ pub async fn post_pflichtverstoss(
 ///
 /// `404` when no breach of that Nummer is open: a cure without a breach is a
 /// data error, not something to record.
+#[utoipa::path(
+    put,
+    path = "/api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben",
+    tag = "anlagen",
+    params(
+        ("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"),
+        ("typ" = String, Path, description = "The § 52 Abs. 1 Nummer as its stored token"),
+    ),
+    request_body = PflichtverstossBehobenRequest,
+    responses(
+        (status = 200, description = "Closed", body = serde_json::Value),
+        (status = 400, description = "A `typ` that is no § 52 Abs. 1 Nummer, or a date that does not parse", body = ApiError),
+        (status = 403, description = "Cedar `manage-lifecycle` refused", body = ApiError),
+        (status = 404, description = "No open breach of that Nummer", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_pflichtverstoss_behoben(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

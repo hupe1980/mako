@@ -56,6 +56,9 @@ async fn test_pool() -> Option<(PgPool, PgContainer)> {
         .execute(&pool)
         .await
         .expect("apply schema");
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
     Some((pool, container))
 }
 

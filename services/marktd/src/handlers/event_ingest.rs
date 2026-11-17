@@ -292,7 +292,7 @@ pub async fn ingest_event(
         .chain(derived.iter())
         .chain(stammdaten_events.iter())
     {
-        if let Err(e) = crate::outbox::enqueue(&mut *tx, evt).await {
+        if let Err(e) = crate::outbox::enqueue(&mut tx, evt).await {
             return ApiError::internal(anyhow::Error::from(e).context(format!(
                 "event_ingest: durable enqueue for event {event_id_for_vs}"
             )))

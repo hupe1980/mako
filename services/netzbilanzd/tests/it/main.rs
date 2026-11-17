@@ -8,6 +8,7 @@ mod documented_examples;
 mod invoice_drafts_pg;
 mod mabis;
 mod mcp_round_trips;
+mod openapi_coverage;
 mod router_builds;
 mod schema_enum_guard;
 mod zahlungsziel;

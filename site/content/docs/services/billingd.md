@@ -557,7 +557,13 @@ naming `record_id`, `rechnungsnummer` and `outcome`. `outcome` becomes
 transaction, a record with every monetary field negated (`is_correction = true`,
 `originalRechnungsnummer`, an `ST` number), enqueues
 `de.billing.rechnung.erstellt` with `is_correction: true` (accountingd books the
-credit), and sets the original's `outcome = cancelled`.
+credit, and cancels the payout item of a Schlussrechnung's Guthaben), and sets
+the original's `outcome = cancelled`.
+
+Every `de.billing.rechnung.erstellt` carries `schlussrechnung`, `true` for a
+Schlussrechnung's own event — read off the issued document's `rechnungstyp`
+(`ABSCHLUSSRECHNUNG`), never on a Storno. accountingd raises the § 40c Abs. 3
+EnWG payout item for a Schlussrechnung's Guthaben from it.
 
 The negated document crosses the same
 [`ensure_conformant`](@/docs/architecture/domain-model.md#the-bo4e-gate) gate as
@@ -894,18 +900,14 @@ channel and is recorded, not paid.
    ```
 
 2. Set `vpp_auto_billing = true` and `inbound_webhook_secret` in `billingd.toml`.
-3. Subscribe billingd in marktd, with the same secret as the subscription's
-   `webhook_secret`:
+3. Name billingd as an endpoint in marktd's config, with the same secret:
 
-   ```bash
-   curl -s -X PUT "http://marktd:8180/api/v1/subscriptions/billingd-vpp" \
-     -H "Authorization: Bearer <token>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "webhook_url": "http://billingd:9280/api/v1/webhooks/vpp-dispatch",
-       "webhook_secret": "<the value of BILLINGD_INBOUND_HMAC_SECRET>",
-       "event_types": ["de.vpp.dispatch.confirmed"]
-     }'
+   ```toml
+   [[subscriptions.endpoints]]
+   name        = "billingd-vpp"
+   url         = "http://billingd:9280/api/v1/webhooks/vpp-dispatch"
+   secret      = "env:BILLINGD_INBOUND_HMAC_SECRET"
+   event_types = ["de.vpp.dispatch.confirmed"]
    ```
 
 `flexibility_kwh = max_power_kw × (execution_time_until − execution_time_from) /
@@ -990,10 +992,23 @@ public_url = "https://kundenportal.example.de/nachrechnen/"
 | `POST` | `/api/v1/billing/{id}/release` | Release a held record |
 | `POST` | `/api/v1/billing/{id}/reviewed` | Record the review of a REVIEW record; sends nothing |
 | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G (§ 4a EGovG i.V.m. ERechV) |
+| `GET`/`POST`/… | `/api/v1/webhooks/endpoints/**` · `/api/v1/events` | Webhook endpoints, deliveries, replay and the event feed — see [Webhooks](#webhooks) |
+| `GET` | `/api/v1/openapi.json` | The OpenAPI document; `services/billingd/openapi.json` is its committed copy |
 | `GET` | `/api/v1/policy` | Operator policy (Cedar `read-policy`) |
 | `GET` | `/admin/einrichtung` | Configuration findings and policy (Cedar `read-config`) |
 | `GET` | `/health/live` · `/health/ready` | Liveness; readiness |
 | `POST` | `/mcp` | MCP |
+
+### Webhooks
+
+Every CloudEvent billingd emits is enqueued in `event_outbox` with the write
+it announces. `erp_webhook_url` is the webhook endpoint `default`, signed with
+`erp_hmac_secret` (Standard Webhooks); further endpoints are registered under
+`/api/v1/webhooks/endpoints` (Cedar `manage-subscription`, ADMIN), and
+`GET /api/v1/events` (`read-events`) reads the events as a feed. The routes,
+signatures, ordering, replay and retention (`[subscriptions] retention_days`)
+are the shared module's:
+[Webhook subscriptions](@/docs/architecture/erp-integration.md#webhook-subscriptions).
 
 ### Errors
 
@@ -1041,6 +1056,7 @@ equality is part of every rule, and Cedar is default-deny.
 | `review-billing` | `…/reviewed` | `LF`, `MSB`, `ESA` |
 | `submit-b2g` | `…/submit-b2g` | `LF`, `MSB`, `ESA` |
 | `use-mcp` | `/mcp`, after the `[mcp]` / OIDC credential check | any caller of the tenant |
+| `manage-subscription` · `read-events` | `/api/v1/webhooks/**`, the `list_webhook_*` tools · `GET /api/v1/events` | `ADMIN` |
 
 The VPP webhook is signature-authenticated and carries no Cedar action.
 `mako_roles` are market roles, so the policy cannot separate „may bill" from
@@ -1051,7 +1067,7 @@ keep releases and reviews attributable.
 
 ## MCP server
 
-`/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session): **sixteen tools** and six prompts, every
+`/mcp` (Streamable HTTP, revisions 2026-07-28 and 2025-11-25, no session): **eighteen tools** and six prompts, every
 tool **read-only**, run in process. There is no `calculate_billing`: issuing a
 Rechnung is a legally binding act for an OIDC identity, not a model.
 
@@ -1073,6 +1089,8 @@ Rechnung is a legally binding act for an OIDC identity, not a model.
 | `list_unbilled_periods` | The § 40c watch, typed (`UnbilledPeriods`) |
 | `summarize_billing_deadlines` | Per Lieferant: owed, on time, late, overdue, typed (`DeadlineSummary`) |
 | `recompute_invoice` | Rechnung nachrechnen for one record, typed (`Nachrechnung`) |
+| `list_webhook_endpoints` | The webhook endpoints, the twin of `GET /api/v1/webhooks/endpoints` (`manage-subscription`) |
+| `list_webhook_deliveries` | One endpoint's deliveries, the twin of `GET …/endpoints/{id}/deliveries` (`manage-subscription`) |
 
 Prompts: `order-to-cash`, `preview-invoice`, `check-dynamic-tariff`,
 `14a-steuerungsrabatt`, `eeg-billing`, `gas-billing`. agentd's
@@ -1117,9 +1135,13 @@ seller_tax_number = "123/456/78901"        # BT-32
 seller_iban       = "DE89370400440532013000" # BT-84, BG-16
 seller_bic        = "COBADEFFXXX"          # BT-86
 
-erp_webhook_url        = "http://erp:8000/webhooks/billing"
+erp_webhook_url        = "http://erp:8000/webhooks/billing"  # the webhook endpoint `default`
 vpp_auto_billing       = false
 inbound_webhook_secret = "env:BILLINGD_INBOUND_HMAC_SECRET"
+
+[subscriptions]
+retention_days = 30        # how long emitted events stay replayable
+# allow_loopback = true    # `just dev` only: admit http and loopback endpoints
 
 [http]
 addr = "0.0.0.0:9280"

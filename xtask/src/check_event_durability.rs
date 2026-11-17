@@ -56,9 +56,9 @@
 //! both an attempt counter (`attempts` or `…_attempts`) and a
 //! `…next_attempt_at` column: a hand-rolled retry queue beside
 //! `mako_service::outbox`, with its own claim, backoff and dead-letter rule and
-//! an operator view of its own. The one kept is `marktd`'s `event_delivery`:
-//! it delivers one event to each subscriber of a set snapshotted at fan-out,
-//! which a single-target outbox row cannot express ([`KEPT_QUEUES`]).
+//! an operator view of its own. None is kept ([`KEPT_QUEUES`]): a fan-out to
+//! several receivers is `mako_service::subscriptions`' `webhook_deliveries`,
+//! which is the SDK's, not a service migration's.
 //!
 //! The patterns are narrower than the rules. A pool is recognised by name
 //! (`pool`, `self.pool`, `ctx.pool`, `state.pool`, `sink.pool`, `rt.pool`), a
@@ -102,12 +102,7 @@ const POOL_NAMES: &[&str] = &[
 ];
 
 /// Retry queues kept beside `mako_service::outbox`, as `(migration, table)`.
-pub const KEPT_QUEUES: &[(&str, &str)] = &[(
-    // One row per (event, subscriber), the subscriber set snapshotted when the
-    // event fans out; a single-target outbox row cannot carry that.
-    "services/marktd/migrations/0001_initial.sql",
-    "event_delivery",
-)];
+pub const KEPT_QUEUES: &[(&str, &str)] = &[];
 
 /// `(line, table)` of each `CREATE TABLE` in `sql` that declares an attempt
 /// counter and a next-attempt column together.

@@ -96,12 +96,7 @@ pub fn run(workspace_root: &Path) -> bool {
         let (statements, interpolated) = collect(&dir, workspace_root);
         totals.0 += statements.len();
         totals.1 += interpolated;
-        match guard.check(
-            name,
-            &migrations(&dir),
-            runs_ensure_schema(&dir),
-            &statements,
-        ) {
+        match guard.check(name, &migrations(&dir), &sdk_schemas(&dir), &statements) {
             Ok(broken) if broken.is_empty() => {
                 println!(
                     "  {name:<14} {:>4} statement(s) prepared, {interpolated} unresolved",
@@ -145,36 +140,53 @@ pub fn run(workspace_root: &Path) -> bool {
 }
 
 /// The migration files of one service, in the order they apply.
-/// Whether this service runs `mako_service::outbox::SCHEMA` at boot.
+/// The `mako_service` schemas a service runs at boot, as `(ensure_schema call,
+/// file holding its SCHEMA)`: the outbox, and the webhook tables after it.
+const SDK_SCHEMAS: &[(&str, &str)] = &[
+    ("outbox::ensure_schema", "crates/mako-service/src/outbox.rs"),
+    (
+        "subscriptions::ensure_schema",
+        "crates/mako-service/src/subscriptions/store.rs",
+    ),
+];
+
+/// The files of the `mako_service` schemas this service runs at boot, in
+/// [`SDK_SCHEMAS`] order.
 ///
 /// Read off the source rather than listed here, so a service that starts or
 /// stops emitting through the outbox is covered without a second edit.
-fn runs_ensure_schema(dir: &Path) -> bool {
+fn sdk_schemas(dir: &Path) -> Vec<&'static str> {
     let mut sources = Vec::new();
     collect_rs(&dir.join("src"), &mut sources);
-    sources
+    let texts: Vec<String> = sources
         .iter()
-        .any(|p| std::fs::read_to_string(p).is_ok_and(|s| s.contains("outbox::ensure_schema")))
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .collect();
+    SDK_SCHEMAS
+        .iter()
+        .filter(|(call, _)| texts.iter().any(|t| t.contains(call)))
+        .map(|(_, file)| *file)
+        .collect()
 }
 
-/// The DDL behind `mako_service::outbox::SCHEMA`, read out of the source.
+/// The DDL behind a `mako_service` `SCHEMA` constant in `file`, read out of
+/// the source.
 ///
 /// Textually, not by depending on `mako-service`: `xtask` would otherwise pull
 /// in axum, sqlx and reqwest to read one string, and reading the literal that
 /// ships is the stronger check anyway.
-fn outbox_schema() -> Result<String, String> {
-    const FILE: &str = "crates/mako-service/src/outbox.rs";
+fn sdk_schema(file: &str) -> Result<String, String> {
     const OPEN: &str = "pub const SCHEMA: &str = \"";
-    let src = std::fs::read_to_string(FILE).map_err(|e| format!("{FILE}: {e}"))?;
+    let src = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
     let at = src
         .find(OPEN)
-        .ok_or_else(|| format!("{FILE}: no `pub const SCHEMA`"))?
+        .ok_or_else(|| format!("{file}: no `pub const SCHEMA`"))?
         + OPEN.len();
     let rest = &src[at..];
     // The SQL carries no double quote, so the closing `";` is unambiguous.
     let end = rest
         .find("\";")
-        .ok_or_else(|| format!("{FILE}: SCHEMA literal is unterminated"))?;
+        .ok_or_else(|| format!("{file}: SCHEMA literal is unterminated"))?;
     // A leading `\` + newline is Rust's line continuation, not SQL.
     Ok(rest[..end].trim_start_matches('\\').trim_start().to_owned())
 }
@@ -652,23 +664,23 @@ impl Postgres {
     /// Apply one service's schema to a fresh database and prepare every
     /// statement, returning the ones the server refuses.
     ///
-    /// `outbox` applies `mako_service::outbox::SCHEMA` as well. That DDL is a
-    /// Rust constant run by `ensure_schema` during the daemon's `migrate()`, not
-    /// a file under `migrations/`, so without it the `event_outbox` table is
-    /// absent here and every statement against it prepares against a schema the
+    /// `sdk` applies the `mako_service` schemas the service runs — the outbox,
+    /// the webhook tables. That DDL is a Rust constant run by `ensure_schema`
+    /// during the daemon's `migrate()`, not a file under `migrations/`, so
+    /// without it `event_outbox` or `webhook_deliveries` is absent here and every statement against it prepares against a schema the
     /// running service does not have — and the DDL itself first reaches a server
     /// at startup, where a mistake is eight daemons that will not boot.
     fn check(
         &self,
         service: &str,
         migrations: &[PathBuf],
-        outbox: bool,
+        sdk: &[&str],
         statements: &[Statement],
     ) -> Result<Vec<String>, String> {
         let mut script = String::from("\\set ON_ERROR_STOP off\n\\set VERBOSITY verbose\n");
         script.push_str("DROP SCHEMA IF EXISTS public CASCADE;\nCREATE SCHEMA public;\n");
-        if outbox {
-            script.push_str(&outbox_schema()?);
+        for file in sdk {
+            script.push_str(&sdk_schema(file)?);
             script.push('\n');
         }
         for path in migrations {

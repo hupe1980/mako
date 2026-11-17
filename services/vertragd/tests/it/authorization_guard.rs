@@ -121,12 +121,12 @@ fn actions_permitted_in_policy() -> BTreeSet<String> {
     found
 }
 
-/// The `module::handler` pairs `handlers::router` mounts, minus the webhooks.
+/// The `module::handler` pairs `handlers::api` mounts, minus the webhooks.
 fn routed_handlers() -> Vec<(String, String)> {
     let router = src("handlers/mod.rs");
     let body = router
-        .split_once("pub fn router(")
-        .expect("handlers::router is defined")
+        .split_once("pub fn api(")
+        .expect("handlers::api is defined")
         .1;
     let mut out = Vec::new();
     for module in HANDLER_MODULES {
@@ -174,11 +174,14 @@ fn the_policy_grants_no_action_the_code_never_checks() {
     // `use-mcp` is the blanket gate the shared MCP middleware applies
     // (`mako_service::mcp_auth::McpAuth::authenticate`), one crate over;
     // `read-policy` and `read-config` are checked by
-    // `mako_service::einrichtung::router`.
+    // `mako_service::einrichtung::router`, `manage-subscription` and
+    // `read-events` by `mako_service::subscriptions`.
     let enforced_elsewhere: BTreeSet<String> = [
         "use-mcp".to_owned(),
         "read-policy".to_owned(),
         "read-config".to_owned(),
+        mako_service::subscriptions::MANAGE.to_owned(),
+        mako_service::subscriptions::READ_EVENTS.to_owned(),
     ]
     .into();
     let dead: Vec<_> = permitted

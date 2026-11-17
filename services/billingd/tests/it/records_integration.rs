@@ -36,6 +36,10 @@ async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
         .execute(&pool)
         .await
         .expect("apply schema");
+    // Issuing a document enqueues its event, as `Daemon::migrate` provides.
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
     Some((pool, container))
 }
 
@@ -2084,4 +2088,79 @@ async fn an_overlapping_original_is_refused() {
     )
     .await
     .expect("the days after the last billed one are free");
+}
+
+// ── Webhook delivery ──────────────────────────────────────────────────────────
+
+/// The configured `erp_webhook_url` is the webhook endpoint `default`: an
+/// event committed to the outbox reaches it signed with `erp_hmac_secret`, the
+/// secret the ERP verifies with.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_erp_webhook_receives_an_issued_event_signed_with_its_secret() {
+    use mako_service::Daemon as _;
+    let Some((url, _pg)) = pg_container().await else {
+        return;
+    };
+    let pool = PgPool::connect(&url).await.expect("connect");
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(axum::http::HeaderMap, axum::body::Bytes)>(4);
+    let receiver = axum::Router::new().route(
+        "/erp",
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let tx = tx.clone();
+                async move {
+                    let _ = tx.send((headers, body)).await;
+                    axum::http::StatusCode::NO_CONTENT
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, receiver).await });
+
+    let cfg: billingd::config::BillingdConfig = serde_json::from_value(serde_json::json!({
+        "database": {"url": url},
+        "tenant": TENANT,
+        "productd_url": "http://127.0.0.1:1",
+        "edmd_url": "http://127.0.0.1:1",
+        "marktd_url": "http://127.0.0.1:1",
+        "erp_webhook_url": format!("http://{addr}/erp"),
+        "erp_hmac_secret": "erp-secret",
+        "allow_insecure_no_auth": true,
+    }))
+    .expect("the configuration parses");
+    billingd::daemon::Billingd::migrate(&cfg, &pool)
+        .await
+        .expect("migrate");
+
+    let subs = billingd::daemon::subscriptions(&cfg, pool.clone());
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    subs.start(shutdown.clone())
+        .await
+        .expect("the module starts");
+
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("billingd", TENANT),
+        mako_events::billing::RECHNUNG_ERSTELLT,
+        MALO.to_owned(),
+        serde_json::json!({ "malo_id": MALO }),
+    );
+    let mut tx = pool.begin().await.expect("begin");
+    mako_service::outbox::enqueue(&mut tx, &ce)
+        .await
+        .expect("enqueue");
+    tx.commit().await.expect("commit");
+
+    let (headers, body) = tokio::time::timeout(std::time::Duration::from_secs(20), rx.recv())
+        .await
+        .expect("the delivery arrives")
+        .expect("a delivery");
+    let id = mako_service::webhook::verify_request(Some(b"erp-secret"), &headers, &body)
+        .expect("signed with erp_hmac_secret")
+        .expect("a webhook-id");
+    assert_eq!(id.0, ce.id, "webhook-id is the CloudEvent id");
+    shutdown.cancel();
 }

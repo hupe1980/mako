@@ -105,6 +105,11 @@ pub mod mako {
     // constants here without an emitter would institutionalize fiction.
     /// §20 NZV Netzzugang: aggregated Übermittlungsbedarf toward the NB.
     pub const NETZZUGANG_UEBERMITTLUNGSBEDARF: &str = "de.mako.netzzugang.uebermittlungsbedarf";
+    /// A test delivery to one webhook endpoint, sent on request by any service
+    /// that hosts `mako_service::subscriptions` and signed like a real one, so
+    /// a receiver that verifies it verifies every delivery. `data` carries
+    /// `endpoint_id` and `message`.
+    pub const WEBHOOK_TEST: &str = "de.mako.webhook.test";
 }
 
 /// Market master-data events (`de.markt.*`), emitted by `marktd`.
@@ -174,8 +179,6 @@ pub mod markt {
     pub const MMMA_IMPORT_SUCCESS: &str = "de.markt.mmma.import.success";
     /// MMMA import batch failed.
     pub const MMMA_IMPORT_FAILED: &str = "de.markt.mmma.import.failed";
-    /// Subscription self-test event (`POST /subscriptions/{id}/test`).
-    pub const SUBSCRIPTION_TEST: &str = "de.markt.subscription.test";
 }
 
 /// Billing events (`de.billing.*`), emitted by `billingd`.
@@ -683,6 +686,7 @@ pub fn all() -> &'static [&'static str] {
         mako::EDIFACT_OUTBOUND,
         mako::DEAD_LETTER_RECORDED,
         mako::NETZZUGANG_UEBERMITTLUNGSBEDARF,
+        mako::WEBHOOK_TEST,
         // de.markt.*
         markt::MALO_UPDATED,
         markt::MALO_STAMMDATEN_GEAENDERT,
@@ -704,7 +708,6 @@ pub fn all() -> &'static [&'static str] {
         markt::PRICAT_PUBLISHED,
         markt::MMMA_IMPORT_SUCCESS,
         markt::MMMA_IMPORT_FAILED,
-        markt::SUBSCRIPTION_TEST,
         // de.billing.*
         billing::RECHNUNG_ERSTELLT,
         billing::ABRECHNUNGSINFORMATION_MONATLICH,

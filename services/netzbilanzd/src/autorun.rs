@@ -103,6 +103,20 @@ pub struct MmmAutoRunRequest {
     clippy::too_many_arguments,
     reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
 )]
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/mmm-run/{malo_id}",
+    tag = "billing",
+    params(
+        ("malo_id" = String, Path, description = "MaLo-ID"),
+    ),
+    request_body(content = serde_json::Value, description = "`MmmAutoRunRequest`: the Mehr-/Mindermengen period"),
+    responses(
+        (status = 201, description = "The drafted MMM invoice", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The period is refused", body = ApiError),
+    )
+)]
 pub async fn post_mmm_run(
     claims: Claims,
     Extension(cedar): Authz,
@@ -268,6 +282,20 @@ pub struct GgvNneRequest {
 /// - `400` when no tenant consumption was supplied.
 /// - `409` when one of the tenants' periods is already billed.
 /// - `422` when a settlement is not computable.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/ggv-nne/{ggv_malo_id}",
+    tag = "billing",
+    params(
+        ("ggv_malo_id" = String, Path, description = "MaLo-ID of the Gemeinschaftliche Gebäudeversorgung"),
+    ),
+    request_body(content = serde_json::Value, description = "`GgvNneRequest`: the period"),
+    responses(
+        (status = 201, description = "The drafted NNE invoice", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The period is refused", body = ApiError),
+    )
+)]
 pub async fn post_ggv_nne(
     claims: Claims,
     Extension(cedar): Authz,
@@ -413,9 +441,6 @@ async fn enqueue_alert(
 
 /// Emit `de.netzbilanz.invoic.dispatch-overdue` for drafts stuck undispatched.
 pub async fn dispatch_overdue_alert(pool: &PgPool, cfg: &NetzbilanzConfig, stale_hours: i64) {
-    if cfg.erp_webhook_url.is_none() {
-        return;
-    }
     let rows = match pg::list_undispatched_stale(pool, &cfg.tenant, stale_hours, 100).await {
         Ok(r) if !r.is_empty() => r,
         Ok(_) => return,
@@ -456,9 +481,6 @@ pub async fn dispatch_overdue_alert(pool: &PgPool, cfg: &NetzbilanzConfig, stale
 
 /// Emit `de.netzbilanz.kostenblatt.deadline-approaching` before the 15th.
 pub async fn kostenblatt_deadline_alert(pool: &PgPool, cfg: &NetzbilanzConfig) {
-    if cfg.erp_webhook_url.is_none() {
-        return;
-    }
     // The 15th and the Aktivierungsmonat are German calendar dates.
     let today = mako_fristen::heute();
     let day = today.day();

@@ -847,7 +847,7 @@ export interface ProbeBefund {
 }
 
 /** Tools makod serves without an output schema: no view may read them. */
-export const makodUntyped = ["get_format_version_coverage","get_health","get_malo","get_outbox_status","get_partner","get_policy","list_active_processes","list_commands","list_overdue_deadlines","list_partners","submit_command"] as const;
+export const makodUntyped = ["get_format_impact","get_format_version_coverage","get_health","get_malo","get_outbox_status","get_partner","get_policy","list_active_processes","list_commands","list_overdue_deadlines","list_partners","submit_command"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
 export const makodOberflaeche: Record<string, string> = {"einrichtung_checkliste":"b587961a","einrichtung_vorschlag":"438cba85","get_process":"0f199c8a","get_process_history":"f77e3784","list_dead_letters":"cd716fbd","rehearse_command":"5f4a513c"};

@@ -60,6 +60,18 @@ pub struct GrantBody {
 }
 
 /// `POST /api/v1/esa/einwilligungen` — grant an ESA consent.
+#[utoipa::path(
+    post,
+    path = "/api/v1/esa/einwilligungen",
+    tag = "einwilligung",
+    request_body(content = serde_json::Value, description = "`GrantBody`"),
+    responses(
+        (status = 201, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn grant_einwilligung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -98,12 +110,24 @@ pub async fn grant_einwilligung(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListQuery {
     pub esa_mp_id: String,
 }
 
 /// `GET /api/v1/esa/einwilligungen?esa_mp_id=…` — list active consents.
+#[utoipa::path(
+    get,
+    path = "/api/v1/esa/einwilligungen",
+    tag = "einwilligung",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_einwilligungen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -129,6 +153,18 @@ pub async fn list_einwilligungen(
 }
 
 /// `GET /api/v1/esa/einwilligungen/:id`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/esa/einwilligungen/{id}",
+    tag = "einwilligung",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_einwilligung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -155,6 +191,17 @@ pub async fn get_einwilligung(
 /// one ORDERS 17008 Abbestellung command per covered location; the outbox
 /// worker delivers those to makod with retry, so a makod outage delays the stop
 /// and never loses it.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/esa/einwilligungen/{id}",
+    tag = "einwilligung",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn revoke_einwilligung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -175,13 +222,15 @@ pub async fn revoke_einwilligung(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ConsentCheckQuery {
     pub esa_mp_id: String,
     pub msb_mp_id: String,
     pub location_id: String,
     /// `msb_inbound` (default, lenient) or `esa_outbound` (strict).
     #[serde(default)]
+    #[param(value_type = String)]
     pub perspective: ConsentPerspective,
 }
 
@@ -196,6 +245,17 @@ pub struct ConsentCheckQuery {
 /// treats it as self-assertion and allows (`BNetzA` forbids form-based
 /// rejection); `esa_outbound` treats it as no lawful basis and blocks — the ESA
 /// is the consent holder and must not originate a request it has no consent for.
+#[utoipa::path(
+    get,
+    path = "/api/v1/esa/consent-check",
+    tag = "einwilligung",
+    params(ConsentCheckQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn consent_check(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -236,6 +296,19 @@ pub struct FrameworkBody {
 }
 
 /// `PUT /api/v1/esa/framework/:msb_mp_id/:esa_mp_id`.
+#[utoipa::path(
+    put,
+    path = "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
+    tag = "einwilligung",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber"), ("esa_mp_id" = String, Path, description = "13-digit MP-ID of the Energieserviceanbieter")),
+    request_body(content = serde_json::Value, description = "`FrameworkBody`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_framework(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -311,6 +384,19 @@ pub struct EsaPreisPosition {
 ///
 /// Written by `makod` when the MSB confirms the Bestellung (ORDRSP 19011),
 /// which is the moment the offer becomes binding.
+#[utoipa::path(
+    put,
+    path = "/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}",
+    tag = "einwilligung",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber"), ("esa_mp_id" = String, Path, description = "13-digit MP-ID of the Energieserviceanbieter")),
+    request_body(content = serde_json::Value, description = "`EsaPreiseBody`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_esa_preise(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -360,6 +446,18 @@ pub async fn put_esa_preise(
 /// Across **all** of the pair's subscriptions, deliberately: an INVOIC 31009
 /// bills a Rahmenvertrag rather than a single Meldepunkt, and its positions name
 /// Artikel-IDs without saying which subscription each belongs to.
+#[utoipa::path(
+    get,
+    path = "/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}",
+    tag = "einwilligung",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber"), ("esa_mp_id" = String, Path, description = "13-digit MP-ID of the Energieserviceanbieter")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_esa_preise(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -418,6 +516,19 @@ const fn yes() -> bool {
 /// A code outside Kapitel 4.6 is refused here rather than stored: the catalogue
 /// of orderable products is code (`mako_wim::esa`), not data, and an entry for
 /// a product the Marktrolle may not order could only ever mislead a walk.
+#[utoipa::path(
+    put,
+    path = "/api/v1/esa/messprodukte/{msb_mp_id}",
+    tag = "einwilligung",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber")),
+    request_body(content = serde_json::Value, description = "`Vec<KatalogEintrag>`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_esa_messprodukt_katalog(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -469,6 +580,18 @@ pub async fn put_esa_messprodukt_katalog(
 /// S. 2 Nr. 10 MsbG makes serving an ESA a mandatory Zusatzleistung, so a
 /// Pflichtprodukt is served whatever the catalogue holds. An operator cannot
 /// refuse one by leaving the table empty.
+#[utoipa::path(
+    get,
+    path = "/api/v1/esa/messprodukte/{msb_mp_id}/{messprodukt}",
+    tag = "einwilligung",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber"), ("messprodukt" = String, Path, description = "Messprodukt code (Codeliste der Konfigurationen)"), EsaPreiseQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_esa_messprodukt_angebot(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -531,6 +654,18 @@ pub async fn get_esa_messprodukt_angebot(
 /// `404` when no accepted Angebot names that Belegnummer — the ordinary state
 /// for a delivery whose sender omitted the `RFF+AGI` Muss, and the signal to
 /// fall back to the configured threshold rather than to invent a cadence.
+#[utoipa::path(
+    get,
+    path = "/api/v1/esa/subscriptions/{bestellung_ref}",
+    tag = "einwilligung",
+    params(("bestellung_ref" = String, Path, description = "ORDERS Belegnummer of the Bestellung")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_esa_subscription(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -562,7 +697,8 @@ pub async fn get_esa_subscription(
 }
 
 /// Query of `GET /api/v1/esa/preise/…`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct EsaPreiseQuery {
     /// The day the prices must be in force on. Defaults to today.
     #[serde(default)]
@@ -570,6 +706,18 @@ pub struct EsaPreiseQuery {
 }
 
 /// `GET /api/v1/esa/framework/:msb_mp_id/:esa_mp_id`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
+    tag = "einwilligung",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber"), ("esa_mp_id" = String, Path, description = "13-digit MP-ID of the Energieserviceanbieter")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_framework(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

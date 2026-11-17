@@ -39,12 +39,25 @@ async fn sparte_of(
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct DeliveryQueryParams {
     from: Option<String>,
     to: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/deliveries/{malo_id}",
+    tag = "billing",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), DeliveryQueryParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_deliveries(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -83,7 +96,8 @@ pub(crate) async fn get_deliveries(
 }
 
 /// `GET /api/v1/imbalance/{malo_id}/{year}/{month}` query parameters.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct ImbalanceParams {
     /// `strom` · `gas` — the saldo aggregates over the commodity's balancing
     /// day, and for Gas that is the 06:00 Gastag. Absent, the Sparte the MaLo's
@@ -97,9 +111,25 @@ pub(crate) struct ImbalanceParams {
     /// no amount of metering data yields it. Without it there is no comparison
     /// to make, so the endpoint refuses rather than returning the measured total
     /// twice and calling the difference zero.
+    #[param(value_type = Option<String>)]
     bilanziert_kwh: Option<Decimal>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/imbalance/{malo_id}/{year}/{month}",
+    tag = "billing",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), ("year" = i32, Path, description = "Calendar year"), ("month" = u8, Path, description = "Month, 1–12"), ImbalanceParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 404, description = "Not found", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_imbalance(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -198,7 +228,8 @@ pub(crate) async fn get_imbalance(
 /// - `brennwert_kwh_per_m3` / `zustandszahl` — Gas conversion factors
 ///
 /// Source: GPKE (BK6-24-174) Teil 1; GeLi Gas 3.0 (BK7-24-01-009).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct BillingPeriodParams {
     /// ISO 8601 date `YYYY-MM-DD` — start of billing period (inclusive).
     from: Option<String>,
@@ -210,6 +241,19 @@ pub(crate) struct BillingPeriodParams {
     sparte: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing-period/{malo_id}",
+    tag = "billing",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), BillingPeriodParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_billing_period(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -297,7 +341,8 @@ pub(crate) async fn get_billing_period(
 ///
 /// This is the collection form; `GET /api/v1/billing-period/{malo_id}` returns
 /// the aggregate for a single MaLo.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct BillingPeriodsParams {
     /// Period start date inclusive (YYYY-MM-DD). Defaults to the start of the
     /// previous month — the window MaBiS actually asks about.
@@ -312,6 +357,19 @@ pub(crate) struct BillingPeriodsParams {
     limit: Option<i64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing-periods",
+    tag = "billing",
+    params(BillingPeriodsParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn list_billing_periods(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

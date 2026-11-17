@@ -1,0 +1,3004 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "billingd — multi-product billing",
+    "description": "Calculates, issues, corrects and renders invoices (BO4E `Rechnung`, EN 16931 CII/UBL, ZUGFeRD), settles § 41e VPP dispatches, and watches the § 40c Abs. 2 EnWG deadlines. Every refusal answers with `Problem`; branch on `error.code`.",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.38.0"
+  },
+  "paths": {
+    "/api/v1/billing": {
+      "get": {
+        "tags": [
+          "records"
+        ],
+        "operationId": "list_records",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lf_mp_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "description": "One category — `VPP`, `SAMMEL`, `STROM`, …",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "is_correction",
+            "in": "query",
+            "description": "`true` = only Storno/Korrektur rows, `false` = only originals.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Billing records, newest first",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/deadline-summary": {
+      "get": {
+        "tags": [
+          "deadlines"
+        ],
+        "summary": "`GET /api/v1/billing/deadline-summary`",
+        "description": "Per Lieferant: invoices owed, issued on time, issued late and overdue under\n§ 40c Abs. 2 EnWG.",
+        "operationId": "get_deadline_summary",
+        "responses": {
+          "200": {
+            "description": "Per Lieferant: owed, on time, late and overdue under § 40c Abs. 2 EnWG",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/ggv/{ggv_id}": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "`POST /api/v1/billing/ggv/{ggv_id}` — §42b EnWG community solar (GGV) billing.",
+        "description": "Allocates plant generation across tenants (§42b EnWG proportional\nallocation) and emits one invoice per tenant. Rejects an empty `tenants` list\nor a zero total-kWh input.\n\n## §42b EnWG (Solarpaket I) — two billing models\n\n**Model A — Nutzungsplan-based (recommended)**: supply `pv_generation_kwh` +\n`nutzungsplan`. Each participant is allocated their Aufteilungsschlüssel\nshare of the shareable generation (§42b Abs. 2 Nr. 1 EnWG); the invoice shows\nthat portion at the agreed Gebäudestrom rate and the remainder as residual\ngrid supply, which §42b Abs. 3 EnWG explicitly contemplates because the\noperator owes no Vollversorgung.\n\n**Model B — Direct consumption**: omit `pv_generation_kwh`. Each\nparticipant's full `consumption_kwh` is billed as Gebäudestrom. Only valid\nwhen the plant covered every participant for the whole period.\n\nThe price advantage on the shared portion is contractual (§42b Abs. 2 Nr. 2\nEnWG names the Vergütung as a contract term), not a statutory rebate.",
+        "operationId": "post_ggv_billing",
+        "parameters": [
+          {
+            "name": "ggv_id",
+            "in": "path",
+            "description": "The Gemeinschaftliche Gebäudeversorgung",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`GgvBillingRequest`: participants, Aufteilungsschlüssel and the generation",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "One invoice per participant and the bundle",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed period or participants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `run-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The period already carries an issued document, or the number is in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well-formed, but it cannot be billed as asked — the code names the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/nachrechnen": {
+      "post": {
+        "tags": [
+          "nachrechnen"
+        ],
+        "summary": "`POST /api/v1/billing/nachrechnen` `{ \"token\": \"…\" }`",
+        "description": "The masked projection the public page (portald) renders: no name, no\naddress, the MaLo-ID masked. An unknown, malformed and a revoked token all\nanswer `404 RECORD_NOT_FOUND`, so the answer says nothing about whether a\ntoken ever existed. The token travels in the body, never in a path a\nrequest log or a metrics label could keep.",
+        "operationId": "post_public_nachrechnung",
+        "requestBody": {
+          "description": "The verify token printed on the invoice",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyTokenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The masked recomputation the public page shows",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-billing-by-token` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No invoice carries this token, or it was revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/review-queue": {
+      "get": {
+        "tags": [
+          "risk"
+        ],
+        "summary": "`GET /api/v1/billing/review-queue?band=&limit=`",
+        "description": "The analyst work list: REVIEW and HELD records, highest risk first, each\ncarrying its coded findings.",
+        "operationId": "get_review_queue",
+        "parameters": [
+          {
+            "name": "band",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records the risk gate banded REVIEW or HELD, highest score first",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/sammelrechnung/{rahmenvertrag_id}": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "`POST /api/v1/billing/sammelrechnung/{rahmenvertrag_id}`",
+        "description": "Consolidated B2B invoice for a `Rahmenvertrag` with `rechnungsstellung=SAMMEL`.\n\n## Pipeline\n\n1. Enumerate the Rahmenvertrag's active MaLos from `vertragd`.\n2. **Phase 1, no transaction:** price every site through the ordinary\n   calculation pipeline and resolve its BG-7 buyer. Nothing is written, so a\n   failure here leaves no trace.\n3. Consolidate the per-site invoices into one document — VAT recomputed once\n   over the combined base per rate.\n4. **Phase 2, one transaction:** the per-MaLo records, the consolidated\n   document, the links between them and the outbox event commit together.\n\nPhase 2 is **one** transaction and not four independent writes. A site\nfailing after two of its siblings have committed would leave orphan invoices\noccupying `br_unique_original`, so the retry cannot succeed either, and a\ndropped link would leave the children counted alongside the bundle that\nalready contains them. The GGV endpoint has the same shape.",
+        "operationId": "post_sammelrechnung",
+        "parameters": [
+          {
+            "name": "rahmenvertrag_id",
+            "in": "path",
+            "description": "The Rahmenvertrag billed with rechnungsstellung SAMMEL",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`SammelrechnungRequest`: the period",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The consolidated document and its per-site records",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed period",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `run-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The period already carries an issued document, or the number is in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well-formed, but it cannot be billed as asked — the code names the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream service the calculation reads did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/unbilled": {
+      "get": {
+        "tags": [
+          "deadlines"
+        ],
+        "summary": "`GET /api/v1/billing/unbilled?open=&limit=`",
+        "description": "The § 40c Abs. 2 EnWG watch: every period the scheduled run attempted and\ncould not bill, with its refusal code and the day the invoice is owed by,\nthe earliest due first. `open=false` includes the ones an invoice has\nsince discharged.",
+        "operationId": "get_unbilled_periods",
+        "parameters": [
+          {
+            "name": "open",
+            "in": "query",
+            "description": "Only periods no invoice has discharged yet (default `true`).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Periods the scheduled run could not bill, the earliest due first",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/vpp/{vpp_id}": {
+      "post": {
+        "tags": [
+          "vpp"
+        ],
+        "operationId": "post_vpp_billing",
+        "parameters": [
+          {
+            "name": "vpp_id",
+            "in": "path",
+            "description": "The VPP's Marktlokation",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`VppBillingRequest`: the dispatches to settle",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The § 41e Gutschrift",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed dispatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `settle-flexibility` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The period already carries an issued document, or the number is in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well-formed, but it cannot be billed as asked — the code names the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream service the calculation reads did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}": {
+      "get": {
+        "tags": [
+          "records"
+        ],
+        "operationId": "get_record",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record with its BO4E Rechnung",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/correction": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "`POST /api/v1/billing/{id}/correction`",
+        "description": "Issue a Stornorechnung for an existing record.\n\n1. Fetch the original by `id` (tenant-scoped).\n2. Produce a correction `Rechnung`: `istOriginal: false`,\n   `originalRechnungsnummer: <original>`, every monetary position negated,\n   and its own number from the tenant's `ST` series.\n3. Insert it with `is_correction = TRUE` and `original_record_id`, and\n   advance the original's `outcome` to `cancelled` — in one transaction.\n4. Enqueue `de.billing.rechnung.erstellt` (`is_correction: true`) so\n   `accountingd` books the CREDIT.\n\n## Storno und Neuberechnung\n\nCancelling the original **releases its period**: `br_unique_original`\nexcludes cancelled rows, so the corrected amounts are re-billed by calling\n`POST /api/v1/billing/{malo_id}/calculate` again for the same window. That\nis the flow German accounting practice expects.\n\n## § 147 AO / GoBD\n\nThe original's content is **never** modified — only its outcome — and both\ndocuments stay in `billing_records` for the statutory **8 years**\n(§ 147 Abs. 3 AO for a Buchungsbeleg, reduced from ten by the BEG IV with\neffect from 01.01.2025).",
+        "operationId": "post_correction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Why the invoice is reversed",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The Stornorechnung; the period is free to bill again",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `correct-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A correction, an already cancelled record, or one never issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/nachrechnung": {
+      "get": {
+        "tags": [
+          "nachrechnen"
+        ],
+        "summary": "`GET /api/v1/billing/{id}/nachrechnung`",
+        "description": "Rechnung nachrechnen: every line and total of the stored invoice recomputed\nto the cent, whether the issue-time seal still holds, and the inputs of\neach line (quantity and how it was obtained, unit price and its source,\nthe rule).",
+        "operationId": "get_nachrechnung",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invoice recomputed line by line, with the seal check",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A Storno- or Korrekturrechnung; recompute its original",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/pdf": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "`GET /api/v1/billing/{id}/pdf` — the ZUGFeRD document.",
+        "description": "One file that is both things a customer and their accounting software need:\na page a person reads, and the EN 16931 invoice embedded inside it. Both come\nfrom the same stored model, so they cannot disagree.\n\nThe template is **pinned on the first render after dispatch**, so requesting\nthis a decade later reproduces the document that was issued rather than\nre-styling it with whatever layout is current. A draft still renders with\nthe current template every time — see [`crate::pg::pin_template`].\n\n# Conditional GET\n\nA **pinned** record's PDF is immutable by construction: same stored model,\nsame pinned template, and a creation timestamp taken from BT-2 rather than\nthe clock, so the bytes are identical on every render. That is exactly what\na strong `ETag` and `Cache-Control: immutable` describe, and an\n`If-None-Match` hit answers `304` without waking the renderer at all — a\ncustomer portal was otherwise spending outputd's full render budget every\ntime somebody re-opened an invoice they had already seen.\n\nA **draft** carries neither header: it re-renders with whatever template is\ncurrent, so it is not the same document twice and must not be cached.",
+        "operationId": "get_invoice_pdf",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ZUGFeRD PDF/A-3 with the CII XML embedded",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "A pinned record's PDF is unchanged (`If-None-Match`)"
+          },
+          "403": {
+            "description": "Cedar `read-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The record cannot be rendered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream service the calculation reads did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/release": {
+      "post": {
+        "tags": [
+          "risk"
+        ],
+        "summary": "`POST /api/v1/billing/{id}/release`",
+        "description": "Analyst release of a HELD record: stamps who released it and dispatches\nthe CloudEvent that the risk gate withheld. 409 when the record is not\ncurrently held.",
+        "operationId": "post_release",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Released and dispatched",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `release-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The record is not held",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/reviewed": {
+      "post": {
+        "tags": [
+          "risk"
+        ],
+        "summary": "`POST /api/v1/billing/{id}/reviewed`",
+        "description": "An analyst's review of a REVIEW record: stamps who reviewed it and takes it\noff the work list. The invoice was already issued when the risk gate\nbanded it, so this sends nothing — a finding that holds is answered with a\ncorrection (`POST …/correction`), not here. 409 when the record is not an\nunreviewed REVIEW record.",
+        "operationId": "post_reviewed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The review is recorded; nothing is sent",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `review-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The record is not banded REVIEW, or was reviewed already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/submit-b2g": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "`POST /api/v1/billing/{id}/submit-b2g`",
+        "description": "Prepare an XRechnung 3.0 CII XML from the billing record and notify the\nconfigured ERP webhook so the ERP's PEPPOL AS4 gateway can transmit it\nto the ZRE / OZG-RE portal.\n\n## Why not send directly?\n\nPEPPOL AS4 transport requires an accredited access-point operator\n(Peppol AP) and a registered Peppol participant ID.  These are ERP /\nplatform operator responsibilities.  `billingd` generates the\nEN 16931-conformant XML and hands it to the ERP via CloudEvent;\nthe ERP's AS4 gateway performs the actual network submission.\n\n## Regulatory\n\nB2G e-invoicing to federal contracting authorities has been **mandatory\nsince 27.11.2020** — § 4a EGovG plus the E-Rechnungsverordnung (ERechV,\nin force 27.11.2018), which transpose EU Directive 2014/55/EU; direct\norders up to EUR 1 000 are exempt (§ 3 Abs. 3 ERechV). The 2027/2028 dates\nbelong to the separate **B2B** mandate in § 14 UStG and have nothing to do\nwith this endpoint.",
+        "operationId": "post_submit_b2g",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`SubmitB2gRequest`: the portal, the Leitweg-ID and the public buyer",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The XRechnung is queued for the ERP to transmit",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `submit-b2g` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The document violates the XRechnung rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No ERP webhook is configured (`NO_ERP_WEBHOOK`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/ubl": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "`GET /api/v1/billing/{id}/ubl`",
+        "description": "Render the stored EN 16931 model as PEPPOL BIS Billing 3.0 (UBL 2.1).\n\nUBL and CII are the **two permitted syntaxes** of EN 16931, not a hierarchy:\n§ 14 UStG requires conformance to the norm and accepts either, and so does\nDirective 2014/55/EU. CII is what German receivers overwhelmingly expect\n(XRechnung, ZUGFeRD); UBL is what a cross-border PEPPOL receiver usually\nwants, which is the reason both endpoints exist.",
+        "operationId": "get_ubl",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PEPPOL BIS Billing 3.0 UBL 2.1 rendered from the stored model",
+            "content": {
+              "application/xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No stored EN 16931 model, or one that does not render",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/verify-token/revoke": {
+      "post": {
+        "tags": [
+          "nachrechnen"
+        ],
+        "summary": "`POST /api/v1/billing/{id}/verify-token/revoke`",
+        "description": "Revoke the invoice's verify token: its public page answers 404 from now on.",
+        "operationId": "post_revoke_verify_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked; the public page answers 404 from now on",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `correct-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/versenden": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "`POST /api/v1/billing/{id}/versenden` — issue this invoice, or this\nGebührenbescheid, as a document and queue it for delivery.",
+        "description": "`GET /{id}/pdf` renders on demand, which answers neither question a supplier\nis actually asked:\n\n* **reproduce what was issued** — § 14 Abs. 1 Satz 2 UStG and\n  § 147 Abs. 1 Nr. 2–3 AO keep the Rechnungsdoppel for eight years in the\n  form in which it was issued, and a re-render follows today's template;\n* **did the customer receive it** — § 40c Abs. 2 EnWG puts the invoice in\n  the customer's hands within three or six weeks of the period end.\n\nThis stores the rendered bytes in `outputd` and queues them on the\nrecipient's channels, idempotent on the Rechnungsnummer. A **draft** the\nrisk gate is holding is refused: it has no booked receivable, so sending it\nwould demand money the ledger does not record as owed.",
+        "operationId": "post_invoice_versenden",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Recorded in outputd for 8 years and queued on the customer's channels",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `issue-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A draft the risk gate holds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The record cannot be rendered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream service the calculation reads did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{id}/xrechnung": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "`GET /api/v1/billing/{id}/xrechnung` — ZUGFeRD 2.3 / XRechnung 3.0 CII XML.",
+        "operationId": "get_xrechnung",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The billing record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "EN 16931 CII XML rendered from the stored model",
+            "content": {
+              "application/xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such billing record in this tenant (`RECORD_NOT_FOUND`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No stored EN 16931 model, or one that does not satisfy its profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{malo_id}/calculate": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "`POST /api/v1/billing/{malo_id}/calculate`",
+        "description": "Pipeline:\n1. Parse + validate period\n2. Fetch `Product` from `productd` (or use request override)\n3. Fetch consumption from `edmd` (or use request override)\n4. Take grid pass-through from the request's `grid` (nothing fetches it from `marktd`)\n5. Dispatch to category-specific pure calculator\n6. Persist `billing_records` (idempotent on same malo+period+product)\n7. Emit `de.billing.rechnung.erstellt` CloudEvent",
+        "operationId": "post_calculate",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`CalculateRequest`: the period, the Lieferant and optional inputs that override what billingd reads",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Calculated, persisted and announced",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed period or input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `run-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The period already carries an issued document, or the number is in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well-formed, but it cannot be billed as asked — the code names the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream service the calculation reads did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{malo_id}/preview": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "`POST /api/v1/billing/{malo_id}/preview` — dry-run, no persist, no CloudEvent.",
+        "operationId": "post_preview",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`CalculateRequest`, as for `/calculate`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The positions, totals and warnings a run would produce; nothing persisted",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed period or input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `preview-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well-formed, but it cannot be billed as asked — the code names the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream service the calculation reads did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing/{malo_id}/tarifwechsel": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "`POST /api/v1/billing/{malo_id}/tarifwechsel`",
+        "description": "Calculates a combined invoice for a billing period containing a price change\n(Tarifwechsel). The period is split at `switch_date`:\n\n- **Sub-period A**: `period_from` → `switch_date - 1` at `old_tariff`\n- **Sub-period B**: `switch_date` → `period_to` at `new_tariff`\n\nThe two invoices are merged via [`Invoice::merge()`]: positions are\nconcatenated, totals re-summed. Tax is applied **independently** per sub-period (correct for\nmid-month rate changes per §41 EnWG).\n\n## Legal basis\n\n§41 Abs. 1 Nr. 4 EnWG: every price change requires transparent itemisation\non the next invoice showing the old and new price with their respective\napplicable periods.",
+        "operationId": "post_tarifwechsel",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`TarifwechselRequest`: the period, the switch date and both tariffs",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "One invoice across the price change",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed period or switch date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `run-billing` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The period already carries an issued document, or the number is in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well-formed, but it cannot be billed as asked — the code names the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream service the calculation reads did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The service's events within the retention window, in commit order — the\nfeed an integrator polls instead of, or beside, an endpoint. Each item is\nthe CloudEvent as delivered.",
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Value"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/deliveries/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue one delivery again, whatever its state.",
+        "operationId": "replay_delivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The delivery's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`delivery_not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The endpoints, a page ordered by name.",
+        "operationId": "list_endpoints",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; absent for the first.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Endpoint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Register an endpoint; the answer shows its secret once.",
+        "operationId": "create_endpoint",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointCreated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_name_taken`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`endpoint_url_not_allowed`, `endpoint_name_reserved`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "One endpoint, with its version as `ETag`.",
+        "operationId": "get_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Replace an endpoint; `If-Match` names the version read.",
+        "operationId": "update_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete an endpoint; its pending deliveries are cancelled with it.",
+        "operationId": "delete_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/deliveries": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The deliveries of one endpoint, newest first.",
+        "operationId": "list_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Which deliveries; every one when absent.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryFilter"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Delivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue every event of a time window again for one endpoint, including\nevents that never had a delivery to it.",
+        "operationId": "replay_window",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayWindow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention` (with `oldest_replayable`), `replay_window_invalid`, `replay_window_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Rotate the secret: the new one signs from now, the previous one beside it\nfor `overlap_hours`. The answer shows the new secret once.",
+        "operationId": "rotate_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretRotated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`overlap_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/test": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Send `de.mako.webhook.test` to the endpoint now, signed like a delivery.",
+        "operationId": "test_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestDelivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/vpp-dispatch": {
+      "post": {
+        "tags": [
+          "vpp"
+        ],
+        "summary": "`POST /api/v1/webhooks/vpp-dispatch`",
+        "description": "**Dispatch-confirmed auto-settlement.**\n\nReceives `de.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when the\nMSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag\nand writes one Gutschrift per dispatch against the\n§41e Aggregatorvertrag in force **on the day the dispatch executed** —\n`vertragd` owns that contract; billingd keeps no copy.\n\n## Idempotency\n\nEach `tx_id` is recorded in `vpp_dispatch_ledger` **inside the settlement\ntransaction**, so a dispatch is settled exactly once and a redelivery\nreturns `202 Accepted` without re-settling. That ledger is also why\nper-dispatch records are exempt from `br_unique_original`: a portfolio is\ndispatched several times a day, and a one-row-per-period index cannot\nexpress that.\n\n## HMAC verification\n\nWhen `[inbound_webhook_secret]` is configured in `billingd.toml`, the\n`webhook-signature` header is verified, together with the `webhook-timestamp`\nfreshness that stops a captured request replaying.  Requests with\ninvalid or missing signatures are rejected with `401 Unauthorized`.\n\n## Auto-billing disabled\n\nWhen `vpp_auto_billing = false` in config (the default), the webhook accepts\nevents and records them in `vpp_dispatch_ledger` but does **not** generate a\n`Rechnung`.  The manual `POST /api/v1/billing/vpp/{vpp_id}` endpoint remains\navailable.\n\n## CloudEvent data schema\n\n```json\n{\n  \"tx_id\":               \"abc123\",\n  \"location_id\":         \"C0001234567890\",\n  \"location_type\":       \"sr\",\n  \"execution_time_from\": \"2026-01-15T10:00:00Z\",\n  \"execution_time_until\": \"2026-01-15T10:15:00Z\",\n  \"max_power_kw\":        \"11.0\",\n  \"command_type\":        \"Konfiguration\",\n  \"sender_mp_id\":        \"9900123456789\",\n  \"produkt_code\":        \"TX-MODUL2-HT\"\n}\n```\n\n`sender_mp_id` must be the contracted `aggregator_mp_id` for the dispatch to\nsettle. § 14a EnWG and § 41e ride the same Steuerungsauftrag, so the sender\nis what separates a Netzbetreiber's grid intervention from the aggregator's\nflexibility call — see step 5b.\n\nThe event carries **no price**, deliberately: what a dispatch is worth is the\n§ 41e Aggregatorvertrag's `capacity_price_eur_per_kwh` in `vertragd`, and a\ncounterparty does not get to state what it is owed.",
+        "operationId": "post_vpp_webhook",
+        "requestBody": {
+          "description": "A `de.vpp.dispatch.confirmed` CloudEvent, signed per Standard Webhooks",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted — settled, or recorded as not this aggregator's to settle"
+          },
+          "401": {
+            "description": "The signature does not verify",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The dispatch ledger could not be read; retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "CorrectionRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/billing/{id}/correction`.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason for the correction (e.g. \"Zählerstandskorrektur\")."
+          },
+          "rechnungsnummer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Override the Stornorechnung's number. Absent — the normal case — takes\nthe next number of the tenant's `ST` series."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Delivery": {
+        "type": "object",
+        "description": "One event to one endpoint.",
+        "required": [
+          "id",
+          "endpoint_id",
+          "event_id",
+          "event_type",
+          "status",
+          "attempts",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts made."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the delivery was created."
+          },
+          "endpoint_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint delivered to."
+          },
+          "event_id": {
+            "type": "string",
+            "description": "The CloudEvent `id`, sent as `webhook-id`."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "The CloudEvent `type`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The delivery's id — what a single replay names."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last attempt's failure."
+          },
+          "last_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status of the last attempt; absent when it got no answer."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long the last answered attempt took, in milliseconds."
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next attempt is due, while pending."
+          },
+          "ordering_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The aggregate the event is about; deliveries of one key arrive in order."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus",
+            "description": "`pending`, `delivered` or `dead_lettered`."
+          }
+        }
+      },
+      "DeliveryFilter": {
+        "type": "string",
+        "description": "Which deliveries the log lists.",
+        "enum": [
+          "all",
+          "pending",
+          "delivered",
+          "failed"
+        ]
+      },
+      "DeliveryStatus": {
+        "type": "string",
+        "description": "A delivery's state.",
+        "enum": [
+          "pending",
+          "delivered",
+          "dead_lettered"
+        ]
+      },
+      "Endpoint": {
+        "type": "object",
+        "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "event_types",
+          "extensions",
+          "owner",
+          "active",
+          "version",
+          "created_at"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the endpoint was registered."
+          },
+          "deactivated_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the endpoint was deactivated (`gone`)."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is the config URL."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Owner",
+            "description": "`config` or `api`."
+          },
+          "partner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+          },
+          "previous_secret_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when the previous secret still signs, after a rotation."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where deliveries are POSTed."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The version `If-Match` names."
+          }
+        }
+      },
+      "EndpointCreate": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints`.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is reserved for the config URL."
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EndpointCreated": {
+        "type": "object",
+        "description": "A created endpoint and its secret — the only answer that shows it.",
+        "required": [
+          "endpoint",
+          "secret"
+        ],
+        "properties": {
+          "endpoint": {
+            "$ref": "#/components/schemas/Endpoint",
+            "description": "The endpoint."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The `whsec_` signing secret; shown once."
+          }
+        }
+      },
+      "EndpointUpdate": {
+        "type": "object",
+        "description": "The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.",
+        "required": [
+          "url",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Owner": {
+        "type": "string",
+        "description": "Who owns an endpoint.",
+        "enum": [
+          "config",
+          "api"
+        ]
+      },
+      "Page_Delivery": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One event to one endpoint.",
+              "required": [
+                "id",
+                "endpoint_id",
+                "event_id",
+                "event_type",
+                "status",
+                "attempts",
+                "created_at"
+              ],
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Attempts made."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the delivery was created."
+                },
+                "endpoint_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint delivered to."
+                },
+                "event_id": {
+                  "type": "string",
+                  "description": "The CloudEvent `id`, sent as `webhook-id`."
+                },
+                "event_type": {
+                  "type": "string",
+                  "description": "The CloudEvent `type`."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The delivery's id — what a single replay names."
+                },
+                "last_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The last attempt's failure."
+                },
+                "last_status": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "The HTTP status of the last attempt; absent when it got no answer."
+                },
+                "latency_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "How long the last answered attempt took, in milliseconds."
+                },
+                "next_attempt_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When the next attempt is due, while pending."
+                },
+                "ordering_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The aggregate the event is about; deliveries of one key arrive in order."
+                },
+                "status": {
+                  "$ref": "#/components/schemas/DeliveryStatus",
+                  "description": "`pending`, `delivered` or `dead_lettered`."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Endpoint": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+              "required": [
+                "id",
+                "name",
+                "url",
+                "event_types",
+                "extensions",
+                "owner",
+                "active",
+                "version",
+                "created_at"
+              ],
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the endpoint was registered."
+                },
+                "deactivated_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Why the endpoint was deactivated (`gone`)."
+                },
+                "event_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "`mako_events::matches` patterns; empty matches every type."
+                },
+                "extensions": {
+                  "type": "object",
+                  "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint's id."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Unique per service; `default` is the config URL."
+                },
+                "owner": {
+                  "$ref": "#/components/schemas/Owner",
+                  "description": "`config` or `api`."
+                },
+                "partner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "previous_secret_expires_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "Until when the previous secret still signs, after a rotation."
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Where deliveries are POSTed."
+                },
+                "version": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "The version `If-Match` names."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Value": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {},
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "description": "The body every billingd refusal answers with.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ProblemDetail",
+            "description": "What was refused."
+          }
+        }
+      },
+      "ProblemDetail": {
+        "type": "object",
+        "description": "The refusal inside [`Problem`]. A conflict or an unprocessable request\ncarries further keys that name what decided it (`record_id`, `warnings`, …).",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable machine code (`PERIOD_ALREADY_BILLED`); branch on it."
+          },
+          "message": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a 502: the upstream service that did not answer."
+          }
+        }
+      },
+      "ReplayWindow": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the window, inclusive (RFC 3339)."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the window, exclusive (RFC 3339)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Replayed": {
+        "type": "object",
+        "description": "How many deliveries a replay queued.",
+        "required": [
+          "queued"
+        ],
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deliveries queued again or for the first time."
+          }
+        }
+      },
+      "RotateSecret": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.",
+        "required": [
+          "overlap_hours"
+        ],
+        "properties": {
+          "overlap_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long the previous secret keeps signing, at most 168 hours.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "SecretRotated": {
+        "type": "object",
+        "description": "A rotated secret — the only answer that shows it.",
+        "required": [
+          "secret",
+          "previous_expires_at"
+        ],
+        "properties": {
+          "previous_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until when the previous secret also signs."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The new `whsec_` signing secret; shown once."
+          }
+        }
+      },
+      "TestDelivery": {
+        "type": "object",
+        "description": "What a test delivery came to.",
+        "required": [
+          "delivered"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "boolean",
+            "description": "Whether the endpoint answered 2xx."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was not delivered."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long it took, when it answered."
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status, when it answered.",
+            "minimum": 0
+          }
+        }
+      },
+      "TotalEstimate": {
+        "type": "object",
+        "description": "A count bounded at [`COUNT_CAP`]: a list over a million rows reports\n`{count: 10000, capped: true}` rather than counting them.",
+        "required": [
+          "count",
+          "capped"
+        ],
+        "properties": {
+          "capped": {
+            "type": "boolean",
+            "description": "`true` when there are more rows than `count`."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The rows counted, at most 10 000."
+          }
+        }
+      },
+      "VerifyTokenBody": {
+        "type": "object",
+        "description": "The body of [`post_public_nachrechnung`].",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The verify token printed on the invoice."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "billing",
+      "description": "Calculate, preview and correct invoices"
+    },
+    {
+      "name": "records",
+      "description": "Billing records"
+    },
+    {
+      "name": "documents",
+      "description": "Rendered documents and their issue"
+    },
+    {
+      "name": "risk",
+      "description": "The risk gate's review queue, release and review"
+    },
+    {
+      "name": "deadlines",
+      "description": "§ 40c Abs. 2 EnWG: unbilled periods and the per-Lieferant standing"
+    },
+    {
+      "name": "nachrechnen",
+      "description": "Rechnung nachrechnen: the recomputation and its verify token"
+    },
+    {
+      "name": "vpp",
+      "description": "§ 41e EnWG VPP dispatch settlement"
+    },
+    {
+      "name": "webhooks",
+      "description": "Webhook endpoints, deliveries, replay and the event feed"
+    }
+  ]
+}

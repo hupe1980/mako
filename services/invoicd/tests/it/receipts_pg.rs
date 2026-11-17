@@ -49,6 +49,9 @@ async fn pg_pool() -> Option<(sqlx::PgPool, PgContainer)> {
     mako_service::outbox::ensure_schema(&pool)
         .await
         .expect("outbox schema");
+    mako_service::subscriptions::ensure_schema(&pool)
+        .await
+        .expect("webhook schema");
     Some((pool, container))
 }
 
@@ -303,10 +306,14 @@ async fn a_resolution_cannot_be_recorded_without_its_timestamp() {
 }
 
 /// The receipt event commits with the receipt's conclusion and survives an ERP
-/// outage: undelivered while the ERP is down, delivered once when it returns.
+/// outage: the ERP — the webhook endpoint `default` — is owed it while it
+/// refuses, and receives it once when it returns.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_receipt_event_survives_an_erp_outage_and_is_delivered_once() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
     let (pool, _guard) = pool_or_skip!();
     let id = Uuid::new_v4();
     upsert_receipt(&pool, &receipt(id)).await.expect("persist");
@@ -316,46 +323,25 @@ async fn the_receipt_event_survives_an_erp_outage_and_is_delivered_once() {
         id.to_string(),
         serde_json::json!({ "process_id": id.to_string(), "dispatched": true }),
     );
-    invoicd::pg::receipts::conclude(
-        &pool,
-        TENANT,
-        id,
-        Some(OffsetDateTime::now_utc()),
-        Some(&ce),
-    )
-    .await
-    .expect("conclude");
-
-    let fast = mako_service::outbox::OutboxConfig {
-        lease: std::time::Duration::ZERO,
-        backoff: vec![std::time::Duration::ZERO],
-        ..Default::default()
-    };
-    // The ERP is down: nothing listens on port 9.
-    mako_service::outbox::OutboxWorker::new(pool.clone(), "http://127.0.0.1:9/erp", None)
-        .with_config(fast.clone())
-        .flush_once()
+    invoicd::pg::receipts::conclude(&pool, TENANT, id, Some(OffsetDateTime::now_utc()), &ce)
         .await
-        .expect("flush");
-    let pending: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM event_outbox WHERE ce_type = $1 AND delivered_at IS NULL",
-    )
-    .bind(mako_events::invoic::RECEIPT_SETTLED)
-    .fetch_one(&pool)
-    .await
-    .expect("the receipt event is on record");
-    assert_eq!(pending, 1, "the event survives the outage");
+        .expect("conclude");
 
-    // The ERP returns.
-    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let seen = std::sync::Arc::clone(&calls);
+    // The ERP answers 503 until it is back up.
+    let up = Arc::new(AtomicBool::new(false));
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let (up_in, accepted_in) = (Arc::clone(&up), Arc::clone(&accepted));
     let app = axum::Router::new().route(
         "/erp",
         axum::routing::post(move || {
-            let seen = std::sync::Arc::clone(&seen);
+            let (up, accepted) = (Arc::clone(&up_in), Arc::clone(&accepted_in));
             async move {
-                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                axum::http::StatusCode::OK
+                if up.load(Ordering::SeqCst) {
+                    accepted.fetch_add(1, Ordering::SeqCst);
+                    axum::http::StatusCode::OK
+                } else {
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                }
             }
         }),
     );
@@ -364,14 +350,70 @@ async fn the_receipt_event_survives_an_erp_outage_and_is_delivered_once() {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    let worker = mako_service::outbox::OutboxWorker::new(pool.clone(), url, None).with_config(fast);
-    worker.flush_once().await.expect("flush");
-    worker.flush_once().await.expect("flush");
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "delivered exactly once"
+
+    let subs = invoicd::server::subscriptions(
+        pool.clone(),
+        TENANT,
+        mako_service::subscriptions::SubscriptionsConfig::default(),
+        Some(url),
+        None,
+    )
+    .with_policy(mako_service::outbox::OutboxConfig {
+        lease: std::time::Duration::ZERO,
+        backoff: vec![std::time::Duration::ZERO],
+        ..Default::default()
+    });
+    subs.sync_config().await.expect("the default endpoint");
+    assert_eq!(subs.fan_out_once().await.expect("fan out"), 1);
+
+    subs.deliver_once().await.expect("attempt while down");
+    let owed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM webhook_deliveries
+          WHERE ce_type = $1 AND delivered_at IS NULL AND dead_lettered_at IS NULL",
+    )
+    .bind(mako_events::invoic::RECEIPT_SETTLED)
+    .fetch_one(&pool)
+    .await
+    .expect("the delivery is on record");
+    assert_eq!(owed, 1, "the event survives the outage");
+
+    up.store(true, Ordering::SeqCst);
+    subs.deliver_once().await.expect("attempt once up");
+    subs.deliver_once().await.expect("nothing left");
+    assert_eq!(accepted.load(Ordering::SeqCst), 1, "delivered exactly once");
+}
+
+/// A receipt past its Zahlungsziel is announced once: its event and its stamp
+/// commit together, and a second pass finds nothing left to announce.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_overdue_receipt_is_announced_once_with_its_event() {
+    let (pool, _guard) = pool_or_skip!();
+    let id = Uuid::new_v4();
+    upsert_receipt(&pool, &receipt(id)).await.expect("persist");
+    let settled = mako_service::CloudEvent::new(
+        mako_service::source("invoicd", TENANT),
+        mako_events::invoic::RECEIPT_SETTLED,
+        id.to_string(),
+        serde_json::json!({ "process_id": id.to_string(), "dispatched": true }),
     );
+    invoicd::pg::receipts::conclude(&pool, TENANT, id, Some(OffsetDateTime::now_utc()), &settled)
+        .await
+        .expect("conclude");
+
+    let first = invoicd::payment_overdue::check_and_enqueue(&pool, TENANT)
+        .await
+        .expect("first pass");
+    let second = invoicd::payment_overdue::check_and_enqueue(&pool, TENANT)
+        .await
+        .expect("second pass");
+    assert_eq!((first, second), (1, 0));
+    let events: i64 = sqlx::query_scalar("SELECT count(*) FROM event_outbox WHERE ce_type = $1")
+        .bind(mako_events::invoic::PAYMENT_OVERDUE)
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(events, 1, "one event per announcement");
 }
 
 // ── What a person states for the Prüfschritte no INVOIC answers ──────────────

@@ -105,6 +105,11 @@ pub struct VertragdConfig {
     /// `[policy]` — the operator readings this deployment runs under.
     #[serde(default)]
     pub policy: VertragdPolicy,
+
+    /// `[subscriptions]` — the webhook endpoints integrators register for the
+    /// `de.vertrag.*` CloudEvents; `erp_webhook_url` is the endpoint `default`.
+    #[serde(default)]
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
 }
 
 /// `[policy]` — vertragd's operator settings.
@@ -316,6 +321,12 @@ impl VertragdConfig {
         out
     }
 
+    /// The `[subscriptions]` findings: `allow_loopback`, the config endpoints.
+    #[must_use]
+    pub fn subscription_befunde(&self) -> Vec<mako_service::Befund> {
+        self.subscriptions.befunde()
+    }
+
     /// One finding per missing credential of [`Self::check_auth_posture`],
     /// each at its own key — none under `allow_insecure_no_auth`.
     pub fn auth_befunde(&self) -> Vec<mako_service::Befund> {
@@ -346,8 +357,8 @@ impl VertragdConfig {
         if self.erp_webhook_url.is_some() && self.erp_hmac_secret.is_none() {
             out.push((
                 "erp_hmac_secret",
-                "erp_hmac_secret — erp_webhook_url is set, and `OutboxWorker` signs only \
-                 when it has a secret: every de.vertrag.* CloudEvent, the § 41 Abs. 5 EnWG \
+                "erp_hmac_secret — erp_webhook_url is set, and its webhook endpoint \
+                 `default` signs only when it has a secret: every de.vertrag.* CloudEvent, the § 41 Abs. 5 EnWG \
                  notices among them, goes to the ERP unsigned and the receiver cannot tell \
                  one from a forgery",
             ));
@@ -421,7 +432,7 @@ mod tests {
 
     /// A delivery target without a signing secret is refused.
     ///
-    /// `OutboxWorker` signs only when it has one, so this posture ships every
+    /// The endpoint `default` signs only when it has one, so this posture ships every
     /// `de.vertrag.*` CloudEvent — the § 41 Abs. 5 EnWG notices among them — to
     /// the ERP unsigned, and nothing at runtime says so.
     #[test]

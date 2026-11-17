@@ -27,6 +27,10 @@ mako-events = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "otel", "metrics", "mcp"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
+# Every `/api/v1` route is mounted through `OpenApiRouter`, so it cannot exist
+# without its entry in the served document.
+utoipa       = { workspace = true }
+utoipa-axum  = { workspace = true }
 rubo4e       = { workspace = true }
 # Shared BO4E boundary helpers (`preistyp` carrier, schema version).
 mako-markt   = { workspace = true }
@@ -54,6 +58,7 @@ sha2         = "0.10"
 serde_jcs    = "0.1"
 
 [dev-dependencies]
+tower = { workspace = true }
 mako-service = { workspace = true, features = ["testing"] }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 testcontainers = { workspace = true }

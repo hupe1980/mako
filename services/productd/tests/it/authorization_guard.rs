@@ -52,6 +52,13 @@ const HANDLER_MODULE: &str = "handlers";
 /// (`mako_service::mcp_auth::McpAuth::authenticate`), one crate over.
 const MCP_GATE: &str = "use-mcp";
 
+/// The actions the shared subscription routes check
+/// (`mako_service::subscriptions`), granted to the operator alone.
+const WEBHOOK_ACTIONS: [&str; 2] = [
+    mako_service::subscriptions::MANAGE,
+    mako_service::subscriptions::READ_EVENTS,
+];
+
 /// The two § 41c EnWG comparison-feed routes.
 ///
 /// They are the only routed handlers that take no `Claims`, and that is
@@ -111,18 +118,14 @@ fn identifiers_after(text: &str, needle: &str) -> Vec<String> {
     found
 }
 
-/// Every handler the domain router mounts, read out of the routing calls in
-/// `daemon.rs` rather than out of every `handlers::…` mention — so the background
-/// Angebot-expiry worker `main` also names is not mistaken for a route.
+/// Every handler the domain router mounts, read out of the `routes!(…)` calls
+/// of `daemon::api` rather than out of every `handlers::…` mention — so the
+/// background Angebot-expiry worker `build` also names is not mistaken for a
+/// route.
 fn routed_handlers() -> Vec<String> {
     let main = src("daemon.rs");
-    let mut routed = Vec::new();
-    for verb in ["get(", "post(", "put(", "patch(", "delete("] {
-        routed.extend(identifiers_after(
-            &main,
-            &format!("{verb}{HANDLER_MODULE}::"),
-        ));
-    }
+    let api = &main[main.find("pub fn api(").expect("daemon.rs defines `api`")..];
+    let mut routed = identifiers_after(api, &format!("{HANDLER_MODULE}::"));
     routed.sort();
     routed.dedup();
     routed
@@ -227,12 +230,15 @@ fn the_policy_grants_no_action_the_code_never_checks() {
     // (`mako_service::mcp_auth::McpAuth::authenticate`), one crate over.
     // `read-policy` and `read-config` are checked by
     // `mako_service::einrichtung::router`, the one handler for every daemon.
+    // The webhook actions are checked by the shared subscription routes.
     let enforced_elsewhere: BTreeSet<String> = [
         MCP_GATE.to_owned(),
         "read-policy".to_owned(),
         "read-config".to_owned(),
     ]
-    .into();
+    .into_iter()
+    .chain(WEBHOOK_ACTIONS.map(str::to_owned))
+    .collect();
     let dead: Vec<_> = permitted
         .difference(&used)
         .filter(|a| !enforced_elsewhere.contains(*a))
@@ -457,10 +463,54 @@ fn an_operator_reaches_every_action_of_its_own_tenant() {
     let enforcer = enforcer();
     let operator = operator();
     for action in actions_permitted_in_policy() {
+        if WEBHOOK_ACTIONS.contains(&action.as_str()) {
+            continue;
+        }
         assert!(
             enforcer.check(&operator, &action, TENANT).is_ok(),
             "the LF operating this deployment is refused {action:?} — an endpoint no caller \
              can reach is worse than one too many can"
+        );
+    }
+}
+
+/// A webhook endpoint exports every matching event, and its test delivery
+/// reports the target's status: the operator's act. A market role, a
+/// Vertriebspartner's credential and a role-less token are refused both
+/// webhook actions; the operator holds them.
+#[test]
+fn only_the_operator_manages_webhooks() {
+    let enforcer = enforcer();
+    for roles in [
+        vec![],
+        vec!["LF"],
+        vec!["MSB"],
+        vec!["ESA"],
+        vec!["VERTRIEBSPARTNER"],
+        vec!["LF", "MSB", "ESA"],
+    ] {
+        let principal = CedarPrincipal {
+            sub: "partner-or-staff".to_owned(),
+            tenant: TENANT.to_owned(),
+            roles: roles.iter().map(|r| (*r).to_owned()).collect(),
+        };
+        for action in WEBHOOK_ACTIONS {
+            assert!(
+                enforcer.check(&principal, action, TENANT).is_err(),
+                "{roles:?} reaches {action:?} — registering a webhook endpoint is an \
+                 outbound data export, the operator's decision"
+            );
+        }
+    }
+    let admin = CedarPrincipal {
+        sub: "admin".to_owned(),
+        tenant: TENANT.to_owned(),
+        roles: vec!["ADMIN".to_owned()],
+    };
+    for action in WEBHOOK_ACTIONS {
+        assert!(
+            enforcer.check(&admin, action, TENANT).is_ok(),
+            "the operator is refused {action:?}"
         );
     }
 }
@@ -483,11 +533,14 @@ fn the_msb_and_esa_deployments_reach_their_own_catalogue() {
             roles: vec![role.to_owned()],
         };
         for action in actions_permitted_in_policy() {
-            if role != "ADMIN" && ENDKUNDEN_ACTIONS.contains(&action.as_str()) {
+            if role != "ADMIN"
+                && (ENDKUNDEN_ACTIONS.contains(&action.as_str())
+                    || WEBHOOK_ACTIONS.contains(&action.as_str()))
+            {
                 assert!(
                     enforcer.check(&principal, &action, TENANT).is_err(),
                     "a {role} deployment reaches {action:?} — a binding energy-supply offer \
-                     to a consumer is the Lieferant's"
+                     to a consumer is the Lieferant's, a webhook endpoint the operator's"
                 );
                 continue;
             }

@@ -530,13 +530,17 @@ CREATE TABLE settlement_receipts (
     -- Human-readable Gutschrift number (GS-EEG-<tr>-<year>-<month>) for lookup/idempotency.
     gutschrift_nummer           TEXT,
     bo4e_version                TEXT        NOT NULL DEFAULT '202607.1.0',
-    -- 'calculated' | 'price_missing' | 'no_data' | 'error' | 'foerderung_beendet'
-    -- | 'jahreskontingent_erschoepft' (§ 8 Abs. 4 KWKG: the calendar year's
-    -- Vollbenutzungsstunden are used up; the Förderung resumes in January)
-    -- | 'sanctioned' | 'kein_anspruch' | 'unknown'
-    -- | 'gehalten' ([policy] beihilfe_politik = 'halten': computed, not paid —
-    --   no Gutschrift, no payout event — until an approval covers the period)
-    status                      TEXT        NOT NULL DEFAULT 'calculated',
+    -- 'jahreskontingent_erschoepft' is § 8 Abs. 4 KWKG (the calendar year's
+    -- Vollbenutzungsstunden are used up; the Förderung resumes in January);
+    -- 'gehalten' is [policy] beihilfe_politik = 'halten' (computed, not paid —
+    -- no Gutschrift, no payout event — until an approval covers the period).
+    -- No status says paid: the payout is accountingd's (`eeg_payout_orders`).
+    -- Pinned both ways to `pg::RECEIPT_STATUSES` (`schema_code_guard`).
+    status                      TEXT        NOT NULL DEFAULT 'calculated'
+                                CHECK (status IN ('calculated', 'no_data', 'price_missing',
+                                    'foerderung_beendet', 'jahreskontingent_erschoepft',
+                                    'sanctioned', 'kein_anspruch', 'fassung_nicht_tabelliert',
+                                    'gehalten', 'unknown')),
     -- Active | Reduced | Suspended | PostEeg | Ended (at time of settlement)
     settlement_state            TEXT,
     error_detail                TEXT,

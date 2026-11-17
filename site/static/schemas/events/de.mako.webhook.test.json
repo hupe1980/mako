@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WebhookTest",
+  "description": "The `data` of `de.mako.webhook.test`.",
+  "type": "object",
+  "properties": {
+    "endpoint_id": {
+      "description": "The endpoint the test was sent to.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "message": {
+      "description": "A fixed text, for a human looking at the receiver's log.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "endpoint_id",
+    "message"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.webhook.test.json"
+}

@@ -20,6 +20,8 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone)]
 pub struct VertragdMcpState {
     pub pool: PgPool,
+    /// The webhook endpoints and deliveries the two `list_webhook_*` tools read.
+    pub subscriptions: mako_service::subscriptions::Subscriptions,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
     /// The operator policy and posture this deployment runs under.
@@ -152,6 +154,53 @@ pub struct ListKuendigungenParams {
     pub limit: Option<i64>,
 }
 
+/// A page of the webhook endpoints.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookEndpointsParams {
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+/// A page of one endpoint's deliveries.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookDeliveriesParams {
+    /// The endpoint's id.
+    pub endpoint_id: String,
+    /// `all` (default), `pending`, `delivered` or `failed`.
+    pub status: Option<String>,
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+/// The Cedar action a tool needs beyond the `use-mcp` gate — the action its
+/// REST twin checks, so the MCP door is no wider than the REST one.
+fn tool_action(body: &[u8]) -> Option<&'static str> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if v.get("method")?.as_str()? != "tools/call" {
+        return None;
+    }
+    match v.get("params")?.get("name")?.as_str()? {
+        "list_webhook_endpoints" | "list_webhook_deliveries" => {
+            Some(mako_service::subscriptions::MANAGE)
+        }
+        _ => None,
+    }
+}
+
+/// An `ApiError` from the subscription reads as the MCP error of its status.
+fn api_to_mcp(e: &mako_service::ApiError) -> McpError {
+    let text = e.to_string();
+    if e.status().is_client_error() {
+        McpError::invalid_params(text, None)
+    } else {
+        McpError::internal_error(text, None)
+    }
+}
+
 #[derive(Clone)]
 pub struct VertragdMcpHandler {
     state: Arc<VertragdMcpState>,
@@ -185,6 +234,69 @@ impl VertragdMcpHandler {
         ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// The agent twin of `GET /api/v1/webhooks/endpoints`.
+    #[tool(
+        description = "List the webhook endpoints vertragd delivers its de.vertrag.* CloudEvents to, a page ordered by name: url, event-type patterns, extension filters, owner (`config` for the endpoint `default`, the configured erp_webhook_url; `api` for one registered through REST), whether it is active and the last delivery status. Secrets are never listed. Page on `next_cursor`.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
+    )]
+    async fn list_webhook_endpoints(
+        &self,
+        Parameters(p): Parameters<ListWebhookEndpointsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        let endpoints = self
+            .state
+            .subscriptions
+            .list_endpoints(None, &page)
+            .await
+            .map_err(|e| api_to_mcp(&e))?;
+        serde_json::to_value(endpoints)
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    /// The agent twin of `GET /api/v1/webhooks/endpoints/{id}/deliveries`.
+    #[tool(
+        description = "List one webhook endpoint's deliveries, newest first: the CloudEvent id and type, attempts, the last HTTP status, latency and error, and whether it was delivered or dead-lettered. `status` narrows to `pending`, `delivered` or `failed`. Page on `next_cursor`.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Delivery>>()
+    )]
+    async fn list_webhook_deliveries(
+        &self,
+        Parameters(p): Parameters<ListWebhookDeliveriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use mako_service::subscriptions::DeliveryFilter;
+        let status = match p.status.as_deref().unwrap_or("all") {
+            "all" => DeliveryFilter::All,
+            "pending" => DeliveryFilter::Pending,
+            "delivered" => DeliveryFilter::Delivered,
+            "failed" => DeliveryFilter::Failed,
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("status {other:?} is none of all, pending, delivered, failed"),
+                    None,
+                ));
+            }
+        };
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        let deliveries = self
+            .state
+            .subscriptions
+            .list_deliveries(None, &p.endpoint_id, status, &page)
+            .await
+            .map_err(|e| api_to_mcp(&e))?;
+        serde_json::to_value(deliveries)
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
     #[tool(
@@ -1021,7 +1133,7 @@ impl ServerHandler for VertragdMcpHandler {
         .with_instructions(
             "vertragd MCP — B2B + B2C Contract & Customer Management.\n\
              Manages Kunden, Rahmenverträge (B2B framework), and Versorgungsverträge.\n\n\
-             ## Tools (16)\n\
+             ## Tools (18)\n\
              - `get_vertrag_status` — full contract + components by UUID\n\
              - `list_offene_vertraege` — AKTIV/IN_BEARBEITUNG/TEILERFUELLUNG/GEKÜNDIGT\n\
              - `get_kunde` — customer profile by UUID (MaLo IDs + identities)\n\
@@ -1037,7 +1149,9 @@ impl ServerHandler for VertragdMcpHandler {
              - `get_zahlungsinformation` — SEPA/IBAN payment details for accountingd reconciliation\n\
              - `list_auto_renewal_due` — auto-renewal contracts within N days (§ 309 Nr. 9 lit. b BGB)\n\
              - `list_alle_kunden` — all customers for CRM/ERP sync\n\
-             - `compute_kuendigungsfrist` — earliest valid Kündigung date (§ 20 Abs. 1 StromGVV / GasGVV)\n\n\
+             - `compute_kuendigungsfrist` — earliest valid Kündigung date (§ 20 Abs. 1 StromGVV / GasGVV)\n\
+             - `list_webhook_endpoints` — the webhook endpoints the de.vertrag.* events go to\n\
+             - `list_webhook_deliveries` — one endpoint's deliveries, failed ones included\n\n\
              ## Prompts (4)\n\
              - `o2c_review` — full O2C pipeline review + stuck/expiring detection\n\
              - `b2b_onboarding` — step-by-step Rahmenvertrag + N Versorgungsverträge workflow\n\
@@ -1052,6 +1166,23 @@ async fn mcp_auth_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
+    // Buffer the body to read the tool name, authorize the tool's own action,
+    // then hand the reconstructed request to `authenticate`.
+    use axum::response::IntoResponse as _;
+    const MAX_MCP_BODY: usize = 1024 * 1024;
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_MCP_BODY).await else {
+        return mako_service::ApiError::payload_too_large(format!(
+            "MCP request body exceeds {MAX_MCP_BODY} bytes"
+        ))
+        .into_response();
+    };
+    if let Some(action) = tool_action(&bytes)
+        && let Err(resp) = state.auth.authorize(&parts.headers, action)
+    {
+        return resp;
+    }
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     state.auth.authenticate(request, next).await
 }
 
@@ -1084,5 +1215,48 @@ mod tool_contract_tests {
         if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
             panic!("{e}");
         }
+    }
+
+    /// `list_webhook_endpoints` and `list_webhook_deliveries` answer with the
+    /// shape their REST twins document.
+    #[tokio::test]
+    async fn the_webhook_tools_are_twins_of_the_rest_reads() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused@127.0.0.1:1/unused")
+            .expect("a lazy pool opens no connection");
+        let subs = mako_service::subscriptions::Subscriptions::new(
+            pool,
+            "vertragd",
+            "9900357000004",
+            mako_service::subscriptions::SubscriptionsConfig::default(),
+        );
+        let doc = serde_json::to_value(crate::handlers::documented(&subs).1)
+            .expect("the document serializes");
+        let tools = VertragdMcpHandler::tool_router().list_all();
+        for (tool, path) in [
+            ("list_webhook_endpoints", "/api/v1/webhooks/endpoints"),
+            (
+                "list_webhook_deliveries",
+                "/api/v1/webhooks/endpoints/{id}/deliveries",
+            ),
+        ] {
+            mako_service::mcp::conformance::assert_rest_twin(&tools, tool, &doc, path);
+        }
+    }
+
+    /// The two webhook tools need the action their REST twins check.
+    #[test]
+    fn the_webhook_tools_need_manage_subscription() {
+        let call = |name: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": name, "arguments": {}},
+            }))
+            .expect("serializes")
+        };
+        for tool in ["list_webhook_endpoints", "list_webhook_deliveries"] {
+            assert_eq!(super::tool_action(&call(tool)), Some("manage-subscription"));
+        }
+        assert_eq!(super::tool_action(&call("get_vertrag_status")), None);
     }
 }

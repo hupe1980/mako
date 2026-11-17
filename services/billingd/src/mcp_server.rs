@@ -1,6 +1,6 @@
 //! MCP server for `billingd` — Multi-Product Billing Engine.
 //!
-//! ## Tools (13) — all read-only
+//! ## Tools (15) — all read-only
 //!
 //! | Tool | Description |
 //! |---|---|
@@ -17,6 +17,8 @@
 //! | `validate_tariff_config` | Pre-flight validation: §41a iMSys guard, legacy flags, §42 Energiemix |
 //! | `explain_invoice_position` | Explain how a billing position was calculated (PositionTrace audit) |
 //! | `list_review_queue` | Analyst review queue (REVIEW + HELD), typed |
+//! | `list_webhook_endpoints` | The webhook endpoints (REST twin, `manage-subscription`) |
+//! | `list_webhook_deliveries` | One endpoint's deliveries (REST twin, `manage-subscription`) |
 //!
 //! ## Why nothing here issues an invoice
 //!
@@ -76,6 +78,8 @@ pub struct BillingdMcpState {
     pub deps: Arc<crate::clients::BillingDeps>,
     /// The operator policy and posture this deployment runs under.
     pub policy: Arc<mako_service::policy::PolicyReport>,
+    /// The webhook module the two webhook tools read.
+    pub subs: mako_service::subscriptions::Subscriptions,
 }
 
 /// A tool that takes no arguments.
@@ -179,6 +183,28 @@ impl ReviewBand {
             Self::Held => "HELD",
         }
     }
+}
+
+/// A page of `list_webhook_endpoints`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookEndpointsParams {
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+/// A page of one endpoint's deliveries.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookDeliveriesParams {
+    /// The endpoint's id.
+    pub endpoint_id: String,
+    /// `all` (the default), `pending`, `delivered` or `failed`.
+    pub status: Option<String>,
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
 }
 
 /// Filters for `list_review_queue`.
@@ -955,6 +981,54 @@ before billing.",
     }
 
     #[tool(
+        description = "The webhook endpoints billingd delivers its CloudEvents to, a page ordered by name: each with its URL, event-type patterns, extension filter, owner (`config` for the endpoint `default` the configuration names, `api` for one registered through REST), whether it is active, and the last delivery status. Secrets are never shown. The twin of GET /api/v1/webhooks/endpoints.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
+    )]
+    async fn list_webhook_endpoints(
+        &self,
+        Parameters(params): Parameters<ListWebhookEndpointsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: params.limit,
+            cursor: params.cursor,
+        };
+        mako_service::mcp::answer(self.state.subs.list_endpoints(None, &page).await)
+    }
+
+    #[tool(
+        description = "The deliveries of one webhook endpoint, newest first: the event, its type, the attempts, the last HTTP status and latency, and whether it was delivered, is still owed or was dead-lettered. `status` narrows to `pending`, `delivered` or `failed`. The twin of GET /api/v1/webhooks/endpoints/{id}/deliveries.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Delivery>>()
+    )]
+    async fn list_webhook_deliveries(
+        &self,
+        Parameters(params): Parameters<ListWebhookDeliveriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let status = match params.status {
+            None => mako_service::subscriptions::DeliveryFilter::All,
+            Some(s) => match serde_json::from_value(serde_json::Value::String(s)) {
+                Ok(f) => f,
+                Err(_) => {
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
+                        "status_invalid: status is one of all, pending, delivered, failed",
+                    )]));
+                }
+            },
+        };
+        let page = mako_service::page::PageQuery {
+            limit: params.limit,
+            cursor: params.cursor,
+        };
+        mako_service::mcp::answer(
+            self.state
+                .subs
+                .list_deliveries(None, &params.endpoint_id, status, &page)
+                .await,
+        )
+    }
+
+    #[tool(
         description = "The analyst review queue: the undecided billing records the risk gate banded REVIEW (dispatched, queued until reviewed through POST /api/v1/billing/{id}/reviewed) or HELD (not dispatched until released through POST /api/v1/billing/{id}/release), the highest risk score first, each with the coded findings behind its score. A reviewed or released record has left the queue. `saturated` means at least `limit` records matched.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_output::<Pruefliste>()
@@ -1287,6 +1361,9 @@ fn tool_action(body: &[u8]) -> Option<&'static str> {
         "list_unbilled_periods" | "summarize_billing_deadlines" | "recompute_invoice" => {
             Some("read-billing")
         }
+        "list_webhook_endpoints" | "list_webhook_deliveries" => {
+            Some(mako_service::subscriptions::MANAGE)
+        }
         _ => None,
     }
 }
@@ -1382,8 +1459,34 @@ mod contract_tests {
         ] {
             assert_eq!(tool_action(&call(name)), Some("read-billing"), "{name}");
         }
+        for name in ["list_webhook_endpoints", "list_webhook_deliveries"] {
+            assert_eq!(
+                tool_action(&call(name)),
+                Some("manage-subscription"),
+                "{name}"
+            );
+        }
         assert_eq!(tool_action(&call("get_policy")), None);
         assert_eq!(tool_action(b"{\"method\":\"tools/list\"}"), None);
+    }
+
+    /// The two webhook tools answer with the type their REST twins document.
+    #[tokio::test]
+    async fn the_webhook_tools_are_twins_of_the_rest_reads() {
+        let tools = BillingdMcpHandler::tool_router().list_all();
+        let doc = serde_json::to_value(crate::openapi::document()).expect("serializes");
+        mako_service::mcp::conformance::assert_rest_twin(
+            &tools,
+            "list_webhook_endpoints",
+            &doc,
+            "/api/v1/webhooks/endpoints",
+        );
+        mako_service::mcp::conformance::assert_rest_twin(
+            &tools,
+            "list_webhook_deliveries",
+            &doc,
+            "/api/v1/webhooks/endpoints/{id}/deliveries",
+        );
     }
 
     /// The band filter admits the two bands an analyst works and nothing else:

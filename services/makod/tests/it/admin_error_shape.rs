@@ -92,12 +92,12 @@ async fn get(app: axum::Router, uri: &str, token: Option<&str>) -> (StatusCode, 
 
 async fn invoic_app() -> (axum::Router, ProcessId) {
     let (store, tenant_id, process) = malformed_invoic_stream().await;
-    let app = invoic_api::router(Arc::new(InvoicApiState {
+    let app = axum::Router::from(invoic_api::routes(Arc::new(InvoicApiState {
         store,
         tenant_id,
         cedar: authorizer(),
         tenant: TENANT.to_owned(),
-    }));
+    })));
     (app, process)
 }
 

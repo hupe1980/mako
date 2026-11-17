@@ -174,7 +174,7 @@ function deskFetch(
       url.includes("/api/v1/queue/") ||
       url.startsWith("/svc/invoicd/api/") ||
       url.startsWith("/svc/billingd/api/") ||
-      url.startsWith("/svc/accountingd/api/") ||
+      (url.startsWith("/svc/accountingd/api/") && init?.method === "POST") ||
       url.endsWith("/bewertung")
     ) {
       posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });

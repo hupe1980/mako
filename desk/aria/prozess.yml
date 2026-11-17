@@ -39,7 +39,7 @@
   - region "Nachweise":
     - heading "Nachweise" [level=2]
     - list "Nachweise":
-      - listitem: Eingang · PID 55001 — belegt UTILMD-2026-11-04-0001 04.11.2026, 09:00
+      - listitem: Eingang · PID 55001aufgezeichnet UTILMD-2026-11-04-0001 04.11.2026, 09:00
       - listitem:
         - text: Frist des Prozesses steht aus
         - time: "Frist: in 1 Tag"

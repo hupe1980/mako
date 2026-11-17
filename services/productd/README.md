@@ -11,8 +11,8 @@ who is on it — that assignment lives in `vertragd`.
 |---|---|
 | **Port** | 9080 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL, `public` schema — `products`, `epex_prices`, `nehs_prices`, `angebote`, `endkunden_angebote` (append-only) |
-| **MCP** | 14 tools, 3 prompts at `/mcp` |
-| **Emits** | `de.tarif.product.updated`, `de.tarif.angebot.angenommen` through the transactional outbox |
+| **MCP** | 16 tools, 3 prompts at `/mcp` |
+| **Emits** | `de.tarif.product.updated` to every webhook subscriber; `de.tarif.angebot.angenommen` to `erp_webhook_url` (vertragd) — both through the transactional outbox |
 | **Consumes** | none |
 | **Depends on** | billingd (`[policy] behg_regime`), marktd (Preisblätter for an Endkunden-Angebot) |
 
@@ -38,13 +38,17 @@ just test-productd-db
 | `POST /api/v1/products/{lf_mp_id}/endkunden-angebote`, `GET /api/v1/endkunden-angebote/{id}` | Frozen Endkunden-Angebot; a missing input refuses `422 eingabe_fehlt` |
 | `/api/v1/angebote` (+ `/{id}`, `/comparison`, `/versenden`, `/annehmen`, `/ablehnen`, `/expire`) | B2B quotations |
 | `GET /api/v1/comparison-feed`, `/comparison-feed/bo4e` | § 41c EnWG feed, public |
+| `/api/v1/webhooks/endpoints` (+ `/deliveries`, `/replay`, `/test`), `GET /api/v1/events` | Webhook subscriptions and the event feed (`ADMIN`) |
+| `GET /api/v1/openapi.json` | The OpenAPI document, committed as `openapi.json` |
 
 ## Configuration
 
 `tenant`, `lf_mp_id` (defaults to `tenant`), `billingd_url` (without it a Gas
 position in a year § 10 BEHG fixes no price for is refused `BEHG_PREIS_FEHLT`),
 `marktd_url` (without it the Endkunden-Angebot route answers `503`),
-`erp_webhook_url` / `erp_hmac_secret`, `[database]`, `[oidc]`, `[mcp]`.
+`erp_webhook_url` / `erp_hmac_secret` (the webhook endpoint `default`),
+`[subscriptions]` (`retention_days`, `allow_loopback` for `just dev`),
+`[database]`, `[oidc]`, `[mcp]`.
 productd has no `[policy]` of its own; a `behg_regime` key is refused at
 startup because billingd's
 [`behg_regime`](https://hupe1980.github.io/mako/docs/services/billingd/#policy-behg-regime)

@@ -12,8 +12,8 @@ recent window in PostgreSQL, settled history in Apache Iceberg V2.
 |---|---|
 | **Port** | 8380 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `migrations/0001_schema.sql` plus the meterstore tables created at startup; Iceberg catalog for the cold tier |
-| **MCP** | 17 tools, 5 prompts at `/mcp` |
-| **OpenAPI** | `GET /api/v1/openapi.json`, committed as `openapi.json` — the documented reads (series, quality, corrections, per-day coverage) |
+| **MCP** | 19 tools, 5 prompts at `/mcp` |
+| **OpenAPI** | `GET /api/v1/openapi.json`, committed as `openapi.json` — every `/api/v1` route |
 | **Emits** | `de.messwert.reading.*`, `de.messwert.esa.typ2.delivery.*`, `de.messwert.cls.*`, `de.messwert.smgw.cert.expiry-warning` |
 | **Consumes** | `de.mako.process.completed` (MSCONS, GPKE Lieferbeginn/-ende), `de.markt.malo.updated` at `POST /webhook` |
 | **Depends on** | `marktd` (subscription, Bundesland, Lokationszuordnung) |
@@ -38,12 +38,16 @@ EDMD_CONFIG=deploy/demo/edmd.toml cargo run -p edmd -- --check-config
 | `/api/v1/archive/*`, `POST /api/v1/query/sql`, `/api/v1/iceberg` | cold tier |
 | `/api/v1/smgw`, `/api/v1/surveillance/delivery` | SMGW registry, delivery surveillance |
 | `DELETE /api/v1/gdpr/erasure/{malo_id}` | Art. 17 DSGVO erasure |
+| `/api/v1/webhooks/*`, `GET /api/v1/events` | webhook endpoints, deliveries and replay on the emitted events; the outbox as a feed |
 
 ## Configuration
 
 `[database] url`, `[identity] tenant`, `[marktd] url`/`api_key`,
-`[subscription] webhook_url` and `[oidc]` (or `allow_insecure_no_auth = true`
-in dev). `[privacy] erasure_secret` enables erasure. `[policy]`:
+`[webhook] inbound_secret` (the secret of edmd's entry in marktd's
+`[[subscriptions.endpoints]]`) and `[oidc]` (or `allow_insecure_no_auth = true`
+in dev). `[webhook] erp_webhook_url`/`erp_webhook_secret` is the webhook
+endpoint `default`; `[subscriptions] retention_days`/`allow_loopback` govern the
+endpoints registered under `/api/v1/webhooks/endpoints`. `[privacy] erasure_secret` enables erasure. `[policy]`:
 [`physische_loeschung`](https://hupe1980.github.io/mako/docs/services/edmd/#policy-physische-loeschung).
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/edmd/)

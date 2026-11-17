@@ -76,18 +76,15 @@ const MAX_POSITIONS_PER_RUN: usize = 1_000;
 
 /// Enqueue a business CloudEvent in the caller's transaction.
 ///
-/// The event and the write it describes commit together; the outbox worker
-/// delivers it with at-least-once semantics, signing and dead-lettering.
+/// The event and the write it describes commit together; the subscription
+/// worker fans it out to every matching webhook endpoint with at-least-once
+/// semantics, signing and dead-lettering, and the retention window prunes it.
 async fn emit(
     conn: &mut sqlx::PgConnection,
     cfg: &NetzbilanzConfig,
     ce_type: &'static str,
     payload: serde_json::Value,
 ) -> Result<(), sqlx::Error> {
-    if cfg.erp_webhook_url.is_none() {
-        // No worker runs without a URL, so enqueuing would grow the table forever.
-        return Ok(());
-    }
     let ce = mako_service::CloudEvent::new(
         mako_service::source("netzbilanzd", &cfg.tenant),
         ce_type,
@@ -111,6 +108,18 @@ async fn emit(
 ///
 /// - `422` when a position does not describe a computable settlement.
 /// - `409` when a position's MaLo, period and Prüfidentifikator are already billed.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/run",
+    tag = "billing",
+    request_body(content = serde_json::Value, description = "`BillingRunRequest`: the positions to settle and the Rechnungsdatum"),
+    responses(
+        (status = 201, description = "The drafts, numbered and checked", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 409, description = "A position's MaLo, period and Prüfidentifikator are already billed", body = ApiError),
+        (status = 422, description = "A position does not describe a computable settlement", body = ApiError),
+    )
+)]
 pub async fn run_billing(
     claims: Claims,
     Extension(cedar): Authz,
@@ -493,6 +502,28 @@ fn next_cursor(rows: &[pg::DraftSummaryRow], limit: i64) -> Option<String> {
 /// # Errors
 ///
 /// Propagates database failures as 500.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/drafts",
+    tag = "billing",
+    params(
+        ("status" = Option<String>, Query, description = "Lifecycle status"),
+        ("malo_id" = Option<String>, Query, description = "MaLo-ID"),
+        ("sender_mp_id" = Option<String>, Query, description = "Issuing party"),
+        ("recipient_mp_id" = Option<String>, Query, description = "Billed party"),
+        ("pid" = Option<i32>, Query, description = "BDEW Prüfidentifikator"),
+        ("sparte" = Option<String>, Query, description = "STROM or GAS"),
+        ("check_outcome" = Option<String>, Query, description = "invoic-checker verdict"),
+        ("rechnungsart" = Option<String>, Query, description = "RECHNUNG, STORNORECHNUNG or KORREKTURRECHNUNG"),
+        ("after" = Option<String>, Query, description = "next_cursor of the previous page"),
+        ("limit" = Option<i64>, Query, description = "Rows, at most 1 000"),
+    ),
+    responses(
+        (status = 200, description = "A page of drafts", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A filter is refused", body = ApiError),
+    )
+)]
 pub async fn list_drafts(
     claims: Claims,
     Extension(cedar): Authz,
@@ -529,6 +560,19 @@ pub async fn list_drafts(
 /// # Errors
 ///
 /// `404` when the draft does not exist for this tenant.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/drafts/{id}",
+    tag = "billing",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The invoice draft"),
+    ),
+    responses(
+        (status = 200, description = "The draft with its BO4E document and findings", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such draft", body = ApiError),
+    )
+)]
 pub async fn get_draft(
     claims: Claims,
     Extension(cedar): Authz,
@@ -558,6 +602,21 @@ pub async fn get_draft(
 /// - `404` when the draft does not exist for this tenant.
 /// - `409` when it is no longer in `draft` status.
 /// - `422` when the checker disputes the document, or `makod` refuses it.
+#[utoipa::path(
+    put,
+    path = "/api/v1/billing/drafts/{id}/dispatch",
+    tag = "billing",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The invoice draft"),
+    ),
+    responses(
+        (status = 200, description = "Dispatched as INVOIC through makod", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such draft", body = ApiError),
+        (status = 409, description = "No longer a draft", body = ApiError),
+        (status = 422, description = "The checker disputes the document, or makod refuses it", body = ApiError),
+    )
+)]
 pub async fn dispatch_draft(
     claims: Claims,
     Extension(cedar): Authz,
@@ -913,6 +972,20 @@ pub struct RejectRequest {
 /// # Errors
 ///
 /// `404` when the draft does not exist for this tenant or is no longer a draft.
+#[utoipa::path(
+    put,
+    path = "/api/v1/billing/drafts/{id}/reject",
+    tag = "billing",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The invoice draft"),
+    ),
+    request_body(content = serde_json::Value, description = "`RejectRequest`: the reason"),
+    responses(
+        (status = 204, description = "Rejected"),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such draft, or no longer a draft", body = ApiError),
+    )
+)]
 pub async fn reject_draft(
     claims: Claims,
     Extension(cedar): Authz,
@@ -953,6 +1026,18 @@ pub struct DispatchBatchRequest {
 /// # Errors
 ///
 /// `400` for an empty or oversized batch.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/drafts/dispatch-batch",
+    tag = "billing",
+    request_body(content = serde_json::Value, description = "`DispatchBatchRequest`: the draft ids"),
+    responses(
+        (status = 200, description = "The outcome per draft", body = serde_json::Value),
+        (status = 207, description = "The outcome per draft, at least one refused", body = serde_json::Value),
+        (status = 400, description = "An empty or oversized batch", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn post_dispatch_batch(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1066,6 +1151,21 @@ pub struct StornoRequest {
 ///   leave it rejected, and bill again), when it is already reversed, or when
 ///   replaying its stored input no longer reproduces the amounts it was issued
 ///   for.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/drafts/{id}/storno",
+    tag = "billing",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The invoice draft"),
+    ),
+    request_body(content = serde_json::Value, description = "`StornoRequest`: the reason"),
+    responses(
+        (status = 201, description = "The Stornorechnung", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such draft", body = ApiError),
+        (status = 409, description = "Never dispatched, rejected, already reversed, or no longer reproducible", body = ApiError),
+    )
+)]
 pub async fn post_storno(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1286,6 +1386,22 @@ pub struct KorrekturRequest {
 ///   dispatched at all.
 /// - `422` when the corrected inputs do not describe a computable settlement,
 ///   or describe a different invoice than the one being corrected.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/drafts/{id}/korrektur",
+    tag = "billing",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The invoice draft"),
+    ),
+    request_body(content = serde_json::Value, description = "`KorrekturRequest`: the corrected inputs"),
+    responses(
+        (status = 201, description = "The Korrekturrechnung", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such draft", body = ApiError),
+        (status = 409, description = "The original is still live or was never dispatched", body = ApiError),
+        (status = 422, description = "The corrected inputs are refused", body = ApiError),
+    )
+)]
 pub async fn post_korrektur(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1526,6 +1642,20 @@ pub struct MarkPaidRequest {
 /// # Errors
 ///
 /// `404` when the draft does not exist for this tenant or is not dispatched.
+#[utoipa::path(
+    put,
+    path = "/api/v1/billing/drafts/{id}/mark-paid",
+    tag = "billing",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The invoice draft"),
+    ),
+    request_body(content = serde_json::Value, description = "`MarkPaidRequest`: the REMADV 33001 reference"),
+    responses(
+        (status = 200, description = "Marked paid", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such dispatched draft", body = ApiError),
+    )
+)]
 pub async fn mark_paid(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1575,6 +1705,20 @@ pub struct MarkDisputedRequest {
 /// # Errors
 ///
 /// `404` when the draft does not exist for this tenant or is not dispatched.
+#[utoipa::path(
+    put,
+    path = "/api/v1/billing/drafts/{id}/mark-disputed",
+    tag = "billing",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The invoice draft"),
+    ),
+    request_body(content = serde_json::Value, description = "`MarkDisputedRequest`: the REMADV 33002/33003/33004 and its codes"),
+    responses(
+        (status = 200, description = "Marked disputed", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such dispatched draft", body = ApiError),
+    )
+)]
 pub async fn mark_disputed(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1634,6 +1778,17 @@ pub struct RemadvWebhookBody {
 /// - `401` when the HMAC signature does not verify.
 /// - `400` on a malformed body or a `data.draft_id` that is not a UUID.
 /// - `404` when the referenced draft is not in a state the event applies to.
+#[utoipa::path(
+    post,
+    path = "/api/v1/webhooks/remadv",
+    tag = "webhooks-inbound",
+    request_body(content = serde_json::Value, description = "A REMADV CloudEvent, signed with the inbound secret (Standard Webhooks)"),
+    responses(
+        (status = 204, description = "Applied"),
+        (status = 401, description = "The signature does not verify", body = ApiError),
+        (status = 422, description = "The event is refused", body = ApiError),
+    )
+)]
 pub async fn post_remadv_webhook(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
@@ -1749,6 +1904,19 @@ pub struct SummaryQuery {
 /// # Errors
 ///
 /// `400` for a month outside 1–12.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/summary",
+    tag = "billing",
+    params(
+        ("year" = Option<i32>, Query, description = "Year"),
+        ("month" = Option<u8>, Query, description = "Month 1–12"),
+    ),
+    responses(
+        (status = 200, description = "Totals by PID, Sparte, status and Rechnungsart", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn get_billing_summary(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1809,6 +1977,23 @@ pub struct AuditExportQuery {
 /// # Errors
 ///
 /// Propagates database failures as 500.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/audit",
+    tag = "billing",
+    params(
+        ("from" = Option<String>, Query, description = "First Rechnungsdatum, YYYY-MM-DD"),
+        ("to" = Option<String>, Query, description = "Last Rechnungsdatum, YYYY-MM-DD"),
+        ("pid" = Option<i32>, Query, description = "Prüfidentifikator"),
+        ("status" = Option<String>, Query, description = "Lifecycle status"),
+        ("after" = Option<String>, Query, description = "next_cursor of the previous page"),
+        ("limit" = Option<i64>, Query, description = "Rows"),
+    ),
+    responses(
+        (status = 200, description = "A page of the audit export", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn get_billing_audit(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1858,6 +2043,19 @@ pub struct MaloHistoryQuery {
 /// # Errors
 ///
 /// Propagates database failures as 500.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/malo/{malo_id}",
+    tag = "billing",
+    params(
+        ("malo_id" = String, Path, description = "MaLo-ID"),
+        ("limit" = Option<i64>, Query, description = "Rows"),
+    ),
+    responses(
+        (status = 200, description = "The MaLo's invoices, newest first", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn get_malo_billing_history(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1903,6 +2101,20 @@ pub async fn get_malo_billing_history(
 /// - `404` when the draft does not exist for this tenant.
 /// - `409` when the draft has already left the house.
 /// - `422` when the payload is not a `rubo4e::current::Fremdkosten`.
+#[utoipa::path(
+    put,
+    path = "/api/v1/billing/fremdkosten/{draft_id}",
+    tag = "billing",
+    params(
+        ("draft_id" = uuid::Uuid, Path, description = "The invoice draft"),
+    ),
+    request_body(content = serde_json::Value, description = "`UpsertFremdkostenRequest`: the third-party costs"),
+    responses(
+        (status = 200, description = "Stored", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such draft", body = ApiError),
+    )
+)]
 pub async fn put_fremdkosten(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1950,6 +2162,19 @@ pub async fn put_fremdkosten(
 /// # Errors
 ///
 /// `404` when no Fremdkosten are attached for this tenant.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/fremdkosten/{draft_id}",
+    tag = "billing",
+    params(
+        ("draft_id" = uuid::Uuid, Path, description = "The invoice draft"),
+    ),
+    responses(
+        (status = 200, description = "The third-party costs", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "None recorded", body = ApiError),
+    )
+)]
 pub async fn get_fremdkosten(
     claims: Claims,
     Extension(cedar): Authz,

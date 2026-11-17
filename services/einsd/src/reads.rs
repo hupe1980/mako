@@ -6,7 +6,8 @@
 //! `schemars::JsonSchema` (the tool's `output_schema`) and `utoipa::ToSchema`
 //! (the route's response in `/api/v1/openapi.json`), and the tests hold the two
 //! schemas to each other. The routes mount through `utoipa-axum`'s
-//! `OpenApiRouter`, so none of them exists without its document entry.
+//! `OpenApiRouter` (`crate::routes::api_router`), so none of them exists
+//! without its document entry.
 //!
 //! | Read | `GET` | Cedar | Answer |
 //! |---|---|---|---|
@@ -19,8 +20,8 @@
 
 use std::sync::Arc;
 
+use axum::Extension;
 use axum::extract::{Path, Query};
-use axum::{Extension, Router};
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::error::{ApiError, ApiResult};
@@ -28,7 +29,6 @@ use mako_service::oidc::Claims;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::config::EinsdConfig;
@@ -462,8 +462,8 @@ fn authorize(
     params(("tr_id" = String, Path, description = "TechnischeRessource ID of the plant")),
     responses(
         (status = 200, description = "The plant", body = AnlageRow),
-        (status = 403, description = "Cedar `read-anlage` refused"),
-        (status = 404, description = "`anlage_not_found`"),
+        (status = 403, description = "Cedar `read-anlage` refused", body = ApiError),
+        (status = 404, description = "`anlage_not_found`", body = ApiError),
     )
 )]
 async fn rest_get_plant(
@@ -485,8 +485,8 @@ async fn rest_get_plant(
     params(HorizonQuery),
     responses(
         (status = 200, description = "Active plants whose Förderung ends within the horizon", body = AuslaufendeAnlagen),
-        (status = 400, description = "A negative horizon"),
-        (status = 403, description = "Cedar `read-anlage` refused"),
+        (status = 400, description = "A negative horizon", body = ApiError),
+        (status = 403, description = "Cedar `read-anlage` refused", body = ApiError),
     )
 )]
 async fn rest_list_expiring(
@@ -507,7 +507,7 @@ async fn rest_list_expiring(
     tag = "anlagen",
     responses(
         (status = 200, description = "Active plants not registered in the MaStR", body = AnlagenOhneMastr),
-        (status = 403, description = "Cedar `read-anlage` refused"),
+        (status = 403, description = "Cedar `read-anlage` refused", body = ApiError),
     )
 )]
 async fn rest_list_plants_without_mastr(
@@ -530,8 +530,8 @@ async fn rest_list_plants_without_mastr(
     params(("tr_id" = String, Path, description = "TechnischeRessource ID of the plant"), SettlementsQuery),
     responses(
         (status = 200, description = "The plant's receipts, the newest month first", body = Abrechnungen),
-        (status = 400, description = "A month outside 1–12, or an unknown parameter"),
-        (status = 403, description = "Cedar `read-settlement` refused"),
+        (status = 400, description = "A month outside 1–12, or an unknown parameter", body = ApiError),
+        (status = 403, description = "Cedar `read-settlement` refused", body = ApiError),
     )
 )]
 async fn rest_list_settlements(
@@ -560,9 +560,9 @@ async fn rest_list_settlements(
     ),
     responses(
         (status = 200, description = "The newest receipt for the month with its positions", body = AbrechnungsErklaerung),
-        (status = 400, description = "A month outside 1–12"),
-        (status = 403, description = "Cedar `read-settlement` refused"),
-        (status = 404, description = "`settlement_not_found`"),
+        (status = 400, description = "A month outside 1–12", body = ApiError),
+        (status = 403, description = "Cedar `read-settlement` refused", body = ApiError),
+        (status = 404, description = "`settlement_not_found`", body = ApiError),
     )
 )]
 async fn rest_explain_settlement(
@@ -589,8 +589,8 @@ async fn rest_explain_settlement(
     ),
     responses(
         (status = 200, description = "Active plants with no receipt for the month", body = UnabgerechneteAnlagen),
-        (status = 400, description = "A month outside 1–12"),
-        (status = 403, description = "Cedar `read-settlement` refused"),
+        (status = 400, description = "A month outside 1–12", body = ApiError),
+        (status = 403, description = "Cedar `read-settlement` refused", body = ApiError),
     )
 )]
 async fn rest_list_unsettled_plants(
@@ -606,48 +606,15 @@ async fn rest_list_unsettled_plants(
         .map(Json)
 }
 
-/// The document's frame; the paths come from the routes.
-#[derive(OpenApi)]
-#[openapi(
-    info(
-        title = "einsd — EEG/KWKG feed-in settlement",
-        description = "The documented reads of `einsd`: plants, Förderende, MaStR status and settlement receipts. Each is also an MCP tool answering the same type.",
-    ),
-    tags(
-        (name = "anlagen", description = "EEG/KWKG plants"),
-        (name = "settlements", description = "Monthly settlement receipts"),
-    )
-)]
-struct ApiDoc;
-
-/// The documented routes, each mounted with its document entry.
+/// The documented shared reads, each mounted with its document entry; the
+/// document's frame and the remaining routes are `crate::routes::api_router`'s.
 #[must_use]
 pub fn api_router() -> OpenApiRouter {
-    OpenApiRouter::with_openapi(ApiDoc::openapi())
+    OpenApiRouter::new()
         .routes(routes!(rest_list_expiring))
         .routes(routes!(rest_list_plants_without_mastr))
         .routes(routes!(rest_get_plant))
         .routes(routes!(rest_list_settlements))
         .routes(routes!(rest_explain_settlement))
         .routes(routes!(rest_list_unsettled_plants))
-}
-
-/// The OpenAPI 3.1 document `GET /api/v1/openapi.json` serves; its
-/// `info.version` is the crate's (utoipa's default).
-#[must_use]
-pub fn openapi_document() -> utoipa::openapi::OpenApi {
-    api_router().split_for_parts().1
-}
-
-/// The documented routes and `GET /api/v1/openapi.json`, ready to merge.
-pub fn router() -> Router {
-    let (routes, _) = api_router().split_for_parts();
-    let doc = openapi_document();
-    routes.route(
-        "/api/v1/openapi.json",
-        axum::routing::get(move || {
-            let doc = doc.clone();
-            async move { axum::Json(doc) }
-        }),
-    )
 }

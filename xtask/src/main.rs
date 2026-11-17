@@ -59,6 +59,12 @@ Commands:
   check-bo4e-examples  Refuse a documented BO4E example using a field BO4E does not define
   check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
   check-business-dates   Refuse a business date read in UTC rather than in Europe/Berlin
+  check-openapi-routes   Refuse a bare `.route(/api/v1…)` beyond the per-service ratchet — an
+                        /api/v1 route is mounted through `OpenApiRouter` with its document entry
+  api-catalog            Publish every committed services/<svc>/openapi.json under site/static/api/
+                        and generate the reference page linking each (--check: refuse a stale one)
+  event-catalog          Generate the event catalog page and the per-type JSON Schemas from
+                        mako_events (--check: refuse a stale page, schema or untyped ratchet)
   check-outbox-notify    Hold each durable outbox's commit-coupled wake-up together: the
                         AFTER INSERT trigger, the channel it raises on, the worker's LISTEN
                         — and refuse an in-process notify on a producer path
@@ -125,6 +131,9 @@ Commands:
   check-answer-commands  Refuse an invoicd PID route naming a makod command that does not exist
   check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
                         agrees with that server's own `read_only_hint`
+  check-eval-cases    Every tool-calling agentd specialist has a positive and a negative or
+                        escalation eval case (or a shrink-only ratchet entry); no case carries
+                        an e-mail address, an IBAN or a non-synthetic name
   check-translations  Every translated site page (site/content/**/*.<lang>.md) names its English
                         source and that source's sha256, has its English twin, and states no
                         figure the English pages' guards hold (--rehash <file>: re-pin a page
@@ -162,7 +171,7 @@ Commands:
   import-profiles     Regenerate the profiles from the mirrored BDEW documents
                         (--profile <type>/<fv>, --check to prove the committed files)
   profile-diff        Per Prüfidentifikator, what changed between two Formatversionen
-                        (usage: profile-diff <type> <from-fv> <to-fv> [--pid <n>])
+                        (usage: profile-diff <type> <from-fv> <to-fv> [--candidate] [--json] [--pid <n>])
   pdf-grid            Print a BDEW PDF on the character grid the importer reads
 
   --date <YYYY-MM-DD>   Date to check against (default: today)
@@ -174,6 +183,7 @@ Exit codes:
 
 #[cfg(test)]
 mod allow_ratchet;
+mod api_catalog;
 mod bdew;
 mod bump_version;
 mod check_action_pins;
@@ -198,6 +208,7 @@ mod check_db_suites;
 mod check_desk;
 mod check_dynamic_sql;
 mod check_error_tuples;
+mod check_eval_cases;
 mod check_event_durability;
 mod check_event_payloads;
 mod check_event_verlauf;
@@ -208,6 +219,7 @@ mod check_ledger_drafts;
 mod check_malo_ids;
 mod check_mcp_surface;
 mod check_occupancy;
+mod check_openapi_routes;
 mod check_outbox_notify;
 mod check_policy_settings;
 mod check_process_verdict;
@@ -237,6 +249,7 @@ mod check_workflow_purity;
 mod demo_configs;
 mod dep_age;
 mod erstlauf;
+mod event_catalog;
 mod evidence_pack;
 mod import_profiles;
 mod index_sources;
@@ -322,6 +335,21 @@ fn main() {
         Some("evidence-pack") => evidence_pack(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
         Some("check-outbox-notify") => check_outbox_notify(),
+        Some("check-openapi-routes") => root_task(check_openapi_routes::run),
+        Some("api-catalog") => {
+            let (root, _) = workspace_info();
+            let check = std::env::args().skip(2).any(|a| a == "--check");
+            if !api_catalog::run(std::path::Path::new(&root), check) {
+                std::process::exit(1);
+            }
+        }
+        Some("event-catalog") => {
+            let (root, _) = workspace_info();
+            let check = std::env::args().skip(2).any(|a| a == "--check");
+            if !event_catalog::run(std::path::Path::new(&root), check) {
+                std::process::exit(1);
+            }
+        }
         Some("check-atomic-spawn") => check_atomic_spawn(),
         Some("check-command-constructors") => root_task(check_command_constructors::run),
         Some("check-approval-commands") => check_approval_commands(),
@@ -335,6 +363,7 @@ fn main() {
         Some("check-as4-controls") => check_as4_controls(),
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
+        Some("check-eval-cases") => root_task(check_eval_cases::run),
         Some("check-translations") => {
             let (root, _) = workspace_info();
             let args: Vec<String> = std::env::args().skip(2).collect();

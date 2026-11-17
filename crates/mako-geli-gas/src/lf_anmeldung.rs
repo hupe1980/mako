@@ -402,6 +402,8 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
     type Command = GeliGasLfAnmeldungCommand;
 
     const DEADLINE_LABELS: &'static [&'static str] = &[GNB_RESPONSE_WINDOW_LABEL];
+    /// The GNB's answer to the Anmeldung is owed by its Antwortfrist.
+    const FRIST_LABELS: &'static [&'static str] = &[GNB_RESPONSE_WINDOW_LABEL];
 
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,

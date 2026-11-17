@@ -232,9 +232,6 @@ async fn a_comdis_opens_the_second_round_and_a_judgement_decides_it() {
         pool: pool.clone(),
         tenant: TENANT.to_owned(),
         marktrolle: invoicd::config::EmpfaengerRolle::Esa,
-        erp_webhook_url: None,
-        erp_hmac_secret: None,
-        http_client: reqwest::Client::new(),
     };
     let route = invoicd::routing::route_for(31009).expect("31009 is answered");
     let letzter = || {
@@ -372,9 +369,6 @@ async fn objections_not_rebutted_refuse_with_a25() {
         pool: pool.clone(),
         tenant: TENANT.to_owned(),
         marktrolle: invoicd::config::EmpfaengerRolle::Esa,
-        erp_webhook_url: None,
-        erp_hmac_secret: None,
-        http_client: reqwest::Client::new(),
     };
     let process_id = Uuid::new_v4();
     let mut f = Feststellungen::default();

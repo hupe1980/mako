@@ -3,10 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{
-    Router,
-    routing::{get, post, put},
-};
+use axum::{Router, routing::post};
 use mako_markt::makod_client::MakodClient;
 use secrecy::SecretString;
 use tracing::info;
@@ -42,16 +39,16 @@ impl QueueMethod {
 }
 
 /// One approval-queue action endpoint: the method and path template the router
-/// registers.
+/// mounts it under.
 ///
-/// Spelled once because there are two callers — the router below and the
-/// loopback call the MCP `approve_queue_entry` / `reject_queue_entry` tools
-/// make. Nothing in the type system connects a `format!` path to a
-/// `.route()` string, and a loopback path that matches no route answers every
-/// call with 404, so the connection is made here instead.
+/// The loopback call the MCP `approve_queue_entry` / `reject_queue_entry` and
+/// Klärfall tools make is built from it. `#[utoipa::path]` takes only a
+/// literal, so the handler's attribute spells the path again; a loopback path
+/// that matches no route answers every call with 404, so the served document
+/// is held to every constant (`openapi::tests`, `mcp_route_contract`).
 #[derive(Debug, Clone, Copy)]
 pub struct QueueRoute {
-    /// The HTTP method the router registers this path under.
+    /// The HTTP method the router mounts this path under.
     pub method: QueueMethod,
     /// The axum path template, `{id}` included.
     pub path_template: &'static str,
@@ -87,6 +84,25 @@ pub const QUEUE_APPROVE: QueueRoute = QueueRoute {
 pub const QUEUE_REJECT: QueueRoute = QueueRoute {
     method: QueueMethod::Post,
     path_template: "/api/v1/queue/{id}/reject",
+};
+
+/// `POST /api/v1/klaerfaelle/{id}/assign` — take a case, or release it.
+pub const KLAERFALL_ASSIGN: QueueRoute = QueueRoute {
+    method: QueueMethod::Post,
+    path_template: "/api/v1/klaerfaelle/{id}/assign",
+};
+
+/// `POST /api/v1/klaerfaelle/{id}/resolve` — close a case without a message.
+pub const KLAERFALL_RESOLVE: QueueRoute = QueueRoute {
+    method: QueueMethod::Post,
+    path_template: "/api/v1/klaerfaelle/{id}/resolve",
+};
+
+/// `POST /api/v1/klaerfaelle/{id}/dispatch` — „korrigieren & senden": send the
+/// case's correcting command through the Freigabe decision path.
+pub const KLAERFALL_DISPATCH: QueueRoute = QueueRoute {
+    method: QueueMethod::Post,
+    path_template: "/api/v1/klaerfaelle/{id}/dispatch",
 };
 
 // ── Module state bundles ───────────────────────────────────────────────────────
@@ -161,9 +177,16 @@ pub struct ProcessdState {
     pub neuanlage: Arc<crate::neuanlage_module::NeuanlageModuleConfig>,
     /// The process read model every `de.mako.*` event is projected into.
     pub obs: crate::obs::project::ObsState,
-    /// `marktd`, as the source of the CloudEvent replay log the read model is
+    /// `marktd`, whose event feed (`GET /api/v1/events`) the read model is
     /// rebuilt from.
     pub marktd_replay: mako_service::http::Upstream,
+}
+
+/// The read-model handlers mount on the shared router and read their own state.
+impl axum::extract::FromRef<ProcessdState> for crate::obs::project::ObsState {
+    fn from_ref(state: &ProcessdState) -> Self {
+        state.obs.clone()
+    }
 }
 
 // ── RunConfig ─────────────────────────────────────────────────────────────────
@@ -217,13 +240,6 @@ pub struct RunConfig {
     pub eog_warn_days_before_expiry: u32,
     pub eog_notify_webhook_url: Option<String>,
     pub eog_notify_webhook_secret: Option<String>,
-    /// Webhook URL to register with `marktd` on startup (self-registration).
-    /// `None` → skip self-registration (useful in tests / standalone mode).
-    pub self_register_webhook_url: Option<String>,
-    /// Subscriber ID for the `marktd` subscription upsert.
-    pub subscriber_id: String,
-    /// Event types to subscribe to — the union every module reads.
-    pub subscriber_event_types: Vec<String>,
     /// Every operator MP-ID, for the read model's § 7a Abs. 5 EnWG evidence.
     /// `[identity] verbundene_lieferanten`.
     pub verbundene_lieferanten: Vec<String>,
@@ -241,6 +257,8 @@ pub struct RunConfig {
     pub cedar: Arc<CedarEnforcer>,
     /// MCP server auth config (API-key fallback + optional per-named-key identity).
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+    /// `[subscriptions]` — the webhook endpoints the outbox fans out to.
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
 }
 
 // ── Router assembly ─────────────────────────────────────────────────────────────
@@ -292,90 +310,6 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
     info!("processd: running");
 
     let http = ctx.http.clone();
-
-    // ── Self-register subscription with marktd ────────────────────────────────
-    // Driven entirely by config (env var / Helm values.yaml). No imperative
-    // bootstrap scripts needed. Idempotent: PUT is an upsert.
-    // Retries for up to 30 s to tolerate marktd startup ordering in compose/K8s.
-    if let Some(ref self_webhook_url) = cfg.self_register_webhook_url {
-        use secrecy::ExposeSecret;
-        // Authenticated: `marktd` requires a bearer on every write, and
-        // subscription management is an operator-level capability there.
-        let marktd = mako_service::http::Upstream::new(
-            "marktd",
-            &cfg.marktd_url,
-            Some(cfg.marktd_api_key.clone()),
-            http.clone(),
-        );
-        let sub_path = format!("/api/v1/subscriptions/{}", cfg.subscriber_id);
-        let event_types: Vec<&str> = cfg
-            .subscriber_event_types
-            .iter()
-            .map(String::as_str)
-            .collect();
-        let body = serde_json::json!({
-            "webhook_url":    self_webhook_url,
-            "webhook_secret": cfg.inbound_secret.as_ref().map(|s| s.expose_secret()),
-            "event_types":    event_types,
-            "active":         true
-        });
-        info!(
-            subscriber_id = %cfg.subscriber_id,
-            webhook_url   = %self_webhook_url,
-            marktd_url    = %cfg.marktd_url,
-            "processd: self-registering subscription with marktd"
-        );
-        let mut remaining = 15u32;
-        loop {
-            match marktd.put(&sub_path).json(&body).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    info!(
-                        subscriber_id = %cfg.subscriber_id,
-                        status        = %resp.status(),
-                        "processd: subscription registered with marktd"
-                    );
-                    break;
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    // 401/403 will not fix itself by waiting: the key or the
-                    // principal's role is wrong. Fail immediately with the
-                    // reason rather than after 30 s of identical retries.
-                    if status == reqwest::StatusCode::UNAUTHORIZED
-                        || status == reqwest::StatusCode::FORBIDDEN
-                    {
-                        return Err(anyhow::anyhow!(
-                            "processd: self-registration rejected by marktd with HTTP {status} — \
-                             check `[marktd] api_key` and that its principal may manage \
-                             subscriptions (marktd Cedar action `manage-subscription`, ADMIN role)"
-                        ));
-                    }
-                    remaining -= 1;
-                    if remaining == 0 {
-                        return Err(anyhow::anyhow!(
-                            "processd: self-registration failed: marktd returned HTTP {status}"
-                        ));
-                    }
-                    tracing::warn!(
-                        %status, remaining,
-                        "processd: self-registration failed, retrying in 2 s"
-                    );
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
-                Err(e) => {
-                    remaining -= 1;
-                    if remaining == 0 {
-                        return Err(anyhow::anyhow!("processd: self-registration failed: {e}"));
-                    }
-                    tracing::warn!(
-                        error = %e, remaining,
-                        "processd: self-registration failed, retrying in 2 s"
-                    );
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
-            }
-        }
-    }
 
     // makod grants this key `ActOnBehalf`: a module's own answer is then the
     // system's act, and an approval names its person per dispatch
@@ -519,7 +453,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
 
     // ── Sperr-/Entsperrauftrag queue (NB role) ─────────────────────────────
     #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
-    let sperr_router = {
+    let sperr_extensions = {
         // The IFTSTA 21039 an order owes is an outbox command committed with
         // its outcome; this delivers it to makod.
         tokio::spawn(
@@ -538,29 +472,38 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             ctx.shutdown.clone(),
         ));
         // `sperr::events` enqueues into `event_outbox` inside the same
-        // transaction as the state change; this drains it to the ERP.
-        if let Some(url) = cfg.sperr_erp_webhook_url.clone() {
-            tokio::spawn(
-                mako_service::outbox::OutboxWorker::new(
-                    pool.clone(),
-                    url,
-                    cfg.sperr_erp_hmac_secret.clone(),
-                )
-                .run(ctx.shutdown.clone()),
-            );
-        } else {
+        // transaction as the state change; the subscription module below
+        // delivers it to the ERP and every registered endpoint.
+        if cfg.sperr_erp_webhook_url.is_none() {
             tracing::warn!(
-                "processd sperr: no [sperr] erp_webhook_url — the de.sperr.* notices \
-                 accumulate in event_outbox undelivered"
+                "processd sperr: no [sperr] erp_webhook_url — the de.sperr.* notices reach \
+                 only the endpoints registered at /api/v1/webhooks/endpoints"
             );
         }
-        crate::sperr::router(
-            cfg.tenant.clone(),
-            crate::sperr::Lesart(cfg.sperr_msb_vorlauf_lesart),
+        (
+            axum::Extension(crate::sperr::Tenant(cfg.tenant.clone())),
+            axum::Extension(crate::sperr::Lesart(cfg.sperr_msb_vorlauf_lesart)),
         )
     };
-    #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
-    let sperr_router = Router::new();
+
+    // ── Webhook subscriptions on `event_outbox` ────────────────────────────
+    //
+    // Every plain CloudEvent processd commits fans out to the endpoints an
+    // operator registers and to the endpoint `default`, `[sperr]
+    // erp_webhook_url`. Rows enqueued for a named target (the §38 EnWG notice,
+    // `EOG_NOTIFY_TARGET`) and outbox commands (the IFTSTA 21039) are not
+    // fanned out; their own workers above deliver them.
+    let subs = mako_service::subscriptions::Subscriptions::new(
+        pool.clone(),
+        <crate::Processd as mako_service::Daemon>::NAME,
+        cfg.tenant.clone(),
+        cfg.subscriptions.clone(),
+    )
+    .with_default_endpoint(
+        cfg.sperr_erp_webhook_url.clone(),
+        cfg.sperr_erp_hmac_secret.clone(),
+    );
+    subs.spawn(ctx.shutdown.clone());
 
     // ── Assemble shared handler state ──────────────────────────────────────
     let marktd_for_state = Arc::new(mako_markt::marktd_client::MarktdClient::new(
@@ -718,6 +661,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         makod_url: cfg.makod_url.clone(),
         makod_api_key: cfg.makod_api_key.clone(),
         policy: ctx.einrichtung.policy.clone(),
+        subscriptions: subs.clone(),
     });
 
     // ── Router ─────────────────────────────────────────────────────────────
@@ -725,30 +669,19 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
     // owned by `mako_service::run`. processd's own metrics register on the same
     // Prometheus registry (see `crate::metrics`), so they are served from that
     // one `/metrics` rather than a second endpoint of its own.
-    let app = Router::new()
+    let (api, doc) = crate::openapi::api(&subs).split_for_parts();
+    let app = api
         .route("/webhook", post(handle_webhook))
-        .route("/api/v1/obs/rebuild", post(rest::rebuild_projection))
-        .route("/api/v1/decisions", get(rest::list_decisions))
-        .route("/api/v1/queue", get(rest::list_queue))
-        .route("/api/v1/klaerfaelle", get(rest::list_klaerfaelle))
-        .route(QUEUE_APPROVE.path_template, post(rest::approve_queue_entry))
-        .route(QUEUE_REJECT.path_template, post(rest::reject_queue_entry))
-        .route("/api/v1/start-supply", post(rest::start_supply))
-        .route("/api/v1/start-supply-gas", post(rest::start_supply_gas))
-        .route("/api/v1/end-supply", post(rest::end_supply))
-        .route("/api/v1/end-supply-gas", post(rest::end_supply_gas))
-        .route("/api/v1/eog", get(rest::list_eog_cases))
-        .route("/api/v1/neuanlage", get(rest::list_neuanlage_cases))
-        .route(
-            "/api/v1/neuanlage/{id}/identifikation",
-            put(rest::set_neuanlage_identifikation),
-        )
         .with_state(state)
         .merge(crate::obs::router(obs_state))
-        .merge(sperr_router)
+        .merge(mako_service::openapi::serve(doc))
         // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
         // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
-        .merge(mako_service::einrichtung::router(ctx.einrichtung.clone()))
+        .merge(mako_service::einrichtung::router(ctx.einrichtung.clone()));
+    // The Sperrauftrag routes read the tenant and the Sperrtermin reading.
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    let app = app.layer(sperr_extensions.0).layer(sperr_extensions.1);
+    let app = app
         .layer(axum::Extension(mako_service::oidc::ExpectedTenant(
             cfg.tenant.clone(),
         )))
@@ -775,7 +708,7 @@ pub use rest::{
 /// `E01` and `E03` (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73).
 pub const TRANSAKTIONSGRUENDE_55001: &[&str] = mako_gpke::lf_anmeldung::ANMELDUNG_GRUENDE;
 
-mod rest {
+pub(crate) mod rest {
     use std::sync::Arc;
 
     use axum::{
@@ -803,7 +736,7 @@ mod rest {
     // empty string is the handler's `MISSING_*` refusal.
 
     /// `PUT /api/v1/neuanlage/{id}/identifikation`.
-    #[derive(Debug, serde::Deserialize)]
+    #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
     pub struct NeuanlageIdentifikationRequest {
         /// The Marktlokation the NB identified for this Neuanlage.
         pub malo_id: String,
@@ -892,7 +825,7 @@ mod rest {
     }
 
     /// `POST /api/v1/end-supply` — GPKE Lieferende (Strom, 55004).
-    #[derive(Debug, serde::Deserialize)]
+    #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
     pub struct EndSupplyRequest {
         /// 11-digit Strom Marktlokations-ID.
         pub malo_id: String,
@@ -910,7 +843,7 @@ mod rest {
     /// (`mako_markt::commands::GeliLieferendeAnmelden`): the Marktlokation, the
     /// `YYYYMMDD` `process_date` and the Transaktionsgrund the 44004 column makes
     /// Muss (`SG4 STS+7`, UTILMD AHB Gas 1.2 Kap. 5.5).
-    #[derive(Debug, serde::Deserialize)]
+    #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
     pub struct EndSupplyGasRequest {
         /// Gas-MaLo-ID — `SG5 LOC+172`.
         pub malo_id: String,
@@ -1019,12 +952,22 @@ mod rest {
         }
     }
 
-    /// `POST /api/v1/obs/rebuild` — replay `marktd`'s CloudEvent log into the
+    /// `POST /api/v1/obs/rebuild` — replay `marktd`'s event feed into the
     /// process read model through the projection function the webhook calls.
     ///
     /// Runs inline and answers with what it read; the projection is idempotent,
     /// so a rebuild interrupted by a dropped connection is finished by sending
     /// it again.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/obs/rebuild",
+        tag = "obs",
+        responses(
+            (status = 200, description = "What the rebuild read, and the oldest event marktd's retention still held", body = serde_json::Value),
+            (status = 403, description = "Cedar `rebuild-projection` refused", body = ApiError),
+            (status = 502, description = "marktd's event feed did not answer", body = ApiError),
+        ),
+    )]
     pub async fn rebuild_projection(
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1044,6 +987,15 @@ mod rest {
         Ok(Json(serde_json::json!({ "rebuilt": report })))
     }
 
+    #[utoipa::path(
+        get,
+        path = "/api/v1/decisions",
+        tag = "decisions",
+        responses(
+            (status = 200, description = "The latest NB Anmeldung decisions", body = serde_json::Value),
+            (status = 403, description = "Cedar `read-decisions` refused", body = ApiError),
+        ),
+    )]
     pub async fn list_decisions(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1063,6 +1015,15 @@ mod rest {
 
     /// `GET /api/v1/klaerfaelle` — the open Klärfälle, the earliest due date
     /// first (`crate::klaerfall`).
+    #[utoipa::path(
+        get,
+        path = "/api/v1/klaerfaelle",
+        tag = "klaerfaelle",
+        responses(
+            (status = 200, description = "The open Klärfälle of the caller's Marktrollen, the earliest due first", body = serde_json::Value),
+            (status = 403, description = "Cedar `read-case` refused", body = ApiError),
+        ),
+    )]
     pub async fn list_klaerfaelle(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1085,6 +1046,418 @@ mod rest {
         ))
     }
 
+    /// The body of `POST /api/v1/klaerfaelle/{id}/assign`.
+    #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct AssignKlaerfallRequest {
+        /// Who takes the case; absent or null releases it.
+        #[serde(default)]
+        pub assignee: Option<String>,
+    }
+
+    /// The body of `POST /api/v1/klaerfaelle/{id}/resolve`.
+    #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct ResolveKlaerfallRequest {
+        /// Why the case closes without a market message.
+        pub begruendung: String,
+    }
+
+    /// The body of `POST /api/v1/klaerfaelle/{id}/dispatch`.
+    #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct DispatchKlaerfallRequest {
+        /// The command to send; absent sends the case's proposal. Another
+        /// command of the allowed set needs `begruendung`.
+        #[serde(default)]
+        pub befehl: Option<String>,
+        /// The reason for sending another command than the proposal.
+        #[serde(default)]
+        pub begruendung: Option<String>,
+        /// What the decision states beside the Freigabe's frozen answer — the
+        /// body the approve/reject routes read.
+        #[serde(default)]
+        pub antwort: crate::pg::approval::OperatorAnswer,
+    }
+
+    fn case_id(id: &str) -> ApiResult<uuid::Uuid> {
+        id.parse()
+            .map_err(|_| ApiError::bad_request("the Klärfall id is not a UUID"))
+    }
+
+    /// The case the caller may read, or `404` — another role's case reads as
+    /// absent.
+    async fn visible_case(
+        pool: &PgPool,
+        tenant: &str,
+        id: uuid::Uuid,
+        claims: &Claims,
+    ) -> ApiResult<crate::klaerfall::KlaerfallAkte> {
+        crate::klaerfall::get(
+            pool,
+            tenant,
+            id,
+            &claims.principal().roles,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or(ApiError::NotFound)
+    }
+
+    fn case_closed(akte: &crate::klaerfall::KlaerfallAkte) -> ApiError {
+        ApiError::conflict_with(
+            "case_closed",
+            format!(
+                "Klärfall {} is {}",
+                akte.klaerfall.id,
+                akte.klaerfall.zustand.as_str()
+            ),
+            serde_json::json!({
+                "zustand": akte.klaerfall.zustand,
+                "decided_by": akte.klaerfall.decided_by,
+            }),
+        )
+    }
+
+    /// `GET /api/v1/klaerfaelle/{id}` — one case with its history.
+    #[utoipa::path(
+        get,
+        path = "/api/v1/klaerfaelle/{id}",
+        tag = "klaerfaelle",
+        params(("id" = String, Path, description = "The Klärfall id (UUID)")),
+        responses(
+            (status = 200, description = "The case with its history", body = serde_json::Value),
+            (status = 403, description = "Cedar `read-case` refused", body = ApiError),
+            (status = 404, description = "No such case the caller may read", body = ApiError),
+        ),
+    )]
+    pub async fn get_klaerfall(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+        Path(id): Path<String>,
+    ) -> ApiResult<Json<crate::klaerfall::KlaerfallAkte>> {
+        authorize(&enforcer, &claims, "read-case", &state.tenant)?;
+        let id = case_id(&id)?;
+        Ok(Json(visible_case(&pool, &state.tenant, id, &claims).await?))
+    }
+
+    /// `POST /api/v1/klaerfaelle/{id}/assign` — take the case, or release it;
+    /// journaled against the authenticated principal.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/klaerfaelle/{id}/assign",
+        tag = "klaerfaelle",
+        params(("id" = String, Path, description = "The Klärfall id (UUID)")),
+        request_body = AssignKlaerfallRequest,
+        responses(
+            (status = 200, description = "The case", body = serde_json::Value),
+            (status = 403, description = "Cedar `assign-case` refused", body = ApiError),
+            (status = 404, description = "No such case the caller may read", body = ApiError),
+            (status = 409, description = "`case_closed`", body = ApiError),
+        ),
+    )]
+    pub async fn assign_klaerfall(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+        headers: axum::http::HeaderMap,
+        Path(id): Path<String>,
+        Json(body): Json<AssignKlaerfallRequest>,
+    ) -> ApiResult<Json<crate::klaerfall::KlaerfallAkte>> {
+        authorize(&enforcer, &claims, "assign-case", &state.tenant)?;
+        let id = case_id(&id)?;
+        let akte = visible_case(&pool, &state.tenant, id, &claims).await?;
+        let assignee = body
+            .assignee
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty());
+        if !crate::klaerfall::assign(
+            &pool,
+            &state.tenant,
+            id,
+            assignee,
+            &decided_by(&claims, &headers),
+        )
+        .await
+        .map_err(ApiError::internal)?
+        {
+            return Err(case_closed(&akte));
+        }
+        Ok(Json(visible_case(&pool, &state.tenant, id, &claims).await?))
+    }
+
+    /// `POST /api/v1/klaerfaelle/{id}/resolve` — close the case without a
+    /// market message; the reason is required and journaled.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/klaerfaelle/{id}/resolve",
+        tag = "klaerfaelle",
+        params(("id" = String, Path, description = "The Klärfall id (UUID)")),
+        request_body = ResolveKlaerfallRequest,
+        responses(
+            (status = 200, description = "The closed case", body = serde_json::Value),
+            (status = 403, description = "Cedar `resolve-case` refused", body = ApiError),
+            (status = 404, description = "No such case the caller may read", body = ApiError),
+            (status = 409, description = "`case_closed`", body = ApiError),
+            (status = 422, description = "`begruendung_required`", body = ApiError),
+        ),
+    )]
+    pub async fn resolve_klaerfall(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+        headers: axum::http::HeaderMap,
+        Path(id): Path<String>,
+        Json(body): Json<ResolveKlaerfallRequest>,
+    ) -> ApiResult<Json<crate::klaerfall::KlaerfallAkte>> {
+        authorize(&enforcer, &claims, "resolve-case", &state.tenant)?;
+        let id = case_id(&id)?;
+        let begruendung = body.begruendung.trim();
+        if begruendung.is_empty() {
+            return Err(refuse(
+                "begruendung_required",
+                "a case closed without a market message needs a begruendung",
+            ));
+        }
+        let akte = visible_case(&pool, &state.tenant, id, &claims).await?;
+        if !crate::klaerfall::resolve(
+            &pool,
+            &state.tenant,
+            id,
+            begruendung,
+            &decided_by(&claims, &headers),
+        )
+        .await
+        .map_err(ApiError::internal)?
+        {
+            return Err(case_closed(&akte));
+        }
+        Ok(Json(visible_case(&pool, &state.tenant, id, &claims).await?))
+    }
+
+    /// `POST /api/v1/klaerfaelle/{id}/dispatch` — „korrigieren & senden".
+    ///
+    /// Sends the case's correcting command ([`crate::klaerfall::korrektur`])
+    /// through the Freigabe decision path: a pending Freigabe is decided by the
+    /// approve/reject route itself; an answer the counterparty refused is
+    /// re-sent from the decided Freigabe with the same checks —
+    /// `decision_body`, the code against the tree, the body shown, and makod's
+    /// pre-send check, whose refusal comes back in place. Another command than
+    /// the proposal needs a `begruendung`; a command outside the Freigabe's
+    /// approve/reject pair is refused. The caller needs `dispatch-case` and the
+    /// command's own authority — `decide-queue` in the Marktrolle the Freigabe
+    /// owes the answer as. The proposal, the command sent and the reason are
+    /// journaled against the authenticated principal.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/klaerfaelle/{id}/dispatch",
+        tag = "klaerfaelle",
+        params(("id" = String, Path, description = "The Klärfall id (UUID)")),
+        request_body = serde_json::Value,
+        responses(
+            (status = 200, description = "The case after the correcting command went out", body = serde_json::Value),
+            (status = 403, description = "Cedar `dispatch-case` or `decide-queue` refused", body = ApiError),
+            (status = 404, description = "No such case the caller may read", body = ApiError),
+            (status = 409, description = "`case_closed`", body = ApiError),
+            (status = 422, description = "A refusal naming the rule that decided (`no_correction`, makod's pre-send check)", body = ApiError),
+            (status = 502, description = "makod did not answer", body = ApiError),
+        ),
+    )]
+    pub async fn dispatch_klaerfall(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+        headers: axum::http::HeaderMap,
+        Path(id): Path<String>,
+        Json(body): Json<DispatchKlaerfallRequest>,
+    ) -> ApiResult<axum::response::Response> {
+        use axum::response::IntoResponse as _;
+        authorize(&enforcer, &claims, "dispatch-case", &state.tenant)?;
+        // The request a key is bound to: the case and the body as read.
+        let request = serde_json::to_vec(&body).map_err(ApiError::internal)?;
+        let scope = format!("klaerfall/{id}/dispatch");
+        Ok(
+            crate::idempotency::once(&pool, &state.tenant, &headers, &scope, &request, || async {
+                dispatch_klaerfall_once(
+                    &state,
+                    pool.clone(),
+                    &enforcer,
+                    &claims,
+                    &headers,
+                    &id,
+                    body,
+                )
+                .await
+                .into_response()
+            })
+            .await,
+        )
+    }
+
+    /// One dispatch of a Klärfall, after `dispatch-case` was checked.
+    async fn dispatch_klaerfall_once(
+        state: &ProcessdState,
+        pool: PgPool,
+        enforcer: &Arc<CedarEnforcer>,
+        claims: &Claims,
+        headers: &axum::http::HeaderMap,
+        id: &str,
+        body: DispatchKlaerfallRequest,
+    ) -> ApiResult<Json<crate::klaerfall::KlaerfallAkte>> {
+        let id = case_id(id)?;
+        let akte = visible_case(&pool, &state.tenant, id, claims).await?;
+        if akte.klaerfall.zustand != crate::klaerfall::Zustand::Open {
+            return Err(case_closed(&akte));
+        }
+        let befehl = crate::klaerfall::waehle_befehl(
+            akte.klaerfall.korrektur.as_ref(),
+            body.befehl.as_deref(),
+            body.begruendung.as_deref(),
+        )
+        .map_err(|r| refuse(r.code(), r.to_string()))?;
+        let Some(entry) =
+            crate::klaerfall::freigabe(&pool, &state.tenant, akte.klaerfall.process_id)
+                .await
+                .map_err(ApiError::internal)?
+        else {
+            return Err(refuse(
+                "no_correction",
+                crate::klaerfall::DispatchRefusal::NoCorrection.to_string(),
+            ));
+        };
+        // The command's own authority: deciding a Freigabe, in the role the
+        // answer is owed as.
+        authorize(enforcer, claims, "decide-queue", &state.tenant)?;
+        if !crate::klaerfall::darf_senden(&claims.principal().roles, entry.marktrolle.as_deref()) {
+            return Err(ApiError::forbidden(format!(
+                "{befehl} is answered as {}; the caller does not hold that role",
+                entry.marktrolle.as_deref().unwrap_or("a market role")
+            )));
+        }
+        let vorgeschlagen = akte
+            .klaerfall
+            .korrektur
+            .as_ref()
+            .map_or_else(|| befehl.clone(), |k| k.befehl.clone());
+        let begruendung = body
+            .begruendung
+            .as_deref()
+            .map(str::trim)
+            .filter(|b| !b.is_empty());
+        let by = decided_by(claims, headers);
+        let approve = entry.approve_command.as_deref() == Some(befehl.as_str());
+
+        // A pending Freigabe is decided by its own route, which closes the
+        // case with the journal.
+        if entry.status == crate::pg::approval::QueueStatus::Pending {
+            let antwort = serde_json::to_vec(&body.antwort).map_err(ApiError::internal)?;
+            decide_queue_entry(
+                state,
+                pool.clone(),
+                &entry.id.to_string(),
+                approve,
+                &by,
+                &antwort,
+                begruendung,
+            )
+            .await?;
+            return Ok(Json(visible_case(&pool, &state.tenant, id, claims).await?));
+        }
+
+        // An answer the counterparty refused: re-sent from the decided
+        // Freigabe, through the same checks a decision runs.
+        let frozen = if approve {
+            entry.answer_payload.as_ref()
+        } else {
+            entry.reject_payload.as_ref()
+        };
+        let mut payload =
+            crate::pg::approval::decision_body(&entry, &befehl, frozen, &body.antwort)
+                .and_then(|b| {
+                    crate::pg::approval::check_operator_code(&entry, approve, &body.antwort)
+                        .map(|()| b)
+                })
+                .map_err(|r| refuse(crate::entscheidungsprobe::refusal_code(&r), r.to_string()))?;
+        crate::entscheidungsprobe::gezeigter_koerper(&body.antwort, &befehl, &payload)?;
+        let akteur = entry.akteur_der_entscheidung(&befehl, &payload, &by);
+        crate::entscheidungsprobe::makod_prueft(
+            &state.makod,
+            &mako_markt::makod_client::ForwardCommand {
+                marktrolle: entry.marktrolle.clone(),
+                command: befehl.clone(),
+                malo_id: entry.malo_id.clone(),
+                melo_id: None,
+                payload: payload.clone(),
+            },
+        )
+        .await?;
+        if let Some(m) = payload.as_object_mut() {
+            m.insert(
+                if approve {
+                    "approved_by"
+                } else {
+                    "rejected_by"
+                }
+                .into(),
+                serde_json::json!(by),
+            );
+        }
+        if !crate::klaerfall::claim_dispatch(
+            &pool,
+            &state.tenant,
+            id,
+            crate::klaerfall::Dispatch {
+                akteur: &by,
+                vorgeschlagen: &vorgeschlagen,
+                befehl: &befehl,
+                begruendung,
+            },
+        )
+        .await
+        .map_err(ApiError::internal)?
+        {
+            return Err(case_closed(&akte));
+        }
+        let cmd = mako_markt::makod_client::ForwardCommand {
+            marktrolle: entry.marktrolle.clone(),
+            command: befehl.clone(),
+            malo_id: entry.malo_id.clone(),
+            melo_id: None,
+            payload,
+        };
+        let akteur =
+            serde_json::to_value(&akteur).map_err(|e| ApiError::internal(anyhow::Error::new(e)))?;
+        if let Err(e) = state
+            .makod
+            .post_command_on_behalf(&format!("processd-klaerfall-{id}"), &cmd, &akteur)
+            .await
+        {
+            tracing::warn!(%id, error = %e, "processd: Klärfall dispatch failed — reopening the case");
+            if let Err(e) = crate::klaerfall::release_dispatch(&pool, &state.tenant, id).await {
+                tracing::error!(%id, error = %e, "processd: failed to reopen the Klärfall");
+            }
+            return Err(makod_dispatch_error(e));
+        }
+        tracing::info!(%id, command = %befehl, "processd: Klärfall dispatched");
+        Ok(Json(visible_case(&pool, &state.tenant, id, claims).await?))
+    }
+
+    #[utoipa::path(
+        get,
+        path = "/api/v1/queue",
+        tag = "queue",
+        responses(
+            (status = 200, description = "The approval-queue entries", body = serde_json::Value),
+            (status = 403, description = "Cedar `read-queue` refused", body = ApiError),
+        ),
+    )]
     pub async fn list_queue(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1103,6 +1476,17 @@ mod rest {
     }
 
     /// `GET /api/v1/eog?status=…` — EoG gap-closure case log (§36/§38 EnWG).
+    #[utoipa::path(
+        get,
+        path = "/api/v1/eog",
+        tag = "nb",
+        params(("status" = Option<String>, Query, description = "Narrow to one case status, e.g. `expiring` or `expired`")),
+        responses(
+            (status = 200, description = "The EoG case log (§§ 36, 38 EnWG)", body = serde_json::Value),
+            (status = 403, description = "Cedar `read-eog` refused", body = ApiError),
+            (status = 501, description = "This build carries no NB role", body = ApiError),
+        ),
+    )]
     pub async fn list_eog_cases(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1136,6 +1520,17 @@ mod rest {
     /// `?status=offen` is what an operator watches: those are the Neuanlagen
     /// whose Marktlokation the NB has not identified yet, each with the
     /// `letzter_pruefungstag` its refusal only becomes admissible after.
+    #[utoipa::path(
+        get,
+        path = "/api/v1/neuanlage",
+        tag = "nb",
+        params(("status" = Option<String>, Query, description = "Narrow to one case status, e.g. `offen`")),
+        responses(
+            (status = 200, description = "The `E_0608` Neuanlage case log", body = serde_json::Value),
+            (status = 403, description = "Cedar `read-neuanlage` refused", body = ApiError),
+            (status = 501, description = "This build carries no NB role", body = ApiError),
+        ),
+    )]
     pub async fn list_neuanlage_cases(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1171,6 +1566,20 @@ mod rest {
     /// matches it against its own NIS/GIS, the same source that provisions
     /// `malo_grid`. This is where that answer arrives, from an operator or an
     /// ERP integration. The next Prüflauf pass then walks `E_0608` with it.
+    #[utoipa::path(
+        put,
+        path = "/api/v1/neuanlage/{id}/identifikation",
+        tag = "nb",
+        params(("id" = uuid::Uuid, Path, description = "The Neuanlage case id")),
+        request_body = NeuanlageIdentifikationRequest,
+        responses(
+            (status = 204, description = "Recorded; the next Prüflauf walks `E_0608` with it"),
+            (status = 403, description = "Cedar `identify-neuanlage` refused", body = ApiError),
+            (status = 404, description = "No open case with that id", body = ApiError),
+            (status = 422, description = "`MISSING_MALO_ID`", body = ApiError),
+            (status = 501, description = "This build carries no NB role", body = ApiError),
+        ),
+    )]
     pub async fn set_neuanlage_identifikation(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1207,6 +1616,68 @@ mod rest {
         }
     }
 
+    /// Close the `operator_decision` Klärfall of a decided Freigabe: dispatched
+    /// with the proposal and the command sent, or resolved where the decision
+    /// sends no market message. The decision is already out, so a failure here
+    /// is logged rather than returned — reporting the decision as failed would
+    /// invite a second one.
+    async fn close_freigabe_case(
+        pool: &PgPool,
+        tenant: &str,
+        entry: &crate::pg::approval::ApprovalQueueEntry,
+        decided_by: &str,
+        command: Option<&str>,
+        begruendung: Option<&str>,
+    ) {
+        let closed = async {
+            let Some(case) =
+                crate::klaerfall::freigabe_case(pool, tenant, entry.process_id).await?
+            else {
+                return Ok::<(), sqlx::Error>(());
+            };
+            match command {
+                Some(befehl) => {
+                    let vorgeschlagen = entry
+                        .approve_command
+                        .as_deref()
+                        .or(entry.reject_command.as_deref())
+                        .unwrap_or(befehl);
+                    crate::klaerfall::claim_dispatch(
+                        pool,
+                        tenant,
+                        case,
+                        crate::klaerfall::Dispatch {
+                            akteur: decided_by,
+                            vorgeschlagen,
+                            befehl,
+                            begruendung,
+                        },
+                    )
+                    .await?;
+                }
+                None => {
+                    crate::klaerfall::resolve(
+                        pool,
+                        tenant,
+                        case,
+                        begruendung.unwrap_or("the Freigabe was decided without a market message"),
+                        decided_by,
+                    )
+                    .await?;
+                }
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = closed {
+            tracing::error!(
+                process_id = %entry.process_id,
+                error = %e,
+                "processd: the Freigabe was decided but its Klärfall stays open"
+            );
+        }
+    }
+
     /// Check a pending entry's decision, claim it, dispatch its market command,
     /// release the claim on failure.
     ///
@@ -1231,6 +1702,7 @@ mod rest {
         approve: bool,
         decided_by: &str,
         body: &[u8],
+        begruendung: Option<&str>,
     ) -> ApiResult<StatusCode> {
         let Ok(id) = id_str.parse::<uuid::Uuid>() else {
             return Err(ApiError::bad_request("the queue entry id is not a UUID"));
@@ -1249,7 +1721,7 @@ mod rest {
                     }
                 }
             };
-        let queue = PgApprovalQueue::new(pool);
+        let queue = PgApprovalQueue::new(pool.clone());
         let target = if approve {
             crate::pg::approval::QueueStatus::Approved
         } else {
@@ -1295,6 +1767,7 @@ mod rest {
                 return Err(super::unclaimable(id, found.as_ref()));
             }
             tracing::info!(%id, pid = entry.pid, approve, "processd: queue entry decided without a market message");
+            close_freigabe_case(&pool, &state.tenant, &entry, decided_by, None, begruendung).await;
             return Ok(StatusCode::NO_CONTENT);
         };
 
@@ -1397,6 +1870,15 @@ mod rest {
         }
 
         tracing::info!(%id, process_id = %entry.process_id, command, "processd: queue entry {verb}d — command dispatched");
+        close_freigabe_case(
+            &pool,
+            &state.tenant,
+            &entry,
+            decided_by,
+            Some(command),
+            begruendung,
+        )
+        .await;
 
         // A **Meldepflicht** the approved answer carries with it — a message
         // owed „unverzüglich nach dem ÜZ" of that answer, with no answer of its
@@ -1445,6 +1927,22 @@ mod rest {
     /// `expires_at` carries the *business* answer Frist of the queued process,
     /// read from `mako_fristen::antwort`, less an hour of headroom. Operators
     /// must act before it.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/queue/{id}/approve",
+        tag = "queue",
+        params(("id" = String, Path, description = "The approval-queue entry id (UUID)")),
+        request_body = serde_json::Value,
+        responses(
+            (status = 204, description = "Claimed and dispatched"),
+            (status = 403, description = "Cedar `decide-queue` refused", body = ApiError),
+            (status = 404, description = "No such entry", body = ApiError),
+            (status = 409, description = "`already_decided`, naming who decided", body = ApiError),
+            (status = 415, description = "`json_required`", body = ApiError),
+            (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+            (status = 502, description = "makod did not answer", body = ApiError),
+        ),
+    )]
     pub async fn approve_queue_entry(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1453,18 +1951,23 @@ mod rest {
         headers: axum::http::HeaderMap,
         Path(id_str): Path<String>,
         body: axum::body::Bytes,
-    ) -> ApiResult<StatusCode> {
+    ) -> ApiResult<axum::response::Response> {
+        use axum::response::IntoResponse as _;
         authorize(&enforcer, &claims, "decide-queue", &state.tenant)?;
-        crate::entscheidungsprobe::nur_json(&headers)?;
-        decide_queue_entry(
-            &state,
-            pool,
-            &id_str,
-            true,
-            &decided_by(&claims, &headers),
-            &body,
+        // A decision changes the market: only `application/json`, which a
+        // cross-site form cannot send without a CORS preflight, even on an
+        // empty body.
+        mako_service::json::nur_json(&headers)?;
+        let by = decided_by(&claims, &headers);
+        let scope = format!("queue/{id_str}/approve");
+        Ok(
+            crate::idempotency::once(&pool, &state.tenant, &headers, &scope, &body, || async {
+                decide_queue_entry(&state, pool.clone(), &id_str, true, &by, &body, None)
+                    .await
+                    .into_response()
+            })
+            .await,
         )
-        .await
     }
 
     /// Reject an approval-queue entry: claim it, then dispatch its refusal.
@@ -1472,6 +1975,22 @@ mod rest {
     /// The refusal's Antwortcode is the operator's, stated in the body like an
     /// escalated approval; what the refusal is addressed by (the `tx_id` of a
     /// Steuerungsauftrag, the MaLo of the row) comes from the entry.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/queue/{id}/reject",
+        tag = "queue",
+        params(("id" = String, Path, description = "The approval-queue entry id (UUID)")),
+        request_body = serde_json::Value,
+        responses(
+            (status = 204, description = "Claimed and its refusal dispatched"),
+            (status = 403, description = "Cedar `decide-queue` refused", body = ApiError),
+            (status = 404, description = "No such entry", body = ApiError),
+            (status = 409, description = "`already_decided`, naming who decided", body = ApiError),
+            (status = 415, description = "`json_required`", body = ApiError),
+            (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+            (status = 502, description = "makod did not answer", body = ApiError),
+        ),
+    )]
     pub async fn reject_queue_entry(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1480,18 +1999,20 @@ mod rest {
         headers: axum::http::HeaderMap,
         Path(id_str): Path<String>,
         body: axum::body::Bytes,
-    ) -> ApiResult<StatusCode> {
+    ) -> ApiResult<axum::response::Response> {
+        use axum::response::IntoResponse as _;
         authorize(&enforcer, &claims, "decide-queue", &state.tenant)?;
-        crate::entscheidungsprobe::nur_json(&headers)?;
-        decide_queue_entry(
-            &state,
-            pool,
-            &id_str,
-            false,
-            &decided_by(&claims, &headers),
-            &body,
+        mako_service::json::nur_json(&headers)?;
+        let by = decided_by(&claims, &headers);
+        let scope = format!("queue/{id_str}/reject");
+        Ok(
+            crate::idempotency::once(&pool, &state.tenant, &headers, &scope, &body, || async {
+                decide_queue_entry(&state, pool.clone(), &id_str, false, &by, &body, None)
+                    .await
+                    .into_response()
+            })
+            .await,
         )
-        .await
     }
 
     /// The Bilanzkreis an Anmeldung carries — see
@@ -1561,6 +2082,19 @@ mod rest {
     /// - Earliest Lieferbeginn for a submission today: the calendar day **after
     ///   the next Werktag** after today (Berlin date).
     /// - Retroactive dates (`lieferbeginn_datum` < today Berlin) are always rejected.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/start-supply",
+        tag = "supply",
+        request_body = serde_json::Value,
+        responses(
+            (status = 202, description = "makod opened the Anmeldung (55001)", body = serde_json::Value),
+            (status = 403, description = "Cedar `initiate-supply` refused", body = ApiError),
+            (status = 409, description = "makod refused the command in the process's state", body = ApiError),
+            (status = 422, description = "A refusal naming the rule that decided (`MISSING_MALO_ID`, `ANMELDEDATEN_UNVOLLSTAENDIG`, …)", body = ApiError),
+            (status = 502, description = "makod did not answer", body = ApiError),
+        ),
+    )]
     pub async fn start_supply(
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1852,6 +2386,19 @@ mod rest {
     /// 2.5.2 SD „Lieferbeginn" Nr. 1), enforced here. For an Einzug the NB
     /// corrects the date instead of rejecting, so those pass with a
     /// `vorlauffrist_hinweis`.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/start-supply-gas",
+        tag = "supply",
+        request_body = serde_json::Value,
+        responses(
+            (status = 202, description = "makod opened the Anmeldung (44001)", body = serde_json::Value),
+            (status = 403, description = "Cedar `initiate-supply` refused", body = ApiError),
+            (status = 409, description = "makod refused the command in the process's state", body = ApiError),
+            (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+            (status = 502, description = "makod did not answer", body = ApiError),
+        ),
+    )]
     pub async fn start_supply_gas(
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2115,6 +2662,19 @@ mod rest {
     /// in `vertragd` (§ 20 Abs. 1 StromGVV/GasGVV in der Grundversorgung, sonst
     /// vertraglich); this endpoint validates only that the
     /// mandatory fields are present.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/end-supply",
+        tag = "supply",
+        request_body = EndSupplyRequest,
+        responses(
+            (status = 202, description = "makod opened the Abmeldung (55004)", body = serde_json::Value),
+            (status = 403, description = "Cedar `initiate-supply` refused", body = ApiError),
+            (status = 409, description = "makod refused the command in the process's state", body = ApiError),
+            (status = 422, description = "A refusal naming the missing field", body = ApiError),
+            (status = 502, description = "makod did not answer", body = ApiError),
+        ),
+    )]
     pub async fn end_supply(
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2167,6 +2727,19 @@ mod rest {
     /// Forwards to makod `geli.lieferende.anmelden`, which is licensed to the
     /// **Gas** supplier (`LFG`) and reads the Marktlokation, the `YYYYMMDD`
     /// `process_date` and the Transaktionsgrund.
+    #[utoipa::path(
+        post,
+        path = "/api/v1/end-supply-gas",
+        tag = "supply",
+        request_body = EndSupplyGasRequest,
+        responses(
+            (status = 202, description = "makod opened the Lieferende (44004)", body = serde_json::Value),
+            (status = 403, description = "Cedar `initiate-supply` refused", body = ApiError),
+            (status = 409, description = "makod refused the command in the process's state", body = ApiError),
+            (status = 422, description = "A refusal naming the missing field", body = ApiError),
+            (status = 502, description = "makod did not answer", body = ApiError),
+        ),
+    )]
     pub async fn end_supply_gas(
         State(state): State<ProcessdState>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,

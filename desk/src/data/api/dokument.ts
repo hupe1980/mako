@@ -44,6 +44,24 @@ function umbenennen(node: unknown, service: string): unknown {
 /** The merged document's name — a developer's, never shown on screen. */
 const ZUSAMMEN = "mako services through the Desk gateway";
 
+/** Every `#/components/schemas/X` a document points at that it does not define. */
+export function fehlendeSchemas(d: Dokument): string[] {
+  const da = new Set(Object.keys(d.components?.schemas ?? {}));
+  const fehlt = new Set<string>();
+  const gehe = (n: unknown) => {
+    if (Array.isArray(n)) n.forEach(gehe);
+    else if (n && typeof n === "object")
+      for (const [k, v] of Object.entries(n as Record<string, unknown>)) {
+        if (k === "$ref" && typeof v === "string" && v.startsWith("#/components/schemas/")) {
+          const name = v.slice("#/components/schemas/".length);
+          if (!da.has(name)) fehlt.add(name);
+        } else gehe(v);
+      }
+  };
+  gehe(d);
+  return [...fehlt].sort();
+}
+
 /** Merge each service's document into one, as the gateway serves them. */
 export function zusammenfuehren(dokumente: Record<string, Dokument>): {
   dokument: Dokument;

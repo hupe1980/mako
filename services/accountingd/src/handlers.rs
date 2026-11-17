@@ -113,6 +113,19 @@ pub fn format_ct_as_eur(ct: i64) -> String {
 // ── Account endpoints ─────────────────────────────────────────────────────────
 
 /// `GET /api/v1/accounts/{malo_id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+    ),
+)]
 pub async fn get_account(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -133,6 +146,21 @@ pub async fn get_account(
 }
 
 /// `PUT /api/v1/accounts/{malo_id}`  — upsert account + update fields (IBAN, Abschlag)
+#[utoipa::path(
+    put,
+    path = "/api/v1/accounts/{malo_id}",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    request_body = crate::pg::UpdateAccountRequest,
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `write-account` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn put_account(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
@@ -177,6 +205,21 @@ pub async fn put_account(
 /// the Abs. 5 Pauschale and the contract is its one source. An operator token
 /// cannot set it here, and `PUT /api/v1/accounts/{malo_id}` does not carry it.
 /// Creates the account when it is not there yet.
+#[utoipa::path(
+    put,
+    path = "/api/v1/accounts/{malo_id}/verbraucher",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    request_body = crate::pg::SetVerbraucherRequest,
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `sync-verbraucher` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn put_account_verbraucher(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
@@ -276,6 +319,20 @@ pub async fn get_ledger(
 }
 
 /// `GET /api/v1/accounts/{malo_id}/kontoauszug`  — account statement (portald-consumable)
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}/kontoauszug",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        KontoauszugQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn get_kontoauszug(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -351,7 +408,8 @@ fn optional_date(field: &str, raw: Option<&str>) -> Result<Option<time::Date>, S
         .map_err(|e| e.to_string())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct AbschlaegeQuery {
     pub lf_mp_id: Option<String>,
     /// Inclusive lower bound on the advance's `periode` (ISO 8601 date).
@@ -393,6 +451,20 @@ pub struct AbschlaegeQuery {
 /// Response: `[{ "datum", "betrag_eur", "ust_satz", "beschreibung" }]` —
 /// `energy_billing::AbschlagDeduction` verbatim, oldest first, plus
 /// `reference`, `offen_ct` and `verrechnet_mit` for reconciliation.
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}/abschlaege",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AbschlaegeQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+        (status = 400, description = "A malformed parameter", body = ApiError),
+    ),
+)]
 pub async fn get_abschlaege(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -468,7 +540,7 @@ pub async fn get_abschlaege(
 }
 
 /// Body of `PUT /api/v1/accounts/{malo_id}/abschlag`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct PutAbschlagRequest {
     /// The new monthly Abschlag in ct (× 10⁻² EUR). Required.
     pub abschlag_ct: i64,
@@ -482,6 +554,20 @@ fn bo4e_refusal(r: &mako_markt::bo4e::Bo4eRejection) -> ApiError {
 }
 
 /// `PUT /api/v1/accounts/{malo_id}/abschlag`  — update monthly advance payment
+#[utoipa::path(
+    put,
+    path = "/api/v1/accounts/{malo_id}/abschlag",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+    ),
+    request_body = PutAbschlagRequest,
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `write-account` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn put_abschlag(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -522,7 +608,8 @@ pub struct AccountQuery {
 }
 
 /// Query for `GET /api/v1/accounts/{malo_id}/kontoauszug`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct KontoauszugQuery {
     pub lf_mp_id: Option<String>,
     /// Inclusive start of the statement period (ISO 8601 date).
@@ -673,6 +760,19 @@ pub async fn ingest_webhook(
                 .and_then(|v| v.as_str())
                 .unwrap_or(&ce_id)
                 .to_owned();
+            // A Schlussrechnung ending in a Guthaben owes it back within two
+            // weeks (§ 40c Abs. 3 EnWG). Read before anything is booked: an
+            // event that cannot state the due date is refused whole, not
+            // booked without its payout item.
+            let guthaben = match data.map(crate::guthaben::aus_rechnung).transpose() {
+                Ok(g) => g.flatten(),
+                Err(reason) => {
+                    tracing::error!(ce_id = %ce_id, malo_id, %reason, "accountingd: invoice event refused");
+                    return ApiError::unprocessable(reason)
+                        .with_code("credit_without_due_date")
+                        .into_response();
+                }
+            };
             // The receivable is posted against this row. Answering 200 with no
             // account means the invoice is never booked and the sender is told
             // it landed — so a failure here is a 500 that earns a redelivery,
@@ -768,6 +868,33 @@ pub async fn ingest_webhook(
                     )))
                     .into_response();
                 }
+            }
+            // SR-058: one item per Schlussrechnung (keyed on its number), and
+            // its Storno cancels it. A failure is a 500: the booking above
+            // replays as a no-op on redelivery, the item is raised then.
+            if let Some(credit) = &guthaben
+                && let Err(e) =
+                    crate::guthaben::raise(&pool, &cfg.tenant, malo_id, lf_mp_id, credit, &ce_id)
+                        .await
+            {
+                return ApiError::internal(e.context(format!(
+                    "credit payout for {} — returning 500 so the sender redelivers",
+                    credit.rechnungsnummer
+                )))
+                .into_response();
+            }
+            if is_correction
+                && let Some(original) = data
+                    .and_then(|d| d.get("rechnung"))
+                    .and_then(|r| r.get("originalRechnungsnummer"))
+                    .and_then(|v| v.as_str())
+                && let Err(e) = crate::guthaben::cancel(&pool, &cfg.tenant, original, &ce_id).await
+            {
+                return ApiError::internal(e.context(format!(
+                    "credit payout cancellation for {original} — returning 500 so the sender \
+                     redelivers"
+                )))
+                .into_response();
             }
             StatusCode::OK.into_response()
         }
@@ -1163,6 +1290,16 @@ async fn zahle_eeg_kette(
 /// could not be read), `unmatched` (no account claims it) and `failed` (the
 /// lookup or the ledger write errored). They call for different responses, and
 /// a single number cannot tell a quiet day from a broken database.
+#[utoipa::path(
+    post,
+    path = "/api/v1/payments/import",
+    tag = "payments",
+    request_body(content = Vec<serde_json::Value>, description = "The bank export rows"),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `import-payments` refused", body = ApiError),
+    ),
+)]
 pub async fn import_payments(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -1264,8 +1401,34 @@ pub async fn import_payments(
                     amount_ct = entry.ledger_ct(),
                     reference = %entry.reference,
                     has_end_to_end_id = entry.end_to_end_id.is_some(),
-                    "accountingd: no account claims this payment — skipping (unmatched)"
+                    "accountingd: no account claims this payment — kept as unmatched"
                 );
+                // Kept for an operator to assign: money in the bank account
+                // that no list shows is a receivable nobody closes.
+                if let Err(e) = crate::unmatched::record(
+                    &pool,
+                    &cfg.tenant,
+                    &crate::unmatched::NewUnmatched {
+                        bank_transaction_id: &bank_txn_id,
+                        ledger_ct: entry.ledger_ct(),
+                        value_date: date,
+                        reference: &entry.reference,
+                        end_to_end_id: entry.end_to_end_id.as_deref(),
+                        iban: Some(entry.iban.as_str()),
+                        source: crate::unmatched::Quelle::Flat,
+                    },
+                )
+                .await
+                {
+                    tracing::error!(
+                        error = %e,
+                        bank_txn_id = %bank_txn_id,
+                        "accountingd: unmatched payment could not be kept — investigate DB health"
+                    );
+                    failed += 1;
+                    skipped += 1;
+                    continue;
+                }
                 unmatched += 1;
                 skipped += 1;
                 continue;
@@ -1397,6 +1560,17 @@ async fn stage_bank_row<'a>(
     let ledger_id = crate::booking::stage(&mut tx, ledger, tenant, draft).await?;
     let (log, ce) = row(ledger_id);
     crate::pg::record_bank_import(&mut *tx, tenant, &log).await?;
+    // A line kept as unmatched by an earlier import is booked now: it leaves
+    // the list in the same commit.
+    crate::unmatched::close_by_import(
+        &mut tx,
+        tenant,
+        log.bank_transaction_id,
+        &draft.malo_id,
+        &draft.lf_mp_id,
+        ledger_id,
+    )
+    .await?;
     mako_service::outbox::enqueue(&mut tx, &ce).await?;
     tx.commit().await?;
     if let Err(e) = crate::booking::book(ledger, pool, tenant, &draft.idempotency).await {
@@ -1412,6 +1586,8 @@ struct CamtImportCtx {
     ledger: Arc<crate::ledger::PgLedger>,
     iban_key: Option<[u8; 32]>,
     cfg: Arc<AccountingdConfig>,
+    /// The door, recorded on a line no account claims.
+    source: crate::unmatched::Quelle,
 }
 
 /// Counters returned by [`import_cash_entries`].
@@ -1461,6 +1637,7 @@ async fn import_cash_entries(
         ledger,
         iban_key,
         cfg,
+        source,
     } = ctx;
     let mut out = CamtImportResult::default();
 
@@ -1657,8 +1834,31 @@ async fn import_cash_entries(
                         bank_txn_id = %bank_txn_id,
                         amount_ct = signed_ct,
                         reference = %reference,
-                        "accountingd: no account claims this camt entry — skipping (unresolved)"
+                        "accountingd: no account claims this camt entry — kept as unmatched"
                     );
+                    if let Err(e) = crate::unmatched::record(
+                        pool,
+                        &cfg.tenant,
+                        &crate::unmatched::NewUnmatched {
+                            bank_transaction_id: &bank_txn_id,
+                            ledger_ct: crate::sepa::bank_to_ledger_ct(signed_ct),
+                            value_date: date,
+                            reference,
+                            end_to_end_id,
+                            iban: (!counterparty_iban.is_empty()).then_some(counterparty_iban),
+                            source: *source,
+                        },
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            error = %e,
+                            bank_txn_id = %bank_txn_id,
+                            "accountingd: unmatched camt entry could not be kept — investigate DB health"
+                        );
+                        out.skipped += 1;
+                        continue;
+                    }
                     out.unresolved += 1;
                     out.skipped += 1;
                     continue;
@@ -1848,6 +2048,17 @@ async fn import_cash_entries(
 /// `BANKRUECKLAST` debits and ordinary credits `ZAHLUNG`, and deduplication is
 /// keyed on `AcctSvcrRef` (disambiguated per detail by `EndToEndId`) with a
 /// stable hash of the transaction fields as the fallback.
+#[utoipa::path(
+    post,
+    path = "/api/v1/payments/import/camt054",
+    tag = "payments",
+    request_body(content = String, content_type = "application/xml", description = "The camt.054 document exactly as the bank delivers it"),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `import-payments` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn import_payments_camt054(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -1872,6 +2083,7 @@ pub async fn import_payments_camt054(
         ledger,
         iban_key,
         cfg,
+        source: crate::unmatched::Quelle::Camt054,
     };
     let mut result = CamtImportResult::default();
     let mut accounts = Vec::new();
@@ -1925,6 +2137,17 @@ pub async fn import_payments_camt054(
 ///
 /// Interim balances (`ITBD`) are returned rather than posted — a receivables
 /// ledger has no place to put a treasury figure.
+#[utoipa::path(
+    post,
+    path = "/api/v1/payments/import/camt052",
+    tag = "payments",
+    request_body(content = String, content_type = "application/xml", description = "The camt.052 document exactly as the bank delivers it"),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `import-payments` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn import_payments_camt052(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -1949,6 +2172,7 @@ pub async fn import_payments_camt052(
         ledger,
         iban_key,
         cfg,
+        source: crate::unmatched::Quelle::Camt052,
     };
     let mut result = CamtImportResult::default();
     let mut reports = Vec::new();
@@ -2000,6 +2224,17 @@ pub async fn import_payments_camt052(
 /// Running both imports is safe: `bank_import_log` and the ledger idempotency
 /// key are keyed on the bank's transaction reference, so a transaction notified
 /// intraday by camt.054 and again in the evening's camt.053 books once.
+#[utoipa::path(
+    post,
+    path = "/api/v1/payments/import/camt053",
+    tag = "payments",
+    request_body(content = String, content_type = "application/xml", description = "The camt.053 document exactly as the bank delivers it"),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `import-payments` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn import_payments_camt053(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2024,6 +2259,7 @@ pub async fn import_payments_camt053(
         ledger,
         iban_key,
         cfg,
+        source: crate::unmatched::Quelle::Camt053,
     };
     let mut result = CamtImportResult::default();
     let mut statements = Vec::new();
@@ -2193,7 +2429,7 @@ pub async fn metrics(
 // ── Business partner (Geschäftspartner) aggregation ───────────────────────────
 
 /// Body of `PUT /api/v1/accounts/{malo_id}/business-partner`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct PutBusinessPartnerRequest {
     /// The vertragd `kunden_nr` the account belongs to. Required, non-blank.
     pub kunden_nr: String,
@@ -2202,6 +2438,21 @@ pub struct PutBusinessPartnerRequest {
 /// `PUT /api/v1/accounts/{malo_id}/business-partner` — link an account to a
 /// vertragd `kunden_nr` so its balance/dunning aggregate with the customer's
 /// other market locations (FI-CA contract-account model).
+#[utoipa::path(
+    put,
+    path = "/api/v1/accounts/{malo_id}/business-partner",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    request_body = PutBusinessPartnerRequest,
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `write-account` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn put_account_business_partner(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2228,6 +2479,18 @@ pub async fn put_account_business_partner(
 }
 
 /// `GET /api/v1/business-partners/{kunden_nr}/accounts` — all accounts.
+#[utoipa::path(
+    get,
+    path = "/api/v1/business-partners/{kunden_nr}/accounts",
+    tag = "accounts",
+    params(
+        ("kunden_nr" = String, Path, description = "vertragd Kundennummer"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+    ),
+)]
 pub async fn get_bp_accounts(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2250,6 +2513,18 @@ pub async fn get_bp_accounts(
 }
 
 /// `GET /api/v1/business-partners/{kunden_nr}/balance` — consolidated balance.
+#[utoipa::path(
+    get,
+    path = "/api/v1/business-partners/{kunden_nr}/balance",
+    tag = "accounts",
+    params(
+        ("kunden_nr" = String, Path, description = "vertragd Kundennummer"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+    ),
+)]
 pub async fn get_bp_balance(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2379,13 +2654,147 @@ pub async fn match_payment(
         .map(Json)
 }
 
+/// Query of `GET /api/v1/payments/unmatched`.
+#[derive(Debug, Deserialize, schemars::JsonSchema, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct UnmatchedQuery {
+    /// Maximum rows (default 100, at most 1000).
+    pub limit: Option<i64>,
+}
+
+/// `GET /api/v1/payments/unmatched` — the bank lines no account claimed,
+/// oldest first (`crate::unmatched::list`, shared with MCP
+/// `list_unmatched_payments`). The payer's IBAN appears masked only.
+#[utoipa::path(
+    get,
+    path = "/api/v1/payments/unmatched",
+    tag = "payments",
+    params(UnmatchedQuery),
+    responses(
+        (status = 200, description = "The lines waiting for an account", body = crate::unmatched::UnzugeordneteZahlungen),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+    ),
+)]
+pub async fn get_unmatched_payments(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Query(q): Query<UnmatchedQuery>,
+) -> Result<Json<crate::unmatched::UnzugeordneteZahlungen>, ApiError> {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return Err(ApiError::forbidden(e.to_string()));
+    }
+    crate::unmatched::list(&pool, &cfg.tenant, q.limit)
+        .await
+        .map(Json)
+}
+
+/// `POST /api/v1/payments/{payment_id}/assign` — book an unmatched bank line
+/// to the account the operator chose and close it, in one transaction
+/// (`crate::unmatched::assign`). `POST /api/v1/payments/match` proposes the
+/// account.
+#[utoipa::path(
+    post,
+    path = "/api/v1/payments/{payment_id}/assign",
+    tag = "payments",
+    params(("payment_id" = Uuid, Path, description = "The unmatched line, as `GET /api/v1/payments/unmatched` names it")),
+    request_body = crate::unmatched::AssignRequest,
+    responses(
+        (status = 200, description = "Booked and closed", body = crate::unmatched::ZahlungZugeordnet),
+        (status = 403, description = "Cedar `import-payments` refused", body = ApiError),
+        (status = 404, description = "`payment_not_found` or `account_not_found`", body = ApiError),
+        (status = 409, description = "`payment_already_assigned`", body = ApiError),
+    ),
+)]
+pub async fn assign_payment(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(payment_id): Path<Uuid>,
+    Json(req): Json<crate::unmatched::AssignRequest>,
+) -> Result<Json<crate::unmatched::ZahlungZugeordnet>, ApiError> {
+    if let Err(e) = cedar.check(&claims.principal(), "import-payments", &cfg.tenant) {
+        return Err(ApiError::forbidden(e.to_string()));
+    }
+    crate::unmatched::assign(&pool, &ledger, &cfg.tenant, payment_id, &req, claims.sub())
+        .await
+        .map(Json)
+}
+
+/// `GET /api/v1/credit-payouts` — the Guthaben Schlussrechnungen owe back,
+/// earliest due date first, each saying whether it is overdue
+/// (`crate::guthaben::list`, shared with MCP `list_credit_payouts`).
+/// `?overdue=true` is the Desk's Heute source.
+#[utoipa::path(
+    get,
+    path = "/api/v1/credit-payouts",
+    tag = "books",
+    params(crate::guthaben::CreditPayoutQuery),
+    responses(
+        (status = 200, description = "The payout items", body = crate::guthaben::Guthabenauszahlungen),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+    ),
+)]
+pub async fn get_credit_payouts(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Query(q): Query<crate::guthaben::CreditPayoutQuery>,
+) -> Result<Json<crate::guthaben::Guthabenauszahlungen>, ApiError> {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return Err(ApiError::forbidden(e.to_string()));
+    }
+    crate::guthaben::list(&pool, &cfg.tenant, &q, mako_fristen::heute())
+        .await
+        .map(Json)
+}
+
+/// `POST /api/v1/credit-payouts/{payout_id}/paid` — book the transfer of a
+/// Guthaben and close its item, in one transaction; an item is paid once
+/// (`crate::guthaben::pay`).
+#[utoipa::path(
+    post,
+    path = "/api/v1/credit-payouts/{payout_id}/paid",
+    tag = "books",
+    params(("payout_id" = Uuid, Path, description = "The payout item")),
+    request_body = crate::guthaben::PaidRequest,
+    responses(
+        (status = 200, description = "Booked and closed", body = crate::guthaben::GuthabenAusgezahlt),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+        (status = 404, description = "`credit_payout_not_found`", body = ApiError),
+        (status = 409, description = "`credit_payout_not_open` — paid or cancelled", body = ApiError),
+        (status = 422, description = "`invalid_date`", body = ApiError),
+    ),
+)]
+pub async fn post_credit_payout_paid(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(payout_id): Path<Uuid>,
+    Json(req): Json<crate::guthaben::PaidRequest>,
+) -> Result<Json<crate::guthaben::GuthabenAusgezahlt>, ApiError> {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return Err(ApiError::forbidden(e.to_string()));
+    }
+    crate::guthaben::pay(&pool, &ledger, &cfg.tenant, payout_id, &req, claims.sub())
+        .await
+        .map(Json)
+}
+
 /// Body of `POST /api/v1/dunning/{account_id}/escalate`.
 ///
 /// Both fields are required. The Mahnstufe and the Zahlungsfrist are what the
 /// Mahnung tells the customer, and accountingd has no configured policy for a
 /// manual escalation's Zahlungsfrist — so a value the operator did not send is
 /// refused rather than substituted.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, utoipa::ToSchema)]
 pub struct EscalateDunningRequest {
     /// Mahnstufe, 1–3 (the `dunning_cases.stufe` range).
     pub stufe: i16,
@@ -2421,6 +2830,21 @@ impl EscalateDunningRequest {
 }
 
 /// `POST /api/v1/dunning/{account_id}/escalate`  — manual dunning escalation
+#[utoipa::path(
+    post,
+    path = "/api/v1/dunning/{account_id}/escalate",
+    tag = "dunning",
+    params(
+        ("account_id" = uuid::Uuid, Path, description = "The account"),
+    ),
+    request_body = EscalateDunningRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-dunning` refused", body = ApiError),
+        (status = 404, description = "No such account", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn escalate_dunning(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2479,6 +2903,19 @@ pub async fn escalate_dunning(
 }
 
 /// `POST /api/v1/dunning/{id}/resolve`
+#[utoipa::path(
+    post,
+    path = "/api/v1/dunning/{id}/resolve",
+    tag = "dunning",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The dunning case"),
+    ),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `manage-dunning` refused", body = ApiError),
+        (status = 404, description = "No such dunning case", body = ApiError),
+    ),
+)]
 pub async fn resolve_dunning(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2507,6 +2944,20 @@ pub async fn resolve_dunning(
 ///
 /// The instalment period follows § 41g Abs. 1 S. 7–9: **6 to 18 months** in
 /// general, and **12 to 24 months** once the arrears exceed 300 EUR.
+#[utoipa::path(
+    post,
+    path = "/api/v1/dunning/{id}/abwendung/angebot",
+    tag = "dunning",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The dunning case"),
+    ),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `manage-dunning` refused", body = ApiError),
+        (status = 404, description = "No such dunning case", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+    ),
+)]
 pub async fn abwendung_angebot(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2592,6 +3043,18 @@ pub async fn abwendung_angebot(
 /// The debtor banks do not enforce this, so `within_days` looks ahead: a mandate
 /// going dormant next month is worth knowing about while the customer can still
 /// be asked for a new one.
+#[utoipa::path(
+    get,
+    path = "/api/v1/sepa/mandates/dormant",
+    tag = "sepa",
+    params(
+        ReviewQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-banking` refused", body = ApiError),
+    ),
+)]
 pub async fn get_dormant_mandates(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2621,7 +3084,7 @@ pub async fn get_dormant_mandates(
 // ── Mahnsperren (§§41f/41g halts) ─────────────────────────────────────────────
 
 /// Body of `POST /api/v1/dunning/{id}/locks`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlaceLockRequest {
     pub grund: crate::pg::LockGrund,
@@ -2644,6 +3107,22 @@ pub struct PlaceLockRequest {
 /// `DELETE .../locks/{lock_id}` with a reason — because § 41g Abs. 1 S. 11 lets
 /// the supplier resume after a broken agreement, and § 41f Abs. 2 makes the
 /// Gefahr *auf Verlangen glaubhaft zu machen*, hence reviewable.
+#[utoipa::path(
+    post,
+    path = "/api/v1/dunning/{id}/locks",
+    tag = "dunning",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The dunning case"),
+    ),
+    request_body = PlaceLockRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-dunning` refused", body = ApiError),
+        (status = 404, description = "No such dunning case", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn place_lock(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2700,6 +3179,22 @@ pub async fn place_lock(
 /// For a ground known before any Mahnung: an Insolvenz (§ 87 InsO) has to stop
 /// Mahnstufe 1 from being opened at all, and an account without a case has no
 /// case to name.
+#[utoipa::path(
+    post,
+    path = "/api/v1/accounts/{malo_id}/locks",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    request_body = PlaceLockRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-dunning` refused", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn place_account_lock(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2762,6 +3257,18 @@ fn is_exclusion_violation(e: &anyhow::Error) -> bool {
 }
 
 /// `GET /api/v1/dunning/{id}/locks` — every lock this account has carried.
+#[utoipa::path(
+    get,
+    path = "/api/v1/dunning/{id}/locks",
+    tag = "dunning",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The dunning case"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+    ),
+)]
 pub async fn get_locks(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2782,6 +3289,18 @@ pub async fn get_locks(
 ///
 /// § 41f Abs. 2 contemplates circumstances with no foreseeable end and equally
 /// makes them reviewable, so an unbounded lock is allowed but surfaced here.
+#[utoipa::path(
+    get,
+    path = "/api/v1/dunning/locks/review",
+    tag = "dunning",
+    params(
+        ReviewQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+    ),
+)]
 pub async fn get_locks_due_review(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2804,13 +3323,14 @@ pub async fn get_locks_due_review(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ReviewQuery {
     pub older_than_days: Option<i64>,
 }
 
 /// Body of `DELETE /api/v1/dunning/locks/{lock_id}`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LiftLockRequest {
     /// Why the lock no longer applies. `vereinbarung_gebrochen` carries the
@@ -2824,6 +3344,22 @@ pub struct LiftLockRequest {
 /// may resume, but must re-observe § 41f Abs. 1 S. 2 **and Abs. 5**, so the
 /// Ankündigung state is cleared and the case returns to a *fresh* 8-Werktage
 /// announcement. Any other reason leaves the announcement standing.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/dunning/locks/{lock_id}",
+    tag = "dunning",
+    params(
+        ("lock_id" = uuid::Uuid, Path, description = "The lock"),
+    ),
+    request_body = LiftLockRequest,
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `manage-dunning` refused", body = ApiError),
+        (status = 404, description = "No such lock", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn lift_lock(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2880,7 +3416,7 @@ pub async fn lift_lock(
 // ── Forderungseinwände (§ 41f Abs. 3 S. 3–5) ──────────────────────────────────
 
 /// Body of `POST /api/v1/dunning/{id}/einwaende`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EinwandRequest {
     pub art: crate::pg::EinwandArt,
@@ -2899,6 +3435,21 @@ pub struct EinwandRequest {
 /// Not a lock: it does not halt the sequence, it reduces the number the § 41f
 /// Abs. 3 gates are measured against, and the sequence stops by itself when what
 /// remains falls below them.
+#[utoipa::path(
+    post,
+    path = "/api/v1/dunning/{id}/einwaende",
+    tag = "dunning",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The dunning case"),
+    ),
+    request_body = EinwandRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-dunning` refused", body = ApiError),
+        (status = 404, description = "No such dunning case", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn place_einwand(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2962,6 +3513,19 @@ pub async fn place_einwand(
 }
 
 /// `GET /api/v1/dunning/{id}/einwaende` — every objection on this account.
+#[utoipa::path(
+    get,
+    path = "/api/v1/dunning/{id}/einwaende",
+    tag = "dunning",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The dunning case"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+        (status = 404, description = "No such dunning case", body = ApiError),
+    ),
+)]
 pub async fn get_einwaende(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2986,7 +3550,7 @@ pub async fn get_einwaende(
 }
 
 /// Body of `POST /api/v1/einwaende/{einwand_id}/erledigen`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CloseEinwandRequest {
     /// `stattgegeben` | `zurueckgenommen` | `zurueckgewiesen`.
@@ -2999,6 +3563,21 @@ pub struct CloseEinwandRequest {
 /// was decided: upheld means the claim was reduced or written off (and the
 /// posting that does so is what removes it from the arrears), withdrawn or
 /// rejected means it was owed all along.
+#[utoipa::path(
+    post,
+    path = "/api/v1/einwaende/{einwand_id}/erledigen",
+    tag = "dunning",
+    params(
+        ("einwand_id" = uuid::Uuid, Path, description = "The objection"),
+    ),
+    request_body = CloseEinwandRequest,
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `manage-dunning` refused", body = ApiError),
+        (status = 404, description = "No such objection", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn close_einwand(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -3062,6 +3641,17 @@ pub struct DunningQuery {
 
 /// `POST /api/v1/sepa/mandates`  — register SEPA mandate
 /// `POST /api/v1/sepa/mandates`
+#[utoipa::path(
+    post,
+    path = "/api/v1/sepa/mandates",
+    tag = "sepa",
+    request_body = CreateMandateRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-sepa` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_mandate(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
@@ -3099,6 +3689,19 @@ pub async fn post_mandate(
 }
 
 /// `GET /api/v1/sepa/mandates/{mandate_id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/sepa/mandates/{mandate_id}",
+    tag = "sepa",
+    params(
+        ("mandate_id" = uuid::Uuid, Path, description = "The SEPA mandate"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-banking` refused", body = ApiError),
+        (status = 404, description = "No such mandate", body = ApiError),
+    ),
+)]
 pub async fn get_mandate(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -3124,6 +3727,19 @@ pub async fn get_mandate(
 ///
 /// Does NOT affect existing `accounts.iban` or `mandatsref` columns —
 /// update those separately if needed via `PUT /api/v1/accounts/{malo_id}`.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/sepa/mandates/{mandate_id}",
+    tag = "sepa",
+    params(
+        ("mandate_id" = uuid::Uuid, Path, description = "The SEPA mandate"),
+    ),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `manage-sepa` refused", body = ApiError),
+        (status = 404, description = "No such mandate", body = ApiError),
+    ),
+)]
 pub async fn delete_mandate(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -3155,6 +3771,17 @@ pub async fn delete_mandate(
 }
 
 /// `POST /api/v1/sepa/run`  — generate pain.008 XML for all active mandates with positive balance
+#[utoipa::path(
+    post,
+    path = "/api/v1/sepa/run",
+    tag = "sepa",
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-sepa` refused", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn run_sepa(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -3294,6 +3921,21 @@ pub async fn run_sepa(
 /// §40 Abs. 1 EnWG: Abschlag must match estimated consumption.
 /// Typed `Vorauszahlung` enables `portald` Jahresabschluss preview and
 /// auto-adjustment when deviation exceeds 10 %.
+#[utoipa::path(
+    put,
+    path = "/api/v1/accounts/{malo_id}/vorauszahlung",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        VorauszahlungQuery,
+    ),
+    request_body(content = serde_json::Value, description = "The BO4E `Vorauszahlung` object (`Bo4e<…>`)"),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `write-account` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn put_vorauszahlung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -3369,6 +4011,20 @@ pub async fn put_vorauszahlung(
 ///
 /// Falls back to synthesising a `Vorauszahlung` from `abschlag_ct` when no
 /// typed record has been stored ([`vorauszahlung_view`]).
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}/vorauszahlung",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        VorauszahlungQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+        (status = 404, description = "No account for that Marktlokation", body = ApiError),
+    ),
+)]
 pub async fn get_vorauszahlung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -3442,7 +4098,8 @@ pub fn vorauszahlung_view(
     }))
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct VorauszahlungQuery {
     pub lf_mp_id: Option<String>,
 }
@@ -3450,7 +4107,7 @@ pub struct VorauszahlungQuery {
 // ── Manual booking ────────────────────────────────────────────────────────────
 
 /// Request body for `POST /api/v1/accounts/{malo_id}/buchen`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BuchenRequest {
     /// Buchungsart. Must be a valid `entry_type` value.
@@ -3489,6 +4146,20 @@ pub struct BuchenRequest {
 /// Supply `reference_id` to make the post idempotent — re-posting with the same
 /// `reference_id` replays as a ledger no-op. Omit it and each call books a new
 /// entry under a fresh random key.
+#[utoipa::path(
+    post,
+    path = "/api/v1/accounts/{malo_id}/buchen",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+    ),
+    request_body = BuchenRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_buchen(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -3591,7 +4262,8 @@ pub async fn post_buchen(
 
 // ── Jahresabschluss REST API ──────────────────────────────────────────────────
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct JahresabschlussQuery {
     pub lf_mp_id: Option<String>,
     pub year: Option<i32>,
@@ -3743,6 +4415,19 @@ impl std::fmt::Display for SettleError {
 /// one a schedule triggers must produce the same postings, the same refund and
 /// the same event — and a second copy of two hundred lines of money handling is
 /// how they stop doing that.
+#[utoipa::path(
+    post,
+    path = "/api/v1/jahresabschluss/{malo_id}",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        JahresabschlussQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `close-period` refused", body = ApiError),
+    ),
+)]
 pub async fn post_jahresabschluss(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4125,7 +4810,8 @@ pub async fn settle_jahresabschluss(
 // ── Zahlungsinformation (BO4E typed payment info — IBAN + BIC + SEPA) ────────
 
 /// Query param helper for Zahlungsinformation endpoints.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ZahlungsQuery {
     pub lf_mp_id: Option<String>,
 }
@@ -4141,6 +4827,21 @@ pub struct ZahlungsQuery {
 /// - Validates IBAN via mod-97 before storing.
 /// - Atomically syncs `accounts.iban` column from `typed.iban` so that
 ///   `import_payments` (CAMT.054) matching continues to work.
+#[utoipa::path(
+    put,
+    path = "/api/v1/accounts/{malo_id}/zahlungsinformation",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        ZahlungsQuery,
+    ),
+    request_body(content = serde_json::Value, description = "The BO4E `Zahlungsinformation` object (`Bo4e<…>`)"),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `write-account` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn put_zahlungsinformation(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4217,6 +4918,20 @@ pub async fn put_zahlungsinformation(
 /// Retrieve the stored `Zahlungsinformation` for an account.
 /// Falls back to a minimal object from `accounts.iban` when no typed payload has
 /// been PUT yet (backward-compatible with legacy IBAN-only mandates).
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}/zahlungsinformation",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        ZahlungsQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-banking` refused", body = ApiError),
+        (status = 404, description = "No account for that Marktlokation", body = ApiError),
+    ),
+)]
 pub async fn get_zahlungsinformation(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4326,6 +5041,19 @@ mod iban_tests {
 ///     "booking_date": "2026-01-15", "description": "Kundenrechnung" }
 /// ]
 /// ```
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}/open-items",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+    ),
+)]
 pub async fn get_open_items(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4359,7 +5087,7 @@ pub async fn get_open_items(
 
 // ── GDPR Art. 17 anonymization ─────────────────────────────────────────
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AnonymizeRequest {
     /// Operator identity for the GDPR Art. 5(2) audit log.
@@ -4399,6 +5127,22 @@ pub struct AnonymizeRequest {
 /// - `404` — account not found
 /// - `409` — already anonymized
 /// - `422` — missing `requested_by` or `legal_basis`
+#[utoipa::path(
+    post,
+    path = "/api/v1/accounts/{malo_id}/anonymize",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    request_body = AnonymizeRequest,
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `erase-pii` refused", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_anonymize(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4444,7 +5188,8 @@ pub async fn post_anonymize(
 
 // ── Balance reconciliation ────────────────────────────────────────────────────
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ReconcileQuery {
     pub lf_mp_id: Option<String>,
     /// When `true`, resets `balance_ct` to the recomputed value (safe, transactional).
@@ -4473,6 +5218,19 @@ pub struct ReconcileQuery {
 ///
 /// A non-zero `drift_ct` indicates a bug and must be investigated before repair.
 /// This endpoint is idempotent: running it multiple times with `repair=true` is safe.
+#[utoipa::path(
+    post,
+    path = "/api/v1/accounts/{malo_id}/reconcile",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        ReconcileQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+    ),
+)]
 pub async fn post_reconcile(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4506,6 +5264,18 @@ pub async fn post_reconcile(
 /// first, committing each month's closing balances to the log. After sealing,
 /// a booking dated inside a sealed month is refused (`ledger.301`) and parks;
 /// corrections book into a later open month (§ 146 Abs. 4 AO).
+#[utoipa::path(
+    post,
+    path = "/api/v1/periods/{period_id}/seal",
+    tag = "books",
+    params(
+        ("period_id" = String, Path, description = "The period, `YYYY-MM`"),
+    ),
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `close-period` refused", body = ApiError),
+    ),
+)]
 pub async fn post_seal_period(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4538,6 +5308,15 @@ pub async fn post_seal_period(
 /// `audit` replays the whole log and compares every derived table with it, so
 /// `verified: true` says more than a seal chain could: no balance, clearing or
 /// seal disagrees with the entries beneath it.
+#[utoipa::path(
+    get,
+    path = "/api/v1/periods/seals",
+    tag = "books",
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+    ),
+)]
 pub async fn get_seals(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4567,6 +5346,20 @@ pub async fn get_seals(
 
 /// `GET /api/v1/entries/{entry_id}/proof` — a Merkle inclusion proof that the
 /// entry is in the log, with the head it verifies against (RFC 6962).
+#[utoipa::path(
+    get,
+    path = "/api/v1/entries/{entry_id}/proof",
+    tag = "books",
+    params(
+        ("entry_id" = String, Path, description = "The ledger entry"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+        (status = 400, description = "A malformed parameter", body = ApiError),
+        (status = 404, description = "No such entry", body = ApiError),
+    ),
+)]
 pub async fn get_entry_proof(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4601,7 +5394,8 @@ pub async fn get_entry_proof(
 }
 
 /// Query for `GET /api/v1/periods/{period_id}/balance-proof`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct BalanceProofQuery {
     /// Marktlokation whose Kontokorrent balance is being proven.
     pub malo_id: String,
@@ -4617,6 +5411,20 @@ pub struct BalanceProofQuery {
 /// read out of a table is not evidence for that; this returns the seal's
 /// inclusion proof and the account's leaf in the sealed balance tree, verified
 /// against the head before it is published.
+#[utoipa::path(
+    get,
+    path = "/api/v1/periods/{period_id}/balance-proof",
+    tag = "books",
+    params(
+        ("period_id" = String, Path, description = "The period, `YYYY-MM`"),
+        BalanceProofQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+        (status = 404, description = "No such period", body = ApiError),
+    ),
+)]
 pub async fn get_period_balance_proof(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4675,7 +5483,8 @@ pub async fn get_period_balance_proof(
 }
 
 /// Query for `GET /api/v1/entries/consistency-proof`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ConsistencyQuery {
     /// The tree size the auditor archived on an earlier visit.
     pub since: u64,
@@ -4688,6 +5497,19 @@ pub struct ConsistencyQuery {
 /// which a rebuilt ledger would satisfy just as well. This is the half that makes
 /// the log append-only in the eyes of someone who was here before: they check it
 /// against the head they archived and the head returned here.
+#[utoipa::path(
+    get,
+    path = "/api/v1/entries/consistency-proof",
+    tag = "books",
+    params(
+        ConsistencyQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+        (status = 400, description = "A malformed parameter", body = ApiError),
+    ),
+)]
 pub async fn get_consistency_proof(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4725,6 +5547,16 @@ pub async fn get_consistency_proof(
 
 /// `GET /api/v1/trial-balance` — Summen- und Saldenliste (§ 238 HGB): gross debit
 /// and credit turnover and the balance per GL account. Debits must equal credits.
+#[utoipa::path(
+    get,
+    path = "/api/v1/trial-balance",
+    tag = "books",
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn get_trial_balance(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4753,6 +5585,20 @@ pub async fn get_trial_balance(
 /// `POST /api/v1/accounts/{malo_id}/clear` — record a FIFO **Zahlungszuordnung**
 /// (open credits matched against the oldest open debits). Idempotent: matches
 /// nothing when everything is already assigned.
+#[utoipa::path(
+    post,
+    path = "/api/v1/accounts/{malo_id}/clear",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_clear(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4784,6 +5630,19 @@ pub async fn post_clear(
 
 /// `POST /api/v1/clearings/{position}/reset` — release one Zahlungszuordnung; the
 /// applied amount returns to both postings' residuals (the clearing record stays).
+#[utoipa::path(
+    post,
+    path = "/api/v1/clearings/{position}/reset",
+    tag = "books",
+    params(
+        ("position" = u64, Path, description = "The clearing's log position"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_reset_clearing(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4804,7 +5663,7 @@ pub async fn post_reset_clearing(
 // ── Parked bookings — drafts the ledger refused for good ─────────────────────
 
 /// Body of `POST /api/v1/bookings/{key}/rebook`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RebookRequest {
     /// The date to book on (ISO 8601) — an open month; the parked list names
@@ -4813,7 +5672,7 @@ pub struct RebookRequest {
 }
 
 /// Body of `POST /api/v1/bookings/{key}/discard`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiscardRequest {
     /// Why the booking is dropped — kept with the draft for the audit trail.
@@ -4824,6 +5683,21 @@ pub struct DiscardRequest {
 ///
 /// The successor draft and the retirement of the parked one commit together;
 /// the successor is then booked, and answers as the ledger does.
+#[utoipa::path(
+    post,
+    path = "/api/v1/bookings/{key}/rebook",
+    tag = "books",
+    params(
+        ("key" = String, Path, description = "The parked booking's key"),
+    ),
+    request_body = RebookRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+        (status = 400, description = "A malformed parameter", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+    ),
+)]
 pub async fn post_rebook(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4854,6 +5728,19 @@ pub async fn post_rebook(
 }
 
 /// `POST /api/v1/bookings/{key}/discard` — drop a parked draft with a reason.
+#[utoipa::path(
+    post,
+    path = "/api/v1/bookings/{key}/discard",
+    tag = "books",
+    params(
+        ("key" = String, Path, description = "The parked booking's key"),
+    ),
+    request_body = DiscardRequest,
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+    ),
+)]
 pub async fn post_discard(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -4889,83 +5776,50 @@ pub async fn post_discard(
 // - EU Regulation 2024/886: SCT Inst mandatory for all PSPs from Oct 2025
 // - ISO 20022 pain.001.001.09 (SCT Inst) / pain.001.003.03 (SCT CORE)
 
-/// Query parameters for `GET /api/v1/eeg/payouts`.
-#[derive(Debug, serde::Deserialize)]
-pub struct EegPayoutQuery {
-    pub malo_id: Option<String>,
-    pub year: Option<i16>,
-    pub month: Option<i16>,
-    /// Filter by pain002_status: PDNG | ACCP | RJCT | CANC | NULL (not yet submitted)
-    pub status: Option<String>,
-    pub payment_type: Option<String>,
-}
-
-/// One `eeg_payout_orders` row as `GET /api/v1/eeg/payouts` and the MCP
-/// `list_eeg_payouts` serve it.
-#[must_use]
-pub fn eeg_payout_json(r: &sqlx::postgres::PgRow) -> serde_json::Value {
-    use sqlx::Row;
-    let submitted_at: Option<time::OffsetDateTime> = r.try_get("submitted_at").unwrap_or(None);
-    let settled_at: Option<time::OffsetDateTime> = r.try_get("settled_at").unwrap_or(None);
-    let created_at: Option<time::OffsetDateTime> = r.try_get("created_at").ok();
-    serde_json::json!({
-        "payout_id":      r.try_get::<uuid::Uuid, _>("payout_id").ok().map(|u| u.to_string()),
-        "malo_id":        r.try_get::<String, _>("malo_id").ok(),
-        "tr_id":          r.try_get::<String, _>("tr_id").ok(),
-        "billing_year":   r.try_get::<i16, _>("billing_year").ok(),
-        "billing_month":  r.try_get::<i16, _>("billing_month").ok(),
-        "amount_ct":      r.try_get::<i64, _>("amount_ct").ok(),
-        "creditor_iban":  r.try_get::<String, _>("creditor_iban").ok(),
-        "creditor_name":  r.try_get::<String, _>("creditor_name").ok(),
-        "payment_type":   r.try_get::<String, _>("payment_type").ok(),
-        "end_to_end_ref": r.try_get::<String, _>("end_to_end_ref").ok(),
-        "pain002_status": r.try_get::<String, _>("pain002_status").ok(),
-        "pain002_reason": r.try_get::<String, _>("pain002_reason").ok(),
-        "submitted_at":   submitted_at.map(|t| t.to_string()),
-        "settled_at":     settled_at.map(|t| t.to_string()),
-        "source_ce_id":   r.try_get::<String, _>("source_ce_id").ok(),
-        "created_at":     created_at.map(|t| t.to_string()),
-    })
-}
-
-/// `GET /api/v1/eeg/payouts` — list EEG payout orders with optional filters.
+/// `GET /api/v1/eeg/payouts` — the EEG payout orders, newest first
+/// (`crate::reads::eeg_payouts`, shared with MCP `list_eeg_payouts`).
 ///
-/// Returns all `eeg_payout_orders` rows for the tenant, newest first.
-/// Use `?status=PDNG` to find orders awaiting pain.002 confirmation, or
-/// `?status=RJCT` to audit rejected payments (EPC rejection codes).
+/// `?status=PDNG` finds orders awaiting pain.002 confirmation, `?status=RJCT`
+/// the rejected ones (EPC reason codes), `?tr_id=` one plant's orders.
+#[utoipa::path(
+    get,
+    path = "/api/v1/eeg/payouts",
+    tag = "eeg",
+    params(crate::reads::EegPayoutQuery),
+    responses(
+        (status = 200, description = "The payout orders", body = crate::reads::EegAuszahlungen),
+        (status = 403, description = "Cedar `read-eeg-payouts` refused", body = ApiError),
+    ),
+)]
 pub async fn get_eeg_payouts(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
-    Query(q): Query<EegPayoutQuery>,
-) -> impl IntoResponse {
+    Query(q): Query<crate::reads::EegPayoutQuery>,
+) -> Result<Json<crate::reads::EegAuszahlungen>, ApiError> {
     if let Err(e) = cedar.check(&claims.principal(), "read-eeg-payouts", &cfg.tenant) {
-        return ApiError::forbidden(e.to_string()).into_response();
+        return Err(ApiError::forbidden(e.to_string()));
     }
-    let filter = crate::pg::EegPayoutFilter {
-        malo_id: q.malo_id.as_deref(),
-        year: q.year,
-        month: q.month,
-        payment_type: q.payment_type.as_deref(),
-        status: q.status.as_deref().map(|s| {
-            if s == "NULL" || s == "NOTSUBMITTED" {
-                None
-            } else {
-                Some(s)
-            }
-        }),
-    };
-    match crate::pg::list_eeg_payouts(&pool, &cfg.tenant, &filter, 200).await {
-        Ok(rows) => {
-            let result: Vec<serde_json::Value> = rows.iter().map(eeg_payout_json).collect();
-            Json(serde_json::json!({ "payouts": result, "count": result.len() })).into_response()
-        }
-        Err(e) => ApiError::internal(e).into_response(),
-    }
+    crate::reads::eeg_payouts(&pool, &cfg.tenant, &q)
+        .await
+        .map(Json)
 }
 
 /// `GET /api/v1/eeg/payouts/{payout_id}` — get a single payout order with pain.001 XML.
+#[utoipa::path(
+    get,
+    path = "/api/v1/eeg/payouts/{payout_id}",
+    tag = "eeg",
+    params(
+        ("payout_id" = uuid::Uuid, Path, description = "The payout order"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-eeg-payouts` refused", body = ApiError),
+        (status = 404, description = "No such payout order", body = ApiError),
+    ),
+)]
 pub async fn get_eeg_payout(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -5018,7 +5872,8 @@ pub async fn get_eeg_payout(
 // ── EnFG Belastungsausgleich — the payments made (§ 13 Abs. 1 EnFG) ──────────
 
 /// Query for `GET /api/v1/eeg/enfg-zahlungen`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub struct EnfgZahlungenQuery {
     pub year: i16,
@@ -5029,6 +5884,19 @@ pub struct EnfgZahlungenQuery {
 /// for one billing month: payouts the bank settled (`ACSC`) and Aufrechnungen
 /// (§ 13 Abs. 1 Satz 2 EnFG), and nothing that is merely owed. `einsd` builds
 /// its EnFG ledger from this.
+#[utoipa::path(
+    get,
+    path = "/api/v1/eeg/enfg-zahlungen",
+    tag = "eeg",
+    params(
+        EnfgZahlungenQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-enfg` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn get_enfg_zahlungen(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -5055,6 +5923,18 @@ pub async fn get_enfg_zahlungen(
 
 /// `POST /api/v1/eeg/aufrechnungen` — record that a plant operator's EEG claim
 /// was extinguished by Aufrechnung against the named Gegenforderung.
+#[utoipa::path(
+    post,
+    path = "/api/v1/eeg/aufrechnungen",
+    tag = "eeg",
+    request_body = crate::enfg::AufrechnungRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `record-aufrechnung` refused", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_eeg_aufrechnung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -5082,7 +5962,7 @@ pub async fn post_eeg_aufrechnung(
 }
 
 /// Request body for `POST /api/v1/eeg/payouts/run`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunEegPayoutsRequest {
     /// When `true`, force SCT Inst regardless of `[eeg].sepa_instant` config.
@@ -5111,6 +5991,17 @@ pub struct RunEegPayoutsRequest {
 ///
 /// Returns `generated`, `skipped_no_iban`, `nothing_outstanding` and
 /// `errors`, the last naming each chain whose order could not be built.
+#[utoipa::path(
+    post,
+    path = "/api/v1/eeg/payouts/run",
+    tag = "eeg",
+    request_body = RunEegPayoutsRequest,
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `run-payout` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_run_eeg_payouts(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -5197,6 +6088,15 @@ pub async fn post_run_eeg_payouts(
 /// The only place such a claim is served: an EEG plant account is never an
 /// Offener Posten and never dunned. Held to `read-enfg` — the claim is the
 /// Netzbetreiber's, like the payout it reverses.
+#[utoipa::path(
+    get,
+    path = "/api/v1/eeg/rueckforderungen",
+    tag = "eeg",
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-enfg` refused", body = ApiError),
+    ),
+)]
 pub async fn get_eeg_rueckforderungen(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -5236,6 +6136,18 @@ pub async fn get_eeg_rueckforderungen(
 /// counted against the chain, so a repaid chain leaves the Rückforderungen.
 /// More than the chain owes back is `422`, a chain owing nothing `422`, a
 /// second repayment of the chain on the same day `409`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/eeg/rueckzahlungen",
+    tag = "eeg",
+    request_body = crate::eeg_auszahlung::RueckzahlungRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `record-rueckzahlung` refused", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_eeg_rueckzahlung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -5299,7 +6211,7 @@ pub async fn post_eeg_rueckzahlung(
 /// - `AC06` — account blocked
 /// - `MD01` — no mandate (direct debit only — not applicable here)
 /// - `RJCT` + empty reason — generic rejection
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Pain002StatusUpdate {
     /// `ACCP` | `ACSC` | `RJCT` | `CANC`
@@ -5317,6 +6229,22 @@ pub struct Pain002StatusUpdate {
 /// `de.accounting.eeg.payout.rejected` CloudEvent if ERP webhook is configured.
 /// A settled order stays settled: a later status is `409` — money returned
 /// after settlement arrives as a camt return, not as a pain.002.
+#[utoipa::path(
+    put,
+    path = "/api/v1/eeg/payouts/{payout_id}/status",
+    tag = "eeg",
+    params(
+        ("payout_id" = uuid::Uuid, Path, description = "The payout order"),
+    ),
+    request_body = Pain002StatusUpdate,
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `run-payout` refused", body = ApiError),
+        (status = 404, description = "No such payout order", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn put_eeg_payout_status(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -5488,6 +6416,17 @@ pub async fn put_eeg_payout_status(
 /// after anything but a match is an operator's decision. The codes are the
 /// Deutsche Kreditwirtschaft's pain.002 conventions (DFÜ-Abkommen Anlage 3
 /// V3.9 Kap. 2.2.6); they report the check, not who is liable for executing.
+#[utoipa::path(
+    post,
+    path = "/api/v1/sepa/pain002",
+    tag = "sepa",
+    request_body(content = String, content_type = "application/xml", description = "The pain.002 document exactly as the bank delivers it"),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-sepa` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn import_pain002(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -5893,7 +6832,7 @@ async fn apply_pain002_status(
 // ── pain.007 SEPA Direct Debit reversal ──────────────────────────────────────
 
 /// Request body for `POST /api/v1/sepa/reversals`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateReversalRequest {
     /// The collected entry to give back (`sepa_collection_entries.entry_id`).
@@ -5924,6 +6863,19 @@ pub struct CreateReversalRequest {
 /// The compensating `SEPA_STORNO` ledger entry re-opens the receivable: the
 /// money leaves the bank account again, so what the collection discharged is
 /// owed once more.
+#[utoipa::path(
+    post,
+    path = "/api/v1/sepa/reversals",
+    tag = "sepa",
+    request_body = CreateReversalRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-sepa` refused", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_sepa_reversal(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -6168,7 +7120,7 @@ pub async fn post_sepa_reversal(
 }
 
 /// Body of `POST /api/v1/sepa/recalls`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRecallRequest {
     /// The submitted run to recall (`sepa_collection_runs.run_id`).
@@ -6194,6 +7146,19 @@ pub struct CreateRecallRequest {
 /// A recall is a **request**. The bank answers with a camt.029, which
 /// `POST /api/v1/sepa/camt029` applies; until then the recall stands
 /// `REQUESTED` and the collections stay open.
+#[utoipa::path(
+    post,
+    path = "/api/v1/sepa/recalls",
+    tag = "sepa",
+    request_body = CreateRecallRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-sepa` refused", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+        (status = 409, description = "Conflicts with the current state", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_sepa_recall(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -6361,6 +7326,18 @@ pub async fn post_sepa_recall(
 /// collections it stopped as `RECALLED`. Any other outcome leaves them open:
 /// a rejected recall means the collection stands, and a pending one means the
 /// bank has not decided.
+#[utoipa::path(
+    post,
+    path = "/api/v1/sepa/camt029",
+    tag = "sepa",
+    request_body(content = String, content_type = "application/xml", description = "The camt.029 document exactly as the bank delivers it"),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `manage-sepa` refused", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn import_camt029(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -6478,6 +7455,18 @@ pub async fn import_camt029(
 /// is still in flight (`SUBMITTED`), confirmed (`SETTLED`), refused before it
 /// moved (`REJECTED`), returned by the debtor (`RETURNED`) or already given back
 /// (`REVERSED`).
+#[utoipa::path(
+    get,
+    path = "/api/v1/sepa/collections/{run_id}/entries",
+    tag = "sepa",
+    params(
+        ("run_id" = uuid::Uuid, Path, description = "The collection run"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-banking` refused", body = ApiError),
+    ),
+)]
 pub async fn get_collection_entries(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -6608,6 +7597,15 @@ pub(crate) async fn submit_pain001_to_bank(
 ///
 /// Uses the oldest unresolved dunning case issued_at as the "overdue since" date
 /// when present; falls back to `accounts.updated_at` otherwise.
+#[utoipa::path(
+    get,
+    path = "/api/v1/aging",
+    tag = "books",
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-books` refused", body = ApiError),
+    ),
+)]
 pub async fn get_aging(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -6637,6 +7635,19 @@ pub async fn get_aging(
 // ── Interest charges (Verzugszinsen §288 BGB) ─────────────────────────────────
 
 /// `GET /api/v1/accounts/{malo_id}/interest-charges` — list interest charges.
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}/interest-charges",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+    ),
+)]
 pub async fn get_interest_charges(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -6660,7 +7671,7 @@ pub async fn get_interest_charges(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateInterestChargeRequest {
     pub lf_mp_id: Option<String>,
@@ -6679,6 +7690,21 @@ pub struct CreateInterestChargeRequest {
 /// ledger entry — §275 HGB reports Zinsen on their own line — and records the
 /// charge in `interest_charges` for audit. Fails when no Basiszinssatz is
 /// seeded for the period: the rate is announced, not estimated.
+#[utoipa::path(
+    post,
+    path = "/api/v1/accounts/{malo_id}/interest-charges",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+    ),
+    request_body = CreateInterestChargeRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+        (status = 400, description = "A malformed parameter", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_interest_charge(
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
@@ -6734,6 +7760,19 @@ pub async fn post_interest_charge(
 // ── Payment plans (Zahlungsvereinbarung) ──────────────────────────────────────
 
 /// `GET /api/v1/accounts/{malo_id}/payment-plans` — list payment plans for a MaLo.
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{malo_id}/payment-plans",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        AccountQuery,
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+    ),
+)]
 pub async fn get_payment_plans(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -6761,6 +7800,20 @@ pub async fn get_payment_plans(
 ///
 /// Creates a structured payment plan with an auto-generated installment schedule.
 /// An ACTIVE plan suppresses automatic Sperrung escalation (Mahnstufe 3).
+#[utoipa::path(
+    post,
+    path = "/api/v1/accounts/{malo_id}/payment-plans",
+    tag = "accounts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+    ),
+    request_body = crate::pg::CreatePaymentPlanRequest,
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn post_payment_plan(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
@@ -6784,6 +7837,19 @@ pub async fn post_payment_plan(
 }
 
 /// `GET /api/v1/payment-plans/{plan_id}` — get a payment plan with installments.
+#[utoipa::path(
+    get,
+    path = "/api/v1/payment-plans/{plan_id}",
+    tag = "accounts",
+    params(
+        ("plan_id" = uuid::Uuid, Path, description = "The payment plan"),
+    ),
+    responses(
+        (status = 200, description = "Done", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-account` refused", body = ApiError),
+        (status = 404, description = "No such payment plan", body = ApiError),
+    ),
+)]
 pub async fn get_payment_plan(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -6808,6 +7874,19 @@ pub async fn get_payment_plan(
 }
 
 /// `DELETE /api/v1/payment-plans/{plan_id}` — cancel a payment plan.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/payment-plans/{plan_id}",
+    tag = "accounts",
+    params(
+        ("plan_id" = uuid::Uuid, Path, description = "The payment plan"),
+    ),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 403, description = "Cedar `post-entry` refused", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    ),
+)]
 pub async fn delete_payment_plan(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,

@@ -1,0 +1,673 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "agentd — Advisory Agent Plane",
+    "description": "agentd's own REST API: runs a person starts and follows, the Desk's Hinweise and waiting proposals, verdicts, erasure and the specialist inventory. The worklist, run views and case history under `/api/v1/oversight` are agentplane's operator surface, described by agentplane's own OpenAPI document.",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.38.0"
+  },
+  "paths": {
+    "/api/v1/agents": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`GET /api/v1/agents` — the specialists this deployment activated.",
+        "description": "What is *running here*, as opposed to `/api/v1/agents/catalog`, which lists\neverything compiled in whether activated or not.\n\nAuthorized, not merely authenticated: in a combined-role deployment the\nactivated set names which arm's specialists this process runs, which is\n§§ 6a and 7a EnWG-relevant deployment detail rather than public capability\nadvertising, and a token is not a reason to be shown it. The Agent Cards\nunder `/.well-known/agents/{name}` stay open — a card is what an agent *is*,\nand carries no endpoint credential.",
+        "operationId": "list_agents",
+        "responses": {
+          "200": {
+            "description": "The specialists this deployment activated",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `api:agent.list` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/catalog": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`GET /api/v1/agents/catalog` — every specialist compiled into this binary.",
+        "description": "Lists what is *available*, whether or not it is activated, so an operator can\nsee what `[bundled_agents] enable` accepts. The declared ceilings come from\neach specialist's manifest, which is the authority on them.\n\nGated by the same verb as `/api/v1/agents`: the catalogue is the compiled\nset, which in a role-scoped build is the deployment's Marktrolle.",
+        "operationId": "agents_catalog",
+        "responses": {
+          "200": {
+            "description": "Every specialist compiled into this binary, activated or not",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `api:agent.list` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/erasure": {
+      "post": {
+        "tags": [
+          "erasure"
+        ],
+        "summary": "Destroy a case wrapping key and/or forget a memory subject.",
+        "operationId": "erase",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErasureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What was erased",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `api:erasure.execute` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This deployment holds no key ring",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No reason, or neither `case_id` nor `memory_subject`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hinweise": {
+      "get": {
+        "tags": [
+          "desk"
+        ],
+        "summary": "`GET /api/v1/hinweise` — the open worklist rows the caller's roles may\nanswer, each filed under its Anker: the Desk's Hinweise. Read under the\nverb the oversight worklist is.",
+        "operationId": "hinweise",
+        "responses": {
+          "200": {
+            "description": "The open worklist rows the caller's roles may answer, each under its Anker",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `api:task.list` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "start_runs",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "A retried request with the same key is answered with the runs it already admitted",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The runs admitted, each with its journal key",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `api:run.start` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No activated specialist has that name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No subscribing specialist can act on the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "No specialist could be admitted now; resend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run}/antwort": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /api/v1/runs/{run}/antwort` — a run's answer, sentence by sentence,\neach with the call it cites and whether that call's output carries its\nfigures. Read under the verb the oversight run view is (`RUN_READ`); a run\na person started is read only by that person, a run nobody started by\nanyone holding the verb.",
+        "operationId": "answer",
+        "parameters": [
+          {
+            "name": "run",
+            "in": "path",
+            "description": "The run id the admission answered",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run's answer, sentence by sentence, each with the call it cites",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `api:run.read` refused, or the run is another person's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run}/bewertung": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`POST /api/v1/runs/{run}/bewertung` — record whether an answer or a\nHinweis helped, or what became of a proposal, under the caller's own name. A later verdict by the same\nperson replaces theirs; the judged run is never changed. A Freigabe\nproposal's fate is read off processd's decided entry; the `vorschlag` sent\nhere is kept only as the verdict's rationale (`Plane::bewerten`).",
+        "operationId": "bewerten",
+        "parameters": [
+          {
+            "name": "run",
+            "in": "path",
+            "description": "The run id the admission answered",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Exactly one of `hilfreich` (with an optional `begruendung`) or `vorschlag`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The verdict is recorded under the caller's name"
+          },
+          "403": {
+            "description": "Cedar `api:run.assess` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run cannot be judged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Neither or both of `hilfreich` and `vorschlag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run}/schritte": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /api/v1/runs/{run}/schritte` — the run's reads as they are journaled,\nas Server-Sent Events, then its conclusion.",
+        "description": "`schritt` per settled tool call, then `antwort` — the [`Answer`] `GET\n…/antwort` returns for the run, unchanged — or `abgebrochen` with who\nstopped it, after which the stream ends. Each event's `id` is the journal\nsequence of the record it is derived from, and a reconnect's\n`Last-Event-ID` continues after it, so no step is missed or repeated.\n\nRead from the journal, never from an in-process channel — woken by the\nstore's append hint, with a poll as the fallback — so any instance serves\nit and it cannot disagree with history (agentplane `api::a2a_stream`).\nAuthorized exactly as the answer read is: `RUN_READ`, and a run a person\nstarted only for that person.\n\n[`Answer`]: crate::plane::Answer",
+        "operationId": "schritte",
+        "parameters": [
+          {
+            "name": "run",
+            "in": "path",
+            "description": "The run id the admission answered",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "description": "Continue after this journal sequence",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events: `schritt` per settled tool call, then `antwort` or `abgebrochen`",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `api:run.read` refused, or the run is another person's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`Last-Event-ID` repeated or not an id this stream sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run}/stopp": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`POST /api/v1/runs/{run}/stopp` — the starter stops their run.",
+        "description": "agentplane's `request_cancel` with the person as operator: durable at once,\nacted on before the run's next effect — the call in flight completes, and\nno further model turn or tool call is made — after which the `schritte`\nstream ends with `abgebrochen` and the answer read reports `cancelled`. `202`, because\nthe stop is recorded, not yet carried out. Only the starter stops a run\nhere; anyone else's stop is the oversight surface's `RUN_CANCEL`.",
+        "operationId": "stopp",
+        "parameters": [
+          {
+            "name": "run",
+            "in": "path",
+            "description": "The run id the admission answered",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "No body, or an empty object",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The stop is recorded and acted on before the run's next effect",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `api:run.start` refused, or the caller did not start this run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run has already concluded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vorschlaege": {
+      "get": {
+        "tags": [
+          "desk"
+        ],
+        "summary": "`GET /api/v1/vorschlaege?freigabe=<id>,…&disput=<id>,…&buchung=<key>,…` — each entry's\nwaiting proposal, under its kind: its run's answer (`running`, or\nconcluded with its checked `vorschlag`), or `null` where none was\nadmitted. Read under the verb a run's answer is; it never starts a run.",
+        "operationId": "vorschlaege",
+        "parameters": [
+          {
+            "name": "freigabe",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "disput",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "buchung",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Each entry's waiting proposal per kind and id, `null` where none was admitted",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `api:run.read` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "More entries than one request reads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "ErasureRequest": {
+        "type": "object",
+        "description": "Destroy a case's wrapping key, forget a memory subject, or both.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "case_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memory_subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunRequest": {
+        "type": "object",
+        "description": "What a person asks a run for. Every field is named: an unknown one is a\n`422`, because a misspelt `agent` read as absent would start every\nsubscribing specialist instead of the one named.",
+        "properties": {
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The specialist to run; absent, every one subscribed to `event_type`."
+          },
+          "event_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The event type the run answers (`manual` when absent)."
+          },
+          "input": {
+            "description": "The event's data, handed to the specialist as is."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "runs",
+      "description": "Runs a person starts, follows, stops and judges"
+    },
+    {
+      "name": "desk",
+      "description": "The Desk's Hinweise and waiting proposals"
+    },
+    {
+      "name": "erasure",
+      "description": "Crypto-shredding a case and forgetting a memory subject"
+    },
+    {
+      "name": "agents",
+      "description": "The specialists activated here and compiled in"
+    }
+  ]
+}

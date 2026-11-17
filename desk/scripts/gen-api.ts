@@ -15,7 +15,7 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { type Dokument, zusammenfuehren } from "../src/data/api/dokument.ts";
+import { type Dokument, fehlendeSchemas, zusammenfuehren } from "../src/data/api/dokument.ts";
 import { typen } from "./api-typen.ts";
 
 const desk = resolve(import.meta.dirname, "..");
@@ -27,6 +27,20 @@ for (const service of readdirSync(resolve(repo, "services")).sort()) {
   const datei = resolve(repo, "services", service, "openapi.json");
   if (existsSync(datei)) dokumente[service] = JSON.parse(readFileSync(datei, "utf8")) as Dokument;
 }
+// A document that points at a schema it does not define cannot be typed; say
+// which, instead of the resolver's stack trace.
+let kaputt = 0;
+for (const [service, d] of Object.entries(dokumente)) {
+  const fehlt = fehlendeSchemas(d);
+  if (fehlt.length) {
+    console.error(
+      `gen-api: services/${service}/openapi.json refers to schemas it does not define: ${fehlt.join(", ")}`,
+    );
+    kaputt++;
+  }
+}
+if (kaputt) process.exit(1);
+
 const { dokument, staende } = zusammenfuehren(dokumente);
 
 const dateien: Record<string, string> = {

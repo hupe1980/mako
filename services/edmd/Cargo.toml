@@ -82,7 +82,7 @@ toml       = "0.8"
 krafka              = { workspace = true, features = ["test-broker"] }
 tempfile            = "3"
 tokio               = { version = "1", features = ["full"] }
-tower               = { version = "0.5", features = ["util"] }
+tower               = { workspace = true }
 ## Real-PostgreSQL storage integration tests (`tests/it/meterstore_integration.rs`).
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true }

@@ -25,6 +25,8 @@
 //! | `list_failed_submissions` | MaBiS: failed runs, newest first, with `attempt_count` |
 //! | `get_submission_run` | MaBiS: one Summenzeitreihe run by UUID |
 //! | `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (Kap. 9.8.1 obligations), typed |
+//! | `list_webhook_endpoints` | the webhook endpoints, as `GET /api/v1/webhooks/endpoints` answers |
+//! | `list_webhook_deliveries` | one endpoint's deliveries, as `GET /api/v1/webhooks/endpoints/{id}/deliveries` answers |
 //!
 //! Filing a Summenzeitreihe is not a tool either: it is a binding filing with
 //! the BIKO and stays behind `POST /api/v1/mabis/sync`, where Cedar authorises
@@ -69,6 +71,32 @@ pub struct NetzbilanzMcpState {
     pub auth: mako_service::mcp_auth::McpAuth,
     /// The operator policy and posture the runner built at boot.
     pub policy: mako_service::policy::PolicyReport,
+    /// The webhook subscriptions, read by `list_webhook_endpoints` and
+    /// `list_webhook_deliveries`.
+    pub subscriptions: mako_service::subscriptions::Subscriptions,
+}
+
+/// A page of webhook endpoints.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookEndpointsParams {
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page; absent for the first.
+    pub cursor: Option<String>,
+}
+
+/// A page of one endpoint's deliveries.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookDeliveriesParams {
+    /// The endpoint's id (UUID).
+    pub endpoint_id: String,
+    /// `all`, `pending`, `delivered` or `failed`; every delivery when absent.
+    #[schemars(with = "Option<String>")]
+    pub status: Option<mako_service::subscriptions::DeliveryFilter>,
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page; absent for the first.
+    pub cursor: Option<String>,
 }
 
 /// Filters for `list_drafts`.
@@ -223,6 +251,51 @@ impl NetzbilanzMcpHandler {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    /// The read behind `GET /api/v1/webhooks/endpoints`.
+    #[tool(
+        description = "The webhook endpoints netzbilanzd delivers its CloudEvents to, a page ordered by name: each with its URL, event-type filter, owner (`config` for the endpoint the config names, `api` for one registered through the API), whether it is active and the status of its last delivery. Secrets are never listed.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
+    )]
+    async fn list_webhook_endpoints(
+        &self,
+        Parameters(p): Parameters<ListWebhookEndpointsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        mako_service::mcp::answer(self.state.subscriptions.list_endpoints(None, &page).await)
+    }
+
+    /// The read behind `GET /api/v1/webhooks/endpoints/{id}/deliveries`.
+    #[tool(
+        description = "The deliveries of one webhook endpoint, newest first: each event's type, attempts, the HTTP status and latency of the last attempt, and whether it was delivered, is pending or is dead-lettered. Filter by status (all, pending, delivered, failed).",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Delivery>>()
+    )]
+    async fn list_webhook_deliveries(
+        &self,
+        Parameters(p): Parameters<ListWebhookDeliveriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        mako_service::mcp::answer(
+            self.state
+                .subscriptions
+                .list_deliveries(
+                    None,
+                    &p.endpoint_id,
+                    p.status
+                        .unwrap_or(mako_service::subscriptions::DeliveryFilter::All),
+                    &page,
+                )
+                .await,
+        )
     }
 
     #[tool(
@@ -904,7 +977,7 @@ impl ServerHandler for NetzbilanzMcpHandler {
              counterparty and starts a payment obligation, and the only way back is a \
              Stornorechnung — so settling, dispatching, rejecting and correcting all live on \
              the REST API, where the action is attributable to an operator. Read here; act there.\n\n\
-             ## Tools (12)\n\
+             ## Tools (14)\n\
              - `list_drafts` — filter by MaLo, party, PID, Sparte, status, Rechnungsart, verdict\n\
              - `get_draft` — one invoice in full: BO4E document, settlement input, findings, warnings\n\
              - `list_disputed` — REMADV Abweisungen with their ERC codes\n\
@@ -917,7 +990,9 @@ impl ServerHandler for NetzbilanzMcpHandler {
              retry-exhausted / Korrekturbedarf counts\n\
              - `list_failed_submissions(limit)` — MaBiS: failed runs with attempt_count and error_msg\n\
              - `get_submission_run(id)` — MaBiS: one run, full detail\n\
-             - `list_korrekturbedarf` — MaBiS: open negative Prüfmitteilungen (Kap. 9.8.1)\n\n\
+             - `list_korrekturbedarf` — MaBiS: open negative Prüfmitteilungen (Kap. 9.8.1)\n\
+             - `list_webhook_endpoints` — the webhook endpoints and their last delivery status\n\
+             - `list_webhook_deliveries(endpoint_id)` — one endpoint's deliveries\n\n\
              ## Prompts (7)\n\
              `nb-invoic-overview` · `run-nne-billing` · `mmm-monthly-run` · \
              `investigate-dispute` · `ggv-nne-billing` · `redispatch-monthly-submit` · \

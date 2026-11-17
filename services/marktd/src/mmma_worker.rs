@@ -299,7 +299,7 @@ pub async fn run_import_cycle(
                                 "source": "the-api",
                             }),
                         );
-                        crate::outbox::enqueue(&mut *tx, &evt).await?;
+                        crate::outbox::enqueue(&mut tx, &evt).await?;
                         tx.commit().await
                     }
                     .await;
@@ -404,7 +404,7 @@ pub async fn run_import_cycle(
                                 "source": "bdew-csv",
                             }),
                         );
-                        crate::outbox::enqueue(&mut *tx, &evt).await?;
+                        crate::outbox::enqueue(&mut tx, &evt).await?;
                         tx.commit().await
                     }
                     .await;
@@ -466,7 +466,7 @@ async fn emit_event(sink: &EventSink<'_>, tenant: &str, event_type: &str, data: 
     let evt = import_event(tenant, event_type, data);
     let enqueued = async {
         let mut tx = sink.pool.begin().await?;
-        crate::outbox::enqueue(&mut *tx, &evt).await?;
+        crate::outbox::enqueue(&mut tx, &evt).await?;
         tx.commit().await
     }
     .await;
@@ -477,8 +477,7 @@ async fn emit_event(sink: &EventSink<'_>, tenant: &str, event_type: &str, data: 
     }
 }
 
-/// Bundles the durable-outbox handles (`event_log` pool + fan-out wake-up hint)
-/// so the import cycle can persist events without an in-memory channel.
+/// The pool the import cycle enqueues its events to `event_outbox` on.
 pub struct EventSink<'a> {
     pub pool: &'a sqlx::PgPool,
 }

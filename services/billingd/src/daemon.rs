@@ -63,12 +63,9 @@
 //! | `GET` | `/health/live` | Liveness |
 //! | `GET` | `/health/ready` | Readiness |
 
-use crate::{billing_runs, clients, config, handlers, mcp_server};
+use crate::{billing_runs, clients, config, mcp_server};
 use anyhow::Context as _;
-use axum::{
-    Extension, Router,
-    routing::{get, post},
-};
+use axum::{Extension, Router};
 use mako_markt::marktd_client::MarktdClient;
 use mako_service::{Daemon, ServiceContext};
 use secrecy::SecretString;
@@ -98,6 +95,10 @@ impl Daemon for Billingd {
         mako_service::outbox::ensure_schema(pool)
             .await
             .context("ensure outbox schema")?;
+        // Webhook endpoints and deliveries over that outbox.
+        mako_service::subscriptions::ensure_schema(pool)
+            .await
+            .context("ensure webhook subscription schema")?;
         Ok(())
     }
 
@@ -107,6 +108,7 @@ impl Daemon for Billingd {
         if let Err(e) = cfg.check_auth_posture() {
             out.push(Befund::aus_fehler("oidc", e).bereich(Bereich::Zugriff));
         }
+        out.extend(cfg.subscriptions.befunde());
         out
     }
 
@@ -191,19 +193,12 @@ impl Daemon for Billingd {
             accountingd,
         });
 
-        // ── Outbox drain worker (config-gated on the ERP webhook) ────────────────
-        // Only runs when there is somewhere to deliver to; signs with the same
-        // `erp_hmac_secret` the enqueued events are meant to be signed with.
-        if let Some(ref url) = cfg.erp_webhook_url {
-            tokio::spawn(
-                mako_service::outbox::OutboxWorker::new(
-                    pool.clone(),
-                    url.clone(),
-                    cfg.erp_hmac_secret.clone().map(Into::into),
-                )
-                .run(ctx.shutdown.clone()),
-            );
-        }
+        // ── Webhook subscriptions over the outbox ────────────────────────────────
+        // The configured ERP URL is the endpoint `default`, signed with
+        // `erp_hmac_secret`; integrators register further endpoints through
+        // `/api/v1/webhooks/endpoints` and read `/api/v1/events`.
+        let subs = subscriptions(&cfg, pool.clone());
+        subs.spawn(ctx.shutdown.clone());
 
         // ── §40b EnWG scheduled billing runs (config-gated) ──────────────────────
         billing_runs::spawn_billing_run_worker(
@@ -222,112 +217,15 @@ impl Daemon for Billingd {
         .await
         .context("OIDC setup")?;
 
+        let (api, doc) = crate::openapi::api(&subs).split_for_parts();
         let app = Router::new()
             // Readiness and operator policy: GET /admin/einrichtung (Cedar
             // `read-config`) and GET /api/v1/policy (Cedar `read-policy`), read-only.
             .merge(mako_service::einrichtung::router(Arc::clone(
                 &ctx.einrichtung,
             )))
-            .route(
-                "/api/v1/billing/{malo_id}/calculate",
-                post(handlers::post_calculate),
-            )
-            .route("/api/v1/billing", get(handlers::list_records))
-            // Risk gate: analyst work list, release of HELD and review of REVIEW records
-            .route(
-                "/api/v1/billing/review-queue",
-                get(handlers::get_review_queue),
-            )
-            // § 40c Abs. 2 EnWG watch: periods the run could not bill, and the
-            // per-Lieferant standing against the deadline.
-            .route(
-                "/api/v1/billing/unbilled",
-                get(handlers::get_unbilled_periods),
-            )
-            .route(
-                "/api/v1/billing/deadline-summary",
-                get(handlers::get_deadline_summary),
-            )
-            // Rechnung nachrechnen: the operator view, the masked view the
-            // public page reads by token, and revoking that token.
-            .route(
-                "/api/v1/billing/{id}/nachrechnung",
-                get(handlers::get_nachrechnung),
-            )
-            .route(
-                "/api/v1/billing/nachrechnen",
-                post(handlers::post_public_nachrechnung),
-            )
-            .route(
-                "/api/v1/billing/{id}/verify-token/revoke",
-                post(handlers::post_revoke_verify_token),
-            )
-            .route("/api/v1/billing/{id}/release", post(handlers::post_release))
-            .route(
-                "/api/v1/billing/{id}/reviewed",
-                post(handlers::post_reviewed),
-            )
-            .route("/api/v1/billing/{id}", get(handlers::get_record))
-            .route(
-                "/api/v1/billing/{id}/xrechnung",
-                get(handlers::get_xrechnung),
-            )
-            // The ZUGFeRD document: the page and the XML in one file, both
-            // from the record's stored EN 16931 model. billingd renders and
-            // proves the payload; outputd renders the page and the PDF/A-3
-            // carrier with the operator's template (templates live there).
-            .route("/api/v1/billing/{id}/pdf", get(handlers::get_invoice_pdf))
-            // Issue the document to the customer: render, record for 8 years,
-            // and queue it on their channels. `GET /pdf` shows an invoice;
-            // this one sends it.
-            .route(
-                "/api/v1/billing/{id}/versenden",
-                post(handlers::post_invoice_versenden),
-            )
-            .route(
-                "/api/v1/billing/{malo_id}/preview",
-                post(handlers::post_preview),
-            )
-            // L8: Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD audit trail)
-            .route(
-                "/api/v1/billing/{id}/correction",
-                post(handlers::post_correction),
-            )
-            // Tarifwechsel: combined invoice for price change mid-period (§41 EnWG)
-            .route(
-                "/api/v1/billing/{malo_id}/tarifwechsel",
-                post(handlers::post_tarifwechsel),
-            )
-            // L2: B2B Sammelrechnung for Rahmenvertrag with rechnungsstellung=SAMMEL
-            .route(
-                "/api/v1/billing/sammelrechnung/{rahmenvertrag_id}",
-                post(handlers::post_sammelrechnung),
-            )
-            // B1: §42b EnWG GGV community solar multi-tenant proportional billing
-            .route(
-                "/api/v1/billing/ggv/{ggv_id}",
-                post(handlers::post_ggv_billing),
-            )
-            // §41e VPP dispatch settlement (Gutschrift) — de.vpp.settlement.berechnet
-            .route(
-                "/api/v1/billing/vpp/{vpp_id}",
-                post(handlers::post_vpp_billing),
-            )
-            // §41e auto-settlement webhook (de.vpp.dispatch.confirmed, HMAC-signed)
-            .route(
-                "/api/v1/webhooks/vpp-dispatch",
-                post(handlers::post_vpp_webhook),
-            )
-            // XRechnung B2G submission (§4a EGovG i.V.m. ERechV — mandatory since 27.11.2020)
-            .route(
-                "/api/v1/billing/{id}/submit-b2g",
-                post(handlers::post_submit_b2g),
-            )
-            // PEPPOL BIS Billing 3.0 UBL 2.1 — EN 16931's other permitted syntax
-            .route(
-                "/api/v1/billing/{id}/ubl",
-                axum::routing::get(handlers::get_ubl),
-            )
+            .merge(api)
+            .merge(mako_service::openapi::serve(doc))
             .layer(Extension(mako_service::oidc::ExpectedTenant(
                 cfg.tenant.clone(),
             )))
@@ -353,7 +251,27 @@ impl Daemon for Billingd {
             ),
             deps: Arc::clone(&deps),
             policy: Arc::new(cfg.policy_report()),
+            subs,
         });
         Ok(app.merge(mcp_server::router(mcp_state, ctx.shutdown.clone())))
     }
+}
+
+/// The webhook module over billingd's outbox: the configured ERP URL is the
+/// endpoint `default`, signed with `erp_hmac_secret`.
+#[must_use]
+pub fn subscriptions(
+    cfg: &config::BillingdConfig,
+    pool: sqlx::PgPool,
+) -> mako_service::subscriptions::Subscriptions {
+    mako_service::subscriptions::Subscriptions::new(
+        pool,
+        Billingd::NAME,
+        &cfg.tenant,
+        cfg.subscriptions.clone(),
+    )
+    .with_default_endpoint(
+        cfg.erp_webhook_url.clone(),
+        cfg.erp_hmac_secret.clone().map(SecretString::from),
+    )
 }

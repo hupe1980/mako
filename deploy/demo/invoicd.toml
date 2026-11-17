@@ -32,9 +32,3 @@ api_key = "dev-marktd-key"
 # dev principal. Reported as a warning by `--check-config`.
 [oidc]
 mode = "demo"
-
-# Where marktd delivers the process events invoicd checks INVOICs from — named
-# here, not left to the default, so `just dev` moves it to loopback with every
-# other peer.
-[subscription]
-webhook_url = "http://invoicd:8280/webhook"

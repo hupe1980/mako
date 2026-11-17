@@ -5,9 +5,11 @@
 mod authorization_guard;
 mod db_scenarios;
 mod demo_config;
+mod desk_money;
 mod eeg_payout;
 mod integration_tests;
 mod mcp_round_trips;
+mod openapi_coverage;
 mod receivables;
 mod request_bodies;
 mod router_builds;

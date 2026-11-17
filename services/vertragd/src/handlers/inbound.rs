@@ -45,6 +45,17 @@ fn verify_signature(ctx: &Ctx, headers: &HeaderMap, body: &Bytes) -> ApiResult<(
 /// account, and — once every commodity is in supply — `de.vertrag.aktiv`. None
 /// of that is a detached task any more, so a restart mid-confirmation costs a
 /// retry rather than a lost obligation.
+#[utoipa::path(
+    post,
+    path = "/api/v1/events",
+    tag = "inbound",
+    request_body(content = serde_json::Value, description = "A CloudEvent, signed with the `inbound_secret` (Standard Webhooks)"),
+    responses(
+        (status = 200, description = "Done"),
+        (status = 400, description = "Not a CloudEvent", body = ApiError),
+        (status = 401, description = "The signature does not verify", body = ApiError),
+    )
+)]
 pub async fn cloud_event(
     Extension(ctx): Extension<Arc<Ctx>>,
     headers: HeaderMap,
@@ -216,6 +227,18 @@ async fn apply_outcome(
 /// Idempotent twice over — on the CloudEvent id, recorded once the work is
 /// done, and on `erp_rahmenvertrag_id = angebot_id` — so a redelivery creates
 /// nothing, and a redelivery after a failure finishes the work.
+#[utoipa::path(
+    post,
+    path = "/api/v1/webhooks/angebot",
+    tag = "inbound",
+    request_body(content = serde_json::Value, description = "A CloudEvent, signed with the `inbound_secret` (Standard Webhooks)"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 201, body = serde_json::Value),
+        (status = 400, description = "Not a CloudEvent", body = ApiError),
+        (status = 401, description = "The signature does not verify", body = ApiError),
+    )
+)]
 pub async fn angebot(
     Extension(ctx): Extension<Arc<Ctx>>,
     headers: HeaderMap,

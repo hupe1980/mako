@@ -235,6 +235,66 @@ export interface EdmdTools {
       failed_count: number;
     };
   };
+  list_webhook_deliveries: {
+    input: {
+      /**
+       * The endpoint's id (UUID).
+       */
+      endpoint_id: string;
+      /**
+       * `all`, `pending`, `delivered` or `failed`; every delivery when absent.
+       */
+      status?: string | null;
+      /**
+       * Rows per page, 1–200; 50 when absent.
+       */
+      limit?: number | null;
+      /**
+       * The `next_cursor` of the previous page; absent for the first.
+       */
+      cursor?: string | null;
+    };
+    output: {
+      /**
+       * The rows of this page, in the list's order.
+       */
+      items: Delivery[];
+      /**
+       * The cursor of the next page; absent on the last.
+       */
+      next_cursor: string | null;
+      /**
+       * How many rows the whole list holds, where the list counts them.
+       */
+      total_estimate?: TotalEstimate | null;
+    };
+  };
+  list_webhook_endpoints: {
+    input: {
+      /**
+       * Rows per page, 1–200; 50 when absent.
+       */
+      limit?: number | null;
+      /**
+       * The `next_cursor` of the previous page; absent for the first.
+       */
+      cursor?: string | null;
+    };
+    output: {
+      /**
+       * The rows of this page, in the list's order.
+       */
+      items: Endpoint[];
+      /**
+       * The cursor of the next page; absent on the last.
+       */
+      next_cursor: string | null;
+      /**
+       * How many rows the whole list holds, where the list counts them.
+       */
+      total_estimate?: TotalEstimate | null;
+    };
+  };
 }
 /**
  * One retroactive correction of a stored interval (§ 147 Abs. 1 AO /
@@ -345,9 +405,133 @@ export interface UeberfaelligerAbleseauftrag {
    */
   days_overdue: number;
 }
+/**
+ * One event to one endpoint.
+ */
+export interface Delivery {
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key: string | null;
+  /**
+   * `pending`, `delivered` or `dead_lettered`.
+   */
+  status: "pending" | "delivered" | "dead_lettered";
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status: number | null;
+  /**
+   * The last attempt's failure.
+   */
+  last_error: string | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at: Instant | null;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface TotalEstimate {
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface Endpoint {
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `config` or `api`.
+   */
+  owner: "config" | "api";
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner: string | null;
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at: Instant | null;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+}
 
 /** Tools edmd serves without an output schema: no view may read them. */
 export const edmdUntyped = ["get_annual_forecast","get_billing_period","get_device_history","get_gas_quality","get_imbalance","get_policy","get_quality_assessments","get_summenzeitreihe","list_reading_orders","trigger_jahresablesung","trigger_substitution","validate_timeseries"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const edmdOberflaeche: Record<string, string> = {"get_correction_history":"d7416ed5","get_coverage":"fa510e18","get_quality_warnings":"a2044016","get_timeseries":"3ae64296","list_overdue_reading_orders":"42cd50df"};
+export const edmdOberflaeche: Record<string, string> = {"get_correction_history":"d7416ed5","get_coverage":"fa510e18","get_quality_warnings":"a2044016","get_timeseries":"3ae64296","list_overdue_reading_orders":"42cd50df","list_webhook_deliveries":"e9b2ac35","list_webhook_endpoints":"e18d6bdc"};

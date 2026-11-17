@@ -36,8 +36,8 @@ use tracing::info;
 
 use crate::{
     api::{
-        edifact_api, einrichtung_api, invoic_api, malo_admin_api, mcp_server, metrics_api,
-        migration_api, openapi, partner_api,
+        edifact_api, einrichtung_api, format_impact_api, invoic_api, malo_admin_api, mcp_server,
+        metrics_api, migration_api, openapi, partner_api,
     },
     cedar_authz::CedarAuthorizer,
     commands_api, contrl_ack, health, ingest_dispatcher, malo_cache, malo_sync,
@@ -156,6 +156,9 @@ pub(crate) struct HttpServerConfig<'a> {
     /// The AS4 certificates' expiry, re-read while running; `None` without
     /// AS4.
     pub zertifikate: Option<Arc<crate::zertifikat_monitor::ZertifikatMonitor>>,
+    /// `[format_impact]`; `None` answers the impact route
+    /// `format_impact_not_configured`.
+    pub format_impact: Option<crate::format_impact::FormatImpactConfig>,
 }
 
 /// Build and start the HTTP REST API server.
@@ -233,6 +236,22 @@ pub(crate) async fn serve_http(
         zertifikate: cfg.zertifikate,
     });
 
+    let format_impact = cfg.format_impact.map(|config| {
+        Arc::new(crate::format_impact::FormatImpactState {
+            config,
+            own_mp_ids: deps
+                .mp_id_registry
+                .own_mp_ids()
+                .map(str::to_owned)
+                .collect(),
+        })
+    });
+    let format_impact_state = Arc::new(format_impact_api::FormatImpactApiState {
+        impact: format_impact.clone(),
+        cedar: Arc::clone(&deps.cedar),
+        tenant: primary_mp_id.clone(),
+    });
+
     let mcp_state = Arc::new(mcp_server::MakodMcpState {
         tenant: primary_mp_id.clone(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -244,6 +263,7 @@ pub(crate) async fn serve_http(
         deadline_store: deps.store.as_deadline_store(),
         policy: Arc::new(einrichtung_state.einrichtung.policy.clone()),
         einrichtung: Arc::clone(&einrichtung_state),
+        format_impact,
     });
 
     let invoic_api_state = Arc::new(invoic_api::InvoicApiState {
@@ -259,17 +279,25 @@ pub(crate) async fn serve_http(
     if let Some(sync) = cfg.malo_sync {
         app = app.merge(malo_sync::router(sync));
     }
+    // Every `/api/v1` route with its document entry: a route cannot be
+    // mounted without one (`cargo xtask check-openapi-routes`).
+    let (api, doc) = openapi::api_router(
+        commands_state,
+        invoic_api_state,
+        Arc::clone(&einrichtung_state),
+        format_impact_state,
+    )
+    .split_for_parts();
     let app = app
+        .merge(api)
         .merge(malo_admin_api::router(admin_state))
         .merge(partner_api::router(partner_admin_state))
-        .merge(commands_api::router(commands_state))
-        .merge(invoic_api::router(invoic_api_state))
         .merge(metrics_api::router(metrics_state))
         .merge(migration_api::router(migration_state))
         .merge(einrichtung_api::router(einrichtung_state))
         .merge(mcp_server::router(mcp_state, deps.shutdown_token.clone()))
         .merge(health::router(deps.health_state.clone()))
-        .merge(openapi::router())
+        .merge(mako_service::openapi::serve(doc))
         // Per-peer rate limit, the same GCRA policy the AS4 and API-Webdienste
         // ports carry. The port is authenticated, but a holder of one valid key
         // could still exhaust the event-store write budget through the command

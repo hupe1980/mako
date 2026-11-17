@@ -717,6 +717,95 @@ fn date(s: &str) -> Option<time::Date> {
     time::Date::parse(s, &f).ok()
 }
 
+/// The candidates tree against the binding profiles.
+///
+/// A Konsultationsfassung is never binding (constitution II): under
+/// `profiles/` `build.rs` would embed it as a selectable Release of the
+/// published crate. So no `candidate.json` and no candidate-marked entry
+/// (`status`, `against`) may sit there; every `candidates/` entry names a
+/// `<type>/<fv>` the binding profiles do not, loads as a candidate
+/// (`Konsultationsfassung`, a SHA-256 per consultation PDF), and every
+/// candidate directory is in `candidates/sources.json`. Candidates are exempt
+/// from the binding checks above by being named here and nowhere else.
+fn candidate_errors(profiles: &Path, candidates: &Path) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut binding: BTreeSet<String> = BTreeSet::new();
+    match load::<serde_json::Value>(&profiles.join("sources.json")) {
+        Ok(v) => {
+            for (dir, entry) in v["profiles"].as_object().into_iter().flatten() {
+                binding.insert(dir.clone());
+                for key in ["status", "against", "candidate"] {
+                    if entry.get(key).is_some() {
+                        errors.push(format!(
+                            "profiles/sources.json {dir}: `{key}` marks a candidate — a \
+                             Konsultationsfassung belongs in candidates/, never among the binding profiles"
+                        ));
+                    }
+                }
+            }
+        }
+        Err(e) => errors.push(e),
+    }
+    for ty in std::fs::read_dir(profiles).into_iter().flatten().flatten() {
+        for fv in std::fs::read_dir(ty.path()).into_iter().flatten().flatten() {
+            if fv.path().join("candidate.json").exists() {
+                errors.push(format!(
+                    "{}: a candidate.json under the embedded profiles would ship a \
+                     Konsultationsfassung as a selectable Release — move it to candidates/",
+                    fv.path().display()
+                ));
+            }
+        }
+    }
+    if !candidates.exists() {
+        return errors;
+    }
+    let listed: BTreeMap<String, serde_json::Value> =
+        match load::<serde_json::Value>(&candidates.join("sources.json")) {
+            Ok(v) => v["candidates"]
+                .as_object()
+                .map(|m| m.clone().into_iter().collect())
+                .unwrap_or_default(),
+            Err(e) => {
+                errors.push(e);
+                BTreeMap::new()
+            }
+        };
+    for (dir, entry) in &listed {
+        if binding.contains(dir) {
+            errors.push(format!(
+                "candidates/{dir}: is also a binding profile — a Formatversion is a candidate or binding, never both"
+            ));
+        }
+        if entry["status"] != edi_energy::candidate::KONSULTATIONSFASSUNG {
+            errors.push(format!(
+                "candidates/sources.json {dir}: status {} — a candidate is a Konsultationsfassung",
+                entry["status"]
+            ));
+        }
+        if let Err(e) = edi_energy::candidate::Candidate::load_dir(&candidates.join(dir)) {
+            errors.push(format!("candidates/{dir}: {e}"));
+        }
+    }
+    for ty in std::fs::read_dir(candidates)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        for fv in std::fs::read_dir(ty.path()).into_iter().flatten().flatten() {
+            let dir = format!(
+                "{}/{}",
+                ty.file_name().to_string_lossy(),
+                fv.file_name().to_string_lossy()
+            );
+            if fv.path().join("candidate.json").exists() && !listed.contains_key(&dir) {
+                errors.push(format!("candidates/{dir}: not in candidates/sources.json"));
+            }
+        }
+    }
+    errors
+}
+
 pub fn run(workspace_root: &str) -> bool {
     let root = Path::new(workspace_root);
     let profiles = root.join(PROFILES_DIR);
@@ -735,6 +824,11 @@ pub fn run(workspace_root: &str) -> bool {
     let allowed = crate::profile_expressions::allowlist(root);
     let bless = std::env::var_os("BLESS_PROFILE_EXPRESSIONS").is_some();
     let mut found_expressions = crate::profile_expressions::Ledger::new();
+
+    errors.extend(candidate_errors(
+        &profiles,
+        &root.join(crate::import_profiles::CANDIDATES_DIR),
+    ));
 
     // Directories ↔ sources.json.
     let mut dirs: BTreeSet<String> = BTreeSet::new();
@@ -1263,6 +1357,152 @@ mod tests {
         fn a_publication_on_or_after_its_anwendungszeitpunkt_is_refused() {
             assert!(refused("2027-10-01", Some("2027-10-01"), Some(NR_58)));
             assert!(refused("2027-10-01", Some("2027-11-01"), Some(NR_58)));
+        }
+    }
+
+    /// A Konsultationsfassung is a candidate and never binding: under
+    /// `profiles/` it would be embedded as a selectable Release, so it lives in
+    /// `candidates/`, named as such, with its consultation PDFs' SHA-256.
+    mod candidates {
+        use super::super::candidate_errors;
+        use std::path::{Path, PathBuf};
+
+        const MIG: &str =
+            include_str!("../../crates/edi-energy/profiles/utilmd/fv20261001/mig.json");
+        const AHB: &str =
+            include_str!("../../crates/edi-energy/profiles/utilmd/fv20261001/ahb.json");
+
+        fn tree(name: &str) -> PathBuf {
+            let root = std::env::temp_dir()
+                .join(format!("xtask-candidates-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("profiles")).expect("tempdir");
+            std::fs::write(
+                root.join("profiles/sources.json"),
+                r#"{"profiles":{"utilmd/fv20261001":{"release":"S2.2","valid_from":"2026-10-01","ahb_version":"2.2","mig":"m.pdf","ahb":"a.pdf"}}}"#,
+            )
+            .expect("write");
+            root
+        }
+
+        fn candidate(root: &Path, dir: &str, status: &str, sha: &str) {
+            let out = root.join("candidates").join(dir);
+            std::fs::create_dir_all(&out).expect("dir");
+            std::fs::write(out.join("mig.json"), MIG).expect("write");
+            std::fs::write(out.join("ahb.json"), AHB).expect("write");
+            std::fs::write(
+                out.join("candidate.json"),
+                serde_json::json!({
+                    "message_type": "UTILMD", "fv": dir.split('/').nth(1),
+                    "status": status, "against": "fv20261001",
+                    "sources": [{ "file": "k.pdf", "sha256": sha }],
+                    "changed_pids": [55001], "added_pids": [], "removed_pids": [],
+                })
+                .to_string(),
+            )
+            .expect("write");
+            std::fs::write(
+                root.join("candidates/sources.json"),
+                serde_json::json!({ "candidates": { dir: {
+                    "status": status, "against": "fv20261001", "release": "S2.2",
+                    "valid_from": "2027-04-01", "ahb_version": "2.3",
+                    "mig": "km.pdf", "ahb": "ka.pdf",
+                }}})
+                .to_string(),
+            )
+            .expect("write");
+        }
+
+        fn errors(root: &Path) -> Vec<String> {
+            candidate_errors(&root.join("profiles"), &root.join("candidates"))
+        }
+
+        #[test]
+        fn a_well_formed_candidate_outside_the_profiles_passes() {
+            let root = tree("ok");
+            candidate(
+                &root,
+                "utilmd/fv20270401",
+                "Konsultationsfassung",
+                &"a".repeat(64),
+            );
+            assert_eq!(errors(&root), Vec::<String>::new());
+        }
+
+        #[test]
+        fn a_candidate_under_the_embedded_profiles_is_refused() {
+            let root = tree("embedded");
+            let dir = root.join("profiles/utilmd/fv20270401");
+            std::fs::create_dir_all(&dir).expect("dir");
+            std::fs::write(dir.join("candidate.json"), "{}").expect("write");
+            assert!(
+                errors(&root).iter().any(|e| e.contains("candidate.json")),
+                "{:?}",
+                errors(&root)
+            );
+        }
+
+        #[test]
+        fn a_binding_entry_marked_as_a_candidate_is_refused() {
+            let root = tree("marked");
+            std::fs::write(
+                root.join("profiles/sources.json"),
+                r#"{"profiles":{"utilmd/fv20270401":{"status":"Konsultationsfassung","release":"S2.3","valid_from":"2027-04-01","ahb_version":"2.3","mig":"m.pdf","ahb":"a.pdf"}}}"#,
+            )
+            .expect("write");
+            assert!(
+                errors(&root)
+                    .iter()
+                    .any(|e| e.contains("utilmd/fv20270401")),
+                "{:?}",
+                errors(&root)
+            );
+        }
+
+        #[test]
+        fn a_candidate_that_is_also_binding_is_refused() {
+            let root = tree("both");
+            candidate(
+                &root,
+                "utilmd/fv20261001",
+                "Konsultationsfassung",
+                &"a".repeat(64),
+            );
+            assert!(
+                errors(&root).iter().any(|e| e.contains("binding")),
+                "{:?}",
+                errors(&root)
+            );
+        }
+
+        #[test]
+        fn a_candidate_without_its_status_or_digest_is_refused() {
+            let root = tree("status");
+            candidate(&root, "utilmd/fv20270401", "binding", &"a".repeat(64));
+            assert!(!errors(&root).is_empty());
+            let root = tree("digest");
+            candidate(&root, "utilmd/fv20270401", "Konsultationsfassung", "abc");
+            assert!(!errors(&root).is_empty());
+        }
+
+        #[test]
+        fn a_candidate_directory_not_in_its_sources_is_refused() {
+            let root = tree("orphan");
+            candidate(
+                &root,
+                "utilmd/fv20270401",
+                "Konsultationsfassung",
+                &"a".repeat(64),
+            );
+            std::fs::write(root.join("candidates/sources.json"), r#"{"candidates":{}}"#)
+                .expect("write");
+            assert!(
+                errors(&root)
+                    .iter()
+                    .any(|e| e.contains("not in candidates/sources.json")),
+                "{:?}",
+                errors(&root)
+            );
         }
     }
 }

@@ -17,6 +17,8 @@
 //! | `summarize_billing_month`  | Monthly billing volume and dispute rate per NB |
 //! | `list_exceptions`          | The two operator queues: undispatched answers and dead-lettered INVOICs |
 //! | `list_held_receipts`       | Invoices held `Offen`, each with the Prüfschritte a person has to state |
+//! | `list_webhook_endpoints`   | The webhook endpoints (REST twin, `manage-subscription`) |
+//! | `list_webhook_deliveries`  | One endpoint's deliveries (REST twin, `manage-subscription`) |
 //!
 //! ## Prompts
 //!
@@ -239,9 +241,33 @@ pub struct InvoicdMcpState {
     pub auth: mako_service::mcp_auth::McpAuth,
     /// The operator policy and posture the runner built at boot.
     pub policy: mako_service::policy::PolicyReport,
+    /// The webhook module the two webhook tools read.
+    pub subs: mako_service::subscriptions::Subscriptions,
 }
 
 // ── Tool parameters ───────────────────────────────────────────────────────────
+
+/// A page of `list_webhook_endpoints`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookEndpointsParams {
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+/// A page of one endpoint's deliveries.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookDeliveriesParams {
+    /// The endpoint's id.
+    pub endpoint_id: String,
+    /// `all` (the default), `pending`, `delivered` or `failed`.
+    pub status: Option<String>,
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetReceiptParams {
@@ -311,6 +337,54 @@ impl InvoicdMcpHandler {
     /// Returns the receipt metadata including PID, sender GLN, outcome
     /// (`Ok`/`Warn`/`Dispute`), and timestamps.  The full `rechnung` BO4E
     /// payload is not returned — use `get_check_result` to inspect findings.
+    #[tool(
+        description = "The webhook endpoints invoicd delivers its CloudEvents to, a page ordered by name: each with its URL, event-type patterns, extension filter, owner (`config` for the endpoint `default` the configuration names, `api` for one registered through REST), whether it is active, and the last delivery status. Secrets are never shown. The twin of GET /api/v1/webhooks/endpoints.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
+    )]
+    async fn list_webhook_endpoints(
+        &self,
+        Parameters(params): Parameters<ListWebhookEndpointsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: params.limit,
+            cursor: params.cursor,
+        };
+        mako_service::mcp::answer(self.state.subs.list_endpoints(None, &page).await)
+    }
+
+    #[tool(
+        description = "The deliveries of one webhook endpoint, newest first: the event, its type, the attempts, the last HTTP status and latency, and whether it was delivered, is still owed or was dead-lettered. `status` narrows to `pending`, `delivered` or `failed`. The twin of GET /api/v1/webhooks/endpoints/{id}/deliveries.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Delivery>>()
+    )]
+    async fn list_webhook_deliveries(
+        &self,
+        Parameters(params): Parameters<ListWebhookDeliveriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let status = match params.status {
+            None => mako_service::subscriptions::DeliveryFilter::All,
+            Some(s) => match serde_json::from_value(serde_json::Value::String(s)) {
+                Ok(f) => f,
+                Err(_) => {
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
+                        "status_invalid: status is one of all, pending, delivered, failed",
+                    )]));
+                }
+            },
+        };
+        let page = mako_service::page::PageQuery {
+            limit: params.limit,
+            cursor: params.cursor,
+        };
+        mako_service::mcp::answer(
+            self.state
+                .subs
+                .list_deliveries(None, &params.endpoint_id, status, &page)
+                .await,
+        )
+    }
+
     #[tool(
         description = "Read a single INVOIC receipt by UUID",
         annotations(read_only_hint = true, open_world_hint = false)
@@ -1017,11 +1091,43 @@ impl ServerHandler for InvoicdMcpHandler {
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
+/// The Cedar action a `tools/call` needs beyond `use-mcp`: the webhook tools
+/// read what their REST twins guard with `manage-subscription`.
+fn tool_action(body: &[u8]) -> Option<&'static str> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if v.get("method")?.as_str()? != "tools/call" {
+        return None;
+    }
+    match v.get("params")?.get("name")?.as_str()? {
+        "list_webhook_endpoints" | "list_webhook_deliveries" => {
+            Some(mako_service::subscriptions::MANAGE)
+        }
+        _ => None,
+    }
+}
+
 async fn mcp_auth_middleware(
     axum::extract::State(state): axum::extract::State<Arc<InvoicdMcpState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
+    // Buffer the body to read the tool name, authorize, then hand the
+    // reconstructed request to `authenticate`.
+    use axum::response::IntoResponse as _;
+    const MAX_MCP_BODY: usize = 1024 * 1024;
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_MCP_BODY).await else {
+        return mako_service::ApiError::payload_too_large(format!(
+            "MCP request body exceeds {MAX_MCP_BODY} bytes"
+        ))
+        .into_response();
+    };
+    if let Some(action) = tool_action(&bytes)
+        && let Err(resp) = state.auth.authorize(&parts.headers, action)
+    {
+        return resp;
+    }
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     state.auth.authenticate(request, next).await
 }
 
@@ -1065,6 +1171,41 @@ mod contract_tests {
         if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
             panic!("{e}");
         }
+    }
+
+    /// The two webhook tools answer with the type their REST twins document,
+    /// and need the action those twins check.
+    #[tokio::test]
+    async fn the_webhook_tools_are_twins_of_the_rest_reads() {
+        let tools = InvoicdMcpHandler::tool_router().list_all();
+        let doc = serde_json::to_value(crate::server::openapi_document()).expect("serializes");
+        mako_service::mcp::conformance::assert_rest_twin(
+            &tools,
+            "list_webhook_endpoints",
+            &doc,
+            "/api/v1/webhooks/endpoints",
+        );
+        mako_service::mcp::conformance::assert_rest_twin(
+            &tools,
+            "list_webhook_deliveries",
+            &doc,
+            "/api/v1/webhooks/endpoints/{id}/deliveries",
+        );
+        let call = |name: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": name, "arguments": {} }
+            }))
+            .expect("json")
+        };
+        for name in ["list_webhook_endpoints", "list_webhook_deliveries"] {
+            assert_eq!(
+                tool_action(&call(name)),
+                Some("manage-subscription"),
+                "{name}"
+            );
+        }
+        assert_eq!(tool_action(&call("list_disputes")), None);
     }
 
     /// A dispute's Frist is the end of the Berlin day its Zahlungsziel falls

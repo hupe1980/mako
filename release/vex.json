@@ -208,6 +208,60 @@
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",
       "impact_statement": "Secret-dependent timing in crypto-bigint arithmetic leaks a secret only through operations on one. mako's one signing path with an elliptic-curve secret, energy-api's JWS for the API-Webdienste, runs on p256 0.14 and crypto-bigint 0.7.10, which is patched. crypto-bigint 0.5.5 remains under jsonwebtoken, which verifies OIDC tokens against public keys, and under aws-config's login DPoP signer, reached only through agentd's bedrock feature, which no released image enables."
+    },
+    {
+      "vulnerability": {
+        "name": "RUSTSEC-2026-0543"
+      },
+      "products": [
+        {
+          "@id": "pkg:github/hupe1980/mako",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/chrono@0.4.45"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. chrono is pulled only by Apache Arrow and DataFusion under meterstore's Iceberg tier; mako's own code uses time and its clippy configuration bans chrono."
+    },
+    {
+      "vulnerability": {
+        "name": "RUSTSEC-2026-0555"
+      },
+      "products": [
+        {
+          "@id": "pkg:github/hupe1980/mako",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/chrono-tz@0.10.4"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. chrono-tz is pulled only by Arrow and DataFusion under meterstore."
+    },
+    {
+      "vulnerability": {
+        "name": "RUSTSEC-2026-0542"
+      },
+      "products": [
+        {
+          "@id": "pkg:github/hupe1980/mako",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/humantime@2.4.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. humantime is pulled by object_store under slatedb and meterstore to parse object_store's own duration settings, never request input."
     }
   ]
 }

@@ -32,3 +32,46 @@ inbound_secret = "dev-webhook-secret"
 # dev principal. Reported as a warning by `--check-config`.
 [oidc]
 mode = "demo"
+
+# Who receives marktd's events. The in-cluster receivers are config-owned
+# endpoints: the API refuses a private address, and these are private by
+# design. Each filter is what its receiver reads. `allow_loopback` lets
+# `just listen` register an http endpoint on this machine.
+[subscriptions]
+allow_loopback = true
+
+# The MaLo-Ident cache follows the MaLo master record.
+[[subscriptions.endpoints]]
+name        = "makod"
+url         = "http://makod:8080/webhooks/marktd"
+event_types = ["de.markt.malo.updated"]
+
+# The NB/LF/MSB modules, the process read model and the EoG automation.
+[[subscriptions.endpoints]]
+name        = "processd"
+url         = "http://processd:8580/webhook"
+event_types = [
+  "de.mako.process.initiated",
+  "de.mako.process.completed",
+  "de.mako.process.failed",
+  "de.mako.aperak.accepted",
+  "de.mako.aperak.rejected",
+  "de.mako.antwortfrist.abgelaufen",
+  "de.markt.versorgung.gap-detected",
+  "de.markt.versorgung.eog-begonnen",
+  "de.markt.versorgung.changed",
+]
+
+# MSCONS deliveries and supply handovers for meter-data storage; MaLo updates
+# refresh the cached Bundesland. Signed with edmd's `[webhook] inbound_secret`.
+[[subscriptions.endpoints]]
+name        = "edmd"
+url         = "http://edmd:8380/webhook"
+secret      = "dev-edmd-webhook-secret"
+event_types = ["de.mako.process.completed", "de.markt.malo.updated"]
+
+# The process starts invoicd checks INVOICs against.
+[[subscriptions.endpoints]]
+name        = "invoicd"
+url         = "http://invoicd:8280/webhook"
+event_types = ["de.mako.process.initiated"]

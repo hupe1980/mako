@@ -390,6 +390,21 @@ fn check_energiemix_completeness(mix: &Energiemix) -> Result<(), ApiError> {
 // ── Product CRUD ──────────────────────────────────────────────────────────────
 
 /// `PUT /api/v1/products/{lf_mp_id}/{product_code}`
+#[utoipa::path(
+    put,
+    path = "/api/v1/products/{lf_mp_id}/{product_code}",
+    tag = "products",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+        ("product_code" = String, Path, description = "The product code"),
+    ),
+    request_body(content = serde_json::Value, description = "`ProductUpsertRequest`: the product version, its BO4E Tarifpreisblatt in `data`"),
+    responses(
+        (status = 200, description = "The stored version", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The Tarifpreisblatt or the Abrechnung is refused", body = ApiError),
+    )
+)]
 pub async fn put_product(
     claims: Claims,
     Extension(cedar): Authz,
@@ -440,31 +455,30 @@ pub async fn put_product(
     };
     let category = req.category.clone();
     let status = req.product_status.clone();
-    // Notify the ERP / productd-agent so §42 Energiemix completeness and §41a
-    // EPEX checks run against the new version. This is the only emitter of the
-    // agent's `de.tarif.product.updated` trigger, so it commits with the
-    // version it announces.
-    let announcement = cfg.erp_webhook_url.as_ref().map(|_| {
-        mako_service::CloudEvent::new(
-            mako_service::source("productd", &cfg.tenant),
-            mako_events::tarif::PRODUCT_UPDATED,
-            &product_code,
-            serde_json::json!({
-                "lf_mp_id": lf_mp_id,
-                "product_code": product_code,
-                "category": category,
-                "product_status": status,
-            }),
-        )
-        .extension("tenantid", cfg.tenant.clone())
-    });
+    // Announce the version to every webhook subscriber — the ERP and the
+    // productd-agent, whose §42 Energiemix completeness and §41a EPEX checks
+    // run against it. This is the only emitter of the agent's
+    // `de.tarif.product.updated` trigger, so it commits with the version it
+    // announces.
+    let announcement = mako_service::CloudEvent::new(
+        mako_service::source("productd", &cfg.tenant),
+        mako_events::tarif::PRODUCT_UPDATED,
+        &product_code,
+        serde_json::json!({
+            "lf_mp_id": lf_mp_id,
+            "product_code": product_code,
+            "category": category,
+            "product_status": status,
+        }),
+    )
+    .extension("tenantid", cfg.tenant.clone());
     match upsert_product_announced(
         &pool,
         &lf_mp_id,
         claims.tenant(),
         &product_code,
         req,
-        announcement.as_ref(),
+        Some(&announcement),
     )
     .await
     {
@@ -474,6 +488,20 @@ pub async fn put_product(
 }
 
 /// `GET /api/v1/products/{lf_mp_id}/{product_code}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/products/{lf_mp_id}/{product_code}",
+    tag = "products",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+        ("product_code" = String, Path, description = "The product code"),
+    ),
+    responses(
+        (status = 200, description = "The version in force today", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such product", body = ApiError),
+    )
+)]
 pub async fn get_product(
     claims: Claims,
     Extension(cedar): Authz,
@@ -493,6 +521,24 @@ pub async fn get_product(
 }
 
 /// `GET /api/v1/products/{lf_mp_id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/products/{lf_mp_id}",
+    tag = "products",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+        ("category" = Option<String>, Query, description = "Product category (`STROM`, `GAS`, …)"),
+        ("sparte" = Option<String>, Query, description = "Sparte"),
+        ("kundentyp" = Option<String>, Query, description = "Kundentyp"),
+        ("include_drafts" = Option<bool>, Query, description = "Include DRAFT products"),
+        ("include_expired" = Option<bool>, Query, description = "Include withdrawn and expired products"),
+        ("limit" = Option<i64>, Query, description = "Rows, at most 200"),
+    ),
+    responses(
+        (status = 200, description = "The products in force", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_products_handler(
     claims: Claims,
     Extension(cedar): Authz,
@@ -511,6 +557,19 @@ pub async fn list_products_handler(
 }
 
 /// `GET /api/v1/products/{lf_mp_id}/{product_code}/history`
+#[utoipa::path(
+    get,
+    path = "/api/v1/products/{lf_mp_id}/{product_code}/history",
+    tag = "products",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+        ("product_code" = String, Path, description = "The product code"),
+    ),
+    responses(
+        (status = 200, description = "Every version, newest first", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn get_product_history(
     claims: Claims,
     Extension(cedar): Authz,
@@ -533,6 +592,20 @@ pub async fn get_product_history(
 /// The product remains in the database for historical billing lookups but is
 /// excluded from the comparison feed and `list_products` (unless
 /// `?include_expired=true` is passed).
+#[utoipa::path(
+    delete,
+    path = "/api/v1/products/{lf_mp_id}/{product_code}",
+    tag = "products",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+        ("product_code" = String, Path, description = "The product code"),
+    ),
+    responses(
+        (status = 204, description = "Withdrawn (soft-deleted, its history stays)"),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such product", body = ApiError),
+    )
+)]
 pub async fn delete_product(
     claims: Claims,
     Extension(cedar): Authz,
@@ -585,6 +658,20 @@ pub struct ResolveProductsRequest {
 /// A code with no version valid on its date comes back as `null` in place, so
 /// the caller can tell *which* of its legs is unpriceable rather than getting a
 /// shorter list than it asked for.
+#[utoipa::path(
+    post,
+    path = "/api/v1/products/{lf_mp_id}/resolve",
+    tag = "products",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+    ),
+    request_body(content = serde_json::Value, description = "`ResolveProductsRequest`: the product codes and the day each is resolved for"),
+    responses(
+        (status = 200, description = "One definition per request", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A code is refused", body = ApiError),
+    )
+)]
 pub async fn post_resolve_products(
     claims: Claims,
     Extension(cedar): Authz,
@@ -624,6 +711,21 @@ pub async fn post_resolve_products(
 /// `{ "prices": [ct_kwh_mtu0, …], "mtu_minutes": 15, "source": "..." }`.
 /// `prices` length must match the local day's MTU count (96/92/100 at 15-min,
 /// 24/23/25 at 60-min). `mtu_minutes` defaults to 15.
+#[utoipa::path(
+    put,
+    path = "/api/v1/epex-prices/{date}",
+    tag = "marktpreise",
+    params(
+        ("date" = String, Path, description = "The delivery day, YYYY-MM-DD"),
+    ),
+    request_body(content = serde_json::Value, description = "`EpexImportRequest`: the day-ahead quarter-hourly prices"),
+    responses(
+        (status = 200, description = "Imported", body = serde_json::Value),
+        (status = 400, description = "Not a date", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The curve is refused", body = ApiError),
+    )
+)]
 pub async fn put_epex_prices(
     claims: Claims,
     Extension(cedar): Authz,
@@ -653,6 +755,20 @@ pub async fn put_epex_prices(
 /// Returns the delivery day's spot prices as 15-minute market time units, each
 /// with its UTC `mtu_start` instant and `price_ct_kwh` (legacy hourly rows are
 /// expanded to quarter-hours). Used by `billingd` for §41a dynamic billing.
+#[utoipa::path(
+    get,
+    path = "/api/v1/epex-prices/{date}/quarter-hourly",
+    tag = "marktpreise",
+    params(
+        ("date" = String, Path, description = "The delivery day, YYYY-MM-DD"),
+    ),
+    responses(
+        (status = 200, description = "The quarter-hourly prices", body = serde_json::Value),
+        (status = 400, description = "Not a date", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No prices for the day", body = ApiError),
+    )
+)]
 pub async fn get_epex_prices_quarter_hourly(
     claims: Claims,
     Extension(cedar): Authz,
@@ -699,6 +815,20 @@ pub async fn get_epex_prices_quarter_hourly(
 ///
 /// Returns the monthly average ct/kWh for EPEX Spot.
 /// Used by `einsd` for Direktvermarktung Marktprämie calculation.
+#[utoipa::path(
+    get,
+    path = "/api/v1/epex-prices/{year}/{month}/average",
+    tag = "marktpreise",
+    params(
+        ("year" = i32, Path, description = "Year"),
+        ("month" = u8, Path, description = "Month 1–12"),
+    ),
+    responses(
+        (status = 200, description = "The monthly average", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No prices for the month", body = ApiError),
+    )
+)]
 pub async fn get_epex_monthly_average(
     claims: Claims,
     Extension(cedar): Authz,
@@ -731,6 +861,21 @@ pub async fn get_epex_monthly_average(
 /// Import one dated nEHS certificate price (EUR/t CO₂) — an EEX auction
 /// clearing price (weekly from 01.07.2026), the Verkaufsphase price (68 EUR/t)
 /// or a manual entry. Body: `{ "eur_per_t": "63.50", "source": "auktion" }`.
+#[utoipa::path(
+    put,
+    path = "/api/v1/nehs-prices/{date}",
+    tag = "marktpreise",
+    params(
+        ("date" = String, Path, description = "The price day, YYYY-MM-DD"),
+    ),
+    request_body(content = serde_json::Value, description = "`NehsImportRequest`: the BEHG certificate price"),
+    responses(
+        (status = 200, description = "Imported", body = serde_json::Value),
+        (status = 400, description = "Not a date", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The price is refused", body = ApiError),
+    )
+)]
 pub async fn put_nehs_price(
     claims: Claims,
     Extension(cedar): Authz,
@@ -759,6 +904,20 @@ pub async fn put_nehs_price(
 ///
 /// Most recent nEHS price at or before `date` (defaults to today). Used by
 /// `billingd` to derive the Gas CO₂ component (CO2KostAufG §3 pass-through).
+#[utoipa::path(
+    get,
+    path = "/api/v1/nehs-prices/latest",
+    tag = "marktpreise",
+    params(
+        ("date" = Option<String>, Query, description = "The day, YYYY-MM-DD, today in Berlin when absent"),
+    ),
+    responses(
+        (status = 200, description = "The latest price on or before the day", body = serde_json::Value),
+        (status = 400, description = "Not a date", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No price recorded", body = ApiError),
+    )
+)]
 pub async fn get_nehs_price_latest(
     claims: Claims,
     Extension(cedar): Authz,
@@ -805,6 +964,22 @@ pub async fn get_nehs_price_latest(
 /// - Re-serialized to canonical BO4E camelCase before storage.
 /// - Does NOT re-archive or change product pricing — only touches the
 ///   `energiemix` / `oekolabel` columns.
+#[utoipa::path(
+    put,
+    path = "/api/v1/products/{lf_mp_id}/{product_code}/energiemix",
+    tag = "products",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+        ("product_code" = String, Path, description = "The product code"),
+    ),
+    request_body(content = serde_json::Value, description = "`EnergimixUpsertRequest`: the § 42 EnWG Energiemix and Ökolabel"),
+    responses(
+        (status = 200, description = "Stored", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such product", body = ApiError),
+        (status = 422, description = "The Energiemix is refused", body = ApiError),
+    )
+)]
 pub async fn put_energiemix(
     claims: Claims,
     Extension(cedar): Authz,
@@ -850,6 +1025,20 @@ pub async fn put_energiemix(
 /// ```
 ///
 /// Returns 404 if the product has no Energiemix set.
+#[utoipa::path(
+    get,
+    path = "/api/v1/products/{lf_mp_id}/{product_code}/energiemix",
+    tag = "products",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+        ("product_code" = String, Path, description = "The product code"),
+    ),
+    responses(
+        (status = 200, description = "The Energiemix and Ökolabel", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No Energiemix recorded", body = ApiError),
+    )
+)]
 pub async fn get_energiemix(
     claims: Claims,
     Extension(cedar): Authz,
@@ -871,6 +1060,20 @@ pub async fn get_energiemix(
 ///
 /// Remove the `Energiemix` and `Oekolabel` from a product (deleted outright, no archive).
 /// Use when a product transitions from green-certified back to standard.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/products/{lf_mp_id}/{product_code}/energiemix",
+    tag = "products",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+        ("product_code" = String, Path, description = "The product code"),
+    ),
+    responses(
+        (status = 204, description = "Removed"),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No Energiemix recorded", body = ApiError),
+    )
+)]
 pub async fn delete_energiemix_handler(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1724,6 +1927,17 @@ fn default_gueltig_bis() -> time::Date {
 /// `POST /api/v1/angebote/{id}/annehmen` transitions to ANGENOMMEN and emits
 /// `de.tarif.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the
 /// `Rahmenvertrag` + `Versorgungsverträge` from the accepted Angebot data.
+#[utoipa::path(
+    post,
+    path = "/api/v1/angebote",
+    tag = "angebote",
+    request_body(content = serde_json::Value, description = "`CreateAngebotRequest`: the quotation to price"),
+    responses(
+        (status = 201, description = "Created and priced", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The quotation is refused", body = ApiError),
+    )
+)]
 pub async fn post_angebot(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1939,6 +2153,19 @@ pub struct AngebotListQuery {
 }
 
 /// `GET /api/v1/angebote`
+#[utoipa::path(
+    get,
+    path = "/api/v1/angebote",
+    tag = "angebote",
+    params(
+        ("status" = Option<String>, Query, description = "ANGELEGT, VERSANDT, ANGENOMMEN, ABGELEHNT or ABGELAUFEN"),
+        ("limit" = Option<i64>, Query, description = "Rows, at most 200"),
+    ),
+    responses(
+        (status = 200, description = "The Angebote", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_angebote_handler(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1964,6 +2191,19 @@ pub async fn list_angebote_handler(
 }
 
 /// `GET /api/v1/angebote/{id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/angebote/{id}",
+    tag = "angebote",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The Angebot"),
+    ),
+    responses(
+        (status = 200, description = "The Angebot", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such Angebot", body = ApiError),
+    )
+)]
 pub async fn get_angebot_handler(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1993,6 +2233,21 @@ pub async fn get_angebot_handler(
     clippy::too_many_arguments,
     reason = "an axum handler: each argument is an extractor the route needs"
 )]
+#[utoipa::path(
+    post,
+    path = "/api/v1/products/{lf_mp_id}/endkunden-angebote",
+    tag = "endkunden-angebote",
+    params(
+        ("lf_mp_id" = String, Path, description = "MP-ID of the Lieferant whose catalogue this is"),
+    ),
+    request_body(content = serde_json::Value, description = "`EndkundenAngebotAnfrage`: the product, the MaLo and the consumption to price"),
+    responses(
+        (status = 201, description = "The frozen offer and its hash", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The offer cannot be priced", body = ApiError),
+        (status = 503, description = "marktd is not configured", body = ApiError),
+    )
+)]
 pub async fn post_endkunden_angebot(
     claims: Claims,
     Extension(cedar): Authz,
@@ -2019,6 +2274,19 @@ pub async fn post_endkunden_angebot(
 /// `GET /api/v1/endkunden-angebote/{id}` — the frozen offer, as stored, read
 /// back out of the bytes its `content_sha256` is computed over. An expired
 /// offer stays readable: an order placed against it is proven by it.
+#[utoipa::path(
+    get,
+    path = "/api/v1/endkunden-angebote/{id}",
+    tag = "endkunden-angebote",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The Endkunden-Angebot"),
+    ),
+    responses(
+        (status = 200, description = "The frozen offer", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such offer", body = ApiError),
+    )
+)]
 pub async fn get_endkunden_angebot(
     claims: Claims,
     Extension(cedar): Authz,
@@ -2078,6 +2346,19 @@ pub async fn get_endkunden_angebot(
 /// [`Angebot`](rubo4e::current::Angebot) under `bo4e`, and persists it to
 /// `angebote.bo4e` — this endpoint is where pricing happens, so it is where the
 /// interchange document is produced.
+#[utoipa::path(
+    get,
+    path = "/api/v1/angebote/{id}/comparison",
+    tag = "angebote",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The Angebot"),
+    ),
+    responses(
+        (status = 200, description = "The variants side by side", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such Angebot", body = ApiError),
+    )
+)]
 pub async fn get_angebot_comparison(
     claims: Claims,
     Extension(cedar): Authz,
@@ -2254,6 +2535,20 @@ pub async fn get_angebot_comparison(
 /// `POST /api/v1/angebote/{id}/versenden`
 ///
 /// Mark an Angebot as VERSANDT (sent to customer).
+#[utoipa::path(
+    post,
+    path = "/api/v1/angebote/{id}/versenden",
+    tag = "angebote",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The Angebot"),
+    ),
+    responses(
+        (status = 200, description = "VERSANDT", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such Angebot", body = ApiError),
+        (status = 409, description = "Not in ANGELEGT", body = ApiError),
+    )
+)]
 pub async fn post_angebot_versenden(
     claims: Claims,
     Extension(cedar): Authz,
@@ -2290,6 +2585,22 @@ pub struct AnnehmenRequest {
 /// transaction that marks the delivery done. So the answer here never carries
 /// the Rahmenvertrag: it exists once the delivery has gone through, and the
 /// Angebot names it from then on.
+#[utoipa::path(
+    post,
+    path = "/api/v1/angebote/{id}/annehmen",
+    tag = "angebote",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The Angebot"),
+    ),
+    request_body(content = serde_json::Value, description = "`AnnehmenRequest`: the chosen variant"),
+    responses(
+        (status = 200, description = "ANGENOMMEN, the contract request is queued", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such Angebot", body = ApiError),
+        (status = 409, description = "Already decided or expired", body = ApiError),
+        (status = 422, description = "Not priced", body = ApiError),
+    )
+)]
 pub async fn post_angebot_annehmen(
     claims: Claims,
     Extension(cedar): Authz,
@@ -2371,6 +2682,20 @@ pub(crate) fn accept_error_response(e: crate::pg::AcceptError) -> ApiError {
 /// `POST /api/v1/angebote/{id}/ablehnen`
 ///
 /// Mark an Angebot as ABGELEHNT (declined by customer).
+#[utoipa::path(
+    post,
+    path = "/api/v1/angebote/{id}/ablehnen",
+    tag = "angebote",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The Angebot"),
+    ),
+    responses(
+        (status = 200, description = "ABGELEHNT", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such Angebot", body = ApiError),
+        (status = 409, description = "Already decided", body = ApiError),
+    )
+)]
 pub async fn post_angebot_ablehnen(
     claims: Claims,
     Extension(cedar): Authz,
@@ -2402,6 +2727,15 @@ pub(crate) fn transition_error_response(e: crate::pg::TransitionError) -> ApiErr
 ///
 /// Mark all Angebote past `gueltig_bis` as ABGELAUFEN.
 /// Called by the background task; also available for manual triggers.
+#[utoipa::path(
+    post,
+    path = "/api/v1/angebote/expire",
+    tag = "angebote",
+    responses(
+        (status = 200, description = "How many were marked ABGELAUFEN", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn post_expire_angebote(
     claims: Claims,
     Extension(cedar): Authz,
@@ -2440,6 +2774,22 @@ pub struct UpdateAngebotRequest {
 ///
 /// Re-calculates `jahreskosten_netto_eur` / `jahreskosten_brutto_eur` when
 /// `positionen` are updated so the totals stay in sync.
+#[utoipa::path(
+    put,
+    path = "/api/v1/angebote/{id}",
+    tag = "angebote",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The Angebot"),
+    ),
+    request_body(content = serde_json::Value, description = "`UpdateAngebotRequest`: the changed fields, before VERSANDT"),
+    responses(
+        (status = 200, description = "Updated and re-priced", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such Angebot", body = ApiError),
+        (status = 409, description = "The Angebot has been sent", body = ApiError),
+        (status = 422, description = "The change is refused", body = ApiError),
+    )
+)]
 pub async fn put_angebot(
     claims: Claims,
     Extension(cedar): Authz,
@@ -3039,6 +3389,26 @@ pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo
 ///   ]
 /// }
 /// ```
+#[utoipa::path(
+    get,
+    path = "/api/v1/comparison-feed/bo4e",
+    tag = "comparison-feed",
+    params(
+        ("lf_mp_id" = Option<String>, Query, description = "MP-ID of the Lieferant"),
+        ("sparte" = Option<String>, Query, description = "STROM or GAS"),
+        ("kundentyp" = Option<String>, Query, description = "Kundentyp"),
+        ("verbrauch_kwh" = Option<String>, Query, description = "Annual consumption, decimal"),
+        ("oekolabel" = Option<String>, Query, description = "Only products with this Ökolabel"),
+        ("include_dynamic" = Option<bool>, Query, description = "Include § 41a dynamic tariffs"),
+        ("only_dynamic" = Option<bool>, Query, description = "Only § 41a dynamic tariffs"),
+        ("limit" = Option<i64>, Query, description = "Rows"),
+        ("cursor" = Option<String>, Query, description = "The next_cursor of the previous page"),
+    ),
+    responses(
+        (status = 200, description = "The feed as a BO4E Tarifinfo array (§ 41c Abs. 5 EnWG, no credential)", body = serde_json::Value),
+        (status = 304, description = "Unchanged since the ETag", body = ApiError),
+    )
+)]
 pub async fn get_comparison_feed_bo4e(
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
@@ -3168,6 +3538,26 @@ pub async fn get_comparison_feed_bo4e(
 /// `meta.next_cursor` is non-null, pass it as `?cursor=<value>` to retrieve the
 /// next page.  The cursor is stable: new or updated products appear on page 1
 /// without affecting subsequent pages.
+#[utoipa::path(
+    get,
+    path = "/api/v1/comparison-feed",
+    tag = "comparison-feed",
+    params(
+        ("lf_mp_id" = Option<String>, Query, description = "MP-ID of the Lieferant"),
+        ("sparte" = Option<String>, Query, description = "STROM or GAS"),
+        ("kundentyp" = Option<String>, Query, description = "Kundentyp"),
+        ("verbrauch_kwh" = Option<String>, Query, description = "Annual consumption for the yearly cost, decimal"),
+        ("oekolabel" = Option<String>, Query, description = "Only products with this Ökolabel"),
+        ("include_dynamic" = Option<bool>, Query, description = "Include § 41a dynamic tariffs"),
+        ("only_dynamic" = Option<bool>, Query, description = "Only § 41a dynamic tariffs"),
+        ("limit" = Option<i64>, Query, description = "Rows"),
+        ("cursor" = Option<String>, Query, description = "The next_cursor of the previous page"),
+    ),
+    responses(
+        (status = 200, description = "The published tariffs (§ 41c Abs. 5 EnWG, no credential)", body = serde_json::Value),
+        (status = 304, description = "Unchanged since the ETag", body = ApiError),
+    )
+)]
 pub async fn get_comparison_feed(
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,

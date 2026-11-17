@@ -12,7 +12,7 @@ use axum::{
     body::Body,
     extract::{Path, State},
     http::{Request, StatusCode},
-    routing::{get, put},
+    routing::get,
 };
 use http_body_util::BodyExt as _;
 use mako_engine::ids::TenantId;
@@ -39,7 +39,7 @@ fn tenant() -> TenantId {
 
 /// The command doors of an LF Strom deployment over `cache`.
 fn tueren(store: &SlateDbStore, cache: &SlateDbMaloCache) -> Router {
-    makod::commands_api::router(Arc::new(CommandsApiState {
+    axum::Router::from(makod::commands_api::routes(Arc::new(CommandsApiState {
         tenant_id: tenant(),
         sender_party_id: LF.to_owned(),
         configured_marktrollen: vec!["LF".to_owned()],
@@ -51,7 +51,7 @@ fn tueren(store: &SlateDbStore, cache: &SlateDbMaloCache) -> Router {
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store.clone()),
         marktd_client: None,
-    }))
+    })))
 }
 
 /// Rehearse the Desk's sample Anmeldung; the door's answer.
@@ -155,13 +155,9 @@ async fn spawn_marktd(record: Shared) -> String {
         let items: Vec<Value> = m.lock().expect("lock").iter().cloned().collect();
         Json(json!({ "items": items, "total": items.len(), "page": 0, "size": 500 }))
     }
-    async fn sub(Path(_id): Path<String>) -> Json<Value> {
-        Json(json!({ "version": 1 }))
-    }
     let app = Router::new()
         .route("/api/v1/malos", get(all))
         .route("/api/v1/malos/{id}", get(one))
-        .route("/api/v1/subscriptions/{id}", put(sub))
         .with_state(record);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -200,7 +196,6 @@ async fn a_malo_delivered_by_the_marktd_fan_out_is_found_by_the_command_door() {
         reqwest::Client::new(),
         url,
         SecretString::from("marktd-key"),
-        "http://makod:8080/webhooks/marktd",
         None,
         cache.clone(),
         registry,

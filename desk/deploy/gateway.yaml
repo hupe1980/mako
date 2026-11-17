@@ -35,39 +35,43 @@ upstreamConfig:
       rewriteTarget: /$1
       uri: http://makod:8080
     - id: processd
-      path: ^/svc/processd/(mcp|api/v1/openapi\.json|api/v1/queue/[^/]+/(?:approve|reject)|api/v1/counterparties/[^/]+/[^/]+)$
+      path: ^/svc/processd/(mcp|api/v1/openapi\.json|api/v1/queue/[^/]+/(?:approve|reject)|api/v1/counterparties/[^/]+/[^/]+|api/v1/klaerfaelle/[^/]+/(?:dispatch|resolve|assign)|api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
       rewriteTarget: /$1
       uri: http://processd:8580
     - id: vertragd
-      path: ^/svc/vertragd/(mcp|api/v1/openapi\.json)$
+      path: ^/svc/vertragd/(mcp|api/v1/openapi\.json|api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
       rewriteTarget: /$1
       uri: http://vertragd:9780
     - id: marktd
-      path: ^/svc/marktd/(mcp|api/v1/openapi\.json|api/v1/malos/[^/]+|api/v1/malos/[^/]+/lokationsbuendel|api/v1/versorgung/[^/]+/history|api/v1/lokationsbuendelstrukturen)$
+      path: ^/svc/marktd/(mcp|api/v1/openapi\.json|api/v1/malos/[^/]+|api/v1/malos/[^/]+/lokationsbuendel|api/v1/versorgung/[^/]+/history|api/v1/lokationsbuendelstrukturen|api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
       rewriteTarget: /$1
       uri: http://marktd:8180
     - id: invoicd
-      path: ^/svc/invoicd/(mcp|api/v1/openapi\.json|api/v1/receipts/[^/]+/(?:resolve-dispute|dispatch-answer|feststellungen)|api/v1/leistungsnachweise)$
+      path: ^/svc/invoicd/(mcp|api/v1/openapi\.json|api/v1/receipts/[^/]+/(?:resolve-dispute|dispatch-answer|feststellungen)|api/v1/leistungsnachweise|api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
       rewriteTarget: /$1
       uri: http://invoicd:8280
     - id: edmd
-      path: ^/svc/edmd/(mcp|api/v1/openapi\.json|api/v1/(?:coverage|timeseries|quality|corrections)/[^/]+)$
+      path: ^/svc/edmd/(mcp|api/v1/openapi\.json|api/v1/(?:coverage|timeseries|quality|corrections)/[^/]+|api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
       rewriteTarget: /$1
       uri: http://edmd:8380
     - id: netzbilanzd
-      path: ^/svc/netzbilanzd/(mcp|api/v1/openapi\.json)$
+      path: ^/svc/netzbilanzd/(mcp|api/v1/openapi\.json|api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
       rewriteTarget: /$1
       uri: http://netzbilanzd:8680
     - id: billingd
-      path: ^/svc/billingd/(mcp|api/v1/openapi\.json|api/v1/billing/[^/]+/(?:release|reviewed))$
+      path: ^/svc/billingd/(mcp|api/v1/openapi\.json|api/v1/billing/[^/]+/(?:release|reviewed)|api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
       rewriteTarget: /$1
       uri: http://billingd:9280
     - id: accountingd
-      path: ^/svc/accountingd/(mcp|api/v1/openapi\.json|api/v1/bookings/[^/]+/(?:rebook|discard)|api/v1/accounts/[^/]+/(?:balance|ledger)|api/v1/dunning|api/v1/offene-posten|api/v1/payments/match)$
+      path: ^/svc/accountingd/(mcp|api/v1/openapi\.json|api/v1/bookings/[^/]+/(?:rebook|discard)|api/v1/accounts/[^/]+/(?:balance|ledger)|api/v1/dunning|api/v1/offene-posten|api/v1/payments/match|api/v1/payments/unmatched|api/v1/payments/[^/]+/assign|api/v1/credit-payouts|api/v1/credit-payouts/[^/]+/paid|api/v1/eeg/payouts)$
       rewriteTarget: /$1
       uri: http://accountingd:9380
+    - id: productd
+      path: ^/svc/productd/(api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
+      rewriteTarget: /$1
+      uri: http://productd:9080
     - id: einsd
-      path: ^/svc/einsd/(mcp|api/v1/openapi\.json)$
+      path: ^/svc/einsd/(mcp|api/v1/openapi\.json|api/v1/anlagen/[^/]+|api/v1/anlagen/[^/]+/settlements|api/v1/anlagen/[^/]+/settlements/[0-9]+/[0-9]+/erklaerung|api/v1/anlagen/unabgerechnet/[0-9]+/[0-9]+|api/v1/anlagen)$
       rewriteTarget: /$1
       uri: http://einsd:9180
     - id: agentd

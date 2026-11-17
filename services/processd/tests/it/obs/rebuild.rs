@@ -1,18 +1,17 @@
 //! `obs::rebuild` against real PostgreSQL: a projection truncated and rebuilt
-//! from `marktd`'s replay log equals the original, row for row.
+//! from `marktd`'s event feed equals the original, row for row.
 //!
-//! The replay log is served by a stand-in for `marktd` `GET /admin/events`
-//! that honours the same contract — `from` and `to` inclusive, oldest first,
-//! `limit` rows — with a page size small enough that the rebuild has to page,
-//! and with events sharing one `received_at` across a page boundary, which is
-//! where an inclusive lower bound re-serves what the previous page applied.
+//! The feed is served by a stand-in for `marktd` `GET /api/v1/events` that
+//! honours the same contract — commit order, the `type` pattern, `limit` rows
+//! and an opaque `next_cursor` — with a page size small enough that the
+//! rebuild has to page.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::extract::Query;
 use processd::obs::project::{ObsState, project};
-use processd::obs::rebuild::{RebuildError, rebuild};
+use processd::obs::rebuild::rebuild;
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -54,11 +53,9 @@ fn state(pool: &sqlx::PgPool) -> ObsState {
     }
 }
 
-/// One replay-log row as `marktd` stores it: the envelope and when it arrived.
+/// One event of `marktd`'s outbox, as the feed serves it.
 #[derive(Clone)]
 struct Logged {
-    event_id: String,
-    received_at: OffsetDateTime,
     envelope: serde_json::Value,
 }
 
@@ -71,8 +68,6 @@ fn event(
     data: serde_json::Value,
 ) -> Logged {
     Logged {
-        event_id: format!("evt-{n}"),
-        received_at: at,
         envelope: serde_json::json!({
             "specversion": "1.0",
             "id": format!("evt-{n}"),
@@ -86,8 +81,8 @@ fn event(
     }
 }
 
-/// A log with several processes in every state the read model knows, some
-/// events sharing one arrival instant, and one event outside `de.mako.*`.
+/// A log with several processes in every state the read model knows, and one
+/// event outside `de.mako.*`, which the feed's `type` filter leaves out.
 fn replay_log() -> Vec<Logged> {
     let p1 = "00000000-0000-4000-8000-000000000001";
     let p2 = "00000000-0000-4000-8000-000000000002";
@@ -108,8 +103,6 @@ fn replay_log() -> Vec<Logged> {
             serde_json::json!({
             "malo_id": "51238696012", "partner_mp_id": "9800000000003" }),
         ),
-        // Three events at one instant: with a page of four, the instant
-        // straddles a page boundary.
         event(
             3,
             "de.mako.aperak.accepted",
@@ -171,45 +164,54 @@ fn replay_log() -> Vec<Logged> {
 }
 
 #[derive(Deserialize)]
-struct EventLogQuery {
-    from: Option<String>,
-    to: Option<String>,
+struct FeedQuery {
+    #[serde(rename = "type")]
+    event_type: Option<String>,
     limit: Option<usize>,
+    cursor: Option<String>,
 }
 
-/// A stand-in for `marktd` `GET /admin/events`.
-async fn marktd_replay(log: Vec<Logged>) -> String {
+/// A stand-in for `marktd` `GET /api/v1/events`: the log in commit order, the
+/// cursor the index of the next row.
+async fn marktd_feed(log: Vec<Logged>) -> String {
     let log = Arc::new(log);
     let app = axum::Router::new().route(
-        "/admin/events",
-        axum::routing::get(move |Query(q): Query<EventLogQuery>| {
+        "/api/v1/events",
+        axum::routing::get(move |Query(q): Query<FeedQuery>| {
             let log = Arc::clone(&log);
             async move {
-                let parse =
-                    |s: Option<String>| s.and_then(|s| OffsetDateTime::parse(&s, &Rfc3339).ok());
-                let (from, to) = (parse(q.from), parse(q.to));
-                let mut rows: Vec<&Logged> = log
+                let prefix = q
+                    .event_type
+                    .as_deref()
+                    .map(|t| t.trim_end_matches('*').to_owned());
+                let rows: Vec<&Logged> = log
                     .iter()
-                    .filter(|e| from.is_none_or(|f| e.received_at >= f))
-                    .filter(|e| to.is_none_or(|t| e.received_at <= t))
-                    .collect();
-                rows.sort_by_key(|e| e.received_at);
-                let body: Vec<serde_json::Value> = rows
-                    .into_iter()
-                    .take(q.limit.unwrap_or(500))
-                    .map(|e| {
-                        serde_json::json!({
-                            "event_id": e.event_id,
-                            "ce_type": e.envelope["type"],
-                            "marktrole": null,
-                            "sparte": null,
-                            "envelope": e.envelope,
-                            "fanned_out_at": null,
-                            "received_at": e.received_at.format(&Rfc3339).expect("rfc3339"),
+                    .filter(|e| {
+                        prefix.as_deref().is_none_or(|p| {
+                            e.envelope["type"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .starts_with(p)
                         })
                     })
                     .collect();
-                axum::Json(body)
+                let start: usize = q
+                    .cursor
+                    .as_deref()
+                    .map_or(0, |c| c.parse().expect("cursor"));
+                let limit = q.limit.unwrap_or(50);
+                let items: Vec<serde_json::Value> = rows
+                    .iter()
+                    .skip(start)
+                    .take(limit)
+                    .map(|e| e.envelope.clone())
+                    .collect();
+                let next = (start + limit < rows.len()).then(|| (start + limit).to_string());
+                axum::Json(serde_json::json!({
+                    "items": items,
+                    "next_cursor": next,
+                    "total_estimate": rows.len(),
+                }))
             }
         }),
     );
@@ -264,15 +266,17 @@ async fn a_truncated_projection_is_rebuilt_row_for_row() {
         .expect("truncate");
     assert!(snapshot(&pool).await.is_empty());
 
-    let marktd = marktd_replay(log.clone()).await;
+    let marktd = marktd_feed(log.clone()).await;
     let report = rebuild(&obs, &upstream(&marktd), 4).await.expect("rebuild");
 
-    assert_eq!(report.read, 9, "every logged event is read exactly once");
-    assert_eq!(
-        report.ignored, 1,
-        "the versorgung event is not a process state"
-    );
+    assert_eq!(report.read, 8, "every de.mako.* event is read exactly once");
+    assert_eq!(report.ignored, 0);
     assert_eq!(report.projected, 8);
+    assert_eq!(
+        report.oldest_event.as_deref(),
+        Some("2026-09-01T08:00:00Z"),
+        "the report names how far back the feed reached"
+    );
     assert_eq!(
         snapshot(&pool).await,
         original,
@@ -289,38 +293,10 @@ async fn a_rebuild_is_idempotent() {
         return;
     };
     let obs = state(&pool);
-    let marktd = marktd_replay(replay_log()).await;
+    let marktd = marktd_feed(replay_log()).await;
 
     rebuild(&obs, &upstream(&marktd), 4).await.expect("first");
     let once = snapshot(&pool).await;
     rebuild(&obs, &upstream(&marktd), 4).await.expect("second");
     assert_eq!(snapshot(&pool).await, once);
-}
-
-/// As many events at one instant as a page holds cannot be paged by arrival
-/// time; the rebuild says so rather than looping on the same page.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn an_unpageable_log_is_refused() {
-    let Some((pool, _pg)) = pg_pool().await else {
-        return;
-    };
-    let at = datetime!(2026-09-01 08:00 UTC);
-    let log: Vec<Logged> = (0..3)
-        .map(|n| {
-            event(
-                n,
-                "de.mako.process.initiated",
-                &format!("00000000-0000-4000-8000-00000000001{n}"),
-                55_001,
-                at,
-                serde_json::json!({}),
-            )
-        })
-        .collect();
-    let marktd = marktd_replay(log).await;
-    let err = rebuild(&state(&pool), &upstream(&marktd), 2)
-        .await
-        .expect_err("three events at one instant with a page of two");
-    assert!(matches!(err, RebuildError::Stalled { .. }), "{err}");
 }

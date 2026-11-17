@@ -39,6 +39,7 @@ const ROUTEN: { name: string; pfad: string; titel: RegExp }[] = [
   { name: "nachrechnen", pfad: "rechnung/b-1", titel: /^Nachrechnen$/ },
   { name: "gegenpartei", pfad: "gegenpartei/9800357000005/NB", titel: /Gasnetz|9800357000005/ },
   { name: "gegenparteien", pfad: "gegenparteien", titel: /^Gegenparteien$/ },
+  { name: "zustellungen", pfad: "zustellungen", titel: /^Zustellungen$/ },
 ];
 
 /** The lines of `a` and `b` that differ, marked as a unified diff marks them. */

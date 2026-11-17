@@ -262,28 +262,6 @@ pub struct MeloRecord {
     pub bo4e_version: String,
 }
 
-/// Stored webhook subscription.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Subscription {
-    /// Key the subscription is stored and addressed under.
-    pub subscriber_id: String,
-    /// Endpoint the fan-out worker POSTs each matching [`crate::cloudevents::MarktEvent`] to.
-    pub webhook_url: String,
-    /// The Standard Webhooks signing key, stored as plaintext — protect it with
-    /// database least-privilege and storage encryption (marktd README).
-    pub webhook_secret: Option<String>,
-    /// Empty = all roles.
-    pub roles: Vec<String>,
-    /// Empty = all event types.
-    pub event_types: Vec<String>,
-    /// Empty = all Sparten.
-    pub sparten: Vec<String>,
-    /// Whether events are delivered to this subscriber.
-    pub active: bool,
-    /// Optimistic-concurrency version, incremented on every write.
-    pub version: i64,
-}
-
 /// Stored trading-partner record, keyed by its 13-digit `MarktpartnerId`
 /// (Rollencodenummer) — a BDEW-Codenummer, DVGW-Codenummer or GS1 GLN; use
 /// [`crate::domain::nad_agency_code`] for the coding authority.

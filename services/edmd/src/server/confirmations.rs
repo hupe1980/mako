@@ -4,7 +4,8 @@ use super::*;
 
 // ── § 60 Abs. 1 MsbG confirmations ────────────────────────────────────────────
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct ConfirmationListParams {
     /// Filter: OFFEN | BESTAETIGT | UEBERFAELLIG. Default: all open kinds.
     status: Option<String>,
@@ -16,6 +17,19 @@ pub(crate) struct ConfirmationListParams {
 /// Open/overdue obligations to replace estimated or substituted intervals
 /// with plausibilised real values (§ 60 Abs. 1 MsbG). Resolution happens
 /// automatically on ingest of a MEASURED/CORRECTED value for the same slot.
+#[utoipa::path(
+    get,
+    path = "/api/v1/confirmations",
+    tag = "quality",
+    params(ConfirmationListParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn list_confirmations(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

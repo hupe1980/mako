@@ -33,6 +33,9 @@ async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
         .execute(&pool)
         .await
         .expect("apply schema");
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
     Some((pool, container))
 }
 
@@ -542,7 +545,7 @@ async fn a_rolled_back_ingest_leaves_neither_marker_nor_projection_nor_outbox() 
         "the announced future Lieferant is carried on the event"
     );
     marktd::outbox::enqueue(
-        &mut *tx,
+        &mut tx,
         &mako_markt::cloudevents::MarktEvent::new(
             TENANT,
             mako_events::mako::PROCESS_INITIATED,
@@ -562,7 +565,7 @@ async fn a_rolled_back_ingest_leaves_neither_marker_nor_projection_nor_outbox() 
         .fetch_one(&pool)
         .await
         .unwrap();
-    let log: i64 = sqlx::query_scalar("SELECT count(*) FROM event_log")
+    let log: i64 = sqlx::query_scalar("SELECT count(*) FROM event_outbox")
         .fetch_one(&pool)
         .await
         .unwrap();

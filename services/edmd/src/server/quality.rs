@@ -8,6 +8,18 @@ use super::*;
 ///
 /// Returns the quality assessment history for a MaLo.
 /// Each batch ingest produces one quality assessment row per § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail.
+#[utoipa::path(
+    get,
+    path = "/api/v1/quality-assessments/{malo_id}",
+    tag = "quality",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), SimpleTimeParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn list_quality_assessments(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -467,7 +479,8 @@ fn score_one_register(
 // ─── retroactive quality rescoring ──────────────────────────────────────
 
 /// Optional query parameters for retroactive quality rescoring.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct QualityRescoreQuery {
     /// ISO-8601 start date (inclusive). Defaults to 30 days ago.
     pub from: Option<String>,
@@ -501,6 +514,18 @@ pub struct QualityRescoreQuery {
 ///   "grades": { "A": 0, "B": 1, "C": 1, "F": 0 }
 /// }
 /// ```
+#[utoipa::path(
+    post,
+    path = "/api/v1/quality-score/{malo_id}",
+    tag = "quality",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), QualityRescoreQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub async fn post_quality_rescore(
     State(state): State<HandlerState>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

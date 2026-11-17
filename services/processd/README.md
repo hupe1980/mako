@@ -14,7 +14,7 @@ Sperrauftrag queue that turns ORDERS 17115 / 17117 into field work and IFTSTA
 |---|---|
 | **Port** | 8580 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — approval queue, decisions, read model, Sperrauftrag queue |
-| **MCP** | 23 tools, 8 prompts at `/mcp` |
+| **MCP** | 29 tools, 8 prompts at `/mcp` |
 | **Emits** | `de.obs.deadline.approaching`, `de.obs.stp.parity.alert`, `de.sperr.*` |
 | **Consumes** | `de.mako.*` and `de.markt.versorgung.*` at `POST /webhook` (HMAC) |
 | **Depends on** | makod, marktd; einsd and vertragd optional |
@@ -40,7 +40,8 @@ cargo run -p processd --no-default-features --features nb-only   # one role only
 |---|---|
 | `POST /webhook` | Inbound CloudEvent from `marktd` |
 | `GET /api/v1/decisions`, `/api/v1/queue` | Anmeldung STP decisions; approval queue |
-| `GET /api/v1/klaerfaelle` | Open Klärfälle: cause, action and due date from code tables |
+| `GET /api/v1/klaerfaelle` · `/{id}` | Open Klärfälle: cause, action, correction and due date from code tables; one with its history |
+| `POST /api/v1/klaerfaelle/{id}/assign` · `/resolve` · `/dispatch` | Take, close or „korrigieren & senden" a Klärfall, journaled against the principal |
 | `POST /api/v1/queue/{id}/approve` · `/reject` | Decide a queued answer (`application/json`; `body_sha256` → `412` when stale); makod's pre-send check runs first — `422 pruefung_abgelehnt` / `nicht_geprueft`, nothing marked |
 | `POST /api/v1/start-supply` · `-gas`, `/end-supply` · `-gas` | LF Lieferbeginn / Lieferende bootstrap |
 | `GET /api/v1/eog`, `/api/v1/neuanlage` | EoG and `E_0608` Neuanlage case logs |
@@ -48,6 +49,8 @@ cargo run -p processd --no-default-features --features nb-only   # one role only
 | `GET /api/v1/audit/gleichbehandlung` | § 7a Abs. 5 EnWG evidence (`?year=&format=csv`) |
 | `GET /api/v1/counterparties`, `/{mp_id}/{rolle}` | Gegenpartei-Akte: how a counterparty answered what it owed (`?von=&bis=&format=csv`) |
 | `/api/v1/sperr-orders` | Sperrauftrag queue (NB build) |
+| `/api/v1/webhooks/endpoints` · `/api/v1/events` | Webhook endpoints, deliveries and replay for the emitted CloudEvents; the outbox as a feed |
+| `GET /api/v1/openapi.json` | The OpenAPI 3.1 document of every `/api/v1` route, committed as `openapi.json` |
 
 Every route checks a Cedar action in `policies/processd.cedar`; the full table is
 in the operator guide's [Routes and authorization](https://hupe1980.github.io/mako/docs/services/processd/#routes-and-authorization).
@@ -56,10 +59,13 @@ in the operator guide's [Routes and authorization](https://hupe1980.github.io/ma
 
 - `[identity] own_mp_id` (must match `makod`'s primary party) and
   `verbundene_lieferanten` (required, `[]` included).
-- `[makod]`, `[marktd]` (`url`, `api_key`), `[webhook] inbound_secret`,
-  `[subscription]` (self-registers with `marktd`), `[oidc]`.
+- `[makod]`, `[marktd]` (`url`, `api_key`), `[webhook] inbound_secret` — the
+  secret of processd's entry in marktd's `[[subscriptions.endpoints]]`, which
+  is how marktd delivers to it — `[oidc]`.
 - Per role: `[nb]`, `[lf]` (`[[lf.bilanzkreise]]`), `[msb]`, `[esa]`, `[eog]`;
-  `[obs]` and `[sperr]` for the outbound notices.
+  `[obs]` and `[sperr]` for the outbound notices — `[sperr] erp_webhook_url` is
+  the webhook endpoint `default`; `[subscriptions]` (`retention_days`,
+  `allow_loopback`) governs the ones registered over the API.
 
 Policy: [`[policy] msb_vorlauf_lesart`](https://hupe1980.github.io/mako/docs/services/processd/#policy-msb-vorlauf-lesart).
 

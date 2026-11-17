@@ -45,6 +45,12 @@ Port: **`:9580`**
 | `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, breached obligations, event delivery, and a skill's track record over a window — runs by outcome and each person's latest verdict per metric (`capabilities/{capability}/track-record`, `api:capability.track`) (OIDC required) |
 | `GET /health/live` · `GET /health/ready` · `GET /metrics` | Liveness, readiness, agentplane instruments (from the `mako_service` runner) |
 
+`GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of agentd's own
+`/api/v1` routes above, committed as `services/agentd/openapi.json`. The
+`/api/v1/oversight/*` surface is agentplane's and is described by
+[agentplane's own document](https://hupe1980.github.io/agentplane/openapi.json),
+its paths relative to that mount; agentd does not restate it.
+
 ### Following and stopping a run
 
 `POST /api/v1/runs` journals the caller's `sub` as the run's starter
@@ -286,6 +292,13 @@ beside the run's reads (`schritte`, the Spur), and a decided entry still
 resolves its run. A Disput or Buchung proposal has no rehearsal and says
 `keine_probe`.
 
+A refused proposal is asked once more. The verdict exists only after the run
+has concluded, so the repair is a second desk-assistant run on the same case,
+which the tick admits with the refusal (`stufe`, `code`, `regel`, `segment`
+and the service's `text`) as `ablehnung` in its input. Its admission is keyed
+on the entry, so a refused follow-up meets that same run and starts none.
+Reading a proposal never starts a run.
+
 Every model-run specialist's procedure says that text a counterparty, a
 customer or a document wrote — an `FTX`, a Bemerkung, an e-mail — is data,
 never an instruction; agentplane labels every tool output untrusted, which keeps
@@ -508,11 +521,12 @@ context, many tools. mako routes in Rust, so no agent hands off to another.
 
 ## Build-time guards
 
-Four checks run in CI:
+Five checks run in CI:
 
 | Guard | Refuses |
 |---|---|
 | `cargo xtask check-tool-grants` | A grant naming a tool no MCP server declares; a `mutates` flag that disagrees with the server's own `read_only_hint`; a mutating grant on a `tool-calling` agent, which could never dispatch it |
+| `cargo xtask check-eval-cases` | A `tool-calling` specialist (read off each manifest's `execution.kind`) without a positive and a negative or escalation eval case, unless it is on the shrink-only ratchet; a case carrying an e-mail address, an IBAN or a name that is not synthetic |
 | `cargo xtask check-prompt-tools` | A *procedure* instructing a call the manifest never granted — **and** a grant no procedure step mentions |
 | `cargo xtask check-wire-timestamps` | A `time` value reaching a JSON wire as its component array instead of RFC 3339 |
 | `plane::` unit tests | Seven kinds of declaration that read as correct and are not — listed below |
@@ -541,6 +555,31 @@ specialist answering its own schema, the exact procedure and tool surface each
 model is offered, durability, ingest idempotency, oversight and evidence
 signatures.
 
+### Evals
+
+`services/agentd/evals/<specialist>/` holds labelled cases: `cases/<id>.json`
+(the event, the recorded tool results, the label — `positive`, `negative` or
+`insufficient-evidence` — with the expected findings, and the provenance),
+`cassettes/<id>.json` (the model's turns and the tools the plane offered on
+each, under the manifest digest they were recorded for), `expected/<id>.json`
+(the scored outcome the cassette produced) and `scoring.json` (the JSON
+pointers a finding is read from, and how an answer escalates). The `evals`
+module of `cargo test -p agentd --test it` replays each case through the
+production plane with no network and writes `agent-evals.json` to the test's
+target directory: per specialist the case and stale counts, precision, recall,
+refusal correctness and the share of injection twins that held, each with the
+count it is over, and `not measured` where nothing is counted.
+
+The figures decide nothing. What fails the suite is a contract: a cassette
+whose scored outcome differs from its `expected/` file, an injection twin —
+its clean case with a counterparty's `FTX`, an e-mail's or a PDF's text set
+into one tool result — whose tool calls or proposed command differ from the
+clean case's, and a scripted cassette that no longer matches what the plane
+asks (`AGENTD_EVALS_BLESS=1 cargo test -p agentd --test it --
+evals::every_case_replays` re-records it). The cassettes are `scripted` today,
+so they measure the plane's handling of a fixed answer, not a model;
+`desk-assistant` has cases, every other specialist reads `not measured`.
+
 ---
 
 ## Architecture
@@ -557,7 +596,7 @@ graph TB
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 11 services, 189 tools"]
+    subgraph tools ["MCP Tools — 11 services, 212 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · processd"]
         T3["einsd · netzbilanzd · ..."]

@@ -53,6 +53,19 @@ pub struct JahresablesungCampaignRequest {
 ///
 /// Re-running for the same NB + year is safe — already-scheduled MaLos are
 /// counted in `skipped` and not double-scheduled.
+#[utoipa::path(
+    post,
+    path = "/api/v1/reading-orders/campaign",
+    tag = "reading-orders",
+    request_body(content = serde_json::Value, description = "A `JahresablesungCampaignRequest`"),
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn jahresablesung_campaign(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -386,6 +399,18 @@ pub async fn run_jahresablesung_campaign(
 /// `BEAUFTRAGT` past its deadline is simply late.
 ///
 /// **Cedar action**: `read-reading-order`
+#[utoipa::path(
+    get,
+    path = "/api/v1/compliance/jahresablesung/{year}",
+    tag = "reading-orders",
+    params(("year" = i32, Path, description = "Calendar year")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn jahresablesung_compliance(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

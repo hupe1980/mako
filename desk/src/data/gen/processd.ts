@@ -6,6 +6,10 @@ import type { Instant, BusinessDate } from "../../format/brands";
  */
 export type Kategorie =
   "fristgerecht" | "verspaetet" | "unbeantwortet" | "offen" | "abgebrochen" | "ohne_frist" | "schuldner_unbestimmt";
+/**
+ * Where a case stands.
+ */
+export type Zustand = "open" | "resolved" | "dispatched";
 export type QueueStatus = "Pending" | "Approved" | "Rejected" | "Expired";
 /**
  * What the decision route says about a rehearsed decision.
@@ -98,6 +102,18 @@ export interface ProcessdTools {
        */
       prozesse: AkteProzess[];
       definitionen: Definition[];
+    };
+  };
+  get_klaerfall: {
+    input: {
+      /**
+       * UUID of the Klärfall.
+       */
+      id: string;
+    };
+    output: {
+      klaerfall: Klaerfall;
+      verlauf: VerlaufEintrag[];
     };
   };
   get_kpi_report: {
@@ -513,6 +529,66 @@ export interface ProcessdTools {
       saturated: boolean;
     };
   };
+  list_webhook_deliveries: {
+    input: {
+      /**
+       * The endpoint's id.
+       */
+      endpoint_id: string;
+      /**
+       * `all` (default), `pending`, `delivered` or `failed`.
+       */
+      status?: string | null;
+      /**
+       * Rows per page, 1–200; 50 when absent.
+       */
+      limit?: number | null;
+      /**
+       * The `next_cursor` of the previous page.
+       */
+      cursor?: string | null;
+    };
+    output: {
+      /**
+       * The rows of this page, in the list's order.
+       */
+      items: Delivery[];
+      /**
+       * The cursor of the next page; absent on the last.
+       */
+      next_cursor: string | null;
+      /**
+       * How many rows the whole list holds, where the list counts them.
+       */
+      total_estimate?: TotalEstimate | null;
+    };
+  };
+  list_webhook_endpoints: {
+    input: {
+      /**
+       * Rows per page, 1–200; 50 when absent.
+       */
+      limit?: number | null;
+      /**
+       * The `next_cursor` of the previous page.
+       */
+      cursor?: string | null;
+    };
+    output: {
+      /**
+       * The rows of this page, in the list's order.
+       */
+      items: Endpoint[];
+      /**
+       * The cursor of the next page; absent on the last.
+       */
+      next_cursor: string | null;
+      /**
+       * How many rows the whole list holds, where the list counts them.
+       */
+      total_estimate?: TotalEstimate | null;
+    };
+  };
   rehearse_decision: {
     input: {
       /**
@@ -644,6 +720,124 @@ export interface Definition {
   definition: string;
 }
 /**
+ * One case as the Desk's Heute and an integrator read it.
+ */
+export interface Klaerfall {
+  id: string;
+  /**
+   * The message the case concerns, `process:<id>`, or `dead-letter:<reason>`.
+   */
+  message_ref: string;
+  /**
+   * The MP-ID whose signal opened the case; `None` for a case on a process.
+   */
+  partner_mp_id: string | null;
+  process_id: string | null;
+  pid: number | null;
+  /**
+   * The Marktrolle that owns the case — the role mako acted in on its
+   * process; `None` for a case on no process (`ADMIN`'s).
+   */
+  owner_role: string | null;
+  /**
+   * The origins of every signal attached, the first one first.
+   */
+  origins: string[];
+  zustand: Zustand;
+  /**
+   * The cause's code and the list that defines it.
+   */
+  ursache_code: string;
+  ursache_liste: string;
+  /**
+   * The BDEW's own wording of the cause, where the list publishes one
+   * (an Antwortcode in its Entscheidungsbaum); `None` otherwise — never a
+   * paraphrase.
+   */
+  bedeutung: string | null;
+  /**
+   * The tabulated action and what it says to do.
+   */
+  aktion: "retry_with_correction" | "escalate_to_operator" | "abort_process" | "wait_and_retry";
+  hinweis: string;
+  /**
+   * The `mako_markt::commands` command that corrects the case and the ones
+   * a dispatch may send instead ([`korrektur`]); `None` where the case's
+   * answer is not correctable here, and it escalates.
+   */
+  korrektur: Korrektur | null;
+  /**
+   * The business Antwortfrist the case races (`mako_fristen::antwort`, via
+   * the read model), RFC 3339; `None` is „keine Frist", never a default.
+   */
+  due_at: Instant | null;
+  /**
+   * The Fundstelle of `due_at`.
+   */
+  due_source: string | null;
+  /**
+   * `due_at` has passed and the case is still open.
+   */
+  overdue: boolean;
+  /**
+   * A Freigabe's `expires_at` — the Frist less the operator's headroom.
+   */
+  operator_window_ends_at: Instant | null;
+  /**
+   * The person working the case, if somebody took it.
+   */
+  assignee: string | null;
+  /**
+   * The authenticated principal that closed it.
+   */
+  decided_by: string | null;
+  occurrences: number;
+  opened_at: Instant;
+  closed_at: Instant | null;
+}
+/**
+ * The command that corrects a case, and the commands a dispatch may send
+ * instead.
+ */
+export interface Korrektur {
+  /**
+   * The proposed `mako_markt::commands` command.
+   */
+  befehl: string;
+  /**
+   * Every command a dispatch may send: the Freigabe's approve/reject pair.
+   * Another one than `befehl` needs a reason.
+   */
+  erlaubt: string[];
+}
+/**
+ * One step taken on a case.
+ */
+export interface VerlaufEintrag {
+  at: Instant;
+  /**
+   * The authenticated principal.
+   */
+  akteur: string;
+  /**
+   * `assign`, `resolve` or `dispatch`.
+   */
+  schritt: string;
+  /**
+   * On a dispatch: the proposed command and the one sent.
+   */
+  vorgeschlagen: string | null;
+  befehl: string | null;
+  /**
+   * The operator's reason (a resolve, an override).
+   */
+  begruendung: string | null;
+  /**
+   * On an assign: who took it (`None` releases it).
+   */
+  assignee: string | null;
+}
+/**
  * How the processes that ended in the month were handled, by their most
  * human actor — counts always, shares only from 20 ended processes, and
  * the definition the figure is read by.
@@ -773,64 +967,6 @@ export interface CounterpartySummary {
   ablehnungen: number;
 }
 /**
- * One case as the Desk's Heute and an integrator read it.
- */
-export interface Klaerfall {
-  id: string;
-  /**
-   * The message the case concerns, or `process:<id>`.
-   */
-  message_ref: string;
-  /**
-   * The MP-ID whose signal opened the case; `None` for a case on a process.
-   */
-  partner_mp_id: string | null;
-  process_id: string | null;
-  pid: number | null;
-  /**
-   * The origins of every signal attached, the first one first.
-   */
-  origins: string[];
-  /**
-   * The cause's code and the list that defines it.
-   */
-  ursache_code: string;
-  ursache_liste: string;
-  /**
-   * The BDEW's own wording of the cause, where the list publishes one
-   * (an Antwortcode in its Entscheidungsbaum); `None` otherwise — never a
-   * paraphrase.
-   */
-  bedeutung: string | null;
-  /**
-   * The tabulated action and what it says to do.
-   */
-  aktion: "retry_with_correction" | "escalate_to_operator" | "abort_process" | "wait_and_retry";
-  hinweis: string;
-  /**
-   * The `mako_markt::commands` command that corrects the case, where one is
-   * a function of the cause. No ERC code, dead-letter reason or refusal
-   * names one today: the correction re-issues the process's own command, so
-   * this is `None` until a table supplies it.
-   */
-  befehl: string | null;
-  /**
-   * The business Antwortfrist the case races (`mako_fristen::antwort`, via
-   * the read model), RFC 3339; `None` is „keine Frist", never a default.
-   */
-  due_at: Instant | null;
-  /**
-   * The Fundstelle of `due_at`.
-   */
-  due_source: string | null;
-  /**
-   * `due_at` has passed.
-   */
-  overdue: boolean;
-  occurrences: number;
-  opened_at: Instant;
-}
-/**
  * One open process with its Frist.
  */
 export interface ProcessRow {
@@ -952,6 +1088,130 @@ export interface Freigabe {
   gesendet_sha256: string | null;
 }
 /**
+ * One event to one endpoint.
+ */
+export interface Delivery {
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key: string | null;
+  /**
+   * `pending`, `delivered` or `dead_lettered`.
+   */
+  status: "pending" | "delivered" | "dead_lettered";
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status: number | null;
+  /**
+   * The last attempt's failure.
+   */
+  last_error: string | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at: Instant | null;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface TotalEstimate {
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface Endpoint {
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `config` or `api`.
+   */
+  owner: "config" | "api";
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner: string | null;
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at: Instant | null;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+}
+/**
  * Why a decision is refused: a stable code, the refusal's sentence, and the
  * Entscheidungsbaum where the refusal is about a code.
  */
@@ -972,7 +1232,7 @@ export interface EntscheidungsGrund {
 }
 
 /** Tools processd serves without an output schema: no view may read them. */
-export const processdUntyped = ["approve_queue_entry","get_decision","get_parity_report","get_policy","get_stp_breakdown_by_erc","list_affiliate_decisions","list_decisions","list_processes_by_family","reject_queue_entry"] as const;
+export const processdUntyped = ["approve_queue_entry","assign_klaerfall","dispatch_klaerfall","get_decision","get_parity_report","get_policy","get_stp_breakdown_by_erc","list_affiliate_decisions","list_decisions","list_processes_by_family","reject_queue_entry","resolve_klaerfall"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const processdOberflaeche: Record<string, string> = {"count_open_processes":"92d1a719","get_counterparty_record":"096e486b","get_kpi_report":"98fa7379","get_process":"2cd7609c","get_process_stp_rate":"faf231af","get_queue_entry":"4ba460e1","get_stp_rate":"86563b7b","list_counterparties":"091d6f0a","list_klaerfaelle":"a988e8af","list_open_processes":"2a99b874","list_overdue_processes":"e8530d9f","list_pending_approvals":"133d36f2","rehearse_decision":"80e7df54"};
+export const processdOberflaeche: Record<string, string> = {"count_open_processes":"92d1a719","get_counterparty_record":"096e486b","get_klaerfall":"22125977","get_kpi_report":"98fa7379","get_process":"2cd7609c","get_process_stp_rate":"faf231af","get_queue_entry":"4ba460e1","get_stp_rate":"86563b7b","list_counterparties":"091d6f0a","list_klaerfaelle":"1f3c20ab","list_open_processes":"2a99b874","list_overdue_processes":"e8530d9f","list_pending_approvals":"133d36f2","list_webhook_deliveries":"9a6b36b9","list_webhook_endpoints":"ab1f3d89","rehearse_decision":"80e7df54"};

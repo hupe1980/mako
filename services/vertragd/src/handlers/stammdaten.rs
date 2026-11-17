@@ -31,6 +31,20 @@ pub struct SetGgvBetreiberRequest {
 /// never appears in MaKo, but it is who the bundled GGV Sammelrechnung bills —
 /// so the mapping from the operator-assigned `ggv_id` to a customer lives here,
 /// beside every other buyer. Idempotent; a re-PUT moves the pointer.
+#[utoipa::path(
+    put,
+    path = "/api/v1/ggv/{ggv_id}/betreiber",
+    tag = "stammdaten",
+    params(("ggv_id" = String, Path, description = "The GGV's id")),
+    request_body(content = serde_json::Value, description = "`SetGgvBetreiberRequest`"),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_ggv_betreiber(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -54,6 +68,18 @@ pub async fn put_ggv_betreiber(
 /// `404` until a Betreiber is recorded — billingd treats that as "no buyer
 /// reachable" and its e-invoice findings say what is missing, exactly as an
 /// unconfigured retail buyer does.
+#[utoipa::path(
+    get,
+    path = "/api/v1/ggv/{ggv_id}/betreiber",
+    tag = "stammdaten",
+    params(("ggv_id" = String, Path, description = "The GGV's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn get_ggv_betreiber(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -76,6 +102,20 @@ pub async fn get_ggv_betreiber(
 /// Answers `409` when the validity window overlaps an existing contract for the
 /// same resource: two simultaneously active Aggregatorverträge are not
 /// representable, and the `agg_no_overlap` exclusion constraint is what says so.
+#[utoipa::path(
+    put,
+    path = "/api/v1/aggregatorvertraege/{sr_id}",
+    tag = "stammdaten",
+    params(("sr_id" = String, Path, description = "The SteuerbareRessource's id")),
+    request_body(content = serde_json::Value, description = "`UpsertAggregatorvertragInput`"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_aggregatorvertrag(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -110,6 +150,19 @@ pub async fn put_aggregatorvertrag(
 ///
 /// `?haushaltskunde=true` applies the § 309 Nr. 9 lit. c BGB one-month cap to
 /// the contractual notice period.
+#[utoipa::path(
+    get,
+    path = "/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}",
+    tag = "stammdaten",
+    params(("melo_id" = String, Path, description = "The Messlokations-ID"), ("msb_mp_id" = String, Path, description = "The MSB's MP-ID"), MessstellenvertragQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn get_messstellenvertrag(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -131,6 +184,20 @@ pub async fn get_messstellenvertrag(
 /// Answers `409` when the term overlaps an existing contract for the same MSB
 /// and Messlokation — two simultaneously active ones would let the Kündigung
 /// answer depend on row order.
+#[utoipa::path(
+    put,
+    path = "/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}",
+    tag = "stammdaten",
+    params(("melo_id" = String, Path, description = "The Messlokations-ID"), ("msb_mp_id" = String, Path, description = "The MSB's MP-ID")),
+    request_body(content = serde_json::Value, description = "`UpsertMessstellenvertragInput`"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_messstellenvertrag(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -149,7 +216,8 @@ pub async fn put_messstellenvertrag(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct MessstellenvertragQuery {
     /// ISO 8601 date the contract is read as of and the next admissible
     /// Kündigungstermin is computed against; defaults to today.
@@ -159,7 +227,8 @@ pub struct MessstellenvertragQuery {
     pub haushaltskunde: Option<bool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct AggregatorvertragQuery {
     pub sr_id: Option<String>,
     /// ISO 8601 date; defaults to today.
@@ -171,6 +240,18 @@ pub struct AggregatorvertragQuery {
 /// With `?sr_id=…&on=YYYY-MM-DD`, returns the single contract in force for that
 /// resource on that date (404 when none is) — the lookup `billingd` performs
 /// when settling a dispatch.
+#[utoipa::path(
+    get,
+    path = "/api/v1/aggregatorvertraege",
+    tag = "stammdaten",
+    params(AggregatorvertragQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn list_aggregatorvertraege(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -194,7 +275,8 @@ pub async fn list_aggregatorvertraege(
 
 // ── Outbound dead-letter queue ────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct DeadQuery {
     pub limit: Option<i64>,
 }
@@ -204,6 +286,18 @@ pub struct DeadQuery {
 /// A registration that never reached the NB or a Schlussablesung that was never
 /// ordered is the operator's problem the moment the queue gives up on it, so it
 /// has somewhere to be seen instead of only a log line.
+#[utoipa::path(
+    get,
+    path = "/api/v1/outbound/dead",
+    tag = "stammdaten",
+    params(DeadQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn list_dead_tasks(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -222,6 +316,18 @@ pub async fn list_dead_tasks(
 }
 
 /// `POST /api/v1/outbound/dead/{id}/retry` — queue a dead task again.
+#[utoipa::path(
+    post,
+    path = "/api/v1/outbound/dead/{id}/retry",
+    tag = "stammdaten",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn retry_dead_task(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

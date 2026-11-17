@@ -72,8 +72,8 @@
       "name": "desk-assistant",
       "titel": "Assistent im Desk",
       "zweck": "Beantwortet eine Frage zum Kunden, zur Marktlokation, zum Prozess oder zur Entscheidung auf dem Bildschirm, jeden Satz mit seiner Quelle.",
-      "version": "1.5.0",
-      "digest": "e9334a5f7f5c135e8233a869aad81e727f594355ca465d54683e69cf2c24974d",
+      "version": "1.6.0",
+      "digest": "a8bbaf42e77d6f4f026df66bd002bd0be8ed146f66d18c6620779e8a6f9d63a8",
       "ausloeser": [],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [

@@ -847,6 +847,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
     type Command = SupplierChangeCommand;
 
     const DEADLINE_LABELS: &'static [&'static str] = &[GPKE_PROCESS_RESPONSE_LABEL];
+    /// The answer is owed by the published Antwortfrist; the workflow builds
+    /// its own lapse notice, which supersedes the engine's.
+    const FRIST_LABELS: &'static [&'static str] = &[GPKE_PROCESS_RESPONSE_LABEL];
 
     /// Deadline compensation for GPKE regulatory timeouts.
     ///

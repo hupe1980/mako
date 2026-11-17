@@ -64,6 +64,14 @@ use time::OffsetDateTime;
 use crate::erc::ErcCode;
 use crate::ids::{ConversationId, EventId, ProcessId, TenantId};
 
+/// The outbox `message_type` of the lapse notice: the ERP notification that a
+/// business Frist lapsed (`de.mako.antwortfrist.abgelaufen`).
+///
+/// [`Process::run_timeout`](crate::process::Process::run_timeout) enqueues it
+/// for every label a workflow lists in
+/// [`Workflow::FRIST_LABELS`](crate::workflow::Workflow::FRIST_LABELS).
+pub const LAPSE_NOTICE: &str = "AntwortfristAbgelaufen";
+
 // ── ErpAdapterError ───────────────────────────────────────────────────────────
 
 /// Errors produced by [`ErpAdapter`] implementations.

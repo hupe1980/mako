@@ -11,7 +11,7 @@ ledger, committed with the business change that causes it; it prices nothing.
 |---|---|
 | **Port** | 9380 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — satellites in `public`, the journal in schema `ledger` |
-| **MCP** | 18 tools, 1 prompt at `/mcp` |
+| **MCP** | 20 tools, 1 prompt at `/mcp` |
 | **Emits** | `de.accounting.*` (`payment.imported`, `mahnung.issued`, `sperrauftrag`, `sepa.collection-rejected`, …) to the ERP webhook |
 | **Consumes** | `de.billing.rechnung.erstellt`, `de.invoic.receipt.settled`, `de.eeg.verguetung.berechnet`, `de.eeg.marktpraemie.berechnet` at `POST /webhook` |
 | **Depends on** | `makod` (ORDERS 17115/17117), `outputd` (Mahnung), `vertragd` (Mahnung recipient) |
@@ -34,13 +34,15 @@ ACCOUNTINGD_CONFIG=deploy/demo/accountingd.toml cargo run -p accountingd -- --ch
 | `/api/v1/dunning/…` | open cases, Mahnstufen, Einwände, Abwendung, escalation into the Sperr-Sequenz |
 | `/api/v1/sepa/…` | mandates, pain.008 runs, pain.002, reversals, recalls |
 | `POST /api/v1/payments/import` · `/import/camt05{2,3,4}` | bank-statement import |
+| `GET /api/v1/payments/unmatched` · `POST /api/v1/payments/{payment_id}/assign` | bank lines no account claimed, and their assignment |
+| `/api/v1/credit-payouts…` | a Schlussrechnung's Guthaben owed back (§ 40c Abs. 3 EnWG), overdue and paid |
 | `/api/v1/periods/…` · `/api/v1/entries/…` | period seals and audit proofs |
 | `POST /api/v1/jahresabschluss/{malo_id}` | the annual settlement |
 | `/api/v1/eeg/…` | EEG payouts, Rückforderungen, Aufrechnungen, EnFG payments |
 
-`GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of the reads shared
-with MCP (balance, ledger, Offene Posten, dunning, `POST /api/v1/payments/match`),
-committed as [`openapi.json`](openapi.json).
+`GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of every `/api/v1`
+route, committed as [`openapi.json`](openapi.json); the reads shared with MCP
+answer the same type on both doors.
 
 The full route list with each Cedar action is the guide's
 [Endpoints](https://hupe1980.github.io/mako/docs/services/accountingd/#endpoints).

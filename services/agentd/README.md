@@ -40,6 +40,12 @@ AGENTD_CONFIG=deploy/demo/agentd.toml cargo run -p agentd -- --check-config
 | `POST /api/v1/erasure` | crypto-shred a case or forget a memory subject (GDPR Art. 17) |
 | `/api/v1/oversight/*` | agentplane's worklist, runs, cases and four-eyes decisions (with `[oidc]`) |
 
+`GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of agentd's own
+`/api/v1` routes, committed as [`openapi.json`](openapi.json). The
+`/api/v1/oversight/*` surface is agentplane's and is described by
+[agentplane's own document](https://hupe1980.github.io/agentplane/openapi.json),
+its paths relative to that mount.
+
 ## Configuration
 
 `[policy]`: [`agent_posture`](https://hupe1980.github.io/mako/docs/services/agentd/#policy-agent-posture).

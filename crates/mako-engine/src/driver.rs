@@ -67,6 +67,8 @@ type MigrateFn =
 pub struct WorkflowDriver {
     name: &'static str,
     deadline_labels: &'static [&'static str],
+    frist_labels: &'static [&'static str],
+    schedule_labels: &'static [&'static str],
     #[cfg(feature = "slatedb")]
     timeout: TimeoutFn,
     #[cfg(feature = "slatedb")]
@@ -78,6 +80,8 @@ impl std::fmt::Debug for WorkflowDriver {
         f.debug_struct("WorkflowDriver")
             .field("name", &self.name)
             .field("deadline_labels", &self.deadline_labels)
+            .field("frist_labels", &self.frist_labels)
+            .field("schedule_labels", &self.schedule_labels)
             .finish_non_exhaustive()
     }
 }
@@ -93,6 +97,8 @@ impl WorkflowDriver {
         Self {
             name,
             deadline_labels: W::DEADLINE_LABELS,
+            frist_labels: W::FRIST_LABELS,
+            schedule_labels: W::SCHEDULE_LABELS,
             #[cfg(feature = "slatedb")]
             timeout: timeout::<W>,
             #[cfg(feature = "slatedb")]
@@ -112,6 +118,8 @@ impl WorkflowDriver {
         Self {
             name,
             deadline_labels: &[],
+            frist_labels: &[],
+            schedule_labels: &[],
             #[cfg(feature = "slatedb")]
             timeout: no_timeout,
             #[cfg(feature = "slatedb")]
@@ -131,6 +139,19 @@ impl WorkflowDriver {
     #[must_use]
     pub fn deadline_labels(&self) -> &'static [&'static str] {
         self.deadline_labels
+    }
+
+    /// The labels that are business Fristen — [`Workflow::FRIST_LABELS`]; a
+    /// lapse of one announces itself.
+    #[must_use]
+    pub fn frist_labels(&self) -> &'static [&'static str] {
+        self.frist_labels
+    }
+
+    /// The labels that schedule a step — [`Workflow::SCHEDULE_LABELS`].
+    #[must_use]
+    pub fn schedule_labels(&self) -> &'static [&'static str] {
+        self.schedule_labels
     }
 
     /// Hand a fired `deadline` to the workflow's own `on_deadline` through

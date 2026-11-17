@@ -8,6 +8,18 @@ use super::*;
 ///
 /// Returns Gasbeschaffenheitsdaten (Brennwert + Zustandszahl) received via PID 13007.
 /// Used for Gas m³ → kWh_Hs conversion per §25 Nr. 4 MessEV / DVGW G 685.
+#[utoipa::path(
+    get,
+    path = "/api/v1/gas-quality/{malo_id}",
+    tag = "quality",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), SimpleTimeParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_gas_quality(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

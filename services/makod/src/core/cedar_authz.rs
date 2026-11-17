@@ -142,6 +142,9 @@ pub enum MakoAction {
     /// Read the configuration findings — `GET /admin/einrichtung`,
     /// `GET /admin/einrichtung/deployment`, `GET /api/v1/policy`.
     AdminEinrichtung,
+    /// Read the impact of a candidate Formatversion on the operator's own
+    /// interchange archive — `GET /api/v1/format-candidates/{fv}/impact`.
+    ReadFormatImpact,
 }
 
 impl MakoAction {
@@ -166,6 +169,7 @@ impl MakoAction {
             Self::ReadProcess => "ReadProcess",
             Self::AdminMigrations => "AdminMigrations",
             Self::AdminEinrichtung => "AdminEinrichtung",
+            Self::ReadFormatImpact => "ReadFormatImpact",
         }
     }
 }
@@ -730,6 +734,33 @@ impl CedarAuthorizer {
             resource_uid,
             vec![principal_entity(identity), resource],
             serde_json::json!({ "tenant": res.tenant }),
+        )
+    }
+
+    /// Evaluate authorization for reading a candidate Formatversion's impact
+    /// report of `tenant` — it lists the operator's own exchanged messages.
+    pub fn authorize_format_impact(&self, identity: &CallerIdentity, tenant: &str) -> bool {
+        let resource_uid = entity_uid("MaKo::FormatImpactEndpoint", tenant);
+        let resource = match Entity::new(
+            resource_uid.clone(),
+            std::collections::HashMap::from([("tenant".to_owned(), cedar_str(tenant))]),
+            std::collections::HashSet::new(),
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(
+                    principal = %identity.name,
+                    "cedar: failed to build FormatImpactEndpoint entity: {e}"
+                );
+                return false;
+            }
+        };
+        self.eval(
+            identity,
+            MakoAction::ReadFormatImpact,
+            resource_uid,
+            vec![principal_entity(identity), resource],
+            serde_json::json!({ "tenant": tenant }),
         )
     }
 

@@ -3,21 +3,21 @@
 //! `approve_queue_entry` and `reject_queue_entry` do not call a Rust function —
 //! they issue an HTTP request back into this service's own router, so that the
 //! REST handler's Cedar check runs rather than being bypassed. Nothing in the
-//! type system connects a `format!`-built path to a `.route()` string, so a
+//! type system connects a `format!`-built path to a route's path, so a
 //! tool whose method or path differs from the router's answers every call with
 //! 404 and the operator override it exists for never works.
 //!
 //! Pinning the tools' path with a second string literal would be no guard at
 //! all — the wrong path written twice still agrees with itself. So the
-//! method and path now live in one `QueueRoute` constant that the router
-//! registers and the tools build their request from, and this suite checks the
-//! two ends against each other:
+//! method and path live in one `QueueRoute` constant the tools build their
+//! request from, and this suite checks the two ends against each other:
 //!
 //! - the constants produce the paths and method they are supposed to
 //!   (`the_queue_routes_are_the_documented_endpoints`), and
-//! - the router really registers *those constants* rather than literals of its
-//!   own that could drift again (`the_router_registers_the_shared_constants`,
-//!   `no_source_file_spells_a_queue_action_path_by_hand`).
+//! - the `#[utoipa::path]` the router mounts each handler under names the
+//!   constant's path and method (`the_router_registers_the_shared_constants`,
+//!   `no_source_file_spells_a_queue_action_path_by_hand`; the served document
+//!   is held to every constant by `openapi::tests`).
 
 use std::path::{Path, PathBuf};
 
@@ -28,30 +28,33 @@ fn src(file: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read src/{file}: {e}"))
 }
 
-/// The `.route(<path expr>, <method>(rest::<handler>))` registration for one
-/// handler, as the router source spells it.
+/// The `#[utoipa::path(<method>, path = "<path>", …)]` a handler is mounted
+/// under, as the router source spells it.
 ///
-/// Source text, deliberately: the router is the authority on what is reachable,
-/// so the guard has to read what it actually registers rather than ask the same
+/// Source text, deliberately: the attribute is what `routes!` mounts, so the
+/// guard has to read what is actually registered rather than ask the same
 /// constant twice.
 fn registration(handler: &str) -> (String, String) {
     let server = src("server.rs");
-    let needle = format!("rest::{handler})");
+    assert!(
+        src("openapi.rs").contains(&format!("routes!(rest::{handler})")),
+        "no route mounts rest::{handler}"
+    );
     let idx = server
-        .find(&needle)
-        .unwrap_or_else(|| panic!("no route registers rest::{handler}"));
-    let head = &server[..idx];
-    let route_at = head
-        .rfind(".route(")
-        .unwrap_or_else(|| panic!("rest::{handler} appears outside a .route(…) call"));
-    let call = &server[route_at + ".route(".len()..idx];
-    let (path_expr, method) = call
-        .rsplit_once(',')
-        .unwrap_or_else(|| panic!("malformed .route(…) call for rest::{handler}"));
-    (
-        path_expr.trim().trim_end_matches(',').to_owned(),
-        method.trim().trim_end_matches('(').to_owned(),
-    )
+        .find(&format!("pub async fn {handler}("))
+        .unwrap_or_else(|| panic!("rest::{handler} is not defined"));
+    let attr_at = server[..idx]
+        .rfind("#[utoipa::path(")
+        .unwrap_or_else(|| panic!("rest::{handler} carries no #[utoipa::path]"));
+    let attr = &server[attr_at + "#[utoipa::path(".len()..idx];
+    let method = attr.split(',').next().expect("a method").trim().to_owned();
+    let path = attr
+        .split("path = \"")
+        .nth(1)
+        .and_then(|p| p.split('"').next())
+        .unwrap_or_else(|| panic!("rest::{handler}'s attribute names no path"))
+        .to_owned();
+    (path, method)
 }
 
 #[test]
@@ -75,16 +78,15 @@ fn the_queue_routes_are_the_documented_endpoints() {
 
 #[test]
 fn the_router_registers_the_shared_constants() {
-    for (handler, konst, route) in [
-        ("approve_queue_entry", "QUEUE_APPROVE", QUEUE_APPROVE),
-        ("reject_queue_entry", "QUEUE_REJECT", QUEUE_REJECT),
+    for (handler, route) in [
+        ("approve_queue_entry", QUEUE_APPROVE),
+        ("reject_queue_entry", QUEUE_REJECT),
     ] {
-        let (path_expr, method) = registration(handler);
+        let (path, method) = registration(handler);
         assert_eq!(
-            path_expr,
-            format!("{konst}.path_template"),
-            "the router must register the same constant the MCP tool builds its \
-             loopback URL from — a literal here can drift from the tool again"
+            path, route.path_template,
+            "the router must mount rest::{handler} under the path the MCP tool \
+             builds its loopback URL from"
         );
         assert_eq!(
             method,

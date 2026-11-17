@@ -2025,7 +2025,7 @@ mod contract_tests {
     /// (schemars) and the route's documented `200` (utoipa) are one shape.
     #[test]
     fn every_shared_read_answers_its_rest_twins_shape() {
-        let doc = serde_json::to_value(crate::reads::openapi_document()).expect("serializes");
+        let doc = serde_json::to_value(crate::routes::openapi_document()).expect("serializes");
         let tools = EinsdMcpHandler::tool_router().list_all();
         for (tool, path) in [
             ("get_plant", "/api/v1/anlagen/{tr_id}"),
@@ -2053,11 +2053,8 @@ mod contract_tests {
     /// `openapi.json` (`BLESS_MCP_SNAPSHOT=1` rewrites it).
     #[test]
     fn the_openapi_document_matches_the_committed_one() {
-        let doc = serde_json::to_value(crate::reads::openapi_document()).expect("serializes");
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("openapi.json");
-        if let Err(e) = mako_service::mcp_snapshot::compare_json(&doc, &path) {
-            panic!("{e}");
-        }
+        mako_service::openapi::assert_committed(&crate::routes::openapi_document(), &path);
     }
 
     /// A shared read's `tools/call` clears the Cedar action its REST route

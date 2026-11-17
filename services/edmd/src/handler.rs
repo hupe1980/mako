@@ -103,10 +103,6 @@ pub struct HandlerState {
     /// `marktd` client — places a Messlokation an MSCONS names under its
     /// Marktlokation.
     pub marktd: mako_markt::marktd_client::MarktdClient,
-    /// ERP webhook URL for outbound CloudEvents from direct push and quality warnings.
-    pub erp_webhook_url: Option<String>,
-    /// Optional secret signing outbound CloudEvents (Standard Webhooks).
-    pub erp_webhook_secret: Option<secrecy::SecretString>,
     /// §14a SMGW/CLS compliance thresholds, so the synchronous checks on the
     /// upsert and audit endpoints use the same numbers as the daily sweep —
     /// four call sites that would otherwise each carry their own literal.

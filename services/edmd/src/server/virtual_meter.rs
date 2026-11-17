@@ -118,6 +118,18 @@ async fn load_rule(
 /// stored in `meter_reads` — it is computed on demand.
 ///
 /// Use `?from=` / `?to=` (RFC3339 UTC) to bound the query window.
+#[utoipa::path(
+    get,
+    path = "/api/v1/virtual/{virtual_malo_id}/lastgang",
+    tag = "virtual",
+    params(("virtual_malo_id" = String, Path, description = "The virtual Marktlokation's id"), SimpleTimeParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_virtual_lastgang(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -223,6 +235,17 @@ pub(crate) async fn get_virtual_lastgang(
 }
 
 /// `GET /api/v1/virtual` — list all virtual meter configurations for this tenant.
+#[utoipa::path(
+    get,
+    path = "/api/v1/virtual",
+    tag = "virtual",
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn list_virtual_meters(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -315,6 +338,20 @@ pub struct CreateVirtualMeterRequest {
 }
 
 /// `POST /api/v1/virtual` — create a virtual meter configuration.
+#[utoipa::path(
+    post,
+    path = "/api/v1/virtual",
+    tag = "virtual",
+    request_body(content = serde_json::Value, description = "A `CreateVirtualMeterRequest`"),
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn create_virtual_meter(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -389,6 +426,18 @@ pub(crate) async fn create_virtual_meter(
 }
 
 /// `GET /api/v1/virtual/{virtual_malo_id}` — get one virtual meter config.
+#[utoipa::path(
+    get,
+    path = "/api/v1/virtual/{virtual_malo_id}",
+    tag = "virtual",
+    params(("virtual_malo_id" = String, Path, description = "The virtual Marktlokation's id")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_virtual_meter(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -426,6 +475,18 @@ pub(crate) async fn get_virtual_meter(
 }
 
 /// `DELETE /api/v1/virtual/{virtual_malo_id}` — remove a virtual meter configuration.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/virtual/{virtual_malo_id}",
+    tag = "virtual",
+    params(("virtual_malo_id" = String, Path, description = "The virtual Marktlokation's id")),
+    responses(
+        (status = 204, description = "Done, no body"),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn delete_virtual_meter(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

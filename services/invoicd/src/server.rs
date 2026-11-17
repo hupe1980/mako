@@ -16,6 +16,11 @@
 //! | `GET` | `/api/v1/zahlungsstatus/{malo_id}` | `read-receipt` |
 //! | `GET` | `/invoicd/metrics` | — (internal) |
 //!
+//! Every `/api/v1` route mounts through `utoipa-axum`'s `OpenApiRouter`
+//! ([`api`]), with the webhook routes of `mako_service::subscriptions`
+//! (`manage-subscription`, the feed `read-events`); `GET /api/v1/openapi.json`
+//! serves the document and `openapi.json` beside the crate is its committed copy.
+//!
 //! `/health/*` and the generic `/metrics` are the runner's and are not mounted
 //! here.
 
@@ -31,12 +36,14 @@ use axum::{
 };
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
+use mako_service::subscriptions::{Subscriptions, SubscriptionsConfig};
 use mako_service::{ApiError, ApiResult, Json};
 use mako_service::{Daemon, ServiceContext};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::format_description::well_known::Rfc3339;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     config::Config,
@@ -64,7 +71,11 @@ impl Daemon for Invoicd {
         // conclusion here and are delivered from it.
         mako_service::outbox::ensure_schema(pool)
             .await
-            .context("ensure event_outbox schema")
+            .context("ensure event_outbox schema")?;
+        // Webhook endpoints and deliveries over that outbox.
+        mako_service::subscriptions::ensure_schema(pool)
+            .await
+            .context("ensure webhook subscription schema")
     }
 
     /// Fail closed on both doors — the REST API and the inbound webhook each
@@ -94,6 +105,7 @@ impl Daemon for Invoicd {
                  omit the key to check no ceiling",
             ));
         }
+        out.extend(cfg.subscriptions.befunde());
         out
     }
 
@@ -126,38 +138,80 @@ pub const CEDAR_ACTIONS: &[&str] = &[
     "use-mcp",
     "read-policy",
     "read-config",
+    "manage-subscription",
+    "read-events",
 ];
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-/// Build the domain router.
-pub fn router(state: HandlerState) -> Router {
+/// The OpenAPI document's frame: the paths come from the routes.
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    info(
+        title = "invoicd — INVOIC check and settlement",
+        description = "The § 147 AO receipt register of every INVOIC a market partner sent, the answers it was given, the statements that decide a held invoice, and the webhook routes for the events invoicd emits.",
+    ),
+    tags(
+        (name = "receipts", description = "Received invoices, their answers and their payment"),
+        (name = "webhooks", description = "Webhook endpoints, deliveries, replay and the event feed"),
+    ),
+)]
+pub struct ApiDoc;
+
+/// Every `/api/v1` route invoicd serves, each with its document entry, and
+/// the webhook routes of `subs`.
+pub fn api(subs: &Subscriptions) -> OpenApiRouter<HandlerState> {
+    OpenApiRouter::with_openapi(<ApiDoc as utoipa::OpenApi>::openapi())
+        .routes(routes!(list_receipts))
+        .routes(routes!(get_receipt))
+        .routes(routes!(get_rechnung))
+        .routes(routes!(confirm_payment))
+        .routes(routes!(dispatch_answer))
+        .routes(routes!(resolve_dispute))
+        .routes(routes!(post_feststellungen))
+        .routes(routes!(post_leistungsnachweis))
+        .routes(routes!(list_disputes))
+        .routes(routes!(list_overdue_remadv))
+        .routes(routes!(get_zahlungsstatus))
+        .merge(subs.router())
+}
+
+/// The document `GET /api/v1/openapi.json` serves.
+///
+/// Built over a lazy pool that never connects: the document depends on the
+/// routes, not on a database. The pool needs a Tokio runtime to be created in.
+#[must_use]
+pub fn openapi_document() -> utoipa::openapi::OpenApi {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://unused@127.0.0.1:1/unused")
+        .expect("a lazy pool opens no connection");
+    let subs = subscriptions(pool, "unused", SubscriptionsConfig::default(), None, None);
+    api(&subs).split_for_parts().1
+}
+
+/// The webhook module over invoicd's outbox: the ERP URL is the endpoint
+/// `default`, signed with its secret.
+#[must_use]
+pub fn subscriptions(
+    pool: PgPool,
+    tenant: &str,
+    cfg: SubscriptionsConfig,
+    erp_url: Option<String>,
+    erp_secret: Option<SecretString>,
+) -> Subscriptions {
+    Subscriptions::new(pool, <Invoicd as Daemon>::NAME, tenant, cfg)
+        .with_default_endpoint(erp_url, erp_secret)
+}
+
+/// Build the domain router: the inbound webhook, the documented `/api/v1`
+/// routes with their document, and the internal metrics.
+pub fn router(state: HandlerState, subs: &Subscriptions) -> Router {
+    let (api, doc) = api(subs).split_for_parts();
     Router::new()
         .route("/webhook", post(handle_webhook))
-        .route("/api/v1/receipts", get(list_receipts))
-        .route("/api/v1/receipts/{id}", get(get_receipt))
-        .route("/api/v1/receipts/{id}/rechnung", get(get_rechnung))
-        .route(
-            "/api/v1/receipts/{id}/confirm-payment",
-            post(confirm_payment),
-        )
-        .route(
-            "/api/v1/receipts/{id}/dispatch-answer",
-            post(dispatch_answer),
-        )
-        .route(
-            "/api/v1/receipts/{id}/resolve-dispute",
-            post(resolve_dispute),
-        )
-        .route(
-            "/api/v1/receipts/{id}/feststellungen",
-            post(post_feststellungen),
-        )
-        .route("/api/v1/leistungsnachweise", post(post_leistungsnachweis))
-        .route("/api/v1/disputes", get(list_disputes))
-        .route("/api/v1/overdue-remadv", get(list_overdue_remadv))
-        .route("/api/v1/zahlungsstatus/{malo_id}", get(get_zahlungsstatus))
         .route("/invoicd/metrics", get(metrics))
+        .merge(api)
+        .merge(mako_service::openapi::serve(doc))
         .with_state(state)
 }
 
@@ -183,18 +237,12 @@ async fn metrics(State(state): State<HandlerState>) -> Response {
             .await
             .unwrap_or(0)
     };
-    let (total, disputes, overdue, undelivered, dead_letters) = tokio::join!(
+    let (total, disputes, overdue, dead_letters) = tokio::join!(
         scalar("SELECT COUNT(*) FROM invoic_receipts WHERE tenant = $1"),
         scalar("SELECT COUNT(*) FROM invoic_receipts WHERE tenant = $1 AND outcome = 'Dispute'"),
         scalar(
             "SELECT COUNT(*) FROM invoic_receipts WHERE tenant = $1 \
              AND pay_by < now() + INTERVAL '3 days' AND dispatched_at IS NULL"
-        ),
-        // `event_outbox` has no tenant column; the event's source names it.
-        scalar(
-            "SELECT COUNT(*) FROM event_outbox \
-             WHERE envelope->>'source' = 'urn:mako:invoicd:tenant:' || $1 \
-             AND ce_type LIKE 'de.invoic.receipt.%' AND dead_lettered_at IS NOT NULL"
         ),
         scalar("SELECT COUNT(*) FROM invoic_dlq WHERE tenant = $1 AND resolved_at IS NULL"),
     );
@@ -215,11 +263,6 @@ async fn metrics(State(state): State<HandlerState>) -> Response {
             "invoicd_overdue_remadv_total",
             "Receipts within 3 days of the Zahlungsziel whose answer never went out.",
             overdue,
-        ),
-        (
-            "invoicd_erp_dead_lettered_total",
-            "Receipts the ERP webhook never accepted. Non-zero means the ERP is not hearing about settled invoices.",
-            undelivered,
         ),
         (
             "invoicd_dlq_open_total",
@@ -264,7 +307,8 @@ async fn metrics(State(state): State<HandlerState>) -> Response {
 
 // ── Reads ─────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 struct ReceiptListQuery {
     sender_mp_id: Option<String>,
     outcome: Option<String>,
@@ -283,7 +327,7 @@ fn default_size() -> u32 {
 /// Largest receipt page a caller may request.
 const MAX_PAGE: u32 = 500;
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, utoipa::ToSchema)]
 struct ReceiptSummary {
     id: uuid::Uuid,
     process_id: uuid::Uuid,
@@ -308,6 +352,18 @@ fn fmt_ts(t: Option<time::OffsetDateTime>) -> Option<String> {
 }
 
 /// `GET /api/v1/receipts` — list receipts for this tenant.
+#[utoipa::path(
+    get,
+    path = "/api/v1/receipts",
+    tag = "receipts",
+    params(
+        ReceiptListQuery,
+    ),
+    responses(
+        (status = 200, description = "Receipts, newest first", body = Vec<ReceiptSummary>),
+        (status = 403, description = "Cedar `read-receipt` refused", body = ApiError),
+    )
+)]
 async fn list_receipts(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -322,6 +378,15 @@ async fn list_receipts(
 }
 
 /// `GET /api/v1/disputes` — the open exception queue.
+#[utoipa::path(
+    get,
+    path = "/api/v1/disputes",
+    tag = "receipts",
+    responses(
+        (status = 200, description = "Receipts whose outcome is Dispute, newest first", body = Vec<ReceiptSummary>),
+        (status = 403, description = "Cedar `read-disputes` refused", body = ApiError),
+    )
+)]
 async fn list_disputes(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -343,6 +408,19 @@ async fn list_disputes(
 }
 
 /// `GET /api/v1/receipts/{id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/receipts/{id}",
+    tag = "receipts",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The receipt"),
+    ),
+    responses(
+        (status = 200, description = "The receipt", body = ReceiptSummary),
+        (status = 403, description = "Cedar `read-receipt` refused", body = ApiError),
+        (status = 404, description = "No such receipt in this tenant", body = ApiError),
+    )
+)]
 async fn get_receipt(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -367,6 +445,19 @@ async fn get_receipt(
 }
 
 /// `GET /api/v1/receipts/{id}/rechnung` — the invoice exactly as received.
+#[utoipa::path(
+    get,
+    path = "/api/v1/receipts/{id}/rechnung",
+    tag = "receipts",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The receipt"),
+    ),
+    responses(
+        (status = 200, description = "The BO4E Rechnung exactly as received, with its BO4E version and PID", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-receipt` refused", body = ApiError),
+        (status = 404, description = "No such receipt in this tenant", body = ApiError),
+    )
+)]
 async fn get_rechnung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -397,6 +488,15 @@ async fn get_rechnung(
 /// out. An undispatched answer past the Zahlungsziel is both a market-process
 /// breach and a § 147 AO gap, so this is the alert query: run it every 6 h and
 /// alert when it is non-empty.
+#[utoipa::path(
+    get,
+    path = "/api/v1/overdue-remadv",
+    tag = "receipts",
+    responses(
+        (status = 200, description = "`count` and `items`: receipts within three days of their Zahlungsziel whose answer never went out", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-overdue-remadv` refused", body = ApiError),
+    )
+)]
 async fn list_overdue_remadv(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -426,6 +526,18 @@ async fn list_overdue_remadv(
 }
 
 /// `GET /api/v1/zahlungsstatus/{malo_id}` — payment lifecycle per MaLo.
+#[utoipa::path(
+    get,
+    path = "/api/v1/zahlungsstatus/{malo_id}",
+    tag = "receipts",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+    ),
+    responses(
+        (status = 200, description = "The payment lifecycle of the Marktlokation\'s receipts, with counts per status", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-receipt` refused", body = ApiError),
+    )
+)]
 async fn get_zahlungsstatus(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -516,6 +628,19 @@ async fn get_zahlungsstatus(
 ///
 /// The ERP reports that the money moved. Closes the § 147 AO payment trail and
 /// stops the receipt appearing in the overdue view.
+#[utoipa::path(
+    post,
+    path = "/api/v1/receipts/{id}/confirm-payment",
+    tag = "receipts",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The receipt"),
+    ),
+    responses(
+        (status = 204, description = "The payment is recorded"),
+        (status = 403, description = "Cedar `write-receipt` refused", body = ApiError),
+        (status = 404, description = "No such receipt, or it was confirmed already", body = ApiError),
+    )
+)]
 async fn confirm_payment(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -531,7 +656,7 @@ async fn confirm_payment(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct ResolveDisputeBody {
     note: Option<String>,
@@ -543,6 +668,20 @@ struct ResolveDisputeBody {
 /// call, a COMDIS). Moves `Dispute` → `Resolved` with the caller as the
 /// decider and the operator's note. No market message goes out: the answer
 /// REMADV was sent when the dispute was raised.
+#[utoipa::path(
+    post,
+    path = "/api/v1/receipts/{id}/resolve-dispute",
+    tag = "receipts",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The receipt"),
+    ),
+    request_body(content = ResolveDisputeBody, description = "An optional note on how the dispute was settled"),
+    responses(
+        (status = 204, description = "Dispute → Resolved, with the caller as decider"),
+        (status = 403, description = "Cedar `write-receipt` refused", body = ApiError),
+        (status = 404, description = "No such receipt in Dispute", body = ApiError),
+    )
+)]
 async fn resolve_dispute(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -576,6 +715,22 @@ struct FeststellungBody {
 /// A walk that now reaches a verdict is answered and announced as an
 /// automatic one would be; one still open names what is missing. `409` when
 /// the receipt is not held.
+#[utoipa::path(
+    post,
+    path = "/api/v1/receipts/{id}/feststellungen",
+    tag = "receipts",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The receipt"),
+    ),
+    request_body(content = serde_json::Value, description = "`FeststellungBody`: the stated Prüfschritt answers and the Begründung"),
+    responses(
+        (status = 200, description = "The receipt walked again; `outcome` is its result", body = serde_json::Value),
+        (status = 403, description = "Cedar `record-feststellung` refused", body = ApiError),
+        (status = 409, description = "The receipt is not held for a statement", body = ApiError),
+        (status = 422, description = "No Begründung, or no Prüfschritt stated", body = ApiError),
+        (status = 502, description = "The walk could not run", body = ApiError),
+    )
+)]
 async fn post_feststellungen(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -622,6 +777,17 @@ async fn post_feststellungen(
 /// for an Artikel-ID over a period: Prüfschritt 310 for every position it
 /// covers. Every invoice of that MSB held on that order walks again at once;
 /// one recorded before its invoice arrives is read when it does.
+#[utoipa::path(
+    post,
+    path = "/api/v1/leistungsnachweise",
+    tag = "receipts",
+    request_body(content = serde_json::Value, description = "`Leistungsnachweis`: Rechnungssteller, Bestellung, Artikel-ID, period, whether it was performed, and the Nachweis"),
+    responses(
+        (status = 201, description = "Recorded; every held invoice of that order walked again (`erneut_geprueft`)", body = serde_json::Value),
+        (status = 403, description = "Cedar `record-feststellung` refused", body = ApiError),
+        (status = 422, description = "No Nachweis, or `von` after `bis`", body = ApiError),
+    )
+)]
 async fn post_leistungsnachweis(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -675,6 +841,22 @@ async fn post_leistungsnachweis(
 ///
 /// Getting either wrong fails silently — `makod` accepts the command and only
 /// the correlation misses — so neither is defaulted.
+#[utoipa::path(
+    post,
+    path = "/api/v1/receipts/{id}/dispatch-answer",
+    tag = "receipts",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The receipt"),
+    ),
+    responses(
+        (status = 200, description = "The answer command was accepted by makod", body = serde_json::Value),
+        (status = 403, description = "Cedar `write-receipt` refused", body = ApiError),
+        (status = 404, description = "No such receipt in this tenant", body = ApiError),
+        (status = 409, description = "The answer went out already", body = ApiError),
+        (status = 422, description = "The receipt has no answer to send", body = ApiError),
+        (status = 502, description = "makod did not accept the command", body = ApiError),
+    )
+)]
 async fn dispatch_answer(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -800,8 +982,7 @@ async fn fetch_receipts(
 // ── Assembly ──────────────────────────────────────────────────────────────────
 
 /// Resolve secrets, build the OIDC verifier and Cedar enforcer, wire the
-/// handler state and MCP server, spawn the background workers, and register the
-/// `marktd` subscription.
+/// handler state and MCP server, and spawn the background workers.
 pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
     // The auth posture is refused in `Daemon::validate`, before `build` runs.
 
@@ -848,10 +1029,17 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
         pool: pool.clone(),
         tenant: tenant.clone(),
         marktrolle: cfg.identity.marktrolle,
-        erp_webhook_url: cfg.erp.webhook_url.clone(),
-        erp_hmac_secret: erp_hmac_secret.clone(),
-        http_client: ctx.http.clone(),
     };
+
+    // The ERP URL is the webhook endpoint `default`, signed with its secret;
+    // integrators register further endpoints under /api/v1/webhooks/endpoints.
+    let subs = subscriptions(
+        pool.clone(),
+        &tenant,
+        cfg.subscriptions.clone(),
+        cfg.erp.webhook_url.clone(),
+        erp_hmac_secret,
+    );
 
     let mcp_state = Arc::new(crate::mcp_server::InvoicdMcpState {
         pool: pool.clone(),
@@ -863,65 +1051,22 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
             &tenant,
         ),
         policy: ctx.einrichtung.policy.clone(),
+        subs: subs.clone(),
     });
 
-    if let Some(erp_url) = cfg.erp.webhook_url.clone() {
-        tokio::spawn(
-            mako_service::outbox::OutboxWorker::new(
-                pool.clone(),
-                erp_url.clone(),
-                erp_hmac_secret.clone(),
-            )
-            .run(ctx.shutdown.clone()),
-        );
-        crate::payment_overdue::spawn(
-            pool.clone(),
-            tenant.clone(),
-            erp_url,
-            erp_hmac_secret,
-            ctx.http.clone(),
-            ctx.shutdown.clone(),
-        );
-    } else {
+    if cfg.erp.webhook_url.is_none() {
         tracing::warn!(
             "invoicd: no [erp] webhook_url — de.invoic.receipt.* and de.invoic.payment.overdue \
-             events are recorded but nothing delivers them; the ERP will not learn that an \
-             invoice was settled, disputed or has passed its Zahlungsziel"
+             events reach only endpoints registered under /api/v1/webhooks/endpoints; without \
+             one the ERP does not learn that an invoice was settled, disputed or has passed \
+             its Zahlungsziel"
         );
     }
-
-    // No PID filter is sent: `marktd` narrows on `roles`, `event_types` and
-    // `sparten` only. invoicd receives every `process.initiated` fan-out and
-    // decides each through `crate::routing::disposition_for` on arrival.
-    {
-        // In the background: marktd may come up after invoicd, and invoicd
-        // receives no invoice until the subscription stands.
-        let marktd = marktd.clone();
-        let subscriber_id = cfg.subscription.subscriber_id.clone();
-        let webhook_url = cfg.subscription.webhook_url.clone();
-        let inbound_secret = inbound_secret.clone();
-        let shutdown = ctx.shutdown.clone();
-        tokio::spawn(async move {
-            marktd
-                .subscribe_until_registered(
-                    &subscriber_id,
-                    &mako_markt::marktd_client::SubscriptionRequest {
-                        webhook_url: &webhook_url,
-                        webhook_secret: inbound_secret.as_ref().map(|s| {
-                            use secrecy::ExposeSecret as _;
-                            s.expose_secret()
-                        }),
-                        event_types: &[mako_events::mako::PROCESS_INITIATED],
-                        active: true,
-                    },
-                    shutdown.cancelled_owned(),
-                )
-                .await;
-        });
-    }
+    subs.spawn(ctx.shutdown.clone());
+    crate::payment_overdue::spawn(pool.clone(), tenant.clone(), ctx.shutdown.clone());
 
     let expected_tenant = mako_service::oidc::ExpectedTenant(state.tenant.clone());
-    Ok(router(state)
+    Ok(router(state, &subs)
         // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
         // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
         .merge(mako_service::einrichtung::router(ctx.einrichtung.clone()))

@@ -36,6 +36,8 @@ re-checks it.
 | `expire-angebote` | `POST /angebote/expire` | LF, MSB, ESA, ADMIN |
 | `quote-endkunde` | `POST /products/{lf_mp_id}/endkunden-angebote` | LF, ADMIN |
 | `read-endkunden-angebot` | `GET /endkunden-angebote/{id}` | LF, ADMIN |
+| `manage-subscription` | `/api/v1/webhooks/…` — see [Webhooks](#webhooks) | ADMIN |
+| `read-events` | `GET /api/v1/events` | ADMIN |
 | `use-mcp` | the whole `/mcp` surface | LF, MSB, ESA, ADMIN |
 
 MSB and ESA write because `ENERGIEDIENSTLEISTUNG` covers what they sell; the
@@ -95,9 +97,27 @@ graph LR
 | `GET` | `/api/v1/angebote/{id}/comparison` | Prices the scenarios and persists the BO4E `Angebot` to `angebote.bo4e` |
 | `POST` | `/api/v1/angebote/{id}/versenden` | ANGELEGT → VERSANDT; an unknown id is `404`, another status `409` |
 | `PUT` | `/api/v1/angebote/{id}` | Edit before sending — `gueltig_bis`, `lieferbeginn`, `laufzeit_monate`, `positionen`, `varianten`, `notizen`. **`ANGELEGT` only**: once VERSANDT the customer holds the document |
-| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | ANGELEGT **or** VERSANDT → ANGENOMMEN / ABGELEHNT. Unknown id `404`, already decided `409`; acceptance of an unpriced Angebot (no `bo4e`) `422`. An acceptance enqueues `de.tarif.angebot.angenommen` in its own transaction (`erp_dispatch: queued`); the Angebot names its `rahmenvertrag_id` once `vertragd` has answered the delivery |
+| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | ANGELEGT **or** VERSANDT → ANGENOMMEN / ABGELEHNT. Unknown id `404`, already decided `409`; acceptance of an unpriced Angebot (no `bo4e`) `422`. An acceptance enqueues `de.tarif.angebot.angenommen` for `erp_webhook_url` in its own transaction (`erp_dispatch: queued`); the Angebot names its `rahmenvertrag_id` once `vertragd` has answered the delivery |
 | `POST` | `/api/v1/angebote/expire` | Sweeps ANGELEGT and VERSANDT Angebote past `gueltig_bis` to ABGELAUFEN |
+| | `/api/v1/webhooks/…` · `/api/v1/events` | Webhook endpoints, deliveries and the event feed — see [Webhooks](#webhooks) |
+| `GET` | `/api/v1/openapi.json` | This table as an OpenAPI 3.1 document; committed as `services/productd/openapi.json` |
 | `GET` | `/health/live` · `/health/ready` · `/metrics` | From the `mako_service` runner |
+
+---
+
+## Webhooks
+
+productd mounts the shared [webhook subscriptions](@/docs/architecture/erp-integration.md#webhook-subscriptions):
+every `de.tarif.*` event it commits reaches each endpoint registered through
+`/api/v1/webhooks/endpoints` whose filter matches, and `erp_webhook_url` is
+the endpoint `default`. Managing endpoints and reading `GET /api/v1/events`
+are the operator's (`ADMIN`) alone; productd marks no caller as a
+Vertriebspartner.
+
+The contract request of an accepted Angebot is not one of those deliveries:
+`de.tarif.angebot.angenommen` goes to `erp_webhook_url` alone, because
+`vertragd` answers it with the Rahmenvertrag the Angebot then names, and a
+fan-out carries no answer back.
 
 ---
 
@@ -638,7 +658,7 @@ Content-Type: application/json
 ## MCP tools
 
 `productd` ships an MCP server at `/mcp` (Streamable HTTP) with
-**14 read-only tools** and **3 prompts**.
+**16 read-only tools** and **3 prompts**.
 
 | Tool | Description |
 |---|---|
@@ -655,6 +675,8 @@ Content-Type: application/json
 | `validate_tariff_config` | Validate Tarifpreisblatt JSONB before PUT (same logic as REST) |
 | `explain_invoice_position` | How a `preistyp` maps to a billingd invoice output + formula |
 | `get_comparison_feed` | Retrieve the § 41c comparison portal feed (proxies the REST endpoint) |
+| `list_webhook_endpoints` | The webhook endpoints — the twin of `GET /api/v1/webhooks/endpoints` |
+| `list_webhook_deliveries` | One endpoint's deliveries — the twin of `GET /api/v1/webhooks/endpoints/{id}/deliveries` |
 
 The BO4E `Angebot` comes from `GET /angebote/{id}/comparison`, not from a tool.
 
@@ -688,11 +710,14 @@ url = "postgresql://productd:secret@db:5432/productd"
 issuer   = "https://idp.example/realms/mako"
 audience = "productd"
 
-# de.tarif.* notifications to the ERP (vertragd for an accepted Angebot),
-# persisted in event_outbox with the write they announce and delivered with
-# retry; HMAC-signed when the secret is set.
+# The webhook endpoint `default`: every de.tarif.* event, persisted in
+# event_outbox with the write it announces; also the receiver (vertragd) of an
+# accepted Angebot's contract request. Signed when the secret is set.
 # erp_webhook_url = "https://erp.internal/hooks/tarif"
 # erp_hmac_secret = "env:PRODUCTD_ERP_HMAC"
+
+# [subscriptions]
+# retention_days = 30        # how long events stay replayable and in the feed
 
 # [mcp]
 # api_key = "env:PRODUCTD_MCP_API_KEY"

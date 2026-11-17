@@ -30,10 +30,11 @@ async fn mcp() -> String {
     format!("http://{addr}/mcp")
 }
 
-#[tokio::test]
-async fn the_router_builds_as_the_runner_mounts_it() {
+/// The router `build` returns under a minimal dev-mode configuration, with
+/// every specialist activated and the runner's infra routes merged in.
+pub(super) async fn built_app() -> axum::Router {
     let mcp = mcp().await;
-    let dir = std::env::temp_dir().join(format!("agentd-startup-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("agentd-startup-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).expect("scratch dir");
     let journal = dir.join("journal.redb");
     let cfg = toml::from_str(&format!(
@@ -67,7 +68,12 @@ enable_all = true
     .expect("the configuration parses");
     let built = mako_service::build_for_test::<agentd::Agentd>(cfg).await;
     std::fs::remove_dir_all(&dir).ok();
-    let app = built.expect("the router builds");
+    built.expect("the router builds")
+}
+
+#[tokio::test]
+async fn the_router_builds_as_the_runner_mounts_it() {
+    let app = built_app().await;
 
     // The operator policy and the configuration findings are served
     // read-only, through the same verifier as every other route.

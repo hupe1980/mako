@@ -10,7 +10,7 @@ no grid topology, no EDIFACT and no customer master data.
 |---|---|
 | **Port** | 9280 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `billing_records`, `steuerzeilen`, `unbilled_periods`, `invoice_number_series`, `event_outbox` |
-| **MCP** | 16 tools, 6 prompts at `/mcp` |
+| **MCP** | 18 tools, 6 prompts at `/mcp` |
 | **Emits** | `de.billing.rechnung.erstellt`, `de.billing.xrechnung.b2g.ready`, `de.billing.abrechnungsinformation.monatlich`, `de.vpp.settlement.berechnet` |
 | **Consumes** | `de.vpp.dispatch.confirmed` at `POST /api/v1/webhooks/vpp-dispatch` |
 | **Depends on** | `productd`, `edmd`, `marktd`, `vertragd`, `outputd`, `accountingd` |
@@ -37,12 +37,15 @@ BILLINGD_CONFIG=deploy/demo/billingd.toml cargo run -p billingd -- --check-confi
 | `POST /api/v1/billing/sammelrechnung/{rahmenvertrag_id}` | B2B Sammelrechnung |
 | `POST /api/v1/billing/ggv/{ggv_id}` | § 42b EnWG Gemeinschaftliche Gebäudeversorgung |
 | `POST /api/v1/billing/vpp/{vpp_id}` | § 41e EnWG VPP settlement as a Gutschrift |
+| `/api/v1/webhooks/endpoints/**` · `GET /api/v1/events` | webhook endpoints, deliveries, replay, the event feed |
+| `GET /api/v1/openapi.json` | the OpenAPI document; `openapi.json` here is its committed copy |
 
 ## Configuration
 
 `tenant`; `productd_url`, `edmd_url`, `marktd_url` (required), `vertragd_url`,
 `outputd_url`, `accountingd_url`; `seller_name` with `seller_vat_id` and/or
-`seller_tax_number`; `erp_webhook_url` / `erp_hmac_secret`; `[database]`,
+`seller_tax_number`; `erp_webhook_url` / `erp_hmac_secret` (the webhook endpoint
+`default`); `[subscriptions] retention_days`; `[database]`,
 `[oidc]`. `[gebuehrenbescheid]` is required to bill a public-law Gebühr.
 `[policy]` holds
 [`behg_regime`](https://hupe1980.github.io/mako/docs/services/billingd/#policy-behg-regime)

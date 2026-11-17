@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, useSearch } from "@tanstack/react-router";
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, type RefObject, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Button as AriaButton } from "react-aria-components";
 import { entscheidbar, fokussieren, gefunden } from "../app/aktionen";
 import { disclosed, disclosure } from "../app/disclosure";
@@ -24,9 +24,13 @@ import { Bewertung } from "./Bewertung";
 import { GeparktEntscheiden } from "./Buchungen";
 import { Fragen } from "./Fragen";
 import { Entscheiden } from "./Freigaben";
-import { Lage } from "./Lage";
 import { DisputEntscheiden, GehaltenEntscheiden, PruefpostenEntscheiden } from "./Rechnungen";
-import { Warum } from "./Warum";
+
+// The Lieferant's Lage line loads with its Rolle.
+const Lage = lazy(() => import("./Lage").then((m) => ({ default: m.Lage })));
+
+// „Warum?" asks the assistant only when pressed: its trail loads then.
+const Warum = lazy(() => import("./Warum").then((m) => ({ default: m.Warum })));
 
 /** At most this many rows in the DOM, however many items wait. */
 const SICHTBAR = 100;
@@ -236,7 +240,9 @@ function Zeile({
       </div>
       {warum && anker && (
         <div className="px-5 pb-3">
-          <Warum anker={anker} />
+          <Suspense fallback={<div className="skeleton h-12" />}>
+            <Warum anker={anker} />
+          </Suspense>
         </div>
       )}
       {vorschlag && !offen && (
@@ -281,6 +287,8 @@ function Zeile({
 /** Where a source's row opens: its own view where the Desk has one, else Heute narrowed to it. */
 function zielVon(quelle: QuelleId) {
   if (quelle === "freigaben") return { to: "/freigaben" as const, search: {} };
+  if (quelle === "zahlungen" || quelle === "guthaben")
+    return { to: "/zahlungen" as const, search: {} };
   return { to: "/heute" as const, search: { quelle } };
 }
 
@@ -440,7 +448,11 @@ export function HeuteView() {
 
   return (
     <Page width="reading" title={k.titel}>
-      {rolle === "lieferant" && <Lage />}
+      {rolle === "lieferant" && (
+        <Suspense fallback={null}>
+          <Lage />
+        </Suspense>
+      )}
 
       <Arbeitsvorrat staende={staende} agent={agentFehler} />
       {nur && (

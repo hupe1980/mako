@@ -12,8 +12,8 @@ use tokio_util::sync::CancellationToken;
 /// retry window, so seven days is well past the last moment a genuine duplicate
 /// can arrive, and keeping more would grow the table forever for no benefit.
 ///
-/// This is *not* the § 147 AO record — that is `event_log`, which holds the full
-/// envelope and is retained by the operator.
+/// The events marktd emits are a different table, `event_outbox`, kept for
+/// replay and the feed for `[subscriptions] retention_days`.
 const PROCESSED_EVENTS_TTL: Duration = Duration::from_secs(7 * 24 * 3_600);
 
 /// Interval between sweeps.

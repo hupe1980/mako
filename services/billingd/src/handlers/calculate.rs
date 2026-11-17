@@ -113,6 +113,23 @@ pub struct CalculateRequest {
 /// 5. Dispatch to category-specific pure calculator
 /// 6. Persist `billing_records` (idempotent on same malo+period+product)
 /// 7. Emit `de.billing.rechnung.erstellt` CloudEvent
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/{malo_id}/calculate",
+    tag = "billing",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+    ),
+    request_body(content = serde_json::Value, description = "`CalculateRequest`: the period, the Lieferant and optional inputs that override what billingd reads"),
+    responses(
+        (status = 201, description = "Calculated, persisted and announced", body = serde_json::Value),
+        (status = 400, description = "Malformed period or input", body = crate::openapi::Problem),
+        (status = 403, description = "Cedar `run-billing` refused", body = crate::openapi::Problem),
+        (status = 409, description = "The period already carries an issued document, or the number is in use", body = crate::openapi::Problem),
+        (status = 422, description = "Well-formed, but it cannot be billed as asked — the code names the rule", body = crate::openapi::Problem),
+        (status = 502, description = "An upstream service the calculation reads did not answer", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_calculate(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -436,6 +453,18 @@ pub(crate) async fn persist_risk(
 ///
 /// The analyst work list: REVIEW and HELD records, highest risk first, each
 /// carrying its coded findings.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/review-queue",
+    tag = "risk",
+    params(
+        ReviewQueueQuery,
+    ),
+    responses(
+        (status = 200, description = "Records the risk gate banded REVIEW or HELD, highest score first", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+    )
+)]
 pub async fn get_review_queue(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -463,6 +492,18 @@ pub async fn get_review_queue(
 /// could not bill, with its refusal code and the day the invoice is owed by,
 /// the earliest due first. `open=false` includes the ones an invoice has
 /// since discharged.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/unbilled",
+    tag = "deadlines",
+    params(
+        UnbilledQuery,
+    ),
+    responses(
+        (status = 200, description = "Periods the scheduled run could not bill, the earliest due first", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+    )
+)]
 pub async fn get_unbilled_periods(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -484,7 +525,8 @@ pub async fn get_unbilled_periods(
     ))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct UnbilledQuery {
     /// Only periods no invoice has discharged yet (default `true`).
     pub open: Option<bool>,
@@ -495,6 +537,15 @@ pub struct UnbilledQuery {
 ///
 /// Per Lieferant: invoices owed, issued on time, issued late and overdue under
 /// § 40c Abs. 2 EnWG.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/deadline-summary",
+    tag = "deadlines",
+    responses(
+        (status = 200, description = "Per Lieferant: owed, on time, late and overdue under § 40c Abs. 2 EnWG", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+    )
+)]
 pub async fn get_deadline_summary(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -513,6 +564,20 @@ pub async fn get_deadline_summary(
 /// to the cent, whether the issue-time seal still holds, and the inputs of
 /// each line (quantity and how it was obtained, unit price and its source,
 /// the rule).
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/{id}/nachrechnung",
+    tag = "nachrechnen",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    responses(
+        (status = 200, description = "The invoice recomputed line by line, with the seal check", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+        (status = 422, description = "A Storno- or Korrekturrechnung; recompute its original", body = crate::openapi::Problem),
+    )
+)]
 pub async fn get_nachrechnung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -543,6 +608,17 @@ pub async fn get_nachrechnung(
 /// answer `404 RECORD_NOT_FOUND`, so the answer says nothing about whether a
 /// token ever existed. The token travels in the body, never in a path a
 /// request log or a metrics label could keep.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/nachrechnen",
+    tag = "nachrechnen",
+    request_body(content = VerifyTokenBody, description = "The verify token printed on the invoice"),
+    responses(
+        (status = 200, description = "The masked recomputation the public page shows", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-billing-by-token` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No invoice carries this token, or it was revoked", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_public_nachrechnung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -566,7 +642,7 @@ pub async fn post_public_nachrechnung(
 }
 
 /// The body of [`post_public_nachrechnung`].
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VerifyTokenBody {
     /// The verify token printed on the invoice.
@@ -576,6 +652,19 @@ pub struct VerifyTokenBody {
 /// `POST /api/v1/billing/{id}/verify-token/revoke`
 ///
 /// Revoke the invoice's verify token: its public page answers 404 from now on.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/{id}/verify-token/revoke",
+    tag = "nachrechnen",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    responses(
+        (status = 200, description = "Revoked; the public page answers 404 from now on", body = serde_json::Value),
+        (status = 403, description = "Cedar `correct-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_revoke_verify_token(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -596,7 +685,8 @@ pub async fn post_revoke_verify_token(
     ))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ReviewQueueQuery {
     pub band: Option<String>,
     pub limit: Option<i64>,
@@ -607,6 +697,20 @@ pub struct ReviewQueueQuery {
 /// Analyst release of a HELD record: stamps who released it and dispatches
 /// the CloudEvent that the risk gate withheld. 409 when the record is not
 /// currently held.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/{id}/release",
+    tag = "risk",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    responses(
+        (status = 200, description = "Released and dispatched", body = serde_json::Value),
+        (status = 403, description = "Cedar `release-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+        (status = 409, description = "The record is not held", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_release(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -653,6 +757,20 @@ pub async fn post_release(
 /// banded it, so this sends nothing — a finding that holds is answered with a
 /// correction (`POST …/correction`), not here. 409 when the record is not an
 /// unreviewed REVIEW record.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/{id}/reviewed",
+    tag = "risk",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    responses(
+        (status = 200, description = "The review is recorded; nothing is sent", body = serde_json::Value),
+        (status = 403, description = "Cedar `review-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+        (status = 409, description = "The record is not banded REVIEW, or was reviewed already", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_reviewed(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -723,6 +841,22 @@ pub async fn compute_preview(
 }
 
 /// `POST /api/v1/billing/{malo_id}/preview` — dry-run, no persist, no CloudEvent.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/{malo_id}/preview",
+    tag = "billing",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+    ),
+    request_body(content = serde_json::Value, description = "`CalculateRequest`, as for `/calculate`"),
+    responses(
+        (status = 200, description = "The positions, totals and warnings a run would produce; nothing persisted", body = serde_json::Value),
+        (status = 400, description = "Malformed period or input", body = crate::openapi::Problem),
+        (status = 403, description = "Cedar `preview-billing` refused", body = crate::openapi::Problem),
+        (status = 422, description = "Well-formed, but it cannot be billed as asked — the code names the rule", body = crate::openapi::Problem),
+        (status = 502, description = "An upstream service the calculation reads did not answer", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_preview(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,

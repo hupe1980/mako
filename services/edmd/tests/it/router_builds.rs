@@ -14,7 +14,7 @@ use tower::ServiceExt as _;
 
 /// The router over a throwaway PostgreSQL, with a pool on the same database
 /// and the container that must outlive both. `None` without Docker.
-async fn app() -> Option<(axum::Router, sqlx::PgPool, ContainerAsync<Postgres>)> {
+pub(crate) async fn app() -> Option<(axum::Router, sqlx::PgPool, ContainerAsync<Postgres>)> {
     let (cfg, pool, pg) = database().await?;
     let app = mako_service::build_for_test_on::<edmd::Edmd>(edmd_config(cfg), pool.clone())
         .await
@@ -89,10 +89,9 @@ async fn edmd_restarts_against_its_own_database() {
 const MELO: &str = "DE0001234567890123456789012345678";
 
 /// A `marktd` holding one Lokationszuordnung — [`MELO`] under the MaLo
-/// `51238696012` — and the address of that MaLo; it accepts edmd's
-/// subscription. Returns its base URL.
+/// `51238696012` — and the address of that MaLo. Returns its base URL.
 async fn fake_marktd() -> String {
-    use axum::routing::{get, put};
+    use axum::routing::get;
     let edge = || {
         serde_json::json!([{
             "id": "00000000-0000-4000-8000-000000000001",
@@ -147,10 +146,6 @@ async fn fake_marktd() -> String {
                     }
                 },
             ),
-        )
-        .route(
-            "/api/v1/subscriptions/{id}",
-            put(|| async { axum::http::StatusCode::OK }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -208,7 +203,7 @@ fn mscons_read(from: &str, to: &str, kwh: &str) -> serde_json::Value {
     })
 }
 
-async fn call(
+pub(crate) async fn call(
     app: axum::Router,
     request: axum::http::Request<axum::body::Body>,
 ) -> (axum::http::StatusCode, serde_json::Value) {
@@ -1008,4 +1003,120 @@ async fn a_reading_order_names_the_role_that_ordered_it() {
     let (status, body) = call(app, as_role(55_008, "51238696781", "LF", false)).await;
     assert!(status.is_success(), "{status}: {body}");
     assert_eq!(rolle("51238696781").await.as_deref(), Some("LF"));
+}
+
+/// A receiver for edmd's outbound webhooks: every request's headers and body,
+/// in arrival order. Returns them and the URL to configure.
+async fn erp_receiver() -> (
+    std::sync::Arc<std::sync::Mutex<Vec<(axum::http::HeaderMap, Vec<u8>)>>>,
+    String,
+) {
+    let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = std::sync::Arc::clone(&got);
+    let app = axum::Router::new().route(
+        "/hook",
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let sink = std::sync::Arc::clone(&sink);
+                async move {
+                    sink.lock()
+                        .expect("receiver lock")
+                        .push((headers, body.to_vec()));
+                    axum::http::StatusCode::OK
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind the receiver");
+    let addr = listener.local_addr().expect("address");
+    tokio::spawn(async move {
+        let _served = axum::serve(listener, app).await;
+    });
+    (got, format!("http://{addr}/hook"))
+}
+
+/// An event edmd emits reaches the endpoint `webhook.erp_webhook_url` names —
+/// the subscription module's `default` — signed with the configured secret.
+/// A stored direct push is what tells `billingd` to recompute, so one that is
+/// stored and never delivered is consumption that is never billed.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_edmd_event_reaches_a_subscribed_endpoint() {
+    const ERP_SECRET: &str = "edmd-router-test-erp-secret";
+    let Some((mut cfg, pool, _pg)) = database().await else {
+        return;
+    };
+    let (got, url) = erp_receiver().await;
+    let webhook = cfg["webhook"].as_table_mut().expect("a [webhook] table");
+    webhook.insert("erp_webhook_url".to_owned(), url.into());
+    webhook.insert("erp_webhook_secret".to_owned(), ERP_SECRET.into());
+    let tenant = cfg["identity"]["tenant"]
+        .as_str()
+        .expect("an [identity] tenant")
+        .to_owned();
+    let app = mako_service::build_for_test_on::<edmd::Edmd>(edmd_config(cfg), pool.clone())
+        .await
+        .expect("the router builds");
+
+    let (status, body) = call(
+        app.clone(),
+        json_request(
+            "POST",
+            "/api/v1/meter-reads/rlm/51238696012",
+            &serde_json::json!({
+                "intervals": [
+                    { "from": "2026-06-01T00:00:00Z", "to": "2026-06-01T00:15:00Z",
+                      "value": "1.0", "quality": "MEASURED" }
+                ],
+                "source": "DIRECT_PUSH",
+                "obis_code": "1-0:1.8.0"
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "the push is stored: {status} {body}");
+
+    // The endpoint `default` is listed beside any registered one.
+    let (status, endpoints) = call(
+        app,
+        axum::http::Request::get("/api/v1/webhooks/endpoints")
+            .body(axum::body::Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{endpoints}");
+    assert_eq!(endpoints["items"][0]["name"], "default", "{endpoints}");
+
+    // `build_for_test_on` cancels the daemon's shutdown token once the router
+    // is built, so the worker `build` spawned is gone: a worker on the same
+    // tables drains, and delivers to the `default` endpoint `build` wrote.
+    mako_service::subscriptions::Subscriptions::new(
+        pool,
+        <edmd::Edmd as mako_service::Daemon>::NAME,
+        tenant,
+        mako_service::subscriptions::SubscriptionsConfig::default(),
+    )
+    .drain()
+    .await;
+    let delivered = got
+        .lock()
+        .expect("receiver lock")
+        .iter()
+        .find_map(|(h, b)| {
+            let event: serde_json::Value = serde_json::from_slice(b).ok()?;
+            (event["type"] == mako_events::messwert::READING_DIRECT_STORED)
+                .then(|| (h.clone(), b.clone(), event))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no {} reached the endpoint",
+                mako_events::messwert::READING_DIRECT_STORED
+            )
+        });
+    let (headers, bytes, event) = delivered;
+    assert_eq!(event["subject"], "51238696012", "{event}");
+    mako_service::webhook::verify_request(Some(ERP_SECRET.as_bytes()), &headers, &bytes)
+        .expect("the delivery carries a valid Standard Webhooks signature");
 }

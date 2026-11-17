@@ -123,6 +123,9 @@ pub struct MakodMcpState {
     /// makod's report and the daemons `[[einrichtung.dienst]]` names — what
     /// `einrichtung_checkliste` asks, as `GET /admin/einrichtung/deployment`.
     pub einrichtung: Arc<crate::api::einrichtung_api::EinrichtungState>,
+    /// `[format_impact]` and the operator's own MP-IDs — what
+    /// `get_format_impact` reads; `None` unconfigured.
+    pub format_impact: Option<Arc<crate::format_impact::FormatImpactState>>,
 }
 
 // ── Tool parameter types ───────────────────────────────────────────────────────
@@ -207,6 +210,16 @@ pub struct GetMaloParams {
     /// 11-digit Marktlokations-ID.
     #[schemars(description = "11-digit Marktlokations-ID, e.g. \"10001234558\"")]
     pub malo_id: String,
+}
+
+/// Parameters for `get_format_impact`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetFormatImpactParams {
+    /// The candidate's directory name.
+    #[schemars(
+        description = "The candidate Formatversion's directory name, fv<yyyymmdd> or fv<yyyymmdd>_gas (e.g. fv20270401)"
+    )]
+    pub fv: String,
 }
 
 /// Parameters for `get_partner`.
@@ -580,6 +593,24 @@ impl MakodMcpHandler {
         } else {
             Err(McpError::invalid_request(
                 "Cedar policy denied AdminEinrichtung".to_owned(),
+                None,
+            ))
+        }
+    }
+
+    /// Gate a tool on `ReadFormatImpact` — the action
+    /// `GET /api/v1/format-candidates/{fv}/impact` enforces.
+    fn require_format_impact(&self, parts: &axum::http::request::Parts) -> Result<(), McpError> {
+        let identity = caller(parts)?;
+        if self
+            .state
+            .cedar
+            .authorize_format_impact(&identity, &self.state.tenant)
+        {
+            Ok(())
+        } else {
+            Err(McpError::invalid_request(
+                "Cedar policy denied ReadFormatImpact".to_owned(),
                 None,
             ))
         }
@@ -1049,6 +1080,48 @@ impl MakodMcpHandler {
         ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
             .map(|block| CallToolResult::success(vec![block]))
             .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// Which of the operator's own messages a candidate Formatversion would
+    /// refuse — the read `GET /api/v1/format-candidates/{fv}/impact` serves.
+    #[tool(
+        description = "Which of the operator's own exchanged messages a candidate Formatversion (a Konsultationsfassung imported with `cargo xtask import-profiles --candidate`) would refuse that the binding release accepts: per message the PID, direction, counterparty and the candidate rule's text and location, read from the interchange archive under [format_impact] over its window. Only refusals the candidate adds are listed. Read-only; refused with format_impact_not_configured when [format_impact] is absent.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    #[instrument(skip(self, parts), fields(fv = %p.fv))]
+    async fn get_format_impact(
+        &self,
+        Parameters(p): Parameters<GetFormatImpactParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_format_impact(&parts)?;
+        let Some(state) = self.state.format_impact.clone() else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "format_impact_not_configured: no [format_impact] is configured — the report \
+                 reads the candidates tree and the interchange archive it names",
+            )]));
+        };
+        let today = mako_fristen::heute();
+        let fv = p.fv;
+        let result = tokio::task::spawn_blocking(move || {
+            crate::format_impact::get_format_impact(&state, &fv, today)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        match result {
+            Ok(impact) => ContentBlock::json(&impact)
+                .map(|block| CallToolResult::success(vec![block]))
+                .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => {
+                let refusal = mako_service::ApiError::from(e);
+                let code = refusal.code().unwrap_or("format_impact_refused").to_owned();
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "{code}: {refusal}"
+                ))]))
+            }
+        }
     }
 
     /// The deployment's readiness checklist — the value `GET
@@ -2498,6 +2571,7 @@ mod tool_inventory_tests {
                 || body.contains("require_malo_read")
                 || body.contains("require_partner_read")
                 || body.contains("require_einrichtung")
+                || body.contains("require_format_impact")
                 || body.contains("require_any_process_read");
             if !gated {
                 ungated.push(name);
@@ -2539,6 +2613,7 @@ mod tool_inventory_tests {
         let mut expected = vec![
             "einrichtung_checkliste",
             "einrichtung_vorschlag",
+            "get_format_impact",
             "get_format_version_coverage",
             "get_health",
             "get_malo",

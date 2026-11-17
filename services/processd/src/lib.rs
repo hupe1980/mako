@@ -105,11 +105,14 @@ pub mod entscheidungsprobe;
 pub mod freigabe;
 pub use daemon::Processd;
 pub mod handler;
+/// `Idempotency-Key` on the decision routes.
+mod idempotency;
 pub mod klaerfall;
 pub mod mcp_server;
 pub mod metrics;
 /// The process read model — every `de.mako.*` event projected per process.
 pub mod obs;
+pub mod openapi;
 pub mod pg;
 pub mod server;
 /// One parser for every date shape a process payload carries.

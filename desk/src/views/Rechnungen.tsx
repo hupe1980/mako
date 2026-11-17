@@ -19,12 +19,13 @@ import {
 } from "../app/aktionen";
 import { DIENST, nichtErreichbar } from "../app/dienste";
 import { FaktFelder } from "../app/FaktFelder";
-import { FREIGEBEN, UEBERNEHMEN, UNDO } from "../app/keys";
+import { FREIGEBEN, UEBERNEHMEN } from "../app/keys";
 import type { Vorschlag } from "../data/agent";
 import type { Pruefposten } from "../data/gen/billingd";
 import type { Disput, GehalteneRechnung } from "../data/gen/invoicd";
 import { Abgelehnt, offeneSchritte, SchonErledigt } from "../data/rechnung";
 import { useVerweigert, Verweigert } from "../data/verweigert";
+import { Gehalten } from "../design/Gehalten";
 import { Icon } from "../design/Icon";
 import { Notice, Panel } from "../design/Panel";
 import { formatCount } from "../format/count";
@@ -51,17 +52,6 @@ function Fehler({ error, dienst }: { error: unknown; dienst: "invoicd" | "billin
     <Notice tone="refusal" title={t.rechnungen.nichtAngenommen(DIENST[dienst])}>
       {error instanceof Abgelehnt ? error.message : nichtErreichbar(dienst)}
     </Notice>
-  );
-}
-
-/** A held decision, until it is sent or taken back. */
-export function Gehalten({ text }: { text: string }) {
-  const t = useT();
-  return (
-    <p role="status" className="m-0 flex items-center gap-2 text-body text-text">
-      <Icon name="check" size={14} className="text-accent" />
-      {t.entscheidung.gehalten(text, UNDO.keys)}
-    </p>
   );
 }
 

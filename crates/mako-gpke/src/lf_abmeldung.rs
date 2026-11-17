@@ -490,6 +490,8 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
     type Command = LfAbmeldungCommand;
 
     const DEADLINE_LABELS: &'static [&'static str] = &[LF_ABMELDUNG_ANTWORT_WINDOW_LABEL];
+    /// The answer to the Abmeldung is owed by its Antwortfrist.
+    const FRIST_LABELS: &'static [&'static str] = &[LF_ABMELDUNG_ANTWORT_WINDOW_LABEL];
 
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         window_open(deadline.label(), state).then(|| LfAbmeldungCommand::TimeoutExpired {

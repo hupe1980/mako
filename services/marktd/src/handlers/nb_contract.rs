@@ -125,12 +125,14 @@ pub struct NbContractResponse {
     pub tenant: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListNbContractsQuery {
     pub nb_mp_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ByMaloQuery {
     /// Date the contract must be in force on. Defaults to today in Europe/Berlin.
     pub on: Option<String>,
@@ -213,6 +215,19 @@ fn parse_req(
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `PUT /api/v1/nb-contracts/:id`
+#[utoipa::path(
+    put,
+    path = "/api/v1/nb-contracts/{id}",
+    tag = "nb-contract",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    request_body = NbContractUpsertRequest,
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_nb_contract(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -263,7 +278,7 @@ pub async fn put_nb_contract(
                 ..Default::default()
             });
             let ctx = format!("nb_contract: durable enqueue for contract {}", evt.subject);
-            if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+            if let Err(e) = crate::outbox::enqueue(&mut tx, &evt).await {
                 return ApiError::internal(anyhow::Error::from(e).context(ctx)).into_response();
             }
             if let Err(e) = tx.commit().await {
@@ -276,6 +291,18 @@ pub async fn put_nb_contract(
 }
 
 /// `GET /api/v1/nb-contracts/:id`
+#[utoipa::path(
+    get,
+    path = "/api/v1/nb-contracts/{id}",
+    tag = "nb-contract",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_nb_contract(
     Extension(repo): Extension<NbContractRepoExt>,
     claims: Claims,
@@ -300,6 +327,17 @@ pub async fn get_nb_contract(
 }
 
 /// `GET /api/v1/nb-contracts?nb_mp_id=...`
+#[utoipa::path(
+    get,
+    path = "/api/v1/nb-contracts",
+    tag = "nb-contract",
+    params(ListNbContractsQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_nb_contracts(
     Extension(repo): Extension<NbContractRepoExt>,
     claims: Claims,

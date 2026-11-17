@@ -163,14 +163,14 @@ permit(
 
 // ── Operator-level capabilities — ADMIN role ─────────────────────────────────
 //
-// manage-subscription — a webhook subscription receives *every* event this hub
+// manage-subscription — a webhook endpoint receives *every* event this hub
 //   emits that matches its filter, including MaLo/MeLo master data and
 //   VersorgungsStatus transitions. Registering one is an outbound data-export
-//   decision, and `POST /subscriptions/{id}/test` returns the target's HTTP
-//   status, which makes an unrestricted version of it a network probe. Both are
-//   operator capabilities, not market-role ones.
-// manage-fanout — the dead-letter queue and the CloudEvent replay log. § 147 AO
-//   / GoBD evidence; requeueing a dead letter re-emits a market event.
+//   decision, and a test delivery returns the target's HTTP status, which makes
+//   an unrestricted version of it a network probe. Replaying a delivery
+//   re-emits a market event. Operator capabilities, not market-role ones.
+// read-events — `GET /api/v1/events`, the outbox as a feed: every event this
+//   hub emitted within the retention window.
 // import-referenzreihen — a published figure (the KAV Grenzpreis basis, an EEG
 //   Marktwert, the day-ahead price) every billing reads; a wrong one misprices
 //   every unit of its period, and the operator loads it under the publisher's
@@ -180,7 +180,7 @@ permit(
     principal,
     action in [
         Action::"manage-subscription",
-        Action::"manage-fanout",
+        Action::"read-events",
         Action::"import-referenzreihen"
     ],
     resource

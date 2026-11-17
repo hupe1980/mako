@@ -1,18 +1,27 @@
 //! Guard: the „Full `processd.toml` reference" the operator guide prints is a
-//! config `processd` accepts, and it keeps the subscription default it states.
+//! config `processd` accepts, and the demo's marktd delivers processd every
+//! event type its modules read.
 //!
-//! An operator copies the reference block whole. A line in it that narrows
-//! `[subscription] event_types` to one type registers `processd` with `marktd`
-//! for that type alone, so `de.markt.versorgung.gap-detected` is never
-//! delivered and the §§ 36/38 EnWG Ersatz-/Grundversorgung module the same
-//! page documents never runs, and a `de.mako.process.completed` never closes a
-//! row of the process read model — silently, because the service is running
-//! exactly as configured.
+//! marktd delivers to processd through processd's endpoint in its
+//! `[[subscriptions.endpoints]]`. An `event_types` there that leaves out a type
+//! processd reads means `de.markt.versorgung.gap-detected` is never delivered
+//! and the §§ 36/38 EnWG Ersatz-/Grundversorgung module never runs, or a
+//! `de.mako.process.completed` never closes a row of the process read model —
+//! silently, because both services run exactly as configured.
 
 use std::path::Path;
 
 const GUIDE: &str = "site/content/docs/services/processd.md";
 const HEADING: &str = "### Full `processd.toml` reference";
+const MARKTD_DEMO: &str = "deploy/demo/marktd.toml";
+
+fn repo(rel: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} is not readable: {e}", path.display()))
+}
 
 /// The first `toml` block after `heading` in `md`.
 fn reference_block(md: &str, heading: &str) -> Option<String> {
@@ -23,50 +32,62 @@ fn reference_block(md: &str, heading: &str) -> Option<String> {
     Some(body[..close].to_owned())
 }
 
-/// What is wrong with a reference block, if anything.
-fn reference_defects(block: &str) -> Vec<String> {
-    let cfg = match toml::from_str::<processd::config::Config>(block) {
-        Ok(cfg) => cfg,
-        Err(e) => return vec![format!("processd refuses the block: {e}")],
+/// The types processd reads that marktd's config, `toml`, does not deliver to
+/// its endpoint named `processd`.
+fn undelivered(toml: &str) -> Vec<String> {
+    let cfg: toml::Value = toml::from_str(toml).expect("marktd's config parses");
+    let endpoint = cfg
+        .get("subscriptions")
+        .and_then(|s| s.get("endpoints"))
+        .and_then(toml::Value::as_array)
+        .and_then(|es| {
+            es.iter()
+                .find(|e| e.get("name").and_then(toml::Value::as_str) == Some("processd"))
+        });
+    let Some(endpoint) = endpoint else {
+        return vec!["marktd names no endpoint `processd`".to_owned()];
     };
-    let subscribed = &cfg.subscription.event_types;
-    processd::config::default_event_types()
+    let types: Vec<&str> = endpoint
+        .get("event_types")
+        .and_then(toml::Value::as_array)
+        .map(|ts| ts.iter().filter_map(toml::Value::as_str).collect())
+        .unwrap_or_default();
+    if types.is_empty() {
+        return Vec::new();
+    }
+    processd::config::read_event_types()
         .into_iter()
-        .filter(|t| !subscribed.contains(t))
-        .map(|t| format!("`[subscription] event_types` leaves out {t}"))
+        .filter(|t| !types.iter().any(|p| mako_events::matches(p, t)))
+        .map(|t| format!("processd's endpoint leaves out {t}"))
         .collect()
 }
 
 #[test]
-fn the_published_reference_config_parses_and_subscribes_to_every_default_type() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(GUIDE);
-    let md = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{} is not readable: {e}", path.display()));
+fn the_published_reference_config_parses() {
+    let md = repo(GUIDE);
     let block = reference_block(&md, HEADING)
         .unwrap_or_else(|| panic!("{GUIDE} has no toml block under „{HEADING}“"));
-    let defects = reference_defects(&block);
-    assert!(
-        defects.is_empty(),
-        "{GUIDE}, „{HEADING}“:\n{}",
-        defects.join("\n")
-    );
+    if let Err(e) = toml::from_str::<processd::config::Config>(&block) {
+        panic!("{GUIDE}, „{HEADING}“: processd refuses the block: {e}");
+    }
 }
 
 #[test]
-fn a_reference_that_narrows_the_subscription_is_refused() {
-    let planted = "[http]\naddr = \"0.0.0.0:8580\"\n\
-                   [database]\nurl = \"env:DATABASE_URL\"\n\
-                   [identity]\nown_mp_id = \"9900357000004\"\nverbundene_lieferanten = []\n\
-                   [makod]\nurl = \"http://makod:8080\"\napi_key = \"k\"\n\
-                   [marktd]\nurl = \"http://marktd:8180\"\napi_key = \"k\"\n\
-                   [subscription]\nevent_types = [\"de.mako.process.initiated\"]\n";
-    let defects = reference_defects(planted);
+fn the_demo_marktd_delivers_every_type_processd_reads() {
+    let missing = undelivered(&repo(MARKTD_DEMO));
+    assert!(missing.is_empty(), "{MARKTD_DEMO}: {missing:#?}");
+}
+
+#[test]
+fn an_endpoint_that_narrows_the_types_is_refused() {
+    let planted = "[[subscriptions.endpoints]]\nname = \"processd\"\n\
+                   url = \"http://processd:8580/webhook\"\n\
+                   event_types = [\"de.mako.process.initiated\"]\n";
+    let missing = undelivered(planted);
     assert!(
-        defects
+        missing
             .iter()
             .any(|d| d.contains(mako_events::markt::VERSORGUNG_GAP_DETECTED)),
-        "{defects:?}"
+        "{missing:?}"
     );
 }

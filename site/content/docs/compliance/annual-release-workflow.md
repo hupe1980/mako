@@ -54,6 +54,73 @@ against its manifest without the network.
 
 ---
 
+## Before the documents bind — the consultation as a candidate
+
+A consultation publishes the next release's documents as a
+**Konsultationsfassung** months before they bind. It is imported as a
+**candidate**, never as a profile: everything under
+`crates/edi-energy/profiles/` is embedded by `build.rs` as a selectable
+Release of the published crate, and a Konsultationsfassung is never binding.
+Candidates live in `candidates/` at the workspace root and are read at runtime
+only.
+
+1. Name it in `candidates/sources.json` — the same fields as a profile entry,
+   plus `status` and `against`:
+
+   ```json
+   {
+     "candidates": {
+       "utilmd/fv20270401": {
+         "status": "Konsultationsfassung",
+         "against": "fv20261001",
+         "release": "S2.3",
+         "valid_from": "2027-04-01",
+         "ahb_version": "2.3",
+         "mig": "<the consultation MIG PDF in the mirror>",
+         "ahb": "<the consultation AHB PDF in the mirror>"
+       }
+     }
+   }
+   ```
+
+2. Import it with the binding importer:
+
+   ```bash
+   cargo xtask import-profiles --candidate utilmd/fv20270401
+   ```
+
+   This writes `candidates/utilmd/fv20270401/{mig,ahb,candidate}.json`.
+   `candidate.json` records the SHA-256 of each consultation PDF and the
+   Prüfidentifikatoren that changed, appeared and went away against `against`
+   — the list `cargo xtask profile-diff utilmd fv20261001 fv20270401
+   --candidate --json` prints. A column counts as changed when a status or an
+   operand differs, or when it cites a Bedingung or Paket whose text differs.
+
+3. `cargo xtask validate-profiles` holds the line: it refuses a
+   `candidate.json` under `profiles/`, a binding entry carrying `status` or
+   `against`, a candidate whose `<type>/<fv>` is also binding, and one
+   without its status or a SHA-256 per PDF.
+
+4. Read which of the operator's own messages the candidate would refuse. makod
+   keeps no full copy of an exchanged interchange, so the report reads the
+   operator's interchange archive — one interchange per file, named per
+   Allgemeine Festlegungen 6.1d Kap. 2.12
+   (`<MsgType>_<Sender>_<Receiver>_<YYMMDD>_<HHMM>_<Ref>.txt`) — over the last
+   `window_days` (default 90). Each message of a changed PID is validated
+   under its binding profile and under the candidate, and only a refusal the
+   candidate adds is listed: PID, direction, counterparty, date, file, the
+   rule with the candidate AHB's status and Bedingung text, the segment and
+   its position, and for an outbound message the builder in mako that must
+   change. Compressed or unnamed files, messages without a binding profile
+   and PIDs the candidate does not change are counted, not listed. makod's
+   `format_impact` module computes the report, as JSON or as a `;`-separated
+   CSV for the IT provider or the counterparty.
+
+When the binding documents are published, the release runs through Step 1
+onwards like any other, and the candidate directory is deleted.
+
+---
+
 ## Step 1 — Name the profile
 
 Add one entry per moving message type (Strom and Gas are separate entries for

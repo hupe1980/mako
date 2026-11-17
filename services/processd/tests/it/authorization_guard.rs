@@ -97,10 +97,14 @@ fn the_policy_grants_no_action_the_code_never_checks() {
     // (`mako_service::mcp_auth::McpAuth::authenticate`), one crate over;
     // `read-policy` and `read-config` are checked by
     // `mako_service::einrichtung::router`.
+    // `manage-subscription` and `read-events` are checked by the mounted
+    // `mako_service::subscriptions` routes.
     let enforced_elsewhere: BTreeSet<String> = [
         "use-mcp".to_owned(),
         "read-policy".to_owned(),
         "read-config".to_owned(),
+        mako_service::subscriptions::MANAGE.to_owned(),
+        mako_service::subscriptions::READ_EVENTS.to_owned(),
     ]
     .into();
     let dead: Vec<_> = permitted
@@ -120,13 +124,13 @@ fn the_policy_grants_no_action_the_code_never_checks() {
 #[test]
 fn every_rest_handler_authenticates_and_authorizes() {
     let server = src("server.rs");
+    let openapi = src("openapi.rs");
 
     // The handlers reachable from the router, excluding the webhook (which is
     // authenticated by the marktd HMAC, not by a bearer) and the MCP surface
     // (gated by the shared middleware).
-    // A route mounts its handler as a call argument — `post(rest::start_supply)`
-    // — which a `pub use rest::{…}` re-export of a request type is not.
-    let routed: Vec<&str> = server
+    // A route mounts its handler as a macro argument — `routes!(rest::start_supply)`.
+    let routed: Vec<&str> = openapi
         .lines()
         .filter_map(|l| l.split_once("(rest::"))
         .map(|(_, rest)| rest.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_'))
@@ -191,11 +195,19 @@ fn every_read_model_route_authenticates_and_authorizes() {
     let rest = src("obs/rest.rs");
     let router = &rest[rest.find("pub fn router(").expect("obs router")..];
     let router = &router[..router.find("\n}\n").expect("router body")];
-    let routed: Vec<&str> = router
+    let mut routed: Vec<&str> = router
         .split("get(")
         .skip(1)
         .filter_map(|s| s.split(')').next())
         .collect();
+    // The `/api/v1` ones mount with their document entries.
+    let openapi = src("openapi.rs");
+    routed.extend(
+        openapi
+            .split("routes!(crate::obs::rest::")
+            .skip(1)
+            .filter_map(|s| s.split(')').next()),
+    );
     assert!(routed.len() >= 6, "the route parser found only {routed:?}");
 
     let mut offenders = Vec::new();

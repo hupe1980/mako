@@ -22,7 +22,8 @@ use super::*;
 /// `startuhrzeit`/`enduhrzeit` in `HH:MM:SS+00:00` format.
 ///
 /// Source: BO4E-Standard; MSCONS AHB Gas/Strom.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct LastgangParams {
     /// RFC 3339 start (inclusive). Defaults to Unix epoch.
     pub(crate) from: Option<String>,
@@ -39,6 +40,19 @@ pub(crate) struct LastgangParams {
     as_of: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/lastgang/{malo_id}",
+    tag = "lastgang",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), LastgangParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_lastgang(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -146,7 +160,8 @@ pub(crate) async fn get_lastgang(
 }
 
 /// Query parameters for [`get_energy_series`].
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct EnergyParams {
     /// RFC 3339 start (inclusive). Defaults to the last 31 days.
     from: Option<String>,
@@ -191,6 +206,20 @@ pub(crate) struct EnergyParams {
 /// `FAULTY` and were dropped, which is exactly the § 40a Abs. 2 EnWG gate `einsd`
 /// applies before auto-deriving the § 51 EEG reduction. `None` means the point
 /// reports no register in that direction — a different fact from 0 %.
+#[utoipa::path(
+    get,
+    path = "/api/v1/energy/{malo_id}",
+    tag = "lastgang",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), EnergyParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_energy_series(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -633,6 +662,21 @@ pub(crate) struct SmgwTyp2Push {
 /// files what it decoded, and it is deliberately separate from the submetering
 /// push (`POST /api/v1/meter-reads/iot/{malo_id}`), which writes the
 /// **authoritative** store. A Typ-2 value must never reach one.
+#[utoipa::path(
+    post,
+    path = "/api/v1/esa/typ2/{malo_id}",
+    tag = "esa",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `SmgwTyp2Push`"),
+    responses(
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn post_esa_typ2(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -757,6 +801,18 @@ pub(crate) async fn post_esa_typ2(
 /// non-authoritative (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 Kap. 4) and have no
 /// bearing on billing — this endpoint exists so the ESA can retrieve what it was
 /// delivered, kept structurally apart from every billing/aggregation endpoint.
+#[utoipa::path(
+    get,
+    path = "/api/v1/esa/typ2/{malo_id}",
+    tag = "esa",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), LastgangParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_esa_typ2(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -799,6 +855,19 @@ pub(crate) async fn get_esa_typ2(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/zeitreihe/{malo_id}",
+    tag = "lastgang",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), LastgangParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_zeitreihe(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -913,7 +982,8 @@ pub(crate) async fn get_zeitreihe(
 // ── Resampled Lastgang ───────────────────────────────────────────────────
 
 /// Query parameters for resampled Lastgang.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct ResampledParams {
     from: Option<String>,
     to: Option<String>,
@@ -940,6 +1010,20 @@ pub(crate) struct ResampledParams {
 /// - `peak_kw` — the highest average demand of one source interval in the
 ///   bucket, on a grid of an hour or finer
 /// - `quality` — the worst quality of the bucket's slots
+#[utoipa::path(
+    get,
+    path = "/api/v1/lastgang/{malo_id}/resampled",
+    tag = "lastgang",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), ResampledParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_lastgang_resampled(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1077,6 +1161,19 @@ pub(crate) fn resampled_buckets(
 /// - Annual Jahresabrechnung summaries
 ///
 /// Each month bucket includes: `total_kwh`, `peak_kw`, `coverage_pct`, `quality`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/summenzeitreihe/{malo_id}",
+    tag = "lastgang",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), SimpleTimeParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_summenzeitreihe(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

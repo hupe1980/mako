@@ -26,6 +26,10 @@ mako-events = { workspace = true }
 # regulatory window it guards resolve through the same holiday table.
 mako-service = { workspace = true, features = ["otel", "oidc", "cedar", "metrics"] }
 axum         = { version = "0.8" }
+# The OpenAPI document of agentd's own `/api/v1` routes, committed as
+# `openapi.json`; `utoipa-axum` mounts a route and its entry in one call.
+utoipa       = { workspace = true }
+utoipa-axum  = { workspace = true }
 tokio        = { version = "1", features = ["full"] }
 serde        = { workspace = true, features = ["derive"] }
 serde_json   = { workspace = true }

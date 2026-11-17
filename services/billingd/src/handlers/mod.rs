@@ -379,6 +379,10 @@ pub(crate) fn parse_period(from: &str, to: &str) -> BillingResult<(time::Date, t
 /// Both halves happen inside the caller's transaction, so the record and the
 /// event it announces commit together or not at all.
 ///
+/// The event is enqueued whether or not an ERP is configured: the outbox is
+/// what every webhook endpoint and the `GET /api/v1/events` feed read, not a
+/// queue for one URL.
+///
 /// **Issuance does not depend on having an ERP.** Whether an invoice has been
 /// issued is a property of the document; whether an ERP hears about it is a
 /// property of the deployment. Writing the stamp only when `erp_webhook_url` is
@@ -397,9 +401,7 @@ pub(crate) async fn issue_record(
     record_id: Uuid,
     ce: &mako_service::CloudEvent,
 ) -> BillingResult<()> {
-    if cfg.erp_webhook_url.is_some() {
-        mako_service::outbox::enqueue(&mut *tx, ce).await?;
-    }
+    mako_service::outbox::enqueue(&mut *tx, ce).await?;
     mark_dispatched_tx(&mut *tx, record_id)
         .await
         .map_err(BillingError::Internal)?;
@@ -463,7 +465,8 @@ pub(crate) async fn next_rechnungsnummer(
 /// transactional outbox **inside the same transaction as the representing
 /// business write** (`insert_billing_record` / `insert_correction_record` /
 /// `insert_sammelrechnung_record`), so the event and the row commit atomically;
-/// the `OutboxWorker` then delivers it (signed, retried, dead-lettered). The CE
+/// the `OutboxWorker` then delivers it (signed, retried, dead-lettered).
+/// `schlussrechnung` is `true` for a Schlussrechnung's own event. The CE
 /// `id` is a fresh UUID — enqueue is idempotent on it, so a retried request
 /// cannot double-enqueue within its transaction.
 pub(crate) fn rechnung_erstellt_ce(
@@ -482,10 +485,50 @@ pub(crate) fn rechnung_erstellt_ce(
             "malo_id": malo_id,
             "lf_mp_id": lf_mp_id,
             "is_correction": is_correction,
+            // A Schlussrechnung (§ 40c Abs. 2 Satz 1 EnWG) owes a Guthaben back
+            // within two weeks (Abs. 3); accountingd raises its payout item from
+            // this flag. Read off the issued document, so the two cannot
+            // disagree; a Storno of one is not one.
+            "schlussrechnung": !is_correction
+                && rechnung.get("rechnungstyp").and_then(serde_json::Value::as_str)
+                    == Some("ABSCHLUSSRECHNUNG"),
             "rechnung": rechnung
         }),
     )
     .with_id(Uuid::new_v4().to_string())
+}
+
+#[cfg(test)]
+mod rechnung_erstellt_tests {
+    use super::rechnung_erstellt_ce;
+
+    fn data(rechnungstyp: &str, is_correction: bool) -> serde_json::Value {
+        let rechnung = serde_json::json!({ "rechnungstyp": rechnungstyp });
+        let ce = rechnung_erstellt_ce(
+            uuid::Uuid::nil(),
+            "51238696012",
+            "9900357000004",
+            &rechnung,
+            is_correction,
+        );
+        serde_json::to_value(&ce).expect("serialises")["data"].clone()
+    }
+
+    /// M87 T008a: the event says whether it is a Schlussrechnung, so
+    /// accountingd raises the § 40c Abs. 3 EnWG payout item for its Guthaben
+    /// from the event alone; the Storno of one is not one.
+    #[test]
+    fn the_event_says_whether_it_is_a_schlussrechnung() {
+        // The spelling BO4E serialises a Schlussrechnung's `rechnungstyp` as.
+        assert_eq!(
+            serde_json::to_value(rubo4e::current::Rechnungstyp::Abschlussrechnung)
+                .expect("serialises"),
+            "ABSCHLUSSRECHNUNG"
+        );
+        assert_eq!(data("ABSCHLUSSRECHNUNG", false)["schlussrechnung"], true);
+        assert_eq!(data("ENDKUNDENRECHNUNG", false)["schlussrechnung"], false);
+        assert_eq!(data("ABSCHLUSSRECHNUNG", true)["schlussrechnung"], false);
+    }
 }
 
 #[cfg(test)]

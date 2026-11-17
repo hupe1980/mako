@@ -1,10 +1,11 @@
 //! Guard: an outbox wake-up is raised by the database, never by the producer.
 //!
-//! mako runs two durable outboxes — `mako_service`'s `event_outbox`, drained by
-//! the `OutboxWorker` in eight services, and marktd's `event_log`, drained by
-//! the fan-out worker. Both persist inside the producer's business transaction
-//! and both have a background worker that polls on an interval. The wake-up is
-//! what turns that interval from a delivery latency into a fallback.
+//! mako's durable outbox is `mako_service`'s `event_outbox`, drained by two
+//! workers: the `OutboxWorker` (commands, targeted deliveries) and the
+//! subscription fan-out of `mako_service::subscriptions` (every CloudEvent to
+//! its webhook endpoints). The outbox persists inside the producer's business
+//! transaction and each worker polls on an interval. The wake-up is what turns
+//! that interval from a delivery latency into a fallback.
 //!
 //! **Where the wake-up is raised decides whether it can work at all.** A
 //! producer-side, in-process hint (`Notify::notify_one`) taken between the
@@ -27,10 +28,12 @@
 //!
 //! 1. **The trigger exists.** Each outbox's DDL declares an `AFTER INSERT …
 //!    FOR EACH STATEMENT` trigger calling `pg_notify` on its own channel.
-//! 2. **The worker listens on that same channel.** The Rust `NOTIFY_CHANNEL`
-//!    constant must equal the channel the DDL raises on, and something must
-//!    `listen(NOTIFY_CHANNEL)`. A trigger nobody listens to, or a listener on a
-//!    channel nothing raises, is the same silent poll-interval delay.
+//! 2. **Every worker listens on that same channel.** The Rust `NOTIFY_CHANNEL`
+//!    constant must equal the channel the DDL raises on, and each worker must
+//!    `listen(NOTIFY_CHANNEL)` — a second worker by importing the outbox's
+//!    constant, never a literal of its own ([`LISTENERS`]). A trigger nobody
+//!    listens to, or a listener on a channel nothing raises, is the same silent
+//!    poll-interval delay.
 //! 3. **No producer-side wake-up primitive.** `notify_one` must not appear on
 //!    an outbox path. It is the obvious thing to reach for, and it is the one
 //!    shape that cannot work.
@@ -50,25 +53,29 @@ struct Outbox {
     table: &'static str,
 }
 
-const OUTBOXES: &[Outbox] = &[
-    Outbox {
-        name: "mako_service::outbox",
-        ddl: "crates/mako-service/src/outbox.rs",
-        worker: "crates/mako-service/src/outbox.rs",
-        table: "event_outbox",
-    },
-    Outbox {
-        name: "marktd fan-out",
-        ddl: "services/marktd/migrations/0001_initial.sql",
-        worker: "services/marktd/src/fanout.rs",
-        table: "event_log",
-    },
-];
+const OUTBOXES: &[Outbox] = &[Outbox {
+    name: "mako_service::outbox",
+    ddl: "crates/mako-service/src/outbox.rs",
+    worker: "crates/mako-service/src/outbox.rs",
+    table: "event_outbox",
+}];
+
+/// Further workers on an outbox of [`OUTBOXES`]: each listens on the channel
+/// the outbox's own module declares, importing it rather than spelling it.
+const LISTENERS: &[(&str, &str)] = &[(
+    "mako_service::subscriptions fan-out",
+    "crates/mako-service/src/subscriptions/worker.rs",
+)];
 
 /// Trees where a producer-side wake-up is forbidden.
-const NO_IN_PROCESS_WAKE: &[&str] = &["crates/mako-service/src/outbox.rs", "services/marktd/src"];
+const NO_IN_PROCESS_WAKE: &[&str] = &[
+    "crates/mako-service/src/outbox.rs",
+    "crates/mako-service/src/subscriptions",
+    "services/marktd/src",
+];
 
-/// Run the check, returning `true` when both outboxes wake from the database.
+/// Run the check, returning `true` when every outbox worker wakes from the
+/// database.
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings: Vec<String> = Vec::new();
 
@@ -124,6 +131,26 @@ pub fn run(workspace_root: &Path) -> bool {
         }
     }
 
+    for (name, file) in LISTENERS {
+        let Ok(src) = std::fs::read_to_string(workspace_root.join(file)) else {
+            findings.push(format!("{name}: cannot read {file}"));
+            continue;
+        };
+        let imports = src.contains("use crate::outbox::") && src.contains("NOTIFY_CHANNEL");
+        if !imports || notify_channel_const(&src).is_some() {
+            findings.push(format!(
+                "{name}: {file} must listen on `crate::outbox::NOTIFY_CHANNEL`, imported — \
+                 a channel of its own is one the outbox's trigger never raises"
+            ));
+        }
+        if !src.contains("listen(NOTIFY_CHANNEL)") {
+            findings.push(format!(
+                "{name}: {file} never calls `listen(NOTIFY_CHANNEL)` — it drains on its poll \
+                 interval alone"
+            ));
+        }
+    }
+
     // Rule 3 — no producer-side wake-up primitive anywhere on an outbox path.
     let mut sources = Vec::new();
     for tree in NO_IN_PROCESS_WAKE {
@@ -157,8 +184,8 @@ pub fn run(workspace_root: &Path) -> bool {
 
     if findings.is_empty() {
         println!(
-            "check-outbox-notify: both durable outboxes wake from an AFTER INSERT trigger, \
-             on the channel their worker listens to"
+            "check-outbox-notify: the durable outbox wakes from an AFTER INSERT trigger, \
+             on the channel each of its workers listens to"
         );
         return true;
     }

@@ -93,8 +93,8 @@ permit(
 
 // ── Klärfälle — a market role, or ADMIN ──────────────────────────────────────
 //
-// `GET /api/v1/klaerfaelle` and MCP `list_klaerfaelle` list the cases of the
-// caller's own Marktrollen (the role mako acted in on the case's process); a
+// `GET /api/v1/klaerfaelle[/{id}]` and MCP `list_klaerfaelle` / `get_klaerfall`
+// read the cases of the caller's own Marktrollen (the role mako acted in on the case's process); a
 // case on no process is listed to `ADMIN` alone. A role-less caller would read
 // nothing, so it is refused here rather than answered with an empty list.
 
@@ -108,6 +108,43 @@ permit(
      context.principal_roles.contains("LF") ||
      context.principal_roles.contains("MSB") ||
      context.principal_roles.contains("ADMIN"))
+};
+
+// ── Working a Klärfall — a market role, or ADMIN ─────────────────────────────
+//
+// `POST /api/v1/klaerfaelle/{id}/assign` and `/resolve` (MCP `assign_klaerfall`,
+// `resolve_klaerfall`) take a case or close it without a market message; both
+// are journaled against the principal. The case itself is still kept to the
+// caller's Marktrollen by the read the route runs first.
+
+permit(
+    principal,
+    action in [Action::"assign-case", Action::"resolve-case"],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("NB") ||
+     context.principal_roles.contains("LF") ||
+     context.principal_roles.contains("MSB") ||
+     context.principal_roles.contains("ADMIN"))
+};
+
+// ── Dispatching a Klärfall's correction — a market role ──────────────────────
+//
+// `POST /api/v1/klaerfaelle/{id}/dispatch` (MCP `dispatch_klaerfall`) sends a
+// market message through the Freigabe decision path. It needs this action and
+// the command's own: `decide-queue`, in the Marktrolle the Freigabe owes the
+// answer as — so `ADMIN`, which may close a case, never sends one.
+
+permit(
+    principal,
+    action == Action::"dispatch-case",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("NB") ||
+     context.principal_roles.contains("LF") ||
+     context.principal_roles.contains("MSB"))
 };
 
 // ── Identifying a Neuanlage — NB only ────────────────────────────────────────
@@ -151,6 +188,30 @@ permit(
 permit(
     principal,
     action == Action::"rebuild-projection",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("ADMIN")
+};
+
+// ── Webhook subscriptions on processd's event outbox — ADMIN only ────────────
+//
+//   "manage-subscription" — /api/v1/webhooks/** (endpoints, deliveries, replay)
+//                           and the `list_webhook_*` MCP tools. An endpoint
+//                           receives every de.sperr.* notice, which names the
+//                           Marktlokation to be disconnected. Registering one is
+//                           an outbound data-export decision, and a test
+//                           delivery returns the target's HTTP status, which
+//                           makes an unrestricted version of it a network probe.
+//                           Both are operator capabilities, not market-role ones.
+//   "read-events"         — GET /api/v1/events, the outbox as a feed. It carries
+//                           the same events, so it carries the same audience.
+//
+// Both are checked by the mounted `mako_service::subscriptions` routes.
+
+permit(
+    principal,
+    action in [Action::"manage-subscription", Action::"read-events"],
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&

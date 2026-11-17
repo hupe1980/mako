@@ -666,6 +666,16 @@ reason  = "The windows 0.61 crate family uses windows-link 0.1; newer Windows cr
 # the two lists equal and refuses a statement naming another crate than the
 # advisory does.
 ignore = [
+    # RUSTSEC-2026-0543 / RUSTSEC-2026-0555: chrono and chrono-tz unmaintained.
+    # No CVE — maintenance announcements. Pulled only by Apache Arrow and
+    # DataFusion (meterstore's Iceberg tier under edmd); mako's own code uses
+    # `time` and clippy bans chrono. Resolve when Arrow moves to jiff or time.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (no CVE), pulled only by Arrow/DataFusion under meterstore; mako's code uses time and bans chrono" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained (no CVE), pulled only by Arrow/DataFusion under meterstore" },
+    # RUSTSEC-2026-0542: humantime unmaintained. No CVE. Pulled by object_store
+    # (slatedb, meterstore) to parse its own duration settings, which mako
+    # does not take from any request. Resolve when object_store moves away.
+    { id = "RUSTSEC-2026-0542", reason = "humantime unmaintained (no CVE), pulled by object_store under slatedb and meterstore; parses only object_store's own settings" },
     # RUSTSEC-2025-0141: bincode 1.x unmaintained.
     # Pulled transitively by slatedb → foyer and by typst → syntect. The crate is
     # functionally complete (the authors declared v1.3.3 final); it serializes

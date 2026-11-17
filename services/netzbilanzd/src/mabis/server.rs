@@ -115,6 +115,18 @@ pub struct SyncRequest {
 ///
 /// An unknown key, or a value that does not parse, is a 422 — see
 /// [`SyncRequest`].
+#[utoipa::path(
+    post,
+    path = "/api/v1/mabis/sync",
+    tag = "mabis",
+    request_body(content = serde_json::Value, description = "`SyncRequest`: the Bilanzierungsmonat, and the run it corrects"),
+    responses(
+        (status = 202, description = "The run is filed", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 409, description = "A run for the period is in flight", body = ApiError),
+        (status = 422, description = "The period is refused", body = ApiError),
+    )
+)]
 pub async fn trigger_sync(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -191,6 +203,15 @@ pub async fn trigger_sync(
 }
 
 /// `GET /api/v1/mabis/runs` — list recent submission runs.
+#[utoipa::path(
+    get,
+    path = "/api/v1/mabis/runs",
+    tag = "mabis",
+    responses(
+        (status = 200, description = "The latest runs", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_runs(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -227,6 +248,19 @@ pub async fn list_runs(
 }
 
 /// `GET /api/v1/mabis/runs/{id}` — get single run.
+#[utoipa::path(
+    get,
+    path = "/api/v1/mabis/runs/{id}",
+    tag = "mabis",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The Summenzeitreihe run"),
+    ),
+    responses(
+        (status = 200, description = "The run and what went out per Bilanzierungsgebiet", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such run", body = ApiError),
+    )
+)]
 pub async fn get_run(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -283,6 +317,20 @@ pub async fn get_run(
 }
 
 /// `PUT /api/v1/mabis/runs/{id}/retry` — retry a failed run.
+#[utoipa::path(
+    put,
+    path = "/api/v1/mabis/runs/{id}/retry",
+    tag = "mabis",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The Summenzeitreihe run"),
+    ),
+    responses(
+        (status = 202, description = "Retried", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such run", body = ApiError),
+        (status = 409, description = "The run has not failed", body = ApiError),
+    )
+)]
 pub async fn retry_run(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -395,6 +443,17 @@ pub struct PruefmitteilungRequest {
 ///
 /// The Datenstatus is assigned exclusively by the BIKO (BK6-24-174 Anlage 3
 /// Kap. 3.8.3), so this route only records what arrived — it never derives one.
+#[utoipa::path(
+    post,
+    path = "/api/v1/mabis/datenstatus",
+    tag = "mabis",
+    request_body(content = serde_json::Value, description = "`DatenstatusRequest`: the BIKO's Datenstatus"),
+    responses(
+        (status = 200, description = "Recorded", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "Unknown Datenstatus", body = ApiError),
+    )
+)]
 pub async fn post_datenstatus(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -451,6 +510,17 @@ pub async fn post_datenstatus(
 /// A negative one signals Korrekturbedarf (Kap. 9.8.1) and is answered by a
 /// corrected Summenzeitreihe under a higher version, which the operator
 /// triggers via `POST /api/v1/mabis/sync` with `corrects_run_id`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/mabis/pruefmitteilung",
+    tag = "mabis",
+    request_body(content = serde_json::Value, description = "`PruefmitteilungRequest`: the BIKO's Prüfmitteilung"),
+    responses(
+        (status = 201, description = "Recorded", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "Not a Prüfidentifikator a Prüfmitteilung reaches the Netzbetreiber on", body = ApiError),
+    )
+)]
 pub async fn post_pruefmitteilung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -532,6 +602,15 @@ pub async fn post_pruefmitteilung(
 ///
 /// Negative Prüfmitteilungen with no correcting submission yet — open
 /// obligations under Kap. 9.8.1, not history.
+#[utoipa::path(
+    get,
+    path = "/api/v1/mabis/korrekturbedarf",
+    tag = "mabis",
+    responses(
+        (status = 200, description = "Open negative Prüfmitteilungen", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_korrekturbedarf(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,

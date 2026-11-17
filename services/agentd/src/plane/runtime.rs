@@ -1603,6 +1603,57 @@ impl Plane {
             .await
     }
 
+    /// Admit the one follow-up proposal run for an entry whose proposal the
+    /// gate refused: the desk assistant asked again with the refusal —
+    /// stage, code, rule, segment and the service's sentence — as fields of
+    /// its input. The verdict is computed after a run concluded, so the repair
+    /// is a second run on the same case (correlated on the entry's event id),
+    /// never a turn inside the first. Keyed on the entry, so it is admitted
+    /// once: a refused follow-up meets this same run and starts none.
+    /// `None` when the desk assistant is not activated.
+    pub async fn vorschlag_nachbessern(
+        &self,
+        art: super::vorschlag::Art,
+        entry: &str,
+        ablehnung: &super::pruefung::Pruefstufe,
+    ) -> Option<Accepted> {
+        let route = self
+            .router
+            .routes
+            .iter()
+            .find(|r| r.name == super::vorschlag::SKILL)?;
+        let fall = super::vorschlag::ereignis(art, entry);
+        let id = super::vorschlag::nachbesserung(art, entry);
+        let source = mako_service::source("agentd", self.tenant.as_str());
+        let envelope = Envelope {
+            id: &id,
+            source: &source,
+            event_type: "manual",
+        };
+        let mut input = serde_json::Map::new();
+        input.insert("frage".to_owned(), super::vorschlag::FRAGE.into());
+        input.insert(art.key().to_owned(), entry.into());
+        // The whole input is admitted untrusted (`label::admit`), the
+        // service's sentence with it: it is data about the refusal.
+        input.insert(
+            "ablehnung".to_owned(),
+            serde_json::json!({
+                "stufe": ablehnung.stufe,
+                "code": ablehnung.code,
+                "regel": ablehnung.regel,
+                "segment": ablehnung.segment,
+                "text": ablehnung.text,
+            }),
+        );
+        let payload = Value::Object(input);
+        let correlation = super::label::correlation(&fall, &payload);
+        let labelled = super::label::admit("manual", payload);
+        Some(
+            self.accept_prepared(route, envelope, correlation, labelled, None)
+                .await,
+        )
+    }
+
     /// The waiting proposal of one entry of `art`, read from its run's
     /// journal: `None` when no proposal run was admitted for it. A proposal
     /// naming another kind's action is dropped — a Disput is never offered
@@ -1780,6 +1831,26 @@ impl Plane {
             // plane could re-validate, and it will carry none on the next
             // delivery of the same bytes either.
             Err(why) => return refused(why.to_owned(), false),
+        };
+        self.accept_prepared(route, event, correlation, input, starter)
+            .await
+    }
+
+    /// Admit one prepared run, keyed on `event`'s admission key.
+    async fn accept_prepared(
+        &self,
+        route: &Route,
+        event: Envelope<'_>,
+        correlation: super::label::Correlation,
+        input: agentplane::core::Tainted<Value>,
+        starter: Option<&str>,
+    ) -> Accepted {
+        let refused = |why: String, retryable: bool| Accepted {
+            agent_name: route.name.to_owned(),
+            run_id: String::new(),
+            fresh: false,
+            refused: Some(why),
+            retryable,
         };
 
         let mut terms = agentplane::runtime::RunTerms::default()

@@ -106,7 +106,9 @@ and policy to each other in both directions.
 | `POST /webhook` | — (marktd HMAC signature + timestamp) | marktd |
 | `GET /api/v1/decisions` | `read-decisions` | any caller of the tenant |
 | `GET /api/v1/queue` | `read-queue` | any caller of the tenant |
-| `GET /api/v1/klaerfaelle` | `read-case` | `NB`, `LF`, `MSB` or `ADMIN`; cases kept to the caller's Marktrollen |
+| `GET /api/v1/klaerfaelle` · `/{id}` | `read-case` | `NB`, `LF`, `MSB` or `ADMIN`; cases kept to the caller's Marktrollen |
+| `POST /api/v1/klaerfaelle/{id}/assign` · `/resolve` | `assign-case` · `resolve-case` | `NB`, `LF`, `MSB` or `ADMIN` |
+| `POST /api/v1/klaerfaelle/{id}/dispatch` | `dispatch-case`, then `decide-queue` in the Freigabe's Marktrolle | `NB`, `LF` or `MSB` |
 | `GET /api/v1/eog` | `read-eog` | any caller of the tenant |
 | `GET /api/v1/neuanlage` | `read-neuanlage` | any caller of the tenant |
 | `POST /api/v1/queue/{id}/approve` · `/reject` | `decide-queue` | `NB`, `LF` or `MSB` |
@@ -122,6 +124,9 @@ and policy to each other in both directions.
 | `POST /api/v1/sperr-orders` | `create-sperr-order` | `NB` |
 | `PUT /api/v1/sperr-orders/{id}/execute` · `/fail` | `execute-sperr-order` | `NB` |
 | `PUT /api/v1/sperr-orders/{id}/cancel` | `cancel-sperr-order` | `NB` |
+| `/api/v1/webhooks/**` | `manage-subscription` | `ADMIN` |
+| `GET /api/v1/events` | `read-events` | `ADMIN` |
+| `GET /api/v1/openapi.json` | — | anyone who reaches the port |
 | `POST /mcp` | `use-mcp`, then a per-tool action | any caller of the tenant |
 | `GET /api/v1/policy` | `read-policy` | any caller of the tenant |
 | `GET /admin/einrichtung` | `read-config` | any caller of the tenant |
@@ -611,6 +616,15 @@ POST /api/v1/queue/{id}/approve   → dispatch the approve command via makod, ma
 POST /api/v1/queue/{id}/reject    → dispatch the reject command via makod, mark Rejected
 ```
 
+A decision may carry an `Idempotency-Key` (the Desk sends one with every
+held decision), as may `POST /api/v1/klaerfaelle/{id}/dispatch`: a resend with
+the same key and request is answered with the first answer and dispatches
+nothing again, the same key on another entry or body is `422
+idempotency_key_reuse`, and one whose first request is still being decided is
+`409 idempotency_request_in_flight`. A first request that fails with a `5xx`
+keeps no record, so its retry decides again. Without the key a resend meets
+the Pending claim and is `409 already_decided`.
+
 Each entry also stores its proposal: `vorschlag_quelle` (the enqueuing rule,
 `{"art":"regel","name":"nb-module"}`) and `vorschlag_sha256`, the SHA-256 of
 the RFC 8785 canonical `{command, body}` an approval would send with no
@@ -931,21 +945,21 @@ curl -s "http://processd:8580/api/v1/counterparties/9800468000003/NB?von=2026-08
   counts; the CSV is those rows, its code cells quoted (RFC 4180) and a
   leading `= + - @`, tab or CR neutralised.
 
-### Rebuilding from marktd's replay log
+### Rebuilding from marktd's event feed
 
 The projection is a function of the events `marktd` fanned out, and `marktd`
-keeps every envelope in `event_log`. `POST /api/v1/obs/rebuild` (Cedar
-`rebuild-projection`, `ADMIN`) pages `marktd` `GET /admin/events` oldest first,
-from the beginning of the log to the instant the rebuild started, and hands each
-envelope to the projection function the webhook calls — a truncated table
-rebuilt this way equals the original row for row. The projection upserts on
-`process_id`, so a rebuild over a populated table repairs it, and an interrupted
-rebuild is finished by sending it again.
+serves its outbox as a feed, in commit order. `POST /api/v1/obs/rebuild` (Cedar
+`rebuild-projection`, `ADMIN`) pages `marktd` `GET /api/v1/events?type=de.mako.*`
+by its cursor and hands each envelope to the projection function the webhook
+calls — a truncated table rebuilt this way equals the original row for row. The
+projection upserts on `process_id`, so a rebuild over a populated table repairs
+it, and an interrupted rebuild is finished by sending it again.
 
-`marktd` serves the log only to a principal holding its `manage-fanout`
-action, so the `[marktd] api_key` processd uses must belong to one. A replay
-log holding at least a page (5000) of events received at one instant cannot be
-paged by arrival time, and the rebuild refuses rather than loops.
+The feed reaches back marktd's `[subscriptions] retention_days` (default 30): a
+process whose events are older is not rebuilt. The answer names `oldest_event`,
+the `time` of the oldest event the rebuild read, so the reach is visible.
+`marktd` serves the feed only to a principal holding its `read-events` action,
+so the `[marktd] api_key` processd uses must belong to one.
 
 ### Events produced
 
@@ -1070,9 +1084,13 @@ MaLo in `ValidationPassed`; after fixing the cause, requeue the command.
 
 ### Emitted events
 
-All go through the transactional outbox in the transaction of the state change,
-delivered to `[sperr] erp_webhook_url`; without it the notices accumulate in
-`event_outbox` and startup warns.
+All go through the transactional outbox in the transaction of the state change.
+The shared subscription module fans each one out to the webhook endpoint
+`default` — `[sperr] erp_webhook_url`, signed with `erp_hmac_secret` — and to
+every endpoint an `ADMIN` registers at `/api/v1/webhooks/endpoints`, as
+[Standard Webhooks](https://www.standardwebhooks.com/) deliveries with a log,
+replay and `GET /api/v1/events` as a feed. Without a URL startup warns: the
+notices then reach only the registered endpoints.
 
 | CloudEvent | Emitted when |
 |---|---|
@@ -1135,25 +1153,10 @@ api_key = "env:VERTRAGD_API_KEY"
 
 [webhook]
 inbound_secret = "env:INBOUND_WEBHOOK_SECRET"   # required unless allow_insecure_no_auth
-
-[subscription]
-# Self-registers with marktd on startup (PUT /api/v1/subscriptions/{subscriber_id},
-# retried with backoff up to 30 s).
-webhook_url   = "http://processd:8580/webhook"  # optional; omit to skip registration
-subscriber_id = "processd"                       # default
-# One subscription for every module. The default is the union they read;
-# leaving one out silently disables the module that consumes it.
-event_types = [
-  "de.mako.process.initiated",
-  "de.mako.process.completed",
-  "de.mako.process.failed",
-  "de.mako.aperak.accepted",
-  "de.mako.aperak.rejected",
-  "de.mako.antwortfrist.abgelaufen",
-  "de.markt.versorgung.gap-detected",
-  "de.markt.versorgung.eog-begonnen",
-  "de.markt.versorgung.changed",
-]
+# marktd delivers to processd through processd's entry in its own
+# [[subscriptions.endpoints]] — url http://processd:8580/webhook, this secret,
+# and every type processd reads (see marktd's „Fan-out"); processd registers
+# nothing.
 
 [nb]
 auto_accept              = false  # true → dispatch bestaetigen automatically on Accept
@@ -1213,8 +1216,12 @@ parity_threshold_pp = 5.0     # the operator's own escalation threshold, not a r
 parity_window_days  = 90      # parity look-back window
 
 [sperr]                             # NB Sperrauftrag queue — de.sperr.* to the ERP
-# erp_webhook_url = "https://erp.internal/hooks/sperr"
+# erp_webhook_url = "https://erp.internal/hooks/sperr"     # the webhook endpoint `default`
 # erp_hmac_secret = "env:PROCESSD_SPERR_ERP_HMAC_SECRET"   # required with erp_webhook_url
+
+[subscriptions]                     # endpoints registered at /api/v1/webhooks/endpoints
+retention_days = 30                 # default — how long delivered events stay replayable
+# allow_loopback = true             # `just dev`'s local receivers; never in production
 
 [policy]
 msb_vorlauf_lesart = "additiv"      # or "wortlaut" — the Sperrtermin without MSB-Zustimmung
@@ -1243,27 +1250,61 @@ audience = "api://mako-processd"
 
 ## Klärfälle {#klaerfaelle}
 
-One case per message mako could not bring to its end, opened from CloudEvents
-processd already receives (`src/klaerfall.rs`):
+One case per message mako could not bring to its end, with a cause, an action
+and a due date from code tables — never from a model (`src/klaerfall.rs`):
 
 | Origin | Signal | Cause (code table) | Key |
 |---|---|---|---|
 | `aperak` | `de.mako.aperak.rejected` | ERC code → `mako_engine::erc::recommended_action` | the rejected message |
-| `dead_letter` | `de.mako.dead-letter.recorded` | reason → `mako_engine::dead_letter::action_for_label` | the message, else the dead letter |
-| `refusal` | `de.mako.process.completed` with `outcome = rejected` and an Antwortcode | the code in its tree, worded by `mako_pruefung::codes::lies` | the process |
+| `dead_letter` | `de.mako.dead-letter.recorded` | reason → `mako_engine::dead_letter::action_for_label` | the message, else `dead-letter:<reason>` |
+| `refusal` | `de.mako.process.completed` whose Antwortcode refuses (`outcome = rejected`, or the code's cluster in its list) | the code in its tree, worded by `mako_pruefung::codes::lies` | the process |
 | `frist_missed` | `de.mako.antwortfrist.abgelaufen` | the lapse | the process |
+| `operator_decision` | an `approval_queue` row, opened in the enqueue's transaction | the Freigabe | the process |
 
 The key is the message and the MP-ID that sent the signal (`partner_mp_id`):
 an APERAK from another partner citing the same reference opens that partner's
-own case and never attaches to this one. A further signal for the same key,
-from any origin, attaches (`occurrences`, `origins`); the first cause stands. `due_at` is the process's business
-Antwortfrist from the read model, or null — „keine Frist", never a default.
-Only codes are stored: a counterparty's free text never reaches a case, and
-`bedeutung` is the BDEW's own wording. No field is model output; `befehl` is
-null until a table names the correcting command. `GET /api/v1/klaerfaelle`
-(Cedar `read-case`) and MCP `list_klaerfaelle` list the open ones the caller
-may read: a case whose process mako ran in one of the caller's Marktrollen, and
-a case on no process to `ADMIN` alone — an LF reads no case of the NB side.
+own case and never attaches to this one. A dead letter that names no message
+keys on its reason, so a flood from one partner is one case. A further signal
+for the same key, from any origin, attaches to the open case (`occurrences`,
+`origins`); the first cause stands, and once a case is closed the next signal
+opens a new one. `due_at` is the process's business Antwortfrist from the read
+model, or null — „keine Frist", never a default, never a date the signal
+carries; a Freigabe's `expires_at` (the Frist less an hour of headroom) is the
+separate `operator_window_ends_at`, and an expired Freigabe's case stays open
+and reads `overdue` once its Frist passed. Only codes are stored: a
+counterparty's free text never reaches a case, and `bedeutung` is the BDEW's
+own wording.
+
+**Correction.** `korrektur` names the correcting command only where mako's
+outbound answer is one a Freigabe sends: a pending Freigabe proposes its
+approve command, an answer the counterparty refused by APERAK is re-sent from
+the decided Freigabe; `erlaubt` is the Freigabe's approve/reject pair. Every
+other case has `korrektur: null` and escalates.
+
+**Working a case.** Reads — `GET /api/v1/klaerfaelle`, `GET
+/api/v1/klaerfaelle/{id}` (with its `verlauf`), MCP `list_klaerfaelle`,
+`get_klaerfall` — return a case whose process mako ran in one of the caller's
+Marktrollen, and a case on no process to `ADMIN` alone; another role's case
+reads as absent. `POST …/assign` (`{ "assignee": … }`, null releases) and
+`POST …/resolve` (`{ "begruendung": … }`, required) change no market state.
+`POST …/dispatch` — „korrigieren & senden", `{ "befehl"?, "begruendung"?,
+"antwort"? }` — sends `korrektur.befehl`, or another command of `erlaubt` with
+a `begruendung` (`422 begruendung_required`; outside the pair `422
+command_not_allowed`; no correction `422 no_correction`), through the Freigabe
+decision path: a pending Freigabe is decided by its own approve/reject route,
+a refused answer is rebuilt with `decision_body`, checked against its tree and
+by makod's pre-send check, whose refusal comes back in place (`422
+pruefung_abgelehnt`, the case stays open). Deciding a Freigabe on the queue
+routes closes its case too. Every step appends to `klaerfall_verlauf` with the
+authenticated principal — the proposal beside the command sent, and the reason;
+a body naming `decided_by` is refused as an unknown field.
+
+**Equal treatment.** `GET /api/v1/audit/gleichbehandlung` adds `klaerfaelle`:
+per class of the initiating Lieferant (`affiliate`, `third_party`,
+`unattributed` — a case on no process or on a process no Lieferant initiates),
+the cases opened in the year, those closed and the median time to resolve. The
+three sum to the cases opened; § 7a Abs. 5 EnWG does not name Klärfälle, so
+this is supporting evidence.
 
 ## MCP tools
 
@@ -1312,12 +1353,18 @@ the tool error.
 | `list_overdue_processes` | `read-overdue` | Past the business Antwortfrist, most urgent first; reports `saturated` |
 | `get_kpi_report` | `read-kpi` | Typed per-PID KPIs for a `YYYY-MM` month, both clocks separately, and `eingriff` — the ended processes by their most human actor, with its `definition` |
 | `list_klaerfaelle` | `read-case` | Typed `{ klaerfaelle, count, saturated }`: the open Klärfälle, the earliest `due_at` first. See [Klärfälle](#klaerfaelle) |
+| `get_klaerfall` | `read-case` | Typed `KlaerfallAkte { klaerfall, verlauf }`: one case with its history |
+| `assign_klaerfall` | `assign-case` | Take a case (`assignee`) or release it, over `POST …/assign` |
+| `resolve_klaerfall` | `resolve-case` | Close a case without a market message, `begruendung` required, over `POST …/resolve` |
+| `dispatch_klaerfall` | `dispatch-case` | „Korrigieren & senden" over `POST …/dispatch`; the route also checks `decide-queue` in the Freigabe's Marktrolle |
 | `get_parity_report` | `read-kpi` | § 7a Abs. 5 parity; `gap_pp` = affiliate − third_party |
 | `get_process_stp_rate` | `read-kpi` | Typed: completions over the processes that **ended** in the window, `null` when none did |
 | `list_sperr_orders` | `read-sperr-order` | The Sperrauftrag queue (NB build) |
 | `get_sperr_order` | `read-sperr-order` | One order, with ORDERS provenance and IFTSTA state |
 | `get_sperr_stats` | `read-sperr-order` | Counters, incl. `iftsta_outstanding` / `iftsta_stuck` |
 | `list_due_orders` | `read-sperr-order` | The field-dispatch list, with the Treffpunkt |
+| `list_webhook_endpoints` | `manage-subscription` | The webhook endpoints, as `GET /api/v1/webhooks/endpoints` lists them; secrets never |
+| `list_webhook_deliveries` | `manage-subscription` | One endpoint's deliveries, as `GET /api/v1/webhooks/endpoints/{id}/deliveries` lists them |
 
 Guided prompts ship alongside them — `triage-nb-rejection`,
 `investigate-stp-drop`, `triage-msb-wechsel`, `trigger-lieferbeginn`, the read

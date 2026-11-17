@@ -84,6 +84,10 @@ fn the_policy_and_the_code_name_the_same_actions() {
     // `GET /api/v1/policy` and `GET /admin/einrichtung` for every daemon.
     expected.insert("read-policy".to_owned());
     expected.insert("read-config".to_owned());
+    // `manage-subscription` and `read-events` are checked by
+    // `mako_service::subscriptions`, whose routes billingd merges.
+    expected.insert(mako_service::subscriptions::MANAGE.to_owned());
+    expected.insert(mako_service::subscriptions::READ_EVENTS.to_owned());
     let permitted = actions_permitted_in_policy();
     let missing: Vec<_> = expected.difference(&permitted).cloned().collect();
     assert!(
@@ -270,4 +274,28 @@ fn only_portald_reads_by_verify_token() {
     );
     let operator = principal(TENANT, &["LF", "MSB", "ESA", "NB"]);
     assert!(e.check(&operator, "read-billing-by-token", TENANT).is_err());
+}
+
+/// Registering a webhook endpoint exports every matching invoice event, and
+/// the feed discloses the same: an operator capability, not a market role's.
+#[test]
+fn only_an_admin_manages_webhooks_and_reads_the_feed() {
+    let e = enforcer();
+    for action in ["manage-subscription", "read-events"] {
+        assert!(
+            e.check(&principal(TENANT, &["LF"]), action, TENANT)
+                .is_err(),
+            "an LF must not {action}"
+        );
+        assert!(
+            e.check(&principal(TENANT, &["ADMIN"]), action, TENANT)
+                .is_ok(),
+            "an ADMIN may {action}"
+        );
+        assert!(
+            e.check(&principal("9900000000001", &["ADMIN"]), action, TENANT)
+                .is_err(),
+            "another tenant's ADMIN must not {action}"
+        );
+    }
 }

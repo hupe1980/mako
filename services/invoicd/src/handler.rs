@@ -64,11 +64,6 @@ pub struct HandlerState {
     /// marktrolle`. Half of the PID-31009 Use-Case lookup; `IMD+7081` is the
     /// other half. See [`crate::config::EmpfaengerRolle`].
     pub marktrolle: crate::config::EmpfaengerRolle,
-    /// ERP webhook for `de.invoic.receipt.*` CloudEvents.
-    pub erp_webhook_url: Option<String>,
-    /// Standard Webhooks signing secret for outbound ERP deliveries.
-    pub erp_hmac_secret: Option<SecretString>,
-    pub http_client: reqwest::Client,
 }
 
 /// `POST /webhook` — receive a `MarktEvent` CloudEvent from `marktd`.
@@ -1547,9 +1542,9 @@ pub struct PaymentEventCtx<'a> {
 }
 
 /// Conclude a checked invoice: stamp the answer's dispatch and enqueue the
-/// `de.invoic.receipt.*` event for the ERP, in one transaction
-/// ([`pg::receipts::conclude`]). The outbox worker delivers the event with
-/// retry; nothing is enqueued without an ERP webhook.
+/// `de.invoic.receipt.*` event, in one transaction
+/// ([`pg::receipts::conclude`]). The webhook module delivers the event with
+/// retry to the ERP (the endpoint `default`) and every other matching endpoint.
 ///
 /// The market answer is always dispatched before this runs: an ERP webhook
 /// never delays a regulatory obligation. A failure to conclude answers `500`,
@@ -1560,28 +1555,26 @@ pub async fn conclude_receipt(
     dispatched_at: Option<OffsetDateTime>,
     ctx: &PaymentEventCtx<'_>,
 ) -> StatusCode {
-    let ce = state.erp_webhook_url.as_ref().map(|_| {
-        mako_service::CloudEvent::new(
-            mako_service::source("invoicd", &state.tenant),
-            ce_type_for(ctx.outcome),
-            ctx.process_id.to_string(),
-            serde_json::json!({
-                "process_id":     ctx.process_id.to_string(),
-                "pid":            ctx.pid,
-                "sender_mp_id":   ctx.sender_mp_id,
-                "outcome":        ctx.outcome,
-                "pay_by":         ctx.pay_by.map(|d| d.to_string()),
-                "findings_count": ctx.findings_count,
-                "dispatched":     ctx.dispatched,
-            }),
-        )
-    });
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("invoicd", &state.tenant),
+        ce_type_for(ctx.outcome),
+        ctx.process_id.to_string(),
+        serde_json::json!({
+            "process_id":     ctx.process_id.to_string(),
+            "pid":            ctx.pid,
+            "sender_mp_id":   ctx.sender_mp_id,
+            "outcome":        ctx.outcome,
+            "pay_by":         ctx.pay_by.map(|d| d.to_string()),
+            "findings_count": ctx.findings_count,
+            "dispatched":     ctx.dispatched,
+        }),
+    );
     match pg::receipts::conclude(
         &state.pool,
         &state.tenant,
         ctx.process_id,
         dispatched_at,
-        ce.as_ref(),
+        &ce,
     )
     .await
     {
@@ -2031,9 +2024,6 @@ mod tests {
                 .expect("a lazy pool connects to nothing"),
             tenant: "9900357000004".to_owned(),
             marktrolle: crate::config::EmpfaengerRolle::Lieferant,
-            erp_webhook_url: None,
-            erp_hmac_secret: None,
-            http_client: reqwest::Client::new(),
         }
     }
 

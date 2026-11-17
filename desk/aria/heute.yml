@@ -16,6 +16,9 @@
       - listitem:
         - link "Korrekturbedarf nichts offen 0":
           - /url: /heute?quelle=korrekturbedarf
+      - listitem:
+        - link "Anlagen nicht abgerechnet nichts offen 0":
+          - /url: /heute?quelle=anlagen
   - region "Nächste 7 Tage 1":
     - heading "Nächste 7 Tage 1" [level=2]
     - list "Nächste 7 Tage":

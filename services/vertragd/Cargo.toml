@@ -44,6 +44,8 @@ tokio-util    = { workspace = true }
 sha2          = "0.10"
 serde_jcs     = "0.1"
 base64        = { version = "0.22" }
+utoipa        = { workspace = true }
+utoipa-axum   = { workspace = true }
 
 [dev-dependencies]
 # The contract test reads every body vertragd sends processd through
@@ -51,6 +53,7 @@ base64        = { version = "0.22" }
 processd = { path = "../processd" }
 mako-service = { path = "../../crates/mako-service", features = ["testing"] }
 toml       = "0.8"
+tower      = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 

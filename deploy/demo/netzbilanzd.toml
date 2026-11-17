@@ -37,6 +37,11 @@ sender_mp_id           = "9900357000004"
 receiver_mp_id         = "9900077000006"
 bilanzierungsgebiet_id = "11YMAKO-TEST-01U"
 
+# Webhook endpoints registered through /api/v1/webhooks/endpoints may name a
+# receiver on this machine (`just dev`). Reported as a warning by `--check-config`.
+[subscriptions]
+allow_loopback = true
+
 # The demo sign-in: a token from `just token <persona>` or the Desk's persona
 # switcher is answered as that persona by Cedar; a request without one is the
 # dev principal. Reported as a warning by `--check-config`.

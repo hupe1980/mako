@@ -3,7 +3,7 @@
 //! processd, makod and the ERP learn of a change only through the event, so a
 //! write that commits while its event is lost is a change nobody downstream
 //! ever sees — and the caller, answered `500`, retries a write that already
-//! happened. Each test makes the event INSERT fail (`event_log` renamed away,
+//! happened. Each test makes the event INSERT fail (`event_outbox` renamed away,
 //! as a lost event looks from inside the transaction), drives the handler over
 //! HTTP and checks that the business write rolled back with it.
 //!
@@ -83,17 +83,17 @@ impl Harness {
     }
 
     async fn lose_events(&self) {
-        self.sql("ALTER TABLE event_log RENAME TO event_log_away")
+        self.sql("ALTER TABLE event_outbox RENAME TO event_outbox_away")
             .await;
     }
 
     async fn restore_events(&self) {
-        self.sql("ALTER TABLE event_log_away RENAME TO event_log")
+        self.sql("ALTER TABLE event_outbox_away RENAME TO event_outbox")
             .await;
     }
 
     async fn events(&self, ce_type: &str) -> i64 {
-        sqlx::query_scalar("SELECT count(*) FROM event_log WHERE ce_type = $1")
+        sqlx::query_scalar("SELECT count(*) FROM event_outbox WHERE ce_type = $1")
             .bind(ce_type)
             .fetch_one(&self.pool)
             .await

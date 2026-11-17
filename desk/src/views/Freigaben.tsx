@@ -26,6 +26,7 @@ import { Abgelehnt, SchonEntschieden } from "../data/freigabe";
 import type { Freigabe } from "../data/gen/processd";
 import { call } from "../data/mcp";
 import { useVerweigert, Verweigert } from "../data/verweigert";
+import { Gehalten } from "../design/Gehalten";
 import { Icon } from "../design/Icon";
 import { Notice, Panel } from "../design/Panel";
 import { SourceChip } from "../design/SourceChip";
@@ -35,7 +36,6 @@ import { type Katalog, useT } from "../i18n";
 import { useVorschlaege } from "../inbox/quellen";
 import { useDarstellbar, useEntscheidungsprobe } from "./entscheidungsprobe";
 import { Fragen, VorschlagKarte } from "./Fragen";
-import { Gehalten } from "./Rechnungen";
 
 export const ROW =
   "focus-ring flex cursor-default items-center gap-3 border-b border-separator px-4 py-3 outline-none last:border-b-0 data-[focused]:bg-fill data-[hovered]:bg-fill data-[selected]:bg-fill-strong";

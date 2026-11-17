@@ -7,6 +7,7 @@ mod demo_config;
 mod kafka_ingest;
 mod mcp_round_trips;
 mod meterstore_integration;
+mod openapi_coverage;
 mod router_builds;
 mod schema_code_guard;
 mod seed_payloads;

@@ -491,14 +491,18 @@ async fn o2c(estate: &Estate) -> anyhow::Result<()> {
     // statement is today's — the account opens when the invoice posts.
     estate
         .until(60, "the Offener Posten", || async {
-            let all = estate
-                .get("accountingd", "/api/v1/offene-posten")
-                .await?
-                .ok("GET offene-posten")?;
-            Ok(list(&all)
-                .iter()
-                .any(|p| p["malo_id"] == world::ERIKA_MALO)
-                .then_some(()))
+            // The account exists once the invoice posts; until then its
+            // balance read is a 404.
+            let konto = estate
+                .get(
+                    "accountingd",
+                    &format!("/api/v1/accounts/{}/balance", world::ERIKA_MALO),
+                )
+                .await?;
+            Ok(
+                (konto.status.is_success() && konto.body["balance_ct"].as_i64() > Some(0))
+                    .then_some(()),
+            )
         })
         .await?;
     let mut payment = world::body("accountingd-payment.json");
@@ -595,8 +599,9 @@ async fn bestellung(estate: &Estate) -> anyhow::Result<()> {
 }
 
 /// The households: a customer and a contract each. The first one's meter
-/// read nothing in a period overlapping its January invoice, so its second
-/// invoice scores `ZERO_ENERGY` and `PERIOD_OVERLAP` and billingd's risk gate
+/// read nothing in March, after a normal January and February, so its third
+/// invoice scores `ZERO_ENERGY`, `ROLLING_DEVIATION` (the Grundpreis alone against
+/// January's average) and `PERIOD_GAP` — 80 — and billingd's risk gate
 /// holds it for an analyst.
 async fn haushalte(estate: &Estate) -> anyhow::Result<()> {
     for (i, (vorname, nachname)) in world::HAUSHALTE.iter().enumerate() {
@@ -668,18 +673,34 @@ async fn haushalte(estate: &Estate) -> anyhow::Result<()> {
             .ok("POST calculate (January)")?;
     }
     if mine.len() < 2 {
-        let mut zweite = world::body("billingd-calculate.json");
-        zweite["period_from"] = json!("2026-01-15");
-        zweite["period_to"] = json!("2026-02-14");
-        zweite["meter"]["arbeitsmenge_kwh"] = json!("0");
+        let mut februar = world::body("billingd-calculate.json");
+        februar["period_from"] = json!("2026-02-01");
+        februar["period_to"] = json!("2026-02-28");
         estate
             .post(
                 "billingd",
                 &format!("/api/v1/billing/{leer}/calculate"),
-                &zweite,
+                &februar,
             )
             .await?
-            .ok("POST calculate (the overlapping zero)")?;
+            .ok("POST calculate (February)")?;
+    }
+    if mine.len() < 3 {
+        // Two days after February ends, 29 days long: the gap and the zero
+        // count, the Grundpreis alone deviates from the two months before,
+        // and no live invoice overlaps it.
+        let mut leer_monat = world::body("billingd-calculate.json");
+        leer_monat["period_from"] = json!("2026-03-03");
+        leer_monat["period_to"] = json!("2026-03-31");
+        leer_monat["meter"]["arbeitsmenge_kwh"] = json!("0");
+        estate
+            .post(
+                "billingd",
+                &format!("/api/v1/billing/{leer}/calculate"),
+                &leer_monat,
+            )
+            .await?
+            .ok("POST calculate (the zero month)")?;
     }
     Ok(())
 }
@@ -1012,6 +1033,10 @@ pub fn list(v: &Value) -> Vec<Value> {
         "kunden",
         "records",
         "data",
+        "settlements",
+        "plants",
+        "faelle",
+        "accounts",
     ] {
         if let Some(a) = v[key].as_array() {
             return a.clone();

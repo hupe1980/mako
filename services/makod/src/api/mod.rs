@@ -5,6 +5,7 @@
 
 pub mod edifact_api;
 pub mod einrichtung_api;
+pub mod format_impact_api;
 pub mod invoic_api;
 pub mod malo_admin_api;
 pub mod mcp_server;

@@ -284,9 +284,57 @@ fn recover_detail(message: &str) -> Option<(String, serde_json::Value)> {
     Some((sentence, detail))
 }
 
+/// Refuse a request whose `Content-Type` is not `application/json`, even on
+/// an empty body.
+///
+/// A route that changes state and takes no body would otherwise accept a
+/// cross-site form post: a browser sends `application/json` cross-origin only
+/// after a CORS preflight, so requiring it makes the request one a foreign
+/// page cannot send.
+///
+/// # Errors
+///
+/// `415 json_required`.
+pub fn nur_json(headers: &axum::http::HeaderMap) -> Result<(), ApiError> {
+    let json = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|m| m.trim().eq_ignore_ascii_case("application/json"));
+    if json {
+        Ok(())
+    } else {
+        Err(
+            ApiError::UnsupportedMediaType("this request is sent as application/json".to_owned())
+                .with_code("json_required"),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DETAIL_SENTINEL, Json, Lenient};
+
+    /// Only `application/json` (with or without parameters) passes; a missing
+    /// or form content type is `415 json_required`.
+    #[test]
+    fn only_application_json_passes_nur_json() {
+        use axum::http::{HeaderMap, HeaderValue, StatusCode, header::CONTENT_TYPE};
+        let mut h = HeaderMap::new();
+        let refused = super::nur_json(&h).expect_err("no content type");
+        assert_eq!(refused.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(refused.code(), Some("json_required"));
+        h.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        assert!(super::nur_json(&h).is_err(), "a form post");
+        h.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("Application/JSON; charset=utf-8"),
+        );
+        assert!(super::nur_json(&h).is_ok());
+    }
     use axum::{Router, body::Body, http::Request, routing::post};
     use serde::Deserialize;
     use tower::ServiceExt as _;

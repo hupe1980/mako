@@ -1,0 +1,46 @@
+{
+  "specialist": "desk-assistant",
+  "event_type": "manual",
+  "expected_citations": [],
+  "provenance": "synthetic",
+  "id": "disput-aufrechterhalten",
+  "event": {
+    "frage": "Was schlägst du vor?",
+    "disput": "9b2f6a40-5d0e-4c55-8a3e-0c7d2f1e9a11"
+  },
+  "tool_results": {
+    "invoicd/get_receipt": [
+      {
+        "id": "9b2f6a40-5d0e-4c55-8a3e-0c7d2f1e9a11",
+        "process_id": "123e4567-e89b-12d3-a456-426614174000",
+        "pid": 31002,
+        "sender_mp_id": "9900357000004",
+        "outcome": "Dispute",
+        "received_at": "2026-11-10T09:00:00Z",
+        "dispatched_at": "2026-11-10T09:05:00Z",
+        "bo4e_version": "v202607"
+      }
+    ],
+    "invoicd/get_check_result": [
+      {
+        "id": "9b2f6a40-5d0e-4c55-8a3e-0c7d2f1e9a11",
+        "outcome": "Dispute",
+        "findings": [
+          {
+            "kind": "TariffDeviation",
+            "bezeichnung": "Preis weicht vom Preisblatt ab",
+            "is_dispute": true,
+            "message": "Position 1: Arbeitspreis 9,12 ct/kWh, Preisblatt 8,95 ct/kWh"
+          }
+        ],
+        "checked_at": "2026-11-10T09:00:05Z"
+      }
+    ]
+  },
+  "expected": {
+    "label": "positive",
+    "findings": [
+      "/vorschlag/aktion=aufrechterhalten;/vorschlag/antwortcode=null;/vorschlag/befund=TariffDeviation"
+    ]
+  }
+}

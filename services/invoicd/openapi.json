@@ -1,0 +1,2028 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "invoicd — INVOIC check and settlement",
+    "description": "The § 147 AO receipt register of every INVOIC a market partner sent, the answers it was given, the statements that decide a held invoice, and the webhook routes for the events invoicd emits.",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.38.0"
+  },
+  "paths": {
+    "/api/v1/disputes": {
+      "get": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`GET /api/v1/disputes` — the open exception queue.",
+        "operationId": "list_disputes",
+        "responses": {
+          "200": {
+            "description": "Receipts whose outcome is Dispute, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReceiptSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-disputes` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The service's events within the retention window, in commit order — the\nfeed an integrator polls instead of, or beside, an endpoint. Each item is\nthe CloudEvent as delivered.",
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Value"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/leistungsnachweise": {
+      "post": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`POST /api/v1/leistungsnachweise`",
+        "description": "Record that the MSB performed — or did not perform — an ordered Leistung\nfor an Artikel-ID over a period: Prüfschritt 310 for every position it\ncovers. Every invoice of that MSB held on that order walks again at once;\none recorded before its invoice arrives is read when it does.",
+        "operationId": "post_leistungsnachweis",
+        "requestBody": {
+          "description": "`Leistungsnachweis`: Rechnungssteller, Bestellung, Artikel-ID, period, whether it was performed, and the Nachweis",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded; every held invoice of that order walked again (`erneut_geprueft`)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `record-feststellung` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No Nachweis, or `von` after `bis`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/overdue-remadv": {
+      "get": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`GET /api/v1/overdue-remadv`",
+        "description": "Receipts whose Zahlungsziel is within three days and whose answer never went\nout. An undispatched answer past the Zahlungsziel is both a market-process\nbreach and a § 147 AO gap, so this is the alert query: run it every 6 h and\nalert when it is non-empty.",
+        "operationId": "list_overdue_remadv",
+        "responses": {
+          "200": {
+            "description": "`count` and `items`: receipts within three days of their Zahlungsziel whose answer never went out",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-overdue-remadv` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/receipts": {
+      "get": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`GET /api/v1/receipts` — list receipts for this tenant.",
+        "operationId": "list_receipts",
+        "parameters": [
+          {
+            "name": "sender_mp_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Receipts, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReceiptSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-receipt` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/receipts/{id}": {
+      "get": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`GET /api/v1/receipts/{id}`",
+        "operationId": "get_receipt",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The receipt",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-receipt` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such receipt in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/receipts/{id}/confirm-payment": {
+      "post": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`POST /api/v1/receipts/{id}/confirm-payment`",
+        "description": "The ERP reports that the money moved. Closes the § 147 AO payment trail and\nstops the receipt appearing in the overdue view.",
+        "operationId": "confirm_payment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The receipt",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The payment is recorded"
+          },
+          "403": {
+            "description": "Cedar `write-receipt` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such receipt, or it was confirmed already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/receipts/{id}/dispatch-answer": {
+      "post": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`POST /api/v1/receipts/{id}/dispatch-answer`",
+        "description": "Re-send the market answer for a receipt whose automatic dispatch failed.\n\nThe routing key, the command and the payload all come from the receipt:\n\n- **The routing key** is the EDIFACT message reference, which is what\n  `makod` correlates the answer by.\n- **The command** is the answering PID's, from [`crate::routing`].\n- **The payload** is the one recorded at the check — Antwortcode, EBD,\n  Befunde and Ablehnungsgrund — so the REMADV states what the automatic\n  answer would have.\n\nGetting either wrong fails silently — `makod` accepts the command and only\nthe correlation misses — so neither is defaulted.",
+        "operationId": "dispatch_answer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The receipt",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The answer command was accepted by makod",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `write-receipt` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such receipt in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The answer went out already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The receipt has no answer to send",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not accept the command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/receipts/{id}/feststellungen": {
+      "post": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`POST /api/v1/receipts/{id}/feststellungen`",
+        "description": "State the answers a held invoice's walk could not read — Prüfschritt 310\n(Leistung erbracht), 320 (Preis wie Angebot), 330 (Steuersatz) per\nPositionsnummer, and 80 (Preisblatt-Version) — and walk it again in place.\nA walk that now reaches a verdict is answered and announced as an\nautomatic one would be; one still open names what is missing. `409` when\nthe receipt is not held.",
+        "operationId": "post_feststellungen",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The receipt",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`FeststellungBody`: the stated Prüfschritt answers and the Begründung",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The receipt walked again; `outcome` is its result",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `record-feststellung` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The receipt is not held for a statement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No Begründung, or no Prüfschritt stated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The walk could not run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/receipts/{id}/rechnung": {
+      "get": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`GET /api/v1/receipts/{id}/rechnung` — the invoice exactly as received.",
+        "operationId": "get_rechnung",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The receipt",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The BO4E Rechnung exactly as received, with its BO4E version and PID",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-receipt` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such receipt in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/receipts/{id}/resolve-dispute": {
+      "post": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`POST /api/v1/receipts/{id}/resolve-dispute`",
+        "description": "Record that a dispute was settled out of band (a corrected invoice, a phone\ncall, a COMDIS). Moves `Dispute` → `Resolved` with the caller as the\ndecider and the operator's note. No market message goes out: the answer\nREMADV was sent when the dispute was raised.",
+        "operationId": "resolve_dispute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The receipt",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "An optional note on how the dispute was settled",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveDisputeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Dispute → Resolved, with the caller as decider"
+          },
+          "403": {
+            "description": "Cedar `write-receipt` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such receipt in Dispute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/deliveries/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue one delivery again, whatever its state.",
+        "operationId": "replay_delivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The delivery's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`delivery_not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The endpoints, a page ordered by name.",
+        "operationId": "list_endpoints",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; absent for the first.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Endpoint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Register an endpoint; the answer shows its secret once.",
+        "operationId": "create_endpoint",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointCreated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_name_taken`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`endpoint_url_not_allowed`, `endpoint_name_reserved`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "One endpoint, with its version as `ETag`.",
+        "operationId": "get_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Replace an endpoint; `If-Match` names the version read.",
+        "operationId": "update_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete an endpoint; its pending deliveries are cancelled with it.",
+        "operationId": "delete_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/deliveries": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The deliveries of one endpoint, newest first.",
+        "operationId": "list_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Which deliveries; every one when absent.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryFilter"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Delivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue every event of a time window again for one endpoint, including\nevents that never had a delivery to it.",
+        "operationId": "replay_window",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayWindow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention` (with `oldest_replayable`), `replay_window_invalid`, `replay_window_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Rotate the secret: the new one signs from now, the previous one beside it\nfor `overlap_hours`. The answer shows the new secret once.",
+        "operationId": "rotate_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretRotated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`overlap_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/test": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Send `de.mako.webhook.test` to the endpoint now, signed like a delivery.",
+        "operationId": "test_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestDelivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/zahlungsstatus/{malo_id}": {
+      "get": {
+        "tags": [
+          "receipts"
+        ],
+        "summary": "`GET /api/v1/zahlungsstatus/{malo_id}` — payment lifecycle per MaLo.",
+        "operationId": "get_zahlungsstatus",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The payment lifecycle of the Marktlokation's receipts, with counts per status",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-receipt` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "Delivery": {
+        "type": "object",
+        "description": "One event to one endpoint.",
+        "required": [
+          "id",
+          "endpoint_id",
+          "event_id",
+          "event_type",
+          "status",
+          "attempts",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts made."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the delivery was created."
+          },
+          "endpoint_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint delivered to."
+          },
+          "event_id": {
+            "type": "string",
+            "description": "The CloudEvent `id`, sent as `webhook-id`."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "The CloudEvent `type`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The delivery's id — what a single replay names."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last attempt's failure."
+          },
+          "last_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status of the last attempt; absent when it got no answer."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long the last answered attempt took, in milliseconds."
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next attempt is due, while pending."
+          },
+          "ordering_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The aggregate the event is about; deliveries of one key arrive in order."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus",
+            "description": "`pending`, `delivered` or `dead_lettered`."
+          }
+        }
+      },
+      "DeliveryFilter": {
+        "type": "string",
+        "description": "Which deliveries the log lists.",
+        "enum": [
+          "all",
+          "pending",
+          "delivered",
+          "failed"
+        ]
+      },
+      "DeliveryStatus": {
+        "type": "string",
+        "description": "A delivery's state.",
+        "enum": [
+          "pending",
+          "delivered",
+          "dead_lettered"
+        ]
+      },
+      "Endpoint": {
+        "type": "object",
+        "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "event_types",
+          "extensions",
+          "owner",
+          "active",
+          "version",
+          "created_at"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the endpoint was registered."
+          },
+          "deactivated_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the endpoint was deactivated (`gone`)."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is the config URL."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Owner",
+            "description": "`config` or `api`."
+          },
+          "partner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+          },
+          "previous_secret_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when the previous secret still signs, after a rotation."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where deliveries are POSTed."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The version `If-Match` names."
+          }
+        }
+      },
+      "EndpointCreate": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints`.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is reserved for the config URL."
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EndpointCreated": {
+        "type": "object",
+        "description": "A created endpoint and its secret — the only answer that shows it.",
+        "required": [
+          "endpoint",
+          "secret"
+        ],
+        "properties": {
+          "endpoint": {
+            "$ref": "#/components/schemas/Endpoint",
+            "description": "The endpoint."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The `whsec_` signing secret; shown once."
+          }
+        }
+      },
+      "EndpointUpdate": {
+        "type": "object",
+        "description": "The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.",
+        "required": [
+          "url",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Owner": {
+        "type": "string",
+        "description": "Who owns an endpoint.",
+        "enum": [
+          "config",
+          "api"
+        ]
+      },
+      "Page_Delivery": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One event to one endpoint.",
+              "required": [
+                "id",
+                "endpoint_id",
+                "event_id",
+                "event_type",
+                "status",
+                "attempts",
+                "created_at"
+              ],
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Attempts made."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the delivery was created."
+                },
+                "endpoint_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint delivered to."
+                },
+                "event_id": {
+                  "type": "string",
+                  "description": "The CloudEvent `id`, sent as `webhook-id`."
+                },
+                "event_type": {
+                  "type": "string",
+                  "description": "The CloudEvent `type`."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The delivery's id — what a single replay names."
+                },
+                "last_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The last attempt's failure."
+                },
+                "last_status": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "The HTTP status of the last attempt; absent when it got no answer."
+                },
+                "latency_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "How long the last answered attempt took, in milliseconds."
+                },
+                "next_attempt_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When the next attempt is due, while pending."
+                },
+                "ordering_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The aggregate the event is about; deliveries of one key arrive in order."
+                },
+                "status": {
+                  "$ref": "#/components/schemas/DeliveryStatus",
+                  "description": "`pending`, `delivered` or `dead_lettered`."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Endpoint": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+              "required": [
+                "id",
+                "name",
+                "url",
+                "event_types",
+                "extensions",
+                "owner",
+                "active",
+                "version",
+                "created_at"
+              ],
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the endpoint was registered."
+                },
+                "deactivated_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Why the endpoint was deactivated (`gone`)."
+                },
+                "event_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "`mako_events::matches` patterns; empty matches every type."
+                },
+                "extensions": {
+                  "type": "object",
+                  "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint's id."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Unique per service; `default` is the config URL."
+                },
+                "owner": {
+                  "$ref": "#/components/schemas/Owner",
+                  "description": "`config` or `api`."
+                },
+                "partner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "previous_secret_expires_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "Until when the previous secret still signs, after a rotation."
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Where deliveries are POSTed."
+                },
+                "version": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "The version `If-Match` names."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Value": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {},
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "ReceiptSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "process_id",
+          "pid",
+          "sender_mp_id",
+          "outcome",
+          "received_at",
+          "bo4e_version"
+        ],
+        "properties": {
+          "bo4e_version": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invoice_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "process_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "rechnungsnummer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sender_mp_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ReplayWindow": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the window, inclusive (RFC 3339)."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the window, exclusive (RFC 3339)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Replayed": {
+        "type": "object",
+        "description": "How many deliveries a replay queued.",
+        "required": [
+          "queued"
+        ],
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deliveries queued again or for the first time."
+          }
+        }
+      },
+      "ResolveDisputeBody": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "RotateSecret": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.",
+        "required": [
+          "overlap_hours"
+        ],
+        "properties": {
+          "overlap_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long the previous secret keeps signing, at most 168 hours.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "SecretRotated": {
+        "type": "object",
+        "description": "A rotated secret — the only answer that shows it.",
+        "required": [
+          "secret",
+          "previous_expires_at"
+        ],
+        "properties": {
+          "previous_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until when the previous secret also signs."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The new `whsec_` signing secret; shown once."
+          }
+        }
+      },
+      "TestDelivery": {
+        "type": "object",
+        "description": "What a test delivery came to.",
+        "required": [
+          "delivered"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "boolean",
+            "description": "Whether the endpoint answered 2xx."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was not delivered."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long it took, when it answered."
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status, when it answered.",
+            "minimum": 0
+          }
+        }
+      },
+      "TotalEstimate": {
+        "type": "object",
+        "description": "A count bounded at [`COUNT_CAP`]: a list over a million rows reports\n`{count: 10000, capped: true}` rather than counting them.",
+        "required": [
+          "count",
+          "capped"
+        ],
+        "properties": {
+          "capped": {
+            "type": "boolean",
+            "description": "`true` when there are more rows than `count`."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The rows counted, at most 10 000."
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "receipts",
+      "description": "Received invoices, their answers and their payment"
+    },
+    {
+      "name": "webhooks",
+      "description": "Webhook endpoints, deliveries, replay and the event feed"
+    }
+  ]
+}

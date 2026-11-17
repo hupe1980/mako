@@ -46,6 +46,10 @@
 //   "trigger-mabis-run"    — POST /api/v1/mabis/sync, PUT /runs/{id}/retry —
 //                            files a binding Summenzeitreihe (MSCONS 13003)
 //                            with the BIKO
+//   "manage-subscription"  — /api/v1/webhooks/endpoints[/{id}[/…]] and
+//                            /api/v1/webhooks/deliveries/{id}/replay (the
+//                            shared `mako_service::subscriptions` routes)
+//   "read-events"          — GET  /api/v1/events — the outbox as a feed
 //   "use-mcp"              — the blanket gate the shared MCP middleware applies
 //                            (`mako_service::mcp_auth::McpAuth::authenticate`)
 //   "read-policy"          — GET  /api/v1/policy (the operator policy report)
@@ -162,6 +166,23 @@ permit(
     context.principal_tenant == context.resource_tenant &&
     (context.principal_roles.contains("NB") ||
      context.principal_roles.contains("UENB"))
+};
+
+// ── Webhook subscriptions ─────────────────────────────────────────────────────
+// An endpoint receives every invoice event netzbilanzd emits that matches its
+// filter — counterparty, MaLo and amount — so registering one is an outbound
+// data-export decision, and its test delivery reports the target's HTTP status,
+// which makes it a network probe. Both are the operator's, not a market role's.
+permit(
+    principal,
+    action in [
+        Action::"manage-subscription",
+        Action::"read-events"
+    ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("ADMIN")
 };
 
 // ── MCP ───────────────────────────────────────────────────────────────────────

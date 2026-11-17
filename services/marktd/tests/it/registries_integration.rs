@@ -40,6 +40,9 @@ async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
         .execute(&pool)
         .await
         .expect("apply schema");
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
     Some((pool, container))
 }
 
@@ -824,8 +827,8 @@ async fn the_put_commits_the_contract_and_its_event_together() {
 
     assert_eq!(put(body.clone()).await, StatusCode::OK);
     let events: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM event_log WHERE ce_type = 'de.markt.msb-rahmenvertrag.updated' \
-           AND sparte = 'STROM'",
+        "SELECT count(*) FROM event_outbox WHERE ce_type = 'de.markt.msb-rahmenvertrag.updated' \
+           AND envelope ->> 'marktsparte' = 'STROM'",
     )
     .fetch_one(&pool)
     .await
@@ -858,7 +861,7 @@ async fn the_put_commits_the_contract_and_its_event_together() {
     assert_eq!(answer["befund"], "abgeschlossen");
 
     // Make the enqueue fail: the contract write must roll back with it.
-    sqlx::raw_sql("DROP TABLE event_log CASCADE")
+    sqlx::raw_sql("DROP TABLE event_outbox CASCADE")
         .execute(&pool)
         .await
         .unwrap();

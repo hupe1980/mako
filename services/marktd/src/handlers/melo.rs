@@ -224,7 +224,7 @@ pub async fn put_melo(
                 marktmaloid: req.malo_id.clone(),
                 ..Default::default()
             });
-            if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+            if let Err(e) = crate::outbox::enqueue(&mut tx, &evt).await {
                 return ApiError::internal(
                     anyhow::Error::from(e)
                         .context(format!("melo: durable enqueue for MeLo {melo_id}")),

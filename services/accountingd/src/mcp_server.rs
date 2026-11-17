@@ -10,6 +10,8 @@
 //! | `list_overdue` | Accounts with an open balance, largest first |
 //! | `list_sepa_collections` | SEPA collections and their lifecycle (SUBMITTED → SETTLED/REJECTED/RETURNED/REVERSED) |
 //! | `list_eeg_payouts` | The EEG payout orders the Netzbetreiber ran, by plant and billing month |
+//! | `list_unmatched_payments` | Bank lines no account claimed, waiting for an operator |
+//! | `list_credit_payouts` | Guthaben from Schlussrechnungen owed back, and which are overdue |
 //! | `suggest_payment_match` | AI payment reconciliation: match CAMT.054 to open Rechnungen |
 
 use axum::{
@@ -162,21 +164,6 @@ pub struct SepaCollectionParams {
     pub status: Option<String>,
     /// Restrict to one customer MaLo.
     pub malo_id: Option<String>,
-    /// Maximum rows (default 100, capped at 1000).
-    pub limit: Option<i64>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct EegPayoutParams {
-    /// Billing year of the receipt chain paid.
-    pub year: Option<i16>,
-    /// Billing month (1–12) of the receipt chain paid.
-    pub month: Option<i16>,
-    /// Restrict to one plant's MaLo.
-    pub malo_id: Option<String>,
-    /// pain.002 status: `PDNG` | `ACCP` | `ACSC` | `RJCT` | `CANC`, or `NULL` for
-    /// orders not yet submitted.
-    pub status: Option<String>,
     /// Maximum rows (default 100, capped at 1000).
     pub limit: Option<i64>,
 }
@@ -373,46 +360,54 @@ issuing the reversal itself is an operator decision and is not exposed as a tool
     }
 
     #[tool(
-        description = "List the EEG payout orders the Netzbetreiber ran (§ 19 Abs. 1 EEG 2023): \
+        description = "List the EEG payout orders the Netzbetreiber ran (§ 19 Abs. 1 EEG 2023), newest first: \
 each names its plant (tr_id), MaLo, billing month, amount in ct, creditor and pain.002 status. \
-Filter by year/month, malo_id or status (PDNG, ACCP, ACSC, RJCT, CANC, or NULL for not yet \
-submitted). Read-only; held to the NB role like GET /api/v1/eeg/payouts.",
-        annotations(read_only_hint = true, open_world_hint = false)
+Filter by tr_id, malo_id, year/month, payment_type or status (PDNG, ACCP, ACSC, RJCT, CANC, or NULL \
+for not yet submitted). Read-only; held to the NB role like GET /api/v1/eeg/payouts.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::reads::EegAuszahlungen>()
     )]
     async fn list_eeg_payouts(
         &self,
-        Parameters(p): Parameters<EegPayoutParams>,
+        Parameters(p): Parameters<crate::reads::EegPayoutQuery>,
     ) -> Result<CallToolResult, McpError> {
-        let filter = crate::pg::EegPayoutFilter {
-            malo_id: p.malo_id.as_deref(),
-            year: p.year,
-            month: p.month,
-            payment_type: None,
-            status: p
-                .status
-                .as_deref()
-                .map(|s| if s == "NULL" { None } else { Some(s) }),
-        };
-        match crate::pg::list_eeg_payouts(
-            &self.state.pool,
-            &self.state.tenant,
-            &filter,
-            p.limit.unwrap_or(100).clamp(1, 1000),
+        mako_service::mcp::answer(
+            crate::reads::eeg_payouts(&self.state.pool, &self.state.tenant, &p).await,
         )
-        .await
-        {
-            Ok(rows) => {
-                let payouts: Vec<serde_json::Value> =
-                    rows.iter().map(crate::handlers::eeg_payout_json).collect();
-                ContentBlock::json(serde_json::json!({
-                    "count": payouts.len(),
-                    "payouts": payouts,
-                }))
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+    }
+
+    #[tool(
+        description = "List the bank lines no account claimed (flat import and camt.052/053/054), oldest value date first, `limit` of them (default 100, at most 1000): each with payment_id, amount_ct, is_return, value_date, reference, end_to_end_id and the payer's IBAN masked. Propose an account with `suggest_payment_match`; an operator books it with POST /api/v1/payments/{payment_id}/assign.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::unmatched::UnzugeordneteZahlungen>()
+    )]
+    async fn list_unmatched_payments(
+        &self,
+        Parameters(p): Parameters<crate::handlers::UnmatchedQuery>,
+    ) -> Result<CallToolResult, McpError> {
+        mako_service::mcp::answer(
+            crate::unmatched::list(&self.state.pool, &self.state.tenant, p.limit).await,
+        )
+    }
+
+    #[tool(
+        description = "List the Guthaben Schlussrechnungen owe back (§ 40c Abs. 3 EnWG: paid out within two weeks of the Rechnungsdatum), earliest due date first: each with payout_id, rechnungsnummer, malo_id, amount_ct, due_on, status (open, paid, cancelled) and overdue. Default: the open ones; `overdue=true` only those past due_on.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::guthaben::Guthabenauszahlungen>()
+    )]
+    async fn list_credit_payouts(
+        &self,
+        Parameters(p): Parameters<crate::guthaben::CreditPayoutQuery>,
+    ) -> Result<CallToolResult, McpError> {
+        mako_service::mcp::answer(
+            crate::guthaben::list(
+                &self.state.pool,
+                &self.state.tenant,
+                &p,
+                mako_fristen::heute(),
+            )
+            .await,
+        )
     }
 
     #[tool(
@@ -1096,6 +1091,8 @@ pub fn tool_action(tool: &str) -> Option<&'static str> {
         // § 250 accrual position off the ledger.
         "list_dunning"
         | "list_overdue"
+        | "list_unmatched_payments"
+        | "list_credit_payouts"
         | "compute_bilanzielle_abgrenzung"
         | "list_parked_bookings"
         | "get_parked_booking" => "read-books",
@@ -1189,7 +1186,9 @@ pub fn router(state: Arc<AccountingdMcpState>, _shutdown: CancellationToken) -> 
     );
     Router::new()
         .route_service("/mcp", service)
-        .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
+        // `route_layer`, not `layer`: a layer also wraps the fallback, which a
+        // merge hands every unknown path of the service.
+        .route_layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
 }
 
 #[cfg(test)]
@@ -1240,6 +1239,9 @@ mod tests {
             "list_dunning" => "/api/v1/dunning",
             "list_overdue" => "/api/v1/offene-posten",
             "suggest_payment_match" => "/api/v1/payments/match",
+            "list_unmatched_payments" => "/api/v1/payments/unmatched",
+            "list_credit_payouts" => "/api/v1/credit-payouts",
+            "list_eeg_payouts" => "/api/v1/eeg/payouts",
             _ => panic!("{tool} has no REST twin"),
         }
     }
@@ -1273,6 +1275,9 @@ mod tests {
             ("list_dunning", "get_dunning"),
             ("list_overdue", "get_offene_posten"),
             ("suggest_payment_match", "match_payment"),
+            ("list_unmatched_payments", "get_unmatched_payments"),
+            ("list_credit_payouts", "get_credit_payouts"),
+            ("list_eeg_payouts", "get_eeg_payouts"),
         ] {
             let start = HANDLERS
                 .find(&format!("\npub async fn {handler}("))
@@ -1397,5 +1402,81 @@ mod tests {
                 },
             );
         }
+    }
+
+    #[test]
+    fn list_unmatched_payments_answers_its_declared_schema() {
+        holds_to_schema(
+            "list_unmatched_payments",
+            &crate::unmatched::UnzugeordneteZahlungen {
+                payments: vec![crate::unmatched::UnzugeordneteZahlung {
+                    payment_id: uuid::Uuid::nil().to_string(),
+                    bank_transaction_id: "TXN-1".into(),
+                    amount_ct: 4217,
+                    amount_eur: "42.17".into(),
+                    is_return: false,
+                    value_date: "2026-11-02".into(),
+                    reference: "Abschlag".into(),
+                    end_to_end_id: None,
+                    iban_masked: Some("DE…3000".into()),
+                    source: crate::unmatched::Quelle::Camt054,
+                    received_at: "2026-11-02T08:00:00Z".into(),
+                }],
+                count: 1,
+                saturated: false,
+            },
+        );
+    }
+
+    #[test]
+    fn list_credit_payouts_answers_its_declared_schema() {
+        holds_to_schema(
+            "list_credit_payouts",
+            &crate::guthaben::Guthabenauszahlungen {
+                payouts: vec![crate::guthaben::Guthabenauszahlung {
+                    payout_id: uuid::Uuid::nil().to_string(),
+                    rechnungsnummer: "RE-2026-000042".into(),
+                    malo_id: "51238696012".into(),
+                    lf_mp_id: "9900357000004".into(),
+                    amount_ct: 4217,
+                    amount_eur: "42.17".into(),
+                    rechnungsdatum: "2026-04-01".into(),
+                    due_on: "2026-04-15".into(),
+                    status: crate::guthaben::Status::Open,
+                    overdue: true,
+                }],
+                count: 1,
+                overdue_count: 1,
+                saturated: false,
+            },
+        );
+    }
+
+    #[test]
+    fn list_eeg_payouts_answers_its_declared_schema() {
+        holds_to_schema(
+            "list_eeg_payouts",
+            &crate::reads::EegAuszahlungen {
+                payouts: vec![crate::reads::EegAuszahlung {
+                    payout_id: uuid::Uuid::nil().to_string(),
+                    malo_id: "51238696012".into(),
+                    tr_id: "E0000000001".into(),
+                    billing_year: 2026,
+                    billing_month: 10,
+                    amount_ct: 12_345,
+                    amount_eur: "123.45".into(),
+                    creditor_name: "Solar Muster GbR".into(),
+                    payment_type: "SCT_INST".into(),
+                    end_to_end_ref: "EEG-1".into(),
+                    pain002_status: Some("ACCP".into()),
+                    pain002_reason: None,
+                    submitted_at: Some("2026-11-02T08:00:00Z".into()),
+                    settled_at: None,
+                    created_at: "2026-11-02T07:00:00Z".into(),
+                }],
+                count: 1,
+                saturated: false,
+            },
+        );
     }
 }

@@ -153,6 +153,19 @@ pub async fn get_versorgungsstatus_history(
 }
 
 /// PUT /api/v1/versorgung/:malo_id
+#[utoipa::path(
+    put,
+    path = "/api/v1/versorgung/{malo_id}",
+    tag = "versorgung",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body = VersorgungsStatusUpsertRequest,
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_versorgungsstatus(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -325,7 +338,7 @@ pub async fn put_versorgungsstatus(
         marktsparte: sparte,
         ..Default::default()
     });
-    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+    if let Err(e) = crate::outbox::enqueue(&mut tx, &evt).await {
         return ApiError::internal(anyhow::Error::from(e).context(format!(
             "versorgung: durable enqueue for MaLo {malo_id_str}"
         )))

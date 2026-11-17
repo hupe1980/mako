@@ -81,6 +81,18 @@ impl From<MaloGridRecord> for MaloGridResponse {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `GET /api/v1/malos/{malo_id}/grid` — fetch the grid topology for a MaLo.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malos/{id}/grid",
+    tag = "malo-grid",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_malo_grid(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -110,6 +122,19 @@ pub async fn get_malo_grid(
 ///
 /// Requires the `write-malo-grid` action in the Cedar policy.
 /// Idempotent — safe to call repeatedly from `mastr-syncd`.
+#[utoipa::path(
+    put,
+    path = "/api/v1/malos/{id}/grid",
+    tag = "malo-grid",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    request_body(content = serde_json::Value, description = "`PutMaloGridBody`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_malo_grid(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

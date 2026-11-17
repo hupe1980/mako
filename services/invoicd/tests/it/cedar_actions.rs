@@ -100,6 +100,12 @@ fn the_declared_list_matches_the_authorize_calls() {
     // `read-policy` and `read-config` are checked by
     // `mako_service::einrichtung::router`.
     called.extend(["read-policy", "read-config"]);
+    // `manage-subscription` and `read-events` are checked by
+    // `mako_service::subscriptions`, whose routes the router merges.
+    called.extend([
+        mako_service::subscriptions::MANAGE,
+        mako_service::subscriptions::READ_EVENTS,
+    ]);
     called.sort_unstable();
     called.dedup();
 

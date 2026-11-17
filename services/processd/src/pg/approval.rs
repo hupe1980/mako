@@ -348,8 +348,13 @@ impl PgApprovalQueue {
         Self { pool }
     }
 
+    /// Queue `entry` and open its `operator_decision` Klärfall in the same
+    /// transaction: a Freigabe and its case are one record, so neither exists
+    /// without the other. A second entry for the process is not queued and
+    /// opens nothing.
     pub async fn enqueue(&self, entry: &ApprovalQueueEntry) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        let mut tx = self.pool.begin().await?;
+        let queued = sqlx::query(
             "INSERT INTO approval_queue (id, process_id, pid, malo_id, reason, status, approve_command, reject_command, marktrolle, followup_command, followup_payload, answer_payload, reject_payload, ablehnung_ebd, expires_at, created_at, tenant, vorschlag_quelle, vorschlag_sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (process_id, tenant) DO NOTHING",
         )
         .bind(entry.id).bind(entry.process_id).bind(entry.pid).bind(&entry.malo_id)
@@ -361,7 +366,18 @@ impl PgApprovalQueue {
         .bind(entry.expires_at).bind(entry.created_at).bind(&entry.tenant)
         .bind(serde_json::to_value(&entry.vorschlag_quelle).map_err(|e| sqlx::Error::Encode(Box::new(e)))?)
         .bind(entry.proposal_sha256())
-        .execute(&self.pool).await?;
+        .execute(&mut *tx).await?
+        .rows_affected() == 1;
+        if queued {
+            crate::klaerfall::open_or_attach(
+                &mut *tx,
+                &entry.tenant,
+                &crate::klaerfall::signal_of_freigabe(entry),
+                entry.created_at,
+            )
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -460,6 +476,22 @@ impl PgApprovalQueue {
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(map_entry).collect()
+    }
+
+    /// The entry of `process_id` — there is at most one per process.
+    pub async fn find_by_process(
+        &self,
+        process_id: Uuid,
+        tenant: &str,
+    ) -> Result<Option<ApprovalQueueEntry>, sqlx::Error> {
+        let opt = sqlx::query(mako_service::sql::dynamic(format!(
+            "SELECT {ENTRY_COLUMNS} FROM approval_queue WHERE process_id = $1 AND tenant = $2"
+        )))
+        .bind(process_id)
+        .bind(tenant)
+        .fetch_optional(&self.pool)
+        .await?;
+        opt.map(|r| map_entry(&r)).transpose()
     }
 
     pub async fn find_by_id(
@@ -718,7 +750,7 @@ pub fn answer_contract(command: &str) -> Option<&'static [Pflichtfeld]> {
 /// Every field is optional because a held Accept carries its answer already;
 /// an escalated decision does not, and is refused without the ones its command
 /// needs.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OperatorAnswer {
     /// The EBD Antwortcode (`SG4 STS+E01` / `AJT`).

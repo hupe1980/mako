@@ -702,3 +702,50 @@ async fn a_timeout_is_retried_and_a_refusal_is_not() {
         .unwrap();
     assert_eq!(outbox::list_dead_letters(&pool, 10).await.unwrap().len(), 1);
 }
+
+/// A worker's `LISTEN` connection is its own, never one of the service pool's:
+/// a listener holds its connection for the worker's life, so one taken from a
+/// pool of one leaves the worker's own drain — and every request — waiting out
+/// the acquire timeout, and the committed event is never delivered.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_listener_takes_no_connection_from_the_pool() {
+    let setup = boot().await;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(2))
+        .connect_with((*setup.connect_options()).clone())
+        .await
+        .expect("a pool of one");
+    let (url, rx) = spawn_receiver(vec![200]).await;
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    tokio::spawn(
+        OutboxWorker::new(pool.clone(), url, None)
+            .with_config(fast_config())
+            .run(shutdown.clone()),
+    );
+    // The worker has opened its listener.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let mut conn = pool
+        .acquire()
+        .await
+        .expect("the pool's one connection is free beside a listening worker");
+    let mut tx = sqlx::Connection::begin(&mut *conn).await.unwrap();
+    outbox::enqueue(&mut tx, &sample_event()).await.unwrap();
+    tx.commit().await.unwrap();
+    drop(conn);
+
+    for _ in 0..100 {
+        if rx.calls.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    shutdown.cancel();
+    assert_eq!(
+        rx.calls.load(Ordering::SeqCst),
+        1,
+        "the worker drained on the pool's one connection"
+    );
+}

@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -414,6 +414,8 @@ describe("the Prozess page", () => {
       expect(within(bar).queryByRole("button", { name: "Entscheiden" })).toBeNull(),
     );
     expect(within(bar).getByText(/Entscheiden geht erst wieder/)).toBeTruthy();
+    // The banner names the service, as an operator knows it (SR-043).
+    expect((await screen.findByRole("alert")).textContent).toContain("Prozessüberwachung");
   });
 
   it("labels each message with who sent it, the agent's colour only where a proposal was involved", async () => {
@@ -520,5 +522,45 @@ describe("the Prozess page", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { level: 1 }).textContent).toContain("wf-late"),
     );
+  });
+});
+
+describe("the Nachweise (SR-045)", () => {
+  it("calls a sent message with no Zustellquittung recorded, never delivered", async () => {
+    stub({
+      deadlines: [],
+      history: [
+        {
+          ...eintrag(1, "2031-01-01T09:00:00Z", "AntwortGesendet", "ausgang", 55002),
+          akteur: "system",
+        },
+      ],
+    });
+    await open(`/prozess?key=${KEY}`);
+    const kette = await screen.findByRole("list", { name: "Nachweise" });
+    const zeile = (await within(kette).findAllByRole("listitem"))[0] as HTMLElement;
+    expect(zeile.textContent).toContain("Ausgang · PID 55002");
+    expect(zeile.textContent).toContain("aufgezeichnet");
+    expect(zeile.textContent).not.toMatch(/zugestellt/);
+  });
+});
+
+describe("drift on focus (SR-043)", () => {
+  it("asks each service's tools again when the window regains focus", async () => {
+    stub({ deadlines: [] });
+    await open(`/prozess?key=${KEY}`);
+    await screen.findByRole("heading", { level: 1, name: /Lieferantenwechsel/ });
+    const lists = () =>
+      (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls.filter(
+        ([u, i]) => u.startsWith("/svc/processd/mcp") && String(i?.body).includes('"tools/list"'),
+      ).length;
+    await waitFor(() => expect(lists()).toBeGreaterThan(0));
+    const vorher = lists();
+    // A minute later the check is stale; focus brings it back.
+    vi.setSystemTime(Date.now() + 61_000);
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() => expect(lists()).toBeGreaterThan(vorher));
+    vi.useRealTimers();
   });
 });

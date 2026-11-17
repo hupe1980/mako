@@ -46,6 +46,8 @@
 
 pub mod api;
 pub mod core;
+/// Which archived messages a candidate Formatversion would refuse.
+pub mod format_impact;
 pub mod orchestrator;
 pub mod transport;
 

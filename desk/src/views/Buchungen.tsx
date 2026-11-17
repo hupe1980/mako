@@ -23,6 +23,7 @@ import { buchungsart, ErneutGeparkt } from "../data/buchung";
 import type { GeparkteBuchung } from "../data/gen/accountingd";
 import { Abgelehnt, SchonErledigt } from "../data/rechnung";
 import { useVerweigert, Verweigert } from "../data/verweigert";
+import { Gehalten } from "../design/Gehalten";
 import { Icon } from "../design/Icon";
 import { Notice, Panel } from "../design/Panel";
 import { formatBusinessDate, formatInstant } from "../format/date";
@@ -30,7 +31,6 @@ import { seit, useNow } from "../format/frist";
 import { formatCent } from "../format/money";
 import { useT } from "../i18n";
 import { VorschlagKarte } from "./Fragen";
-import { Gehalten } from "./Rechnungen";
 
 const WAHL =
   "focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent";

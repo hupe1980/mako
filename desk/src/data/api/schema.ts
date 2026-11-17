@@ -6,6 +6,56 @@ import type { Instant, BusinessDate, Decimal } from "../../format/brands";
  */
 export type AccountingdSaldostatus = "overdue" | "credit" | "settled";
 /**
+ * A reason to stop dunning an account.
+ *
+ * Every halt carries a ground, a citation, a validity period and a lifting
+ * reason — none of them optional. A halt that cannot be lifted makes an account
+ * permanently undunnable, and § 41f Abs. 2 in particular describes a
+ * circumstance that is *auf Verlangen glaubhaft zu machen*, so reviewable.
+ */
+export type AccountingdLockGrund =
+  "abwendungsvereinbarung" | "schutzbeduerftigkeit" | "zahlungsaussicht" | "insolvenz" | "operator";
+/**
+ * Where a payout item stands.
+ */
+export type AccountingdStatus = "open" | "paid" | "cancelled";
+/**
+ * Where a payout item stands.
+ */
+export type AccountingdStatus1 = "open" | "paid" | "cancelled";
+/**
+ * An amount that must stay out of the § 41f Abs. 3 Verzug calculation.
+ */
+export type AccountingdEinwandArt =
+  "forderung_bestritten" | "preiserhoehung_bestritten" | "schlichtung" | "ratenzahlung_nicht_faellig";
+/**
+ * The Netzbetreiber's claim a plant operator's EEG claim was set off against.
+ *
+ * Each variant is one of the set-offs the EEG 2023 admits against a § 19
+ * Abs. 1 claim.
+ */
+export type AccountingdGegenforderung = "EEG_52_PFLICHTZAHLUNG" | "ENFG_UMLAGE" | "UNBESTRITTEN";
+/**
+ * The import door it arrived through.
+ */
+export type AccountingdQuelle = "flat" | "camt052" | "camt053" | "camt054";
+/**
+ * `config` or `api`.
+ */
+export type BillingdOwner = "config" | "api";
+/**
+ * `config` or `api`.
+ */
+export type BillingdOwner1 = "config" | "api";
+/**
+ * Which deliveries the log lists.
+ */
+export type BillingdDeliveryFilter = "all" | "pending" | "delivered" | "failed";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type BillingdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
+/**
  * The quality of one stored value — the MSCONS Messwertstatus: `MEASURED`
  * (Messwert), `ESTIMATED` (Prognosewert), `SUBSTITUTED` (Ersatzwert),
  * `CALCULATED` (Rechenwert), `CORRECTED` (Nachbearbeitungswert),
@@ -43,6 +93,54 @@ export type EdmdNote = "A" | "B" | "C" | "F";
 export type EdmdMesswertqualitaet1 =
   "MEASURED" | "ESTIMATED" | "SUBSTITUTED" | "CALCULATED" | "CORRECTED" | "PRELIMINARY" | "FAULTY" | "UNKNOWN";
 /**
+ * `config` or `api`.
+ */
+export type EdmdOwner = "config" | "api";
+/**
+ * `config` or `api`.
+ */
+export type EdmdOwner1 = "config" | "api";
+/**
+ * Which deliveries the log lists.
+ */
+export type EdmdDeliveryFilter = "all" | "pending" | "delivered" | "failed";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type EdmdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
+/**
+ * `config` or `api`.
+ */
+export type InvoicdOwner = "config" | "api";
+/**
+ * `config` or `api`.
+ */
+export type InvoicdOwner1 = "config" | "api";
+/**
+ * Which deliveries the log lists.
+ */
+export type InvoicdDeliveryFilter = "all" | "pending" | "delivered" | "failed";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type InvoicdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
+export type MakodPartnerResponse = {} & {
+  updated_at: string;
+};
+/**
+ * Where the refusal came from; absent when the message passes.
+ */
+export type MakodStufe = "tuer" | "pruefung";
+/**
+ * The pre-send check's verdict.
+ */
+export type MakodUrteil = "besteht" | "abgelehnt";
+/**
+ * Routing outcome for this message.
+ */
+export type MakodMessageStatus =
+  "routed" | "unknown_pid" | "no_pid" | "missing_party" | "missing_pid" | "parse_error" | "dispatch_failed";
+/**
  * The Wertegranularität of a register.
  */
 export type MarktdGranularitaet = "JAEHRLICH" | "HALBJAEHRLICH" | "QUARTALSWEISE" | "MONATLICH";
@@ -63,6 +161,10 @@ export type MarktdMsbRvStatus = "angeboten" | "abgeschlossen" | "anpassung_erfor
  */
 export type MarktdMsbRvBefund = "abgeschlossen" | "kein_vertrag" | "angeboten" | "anpassung_erforderlich" | "beendet";
 /**
+ * A native format the import reads.
+ */
+export type MarktdFormat = "generisch" | "smard" | "energy_charts";
+/**
  * The Lieferstatus of a Marktlokation.
  */
 export type MarktdLieferstatus =
@@ -72,14 +174,401 @@ export type MarktdLieferstatus =
  */
 export type MarktdZuordnungsstatus = "Angekuendigt" | "Aktiv";
 /**
+ * `config` or `api`.
+ */
+export type MarktdOwner = "config" | "api";
+/**
+ * `config` or `api`.
+ */
+export type MarktdOwner1 = "config" | "api";
+/**
+ * Which deliveries the log lists.
+ */
+export type MarktdDeliveryFilter = "all" | "pending" | "delivered" | "failed";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type MarktdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
+/**
+ * `config` or `api`.
+ */
+export type NetzbilanzdOwner = "config" | "api";
+/**
+ * `config` or `api`.
+ */
+export type NetzbilanzdOwner1 = "config" | "api";
+/**
+ * Which deliveries the log lists.
+ */
+export type NetzbilanzdDeliveryFilter = "all" | "pending" | "delivered" | "failed";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type NetzbilanzdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
+/**
+ * `config` or `api`.
+ */
+export type ProcessdOwner = "config" | "api";
+/**
+ * `config` or `api`.
+ */
+export type ProcessdOwner1 = "config" | "api";
+/**
+ * Which deliveries the log lists.
+ */
+export type ProcessdDeliveryFilter = "all" | "pending" | "delivered" | "failed";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type ProcessdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
+/**
+ * `config` or `api`.
+ */
+export type ProductdOwner = "config" | "api";
+/**
+ * `config` or `api`.
+ */
+export type ProductdOwner1 = "config" | "api";
+/**
+ * Which deliveries the log lists.
+ */
+export type ProductdDeliveryFilter = "all" | "pending" | "delivered" | "failed";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type ProductdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
+/**
+ * `config` or `api`.
+ */
+export type VertragdOwner = "config" | "api";
+/**
+ * `config` or `api`.
+ */
+export type VertragdOwner1 = "config" | "api";
+/**
+ * Which deliveries the log lists.
+ */
+export type VertragdDeliveryFilter = "all" | "pending" | "delivered" | "failed";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type VertragdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
+/**
+ * The import door a line arrived through.
+ */
+export type AccountingdQuelle1 = "flat" | "camt052" | "camt053" | "camt054";
+/**
  * Where an account's balance stands: `overdue` — the customer owes
  * (`balance_ct > 0`); `credit` — a Guthaben (`balance_ct < 0`); `settled` —
  * nothing is open.
  */
 export type AccountingdSaldostatus1 = "overdue" | "credit" | "settled";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type BillingdDeliveryStatus1 = "pending" | "delivered" | "dead_lettered";
+/**
+ * A delivery's state.
+ */
+export type BillingdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
+/**
+ * Who owns an endpoint.
+ */
+export type BillingdOwner2 = "config" | "api";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type EdmdDeliveryStatus1 = "pending" | "delivered" | "dead_lettered";
+/**
+ * A delivery's state.
+ */
+export type EdmdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
+/**
+ * Who owns an endpoint.
+ */
+export type EdmdOwner2 = "config" | "api";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type InvoicdDeliveryStatus1 = "pending" | "delivered" | "dead_lettered";
+/**
+ * A delivery's state.
+ */
+export type InvoicdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
+/**
+ * Who owns an endpoint.
+ */
+export type InvoicdOwner2 = "config" | "api";
+export type MakodMessageStatus1 =
+  "routed" | "unknown_pid" | "no_pid" | "missing_party" | "missing_pid" | "parse_error" | "dispatch_failed";
+/**
+ * Where a refusal came from.
+ */
+export type MakodStufe1 = "tuer" | "pruefung";
+/**
+ * What the pre-send check says about a rehearsed command.
+ */
+export type MakodUrteil1 = "besteht" | "abgelehnt";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type MarktdDeliveryStatus1 = "pending" | "delivered" | "dead_lettered";
+/**
+ * A delivery's state.
+ */
+export type MarktdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
+/**
+ * Who owns an endpoint.
+ */
+export type MarktdOwner2 = "config" | "api";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type NetzbilanzdDeliveryStatus1 = "pending" | "delivered" | "dead_lettered";
+/**
+ * A delivery's state.
+ */
+export type NetzbilanzdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
+/**
+ * Who owns an endpoint.
+ */
+export type NetzbilanzdOwner2 = "config" | "api";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type ProcessdDeliveryStatus1 = "pending" | "delivered" | "dead_lettered";
+/**
+ * A delivery's state.
+ */
+export type ProcessdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
+/**
+ * Who owns an endpoint.
+ */
+export type ProcessdOwner2 = "config" | "api";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type ProductdDeliveryStatus1 = "pending" | "delivered" | "dead_lettered";
+/**
+ * A delivery's state.
+ */
+export type ProductdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
+/**
+ * Who owns an endpoint.
+ */
+export type ProductdOwner2 = "config" | "api";
+/**
+ * `pending`, `delivered` or `dead_lettered`.
+ */
+export type VertragdDeliveryStatus1 = "pending" | "delivered" | "dead_lettered";
+/**
+ * A delivery's state.
+ */
+export type VertragdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
+/**
+ * Who owns an endpoint.
+ */
+export type VertragdOwner2 = "config" | "api";
 
 export interface Api {
   paths: {
+    "/svc/accountingd/api/v1/accounts/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdUpdateAccountRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/abschlaege": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+            from?: string;
+            to?: string;
+            include_open?: boolean;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/abschlag": {
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdPutAbschlagRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/anonymize": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdAnonymizeRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/accountingd/api/v1/accounts/{malo_id}/balance": {
       get: {
         parameters: {
@@ -107,6 +596,240 @@ export interface Api {
           404: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/buchen": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdBuchenRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/business-partner": {
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdPutBusinessPartnerRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/clear": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/interest-charges": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdCreateInterestChargeRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/kontoauszug": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
             };
           };
         };
@@ -145,6 +868,659 @@ export interface Api {
         };
       };
     };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/locks": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdPlaceLockRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/open-items": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/payment-plans": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdCreatePaymentPlanRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/reconcile": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+            repair?: boolean;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/verbraucher": {
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdSetVerbraucherRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/vorauszahlung": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/accounts/{malo_id}/zahlungsinformation": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/aging": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/bookings/{key}/discard": {
+      post: {
+        parameters: {
+          path: {
+            key: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdDiscardRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/bookings/{key}/rebook": {
+      post: {
+        parameters: {
+          path: {
+            key: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdRebookRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/business-partners/{kunden_nr}/accounts": {
+      get: {
+        parameters: {
+          path: {
+            kunden_nr: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/business-partners/{kunden_nr}/balance": {
+      get: {
+        parameters: {
+          path: {
+            kunden_nr: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/clearings/{position}/reset": {
+      post: {
+        parameters: {
+          path: {
+            position: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/credit-payouts": {
+      get: {
+        parameters: {
+          query?: {
+            status?: AccountingdStatus;
+            overdue?: boolean;
+            malo_id?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdGuthabenauszahlungen;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/credit-payouts/{payout_id}/paid": {
+      post: {
+        parameters: {
+          path: {
+            payout_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdPaidRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdGuthabenAusgezahlt;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/accountingd/api/v1/dunning": {
       get: {
         parameters: {
@@ -164,6 +1540,827 @@ export interface Api {
           403: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/dunning/locks/review": {
+      get: {
+        parameters: {
+          query?: {
+            older_than_days?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/dunning/locks/{lock_id}": {
+      delete: {
+        parameters: {
+          path: {
+            lock_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdLiftLockRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/dunning/{account_id}/escalate": {
+      post: {
+        parameters: {
+          path: {
+            account_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdEscalateDunningRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/dunning/{id}/abwendung/angebot": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/dunning/{id}/einwaende": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdEinwandRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/dunning/{id}/locks": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdPlaceLockRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/dunning/{id}/resolve": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/eeg/aufrechnungen": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": AccountingdAufrechnungRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/eeg/enfg-zahlungen": {
+      get: {
+        parameters: {
+          query: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/eeg/payouts": {
+      get: {
+        parameters: {
+          query?: {
+            malo_id?: string;
+            tr_id?: string;
+            year?: number;
+            month?: number;
+            status?: string;
+            payment_type?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdEegAuszahlungen;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/eeg/payouts/run": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": AccountingdRunEegPayoutsRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/eeg/payouts/{payout_id}": {
+      get: {
+        parameters: {
+          path: {
+            payout_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/eeg/payouts/{payout_id}/status": {
+      put: {
+        parameters: {
+          path: {
+            payout_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdPain002StatusUpdate;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/eeg/rueckforderungen": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/eeg/rueckzahlungen": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": AccountingdRueckzahlungRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/einwaende/{einwand_id}/erledigen": {
+      post: {
+        parameters: {
+          path: {
+            einwand_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdCloseEinwandRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/entries/consistency-proof": {
+      get: {
+        parameters: {
+          query: {
+            since: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/entries/{entry_id}/proof": {
+      get: {
+        parameters: {
+          path: {
+            entry_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/jahresabschluss/{malo_id}": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
+            year?: number;
+            dry_run?: boolean;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
             };
           };
         };
@@ -199,6 +2396,192 @@ export interface Api {
         };
       };
     };
+    "/svc/accountingd/api/v1/payment-plans/{plan_id}": {
+      get: {
+        parameters: {
+          path: {
+            plan_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            plan_id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/payments/import": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown[];
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/payments/import/camt052": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/payments/import/camt053": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/payments/import/camt054": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/accountingd/api/v1/payments/match": {
       post: {
         parameters: {};
@@ -229,6 +2612,2732 @@ export interface Api {
         };
       };
     };
+    "/svc/accountingd/api/v1/payments/unmatched": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdUnzugeordneteZahlungen;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/payments/{payment_id}/assign": {
+      post: {
+        parameters: {
+          path: {
+            payment_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AccountingdAssignRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdZahlungZugeordnet;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/periods/seals": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/periods/{period_id}/balance-proof": {
+      get: {
+        parameters: {
+          path: {
+            period_id: string;
+          };
+          query: {
+            malo_id: string;
+            lf_mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/periods/{period_id}/seal": {
+      post: {
+        parameters: {
+          path: {
+            period_id: string;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/sepa/camt029": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/sepa/collections/{run_id}/entries": {
+      get: {
+        parameters: {
+          path: {
+            run_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/sepa/mandates": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": AccountingdCreateMandateRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/sepa/mandates/dormant": {
+      get: {
+        parameters: {
+          query?: {
+            older_than_days?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/sepa/mandates/{mandate_id}": {
+      get: {
+        parameters: {
+          path: {
+            mandate_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            mandate_id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/sepa/pain002": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/sepa/recalls": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": AccountingdCreateRecallRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/sepa/reversals": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": AccountingdCreateReversalRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/sepa/run": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/accountingd/api/v1/trial-balance": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/agents": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/agents/catalog": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/erasure": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": AgentdErasureRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/hinweise": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/runs": {
+      post: {
+        parameters: {
+          header?: {
+            "Idempotency-Key"?: string | null;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": AgentdRunRequest;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          429: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/runs/{run}/antwort": {
+      get: {
+        parameters: {
+          path: {
+            run: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/runs/{run}/bewertung": {
+      post: {
+        parameters: {
+          path: {
+            run: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/runs/{run}/schritte": {
+      get: {
+        parameters: {
+          path: {
+            run: string;
+          };
+          header?: {
+            "Last-Event-ID"?: string | null;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/runs/{run}/stopp": {
+      post: {
+        parameters: {
+          path: {
+            run: string;
+          };
+        };
+        requestBody?: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/agentd/api/v1/vorschlaege": {
+      get: {
+        parameters: {
+          query?: {
+            freigabe?: string;
+            disput?: string;
+            buchung?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AgentdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing": {
+      get: {
+        parameters: {
+          query?: {
+            malo_id?: string;
+            lf_mp_id?: string;
+            outcome?: string;
+            category?: string;
+            is_correction?: boolean;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/deadline-summary": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/ggv/{ggv_id}": {
+      post: {
+        parameters: {
+          path: {
+            ggv_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/nachrechnen": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": BillingdVerifyTokenBody;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/review-queue": {
+      get: {
+        parameters: {
+          query?: {
+            band?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/sammelrechnung/{rahmenvertrag_id}": {
+      post: {
+        parameters: {
+          path: {
+            rahmenvertrag_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/unbilled": {
+      get: {
+        parameters: {
+          query?: {
+            open?: boolean;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/vpp/{vpp_id}": {
+      post: {
+        parameters: {
+          path: {
+            vpp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/correction": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": BillingdCorrectionRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/nachrechnung": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/pdf": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          304: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/release": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/reviewed": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/submit-b2g": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/ubl": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/verify-token/revoke": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/versenden": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{id}/xrechnung": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{malo_id}/calculate": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{malo_id}/preview": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/billing/{malo_id}/tarifwechsel": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/events": {
+      get: {
+        parameters: {
+          query?: {
+            type?: string;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdPageValue;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/webhooks/deliveries/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdReplayed;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/webhooks/endpoints": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdPageEndpoint;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": BillingdEndpointCreate;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdEndpointCreated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/webhooks/endpoints/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdEndpoint1;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": BillingdEndpointUpdate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdEndpoint1;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/webhooks/endpoints/{id}/deliveries": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            status?: BillingdDeliveryFilter;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdPageDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/webhooks/endpoints/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": BillingdReplayWindow;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdReplayed;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": BillingdRotateSecret;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdSecretRotated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/webhooks/endpoints/{id}/test": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdTestDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/billingd/api/v1/webhooks/vpp-dispatch": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdProblem;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/archive/olap/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/archive/portfolio": {
+      get: {
+        parameters: {
+          query?: {
+            from?: string;
+            to?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/archive/status": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/archive/timeseries/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/billing-period/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+            sparte?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/billing-periods": {
+      get: {
+        parameters: {
+          query?: {
+            from?: string;
+            to?: string;
+            tenant?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/compliance/jahresablesung/{year}": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/confirmations": {
+      get: {
+        parameters: {
+          query?: {
+            status?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/edmd/api/v1/corrections/{malo_id}": {
       get: {
         parameters: {
@@ -253,6 +5362,60 @@ export interface Api {
           400: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
             };
           };
         };
@@ -292,6 +5455,1112 @@ export interface Api {
         };
       };
     };
+    "/svc/edmd/api/v1/deliveries/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/energy/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+            direction?: string;
+            as_of?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/esa/typ2/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+            as_of?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/events": {
+      get: {
+        parameters: {
+          query?: {
+            type?: string;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdPageValue;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/forecast/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/gas-quality/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/gdpr/erasure/{malo_id}": {
+      delete: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/gdpr/erasures": {
+      get: {
+        parameters: {
+          query?: {
+            since?: string;
+            until?: string;
+            trigger?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/imbalance/{malo_id}/{year}/{month}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+            year: number;
+            month: number;
+          };
+          query?: {
+            sparte?: string;
+            bilanziert_kwh?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/lastgang/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+            as_of?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/lastgang/{malo_id}/resampled": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+            resolution?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/meter-reads/gas/{malo_id}": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/meter-reads/iot/{malo_id}": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/meter-reads/rlm/{malo_id}": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/meter-reads/{malo_id}/bulk": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/meter-reads/{malo_id}/substitute": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/netzverlust": {
+      get: {
+        parameters: {
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/quality-assessments/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/quality-score/{malo_id}": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/edmd/api/v1/quality/{malo_id}": {
       get: {
         parameters: {
@@ -320,6 +6589,999 @@ export interface Api {
           404: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/query/sql": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/reading-orders": {
+      get: {
+        parameters: {
+          query?: {
+            malo_id?: string;
+            status?: string;
+            anlass?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/reading-orders/campaign": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/reading-orders/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/reading-orders/{id}/cancel": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/reading-orders/{id}/complete": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/reading-orders/{id}/fail": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/sharing/participants/{malo_id}/allocation": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+            as_of?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/sharing/readiness": {
+      get: {
+        parameters: {
+          query?: {
+            month?: string;
+            malo_ids?: string;
+            min_coverage_pct?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/sharing/{community_id}/allocation": {
+      get: {
+        parameters: {
+          path: {
+            community_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+            as_of?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/smgw": {
+      get: {
+        parameters: {
+          query?: {
+            status?: string;
+            with_issues_only?: boolean;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/smgw/compliance": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/smgw/compliance/scan": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/smgw/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/summenzeitreihe/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/surveillance/delivery": {
+      get: {
+        parameters: {
+          query?: {
+            state?: string;
+            include_resolved?: boolean;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/surveillance/delivery/scan": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
             };
           };
         };
@@ -358,6 +7620,856 @@ export interface Api {
         };
       };
     };
+    "/svc/edmd/api/v1/virtual": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/virtual/{virtual_malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            virtual_malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            virtual_malo_id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/virtual/{virtual_malo_id}/lastgang": {
+      get: {
+        parameters: {
+          path: {
+            virtual_malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/webhooks/deliveries/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdReplayed;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/webhooks/endpoints": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdPageEndpoint;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": EdmdEndpointCreate;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdEndpointCreated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/webhooks/endpoints/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdEndpoint1;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EdmdEndpointUpdate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdEndpoint1;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/webhooks/endpoints/{id}/deliveries": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            status?: EdmdDeliveryFilter;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdPageDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/webhooks/endpoints/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EdmdReplayWindow;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdReplayed;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EdmdRotateSecret;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdSecretRotated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/webhooks/endpoints/{id}/test": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdTestDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/zaehlerstandsgang/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          413: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/zeitreihe/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+            as_of?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen": {
+      get: {
+        parameters: {
+          query?: {
+            malo_id?: string;
+            erzeugungsart?: string;
+            settlement_model?: string;
+            status?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdAnlageRow[];
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/einsd/api/v1/anlagen/foerderung-auslaufend": {
       get: {
         parameters: {
@@ -378,10 +8490,16 @@ export interface Api {
             headers: {
               [k: string]: unknown | undefined;
             };
+            content: {
+              "application/json": EinsdApiError;
+            };
           };
           403: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
             };
           };
         };
@@ -402,6 +8520,9 @@ export interface Api {
           403: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
             };
           };
         };
@@ -428,10 +8549,16 @@ export interface Api {
             headers: {
               [k: string]: unknown | undefined;
             };
+            content: {
+              "application/json": EinsdApiError;
+            };
           };
           403: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
             };
           };
         };
@@ -457,10 +8584,653 @@ export interface Api {
             headers: {
               [k: string]: unknown | undefined;
             };
+            content: {
+              "application/json": EinsdApiError;
+            };
           };
           404: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/aw-reduktionen": {
+      get: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+          query?: {
+            on?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdRegionalnachweisRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdSect54DefektRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdSect54NachweisRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdStromsteuerbefreiungRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/jahresabrechnung/{year}": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+            year: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/mastr-registrierung": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdMastrRegistrierungRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/pflichtverstoesse": {
+      get: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdPflichtverstossAnlegenRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben": {
+      put: {
+        parameters: {
+          path: {
+            tr_id: string;
+            typ: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdPflichtverstossBehobenRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/repowering": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdRepoweringRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/settle/{year}/{month}": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+            year: number;
+            month: number;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdSettleTriggerRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
             };
           };
         };
@@ -491,10 +9261,66 @@ export interface Api {
             headers: {
               [k: string]: unknown | undefined;
             };
+            content: {
+              "application/json": EinsdApiError;
+            };
           };
           403: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+            year: number;
+            month: number;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdCorrectionSettleRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
             };
           };
         };
@@ -522,6 +9348,1514 @@ export interface Api {
             headers: {
               [k: string]: unknown | undefined;
             };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/switch-veraeusserungsform": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdVeraeusserungsformWechselRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/wind-reevaluation": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdWindReevaluationRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/anlagen/{tr_id}/zusammenlegen": {
+      post: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdZusammenlegungRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/einspeiser": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/einspeiser/{einspeiser_id}": {
+      get: {
+        parameters: {
+          path: {
+            einspeiser_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdEinspeiser;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            einspeiser_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdUpsertEinspeiser;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/enfg/ledger/{year}/{month}": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/enfg/mitteilung/{year}/{month}": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/epex-monthly/{year}/{month}": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdEpexPriceBody;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/epex-spot": {
+      put: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": EinsdSpotPriceLoadBody;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/marktwert/{year}/nachbewertung": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/marktwert/{year}/{art}/{erzeugungsart}": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+            art: string;
+            erzeugungsart: string;
+          };
+          query?: {
+            billing_month?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            year: number;
+            art: string;
+            erzeugungsart: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdMarktwertBody;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/settle/{year}/{month}": {
+      post: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EinsdBatchSettleRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/einsd/api/v1/verguetungssatz-lookup": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": EinsdVerguetungssatzLookupRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/disputes": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdReceiptSummary[];
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/events": {
+      get: {
+        parameters: {
+          query?: {
+            type?: string;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdPageValue;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/leistungsnachweise": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/overdue-remadv": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/receipts": {
+      get: {
+        parameters: {
+          query?: {
+            sender_mp_id?: string;
+            outcome?: string;
+            from?: string;
+            to?: string;
+            page?: number;
+            size?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdReceiptSummary[];
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/receipts/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdReceiptSummary;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/receipts/{id}/confirm-payment": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/receipts/{id}/dispatch-answer": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/receipts/{id}/feststellungen": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/receipts/{id}/rechnung": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/receipts/{id}/resolve-dispute": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": InvoicdResolveDisputeBody;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/webhooks/deliveries/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdReplayed;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/webhooks/endpoints": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdPageEndpoint;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": InvoicdEndpointCreate;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdEndpointCreated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/webhooks/endpoints/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdEndpoint1;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": InvoicdEndpointUpdate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdEndpoint1;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/webhooks/endpoints/{id}/deliveries": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            status?: InvoicdDeliveryFilter;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdPageDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/webhooks/endpoints/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": InvoicdReplayWindow;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdReplayed;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": InvoicdRotateSecret;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdSecretRotated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/webhooks/endpoints/{id}/test": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdTestDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/invoicd/api/v1/zahlungsstatus/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": InvoicdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/admin/malo/stats": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodStatsResponse;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/admin/malo/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
           };
           403: {
             headers: {
@@ -531,6 +10865,1488 @@ export interface Api {
           404: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MakodUpsertRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodUpsertResponse;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodDeleteResponse;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/admin/partners": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodListResponse;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/admin/partners/import": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodImportResponse;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/admin/partners/{mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodPartnerResponse;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": {};
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodPartnerResponse;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodDeleteResponse;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/api/v1/commands": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": MakodErpCommand;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodCommandAccepted;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          501: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/api/v1/format-candidates/{fv}/impact": {
+      get: {
+        parameters: {
+          path: {
+            fv: string;
+          };
+          query?: {
+            format?: string | null;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodImpact;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/api/v1/invoic/{process_id}/rechnung": {
+      get: {
+        parameters: {
+          path: {
+            process_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/api/v1/policy": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/api/v1/probe/{command}": {
+      post: {
+        parameters: {
+          path: {
+            command: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MakodProbeRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodProbe;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/edifact": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodIngestResponse;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodIngestResponse;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/health/live": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodHealthResponse;
+            };
+          };
+        };
+      };
+    };
+    "/svc/makod/health/ready": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodHealthResponse;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MakodHealthResponse;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/bilanzierungsgebiete/{eic}/mabis-zp": {
+      get: {
+        parameters: {
+          path: {
+            eic: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            eic: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/correlations": {
+      get: {
+        parameters: {
+          query?: {
+            erp_order_id?: string;
+            malo_id?: string;
+            status?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/correlations/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/energiemix/{nb_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+          query?: {
+            year?: number | null;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/energiemix/{nb_mp_id}/history": {
+      get: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/esa/consent-check": {
+      get: {
+        parameters: {
+          query: {
+            esa_mp_id: string;
+            msb_mp_id: string;
+            location_id: string;
+            perspective?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/esa/einwilligungen": {
+      get: {
+        parameters: {
+          query: {
+            esa_mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/esa/einwilligungen/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+            esa_mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+            esa_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/esa/messprodukte/{msb_mp_id}": {
+      put: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/esa/messprodukte/{msb_mp_id}/{messprodukt}": {
+      get: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+            messprodukt: string;
+          };
+          query?: {
+            at?: BusinessDate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+            esa_mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+            esa_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/esa/subscriptions/{bestellung_ref}": {
+      get: {
+        parameters: {
+          path: {
+            bestellung_ref: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/events": {
+      get: {
+        parameters: {
+          query?: {
+            type?: string;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdPageValue;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/geraete/{geraet_id}": {
+      put: {
+        parameters: {
+          path: {
+            geraet_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdUpsertGeraetRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/grundversorger/{nb_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+          query?: {
+            sparte?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
             };
           };
         };
@@ -551,6 +12367,114 @@ export interface Api {
           403: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/lokationszuordnungen": {
+      put: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/lokationszuordnungen/{von_id}/{nach_id}": {
+      delete: {
+        parameters: {
+          path: {
+            von_id: string;
+            nach_id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/mabis-zp": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
             };
           };
         };
@@ -640,6 +12564,248 @@ export interface Api {
         };
       };
     };
+    "/svc/marktd/api/v1/malos/{id}/buendel": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            at?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{id}/bundesland": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{id}/grid": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{id}/lastprofil": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{id}/lokationen": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            at?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/marktd/api/v1/malos/{id}/lokationsbuendel": {
       get: {
         parameters: {
@@ -670,6 +12836,295 @@ export interface Api {
             };
           };
           422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{id}/lokationsbuendel-angaben": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{id}/netznutzungsdaten": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{id}/utilmd-stammdaten": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query: {
+            stichtag: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{malo_id}/bilanzierung": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            at?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{malo_id}/bilanzierung/history": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/malos/{malo_id}/technische-ressourcen": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
             headers: {
               [k: string]: unknown | undefined;
             };
@@ -730,6 +13185,52 @@ export interface Api {
         };
       };
     };
+    "/svc/marktd/api/v1/melos/{id}/lokationen": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            at?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/marktd/api/v1/melos/{id}/standorteigenschaften": {
       get: {
         parameters: {
@@ -749,6 +13250,479 @@ export interface Api {
           404: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/melos/{melo_id}/msb": {
+      get: {
+        parameters: {
+          path: {
+            melo_id: string;
+          };
+          query?: {
+            at?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            melo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/melos/{melo_id}/msb/history": {
+      get: {
+        parameters: {
+          path: {
+            melo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/melos/{melo_id}/sharing-eligibility": {
+      get: {
+        parameters: {
+          path: {
+            melo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdSharingEligibilityResponse;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/melos/{melo_id}/zaehler": {
+      get: {
+        parameters: {
+          path: {
+            melo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/mmm-preise/strom/{year}/{month}": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/mmma-preise/gas": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/mmma-preise/gas/{year}/{month}": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/mmma-preise/import-trigger": {
+      post: {
+        parameters: {
+          query?: {
+            year?: number;
+            month?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
             };
           };
         };
@@ -872,6 +13846,288 @@ export interface Api {
         };
       };
     };
+    "/svc/marktd/api/v1/nb-contracts": {
+      get: {
+        parameters: {
+          query?: {
+            nb_mp_id?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/nb-contracts/by-malo/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            on?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdNbContractResponse;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/nb-contracts/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdNbContractUpsertRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/nelos": {
+      get: {
+        parameters: {
+          query?: {
+            nb_mp_id?: string | null;
+            page?: number;
+            size?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/nelos/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdNeLoUpsertRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/marktd/api/v1/netzzugang/antraege": {
       get: {
         parameters: {
@@ -981,6 +14237,598 @@ export interface Api {
         };
       };
     };
+    "/svc/marktd/api/v1/partners": {
+      get: {
+        parameters: {
+          query?: {
+            marktrolle?: string;
+            sparte?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/partners/{mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdPartnerUpsertRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/partners/{mp_id}/as4-address": {
+      get: {
+        parameters: {
+          path: {
+            mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/partners/{mp_id}/marktteilnehmer": {
+      get: {
+        parameters: {
+          path: {
+            mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/preisblaetter-dienstleistung/{msb_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+          };
+          query?: {
+            date?: string | null;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdPreisblattDlUpsertRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/preisblaetter-hardware/{msb_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+          };
+          query?: {
+            date?: string | null;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdPreisblattHwUpsertRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/preisblaetter-ka/{nb_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+          query?: {
+            date?: string;
+            kundengruppe?: string;
+            sparte?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdPreisblattKaUpsertRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/preisblaetter-messung/{msb_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+          };
+          query?: {
+            date?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdPreisblattMessungResponse;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            msb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdPreisblattMessungUpsertRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/preisblaetter/{nb_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+          query?: {
+            date?: string | null;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdPreisblattResponse;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdPreisblattUpsertRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
     "/svc/marktd/api/v1/pricat/{nb_mp_id}/dispatch": {
       post: {
         parameters: {
@@ -1056,6 +14904,568 @@ export interface Api {
         };
       };
     };
+    "/svc/marktd/api/v1/referenzreihen": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/referenzreihen/{reihe}/import": {
+      post: {
+        parameters: {
+          path: {
+            reihe: string;
+          };
+          query: {
+            format: MarktdFormat;
+            status: string;
+            quelle_url: string;
+            veroeffentlicht_am?: BusinessDate;
+            vorschau?: boolean;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/referenzreihen/{reihe}/wert": {
+      get: {
+        parameters: {
+          path: {
+            reihe: string;
+          };
+          query?: {
+            von?: BusinessDate;
+            bis?: BusinessDate;
+            dim?: string;
+            stand?: Instant;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/referenzreihen/{reihe}/werte": {
+      get: {
+        parameters: {
+          path: {
+            reihe: string;
+          };
+          query?: {
+            von?: BusinessDate;
+            bis?: BusinessDate;
+            dim?: string;
+            stand?: Instant;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/steuerbare-ressourcen/{sr_id}": {
+      get: {
+        parameters: {
+          path: {
+            sr_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            sr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdUpsertSrRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte": {
+      get: {
+        parameters: {
+          path: {
+            sr_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            sr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdPutKonfigurationsprodukteRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}": {
+      delete: {
+        parameters: {
+          path: {
+            sr_id: string;
+            produktcode: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/technische-ressourcen/{tr_id}": {
+      get: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            tr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdUpsertTrRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/tranchen": {
+      get: {
+        parameters: {
+          query?: {
+            malo_id?: string | null;
+            page?: number;
+            size?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/tranchen/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdTrancheUpsertRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/marktd/api/v1/versorgung/{malo_id}": {
       get: {
         parameters: {
@@ -1088,6 +15498,52 @@ export interface Api {
           422: {
             headers: {
               [k: string]: unknown | undefined;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdVersorgungsStatusUpsertRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
             };
           };
         };
@@ -1126,43 +15582,10061 @@ export interface Api {
         };
       };
     };
+    "/svc/marktd/api/v1/webhooks/deliveries/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdReplayed;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/webhooks/endpoints": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdPageEndpoint;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": MarktdEndpointCreate;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdEndpointCreated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/webhooks/endpoints/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdEndpoint1;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdEndpointUpdate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdEndpoint1;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/webhooks/endpoints/{id}/deliveries": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            status?: MarktdDeliveryFilter;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdPageDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/webhooks/endpoints/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdReplayWindow;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdReplayed;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdRotateSecret;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdSecretRotated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/webhooks/endpoints/{id}/test": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdTestDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zaehler-register/{register_id}/saisons": {
+      get: {
+        parameters: {
+          path: {
+            register_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            register_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zaehler/{zaehler_id}": {
+      put: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdUpsertZaehlerRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zaehler/{zaehler_id}/geraete": {
+      get: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}": {
+      get: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+            geraet_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen": {
+      get: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+            geraet_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+            geraet_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": MarktdPutKonfigurationenRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zaehler/{zaehler_id}/register": {
+      get: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zaehler/{zaehler_id}/tariff-zone": {
+      get: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zaehler/{zaehler_id}/zaehlwerke": {
+      get: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen": {
+      get: {
+        parameters: {
+          path: {
+            zaehler_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/zuordnungsermaechtigungen/{lf_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/audit": {
+      get: {
+        parameters: {
+          query?: {
+            from?: string;
+            to?: string;
+            pid?: number;
+            status?: string;
+            after?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/drafts": {
+      get: {
+        parameters: {
+          query?: {
+            status?: string;
+            malo_id?: string;
+            sender_mp_id?: string;
+            recipient_mp_id?: string;
+            pid?: number;
+            sparte?: string;
+            check_outcome?: string;
+            rechnungsart?: string;
+            after?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/drafts/dispatch-batch": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          207: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/drafts/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/drafts/{id}/dispatch": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/drafts/{id}/korrektur": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/drafts/{id}/mark-disputed": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/drafts/{id}/mark-paid": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/drafts/{id}/reject": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/drafts/{id}/storno": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/fremdkosten/{draft_id}": {
+      get: {
+        parameters: {
+          path: {
+            draft_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            draft_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/ggv-nne/{ggv_malo_id}": {
+      post: {
+        parameters: {
+          path: {
+            ggv_malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/malo/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/mmm-run/{malo_id}": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/run": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/billing/summary": {
+      get: {
+        parameters: {
+          query?: {
+            year?: number;
+            month?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/events": {
+      get: {
+        parameters: {
+          query?: {
+            type?: string;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdPageValue;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/mabis/datenstatus": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/mabis/korrekturbedarf": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/mabis/pruefmitteilung": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/mabis/runs": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/mabis/runs/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/mabis/runs/{id}/retry": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/mabis/sync": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/ausfallarbeit/compute": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/ausfallarbeit/kf-bin": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/ausfallarbeit/malo-split": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/ausfallarbeit/ueberbauung": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/ausfallarbeit/vergleichstag": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/ausfallarbeit/vergleichszeitraum": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/kostenblatt": {
+      get: {
+        parameters: {
+          query: {
+            year: number;
+            month: number;
+            status?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/kostenblatt/gaps/{year}/{month}": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/kostenblatt/submit/{year}/{month}": {
+      post: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/kostenblatt/{activation_id}": {
+      get: {
+        parameters: {
+          path: {
+            activation_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            activation_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/kostenblatt/{activation_id}/compute": {
+      post: {
+        parameters: {
+          path: {
+            activation_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/redispatch/verguetung/{activation_id}/compute": {
+      post: {
+        parameters: {
+          path: {
+            activation_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/webhooks/deliveries/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdReplayed;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/webhooks/endpoints": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdPageEndpoint;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": NetzbilanzdEndpointCreate;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdEndpointCreated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/webhooks/endpoints/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdEndpoint1;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": NetzbilanzdEndpointUpdate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdEndpoint1;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/webhooks/endpoints/{id}/deliveries": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            status?: NetzbilanzdDeliveryFilter;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdPageDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/webhooks/endpoints/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": NetzbilanzdReplayWindow;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdReplayed;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": NetzbilanzdRotateSecret;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdSecretRotated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/webhooks/endpoints/{id}/test": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdTestDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/netzbilanzd/api/v1/webhooks/remadv": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": NetzbilanzdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/balance": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/dashboard": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/dokumente": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            kind?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/dokumente/{document_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+            document_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/eeg": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/invoices": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            limit?: number;
+            outcome?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/invoices/{record_id}/download": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+            record_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/kontakt": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": PortaldPortalKontaktRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/kontoauszug": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/kuendigen": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": PortaldPortalKuendigungRequest;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/kuendigungsfrist": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/lastgang": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            from?: string;
+            to?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/sepa": {
+      put: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": PortaldPortalSepaRequest;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/tarifwechsel": {
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": PortaldPortalTarifwechselRequest;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/versorgung": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/vertrag": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/portald/api/v1/portal/{malo_id}/vorauszahlung": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": PortaldApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/audit/gleichbehandlung": {
+      get: {
+        parameters: {
+          query?: {
+            year?: number;
+            format?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/counterparties": {
+      get: {
+        parameters: {
+          query?: {
+            von?: string;
+            bis?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/counterparties/{mp_id}/{rolle}": {
+      get: {
+        parameters: {
+          path: {
+            mp_id: string;
+            rolle: string;
+          };
+          query?: {
+            von?: string;
+            bis?: string;
+            format?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/decisions": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/end-supply": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": ProcessdEndSupplyRequest;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/end-supply-gas": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": ProcessdEndSupplyGasRequest;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/eog": {
+      get: {
+        parameters: {
+          query?: {
+            status?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          501: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/events": {
+      get: {
+        parameters: {
+          query?: {
+            type?: string;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdPageValue;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/klaerfaelle": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/klaerfaelle/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/klaerfaelle/{id}/assign": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdAssignKlaerfallRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/klaerfaelle/{id}/dispatch": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/klaerfaelle/{id}/resolve": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdResolveKlaerfallRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/neuanlage": {
+      get: {
+        parameters: {
+          query?: {
+            status?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          501: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/neuanlage/{id}/identifikation": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdNeuanlageIdentifikationRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          501: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/obs/rebuild": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/queue": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/queue/{id}/approve": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/queue/{id}/reject": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/sperr-orders": {
+      get: {
+        parameters: {
+          query?: {
+            status?: string;
+            malo_id?: string;
+            limit?: number;
+            due?: boolean;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/sperr-orders/stats": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/sperr-orders/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/sperr-orders/{id}/cancel": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/sperr-orders/{id}/execute": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdExecuteRequest;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/sperr-orders/{id}/fail": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdFailRequest;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/start-supply": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/start-supply-gas": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/webhooks/deliveries/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdReplayed;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/webhooks/endpoints": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdPageEndpoint;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": ProcessdEndpointCreate;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdEndpointCreated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/webhooks/endpoints/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdEndpoint1;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdEndpointUpdate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdEndpoint1;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/webhooks/endpoints/{id}/deliveries": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            status?: ProcessdDeliveryFilter;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdPageDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/webhooks/endpoints/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdReplayWindow;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdReplayed;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdRotateSecret;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdSecretRotated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/webhooks/endpoints/{id}/test": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdTestDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/angebote": {
+      get: {
+        parameters: {
+          query?: {
+            status?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/angebote/expire": {
+      post: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/angebote/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/angebote/{id}/ablehnen": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/angebote/{id}/annehmen": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/angebote/{id}/comparison": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/angebote/{id}/versenden": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/comparison-feed": {
+      get: {
+        parameters: {
+          query?: {
+            lf_mp_id?: string;
+            sparte?: string;
+            kundentyp?: string;
+            verbrauch_kwh?: string;
+            oekolabel?: string;
+            include_dynamic?: boolean;
+            only_dynamic?: boolean;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          304: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/comparison-feed/bo4e": {
+      get: {
+        parameters: {
+          query?: {
+            lf_mp_id?: string;
+            sparte?: string;
+            kundentyp?: string;
+            verbrauch_kwh?: string;
+            oekolabel?: string;
+            include_dynamic?: boolean;
+            only_dynamic?: boolean;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          304: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/endkunden-angebote/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/epex-prices/{date}": {
+      put: {
+        parameters: {
+          path: {
+            date: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/epex-prices/{date}/quarter-hourly": {
+      get: {
+        parameters: {
+          path: {
+            date: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/epex-prices/{year}/{month}/average": {
+      get: {
+        parameters: {
+          path: {
+            year: number;
+            month: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/events": {
+      get: {
+        parameters: {
+          query?: {
+            type?: string;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdPageValue;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/nehs-prices/latest": {
+      get: {
+        parameters: {
+          query?: {
+            date?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/nehs-prices/{date}": {
+      put: {
+        parameters: {
+          path: {
+            date: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/products/{lf_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+          };
+          query?: {
+            category?: string;
+            sparte?: string;
+            kundentyp?: string;
+            include_drafts?: boolean;
+            include_expired?: boolean;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/products/{lf_mp_id}/endkunden-angebote": {
+      post: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/products/{lf_mp_id}/resolve": {
+      post: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/products/{lf_mp_id}/{product_code}": {
+      get: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+            product_code: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+            product_code: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+            product_code: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/products/{lf_mp_id}/{product_code}/energiemix": {
+      get: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+            product_code: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+            product_code: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+            product_code: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/products/{lf_mp_id}/{product_code}/history": {
+      get: {
+        parameters: {
+          path: {
+            lf_mp_id: string;
+            product_code: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/webhooks/deliveries/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdReplayed;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/webhooks/endpoints": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdPageEndpoint;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": ProductdEndpointCreate;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdEndpointCreated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/webhooks/endpoints/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdEndpoint1;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProductdEndpointUpdate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdEndpoint1;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/webhooks/endpoints/{id}/deliveries": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            status?: ProductdDeliveryFilter;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdPageDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/webhooks/endpoints/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProductdReplayWindow;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdReplayed;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProductdRotateSecret;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdSecretRotated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/productd/api/v1/webhooks/endpoints/{id}/test": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdTestDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProductdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/aggregatorvertraege": {
+      get: {
+        parameters: {
+          query?: {
+            sr_id?: string;
+            on?: BusinessDate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/aggregatorvertraege/{sr_id}": {
+      put: {
+        parameters: {
+          path: {
+            sr_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/bestellungen": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/bestellungen/{id}/ablehnen": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/bestellungen/{id}/annehmen": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/bestellungen/{id}/nachweis": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/bestellungen/{id}/widerruf": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/events": {
+      get: {
+        parameters: {
+          query?: {
+            type?: string;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdPageValue;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/ggv/{ggv_id}/betreiber": {
+      get: {
+        parameters: {
+          path: {
+            ggv_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            ggv_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden": {
+      get: {
+        parameters: {
+          query?: {
+            kundentyp?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/authenticate": {
+      get: {
+        parameters: {
+          query: {
+            malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/by-sub/{sub}": {
+      get: {
+        parameters: {
+          path: {
+            sub: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}/anonymize": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}/export": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}/identitaeten": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}/identitaeten/{sub}": {
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+            sub: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}/person": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}/portfolio": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}/rahmenvertraege": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}/vertraege": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/kunden/{id}/zahlungsinformation": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/malo/{malo_id}/produkte": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            as_of?: BusinessDate;
+            from?: BusinessDate;
+            to?: BusinessDate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/malo/{malo_id}/sect14a": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query: {
+            from: BusinessDate;
+            to: BusinessDate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}": {
+      get: {
+        parameters: {
+          path: {
+            melo_id: string;
+            msb_mp_id: string;
+          };
+          query?: {
+            on?: BusinessDate;
+            haushaltskunde?: boolean;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            melo_id: string;
+            msb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/outbound/dead": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/outbound/dead/{id}/retry": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/rahmenvertraege": {
+      get: {
+        parameters: {
+          query?: {
+            status?: string;
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/rahmenvertraege/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/rahmenvertraege/{id}/kuendigen": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/rahmenvertraege/{id}/malos": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/rechtsdokumente/{key}": {
+      get: {
+        parameters: {
+          path: {
+            key: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            key: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/billing-candidates": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/by-malo/{malo_id}": {
+      get: {
+        parameters: {
+          path: {
+            malo_id: string;
+          };
+          query?: {
+            stichtag?: string;
+            kunde?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/expiring": {
+      get: {
+        parameters: {
+          query?: {
+            days?: number;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}/kuendigen": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}/kuendigungsfrist": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            eingang?: BusinessDate;
+            preisanpassung_wirksam_zum?: BusinessDate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}/preisgarantie": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}/stornieren": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}/tarifwechsel": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}/widerruf": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}/widerruf-kuendigung": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/webhooks/angebot": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/webhooks/deliveries/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdReplayed;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/webhooks/endpoints": {
+      get: {
+        parameters: {
+          query?: {
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdPageEndpoint;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": VertragdEndpointCreate;
+          };
+        };
+        responses: {
+          201: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdEndpointCreated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/webhooks/endpoints/{id}": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdEndpoint1;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": VertragdEndpointUpdate;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdEndpoint1;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+      delete: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/webhooks/endpoints/{id}/deliveries": {
+      get: {
+        parameters: {
+          path: {
+            id: string;
+          };
+          query?: {
+            status?: VertragdDeliveryFilter;
+            limit?: number;
+            cursor?: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdPageDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/webhooks/endpoints/{id}/replay": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": VertragdReplayWindow;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdReplayed;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": VertragdRotateSecret;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdSecretRotated;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/webhooks/endpoints/{id}/test": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdTestDelivery;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          415: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
   };
   components: {
     schemas: {
+      "accountingd.AddressParts": AccountingdAddressParts2;
+      "accountingd.AnonymizeRequest": AccountingdAnonymizeRequest;
+      "accountingd.ApiError": AccountingdApiError;
+      "accountingd.AssignRequest": AccountingdAssignRequest;
+      "accountingd.AufrechnungRequest": AccountingdAufrechnungRequest;
+      "accountingd.BuchenRequest": AccountingdBuchenRequest;
+      "accountingd.CloseEinwandRequest": AccountingdCloseEinwandRequest;
+      "accountingd.CreateInterestChargeRequest": AccountingdCreateInterestChargeRequest;
+      "accountingd.CreateMandateRequest": AccountingdCreateMandateRequest;
+      "accountingd.CreatePaymentPlanRequest": AccountingdCreatePaymentPlanRequest;
+      "accountingd.CreateRecallRequest": AccountingdCreateRecallRequest;
+      "accountingd.CreateReversalRequest": AccountingdCreateReversalRequest;
+      "accountingd.DiscardRequest": AccountingdDiscardRequest;
+      "accountingd.EegAuszahlung": AccountingdEegAuszahlung;
+      "accountingd.EegAuszahlungen": AccountingdEegAuszahlungen;
+      "accountingd.EinwandArt": AccountingdEinwandArt;
+      "accountingd.EinwandRequest": AccountingdEinwandRequest;
+      "accountingd.EscalateDunningRequest": AccountingdEscalateDunningRequest;
+      "accountingd.Gegenforderung": AccountingdGegenforderung;
+      "accountingd.GuthabenAusgezahlt": AccountingdGuthabenAusgezahlt;
+      "accountingd.Guthabenauszahlung": AccountingdGuthabenauszahlung;
+      "accountingd.Guthabenauszahlungen": AccountingdGuthabenauszahlungen;
       "accountingd.Kontoauszug": AccountingdKontoauszug;
       "accountingd.Kontobewegung": AccountingdKontobewegung;
       "accountingd.Kontostand": AccountingdKontostand;
+      "accountingd.LiftLockRequest": AccountingdLiftLockRequest;
+      "accountingd.LockGrund": AccountingdLockGrund;
       "accountingd.Mahnfaelle": AccountingdMahnfaelle;
       "accountingd.Mahnfall": AccountingdMahnfall;
+      "accountingd.PaidRequest": AccountingdPaidRequest;
+      "accountingd.Pain002StatusUpdate": AccountingdPain002StatusUpdate;
       "accountingd.PaymentMatchParams": AccountingdPaymentMatchParams;
+      "accountingd.PlaceLockRequest": AccountingdPlaceLockRequest;
+      "accountingd.PutAbschlagRequest": AccountingdPutAbschlagRequest;
+      "accountingd.PutBusinessPartnerRequest": AccountingdPutBusinessPartnerRequest;
+      "accountingd.Quelle": AccountingdQuelle1;
+      "accountingd.RebookRequest": AccountingdRebookRequest;
+      "accountingd.RueckzahlungRequest": AccountingdRueckzahlungRequest;
+      "accountingd.RunEegPayoutsRequest": AccountingdRunEegPayoutsRequest;
       "accountingd.Saldostatus": AccountingdSaldostatus1;
+      "accountingd.SetVerbraucherRequest": AccountingdSetVerbraucherRequest;
+      "accountingd.Status": AccountingdStatus;
       "accountingd.UeberfaelligeKonten": AccountingdUeberfaelligeKonten;
       "accountingd.UeberfaelligesKonto": AccountingdUeberfaelligesKonto;
+      "accountingd.UnzugeordneteZahlung": AccountingdUnzugeordneteZahlung;
+      "accountingd.UnzugeordneteZahlungen": AccountingdUnzugeordneteZahlungen;
+      "accountingd.UpdateAccountRequest": AccountingdUpdateAccountRequest;
+      "accountingd.ZahlungZugeordnet": AccountingdZahlungZugeordnet;
       "accountingd.Zahlungszuordnung": AccountingdZahlungszuordnung;
       "accountingd.Zuordnungskandidat": AccountingdZuordnungskandidat;
+      "agentd.ApiError": AgentdApiError;
+      "agentd.ErasureRequest": AgentdErasureRequest;
+      "agentd.RunRequest": AgentdRunRequest;
+      "billingd.ApiError": BillingdApiError;
+      "billingd.CorrectionRequest": BillingdCorrectionRequest;
+      "billingd.Delivery": BillingdDelivery;
+      "billingd.DeliveryFilter": BillingdDeliveryFilter;
+      "billingd.DeliveryStatus": BillingdDeliveryStatus2;
+      "billingd.Endpoint": BillingdEndpoint1;
+      "billingd.EndpointCreate": BillingdEndpointCreate;
+      "billingd.EndpointCreated": BillingdEndpointCreated;
+      "billingd.EndpointUpdate": BillingdEndpointUpdate;
+      "billingd.Owner": BillingdOwner2;
+      "billingd.Page_Delivery": BillingdPageDelivery;
+      "billingd.Page_Endpoint": BillingdPageEndpoint;
+      "billingd.Page_Value": BillingdPageValue;
+      "billingd.Problem": BillingdProblem;
+      "billingd.ProblemDetail": BillingdProblemDetail1;
+      "billingd.ReplayWindow": BillingdReplayWindow;
+      "billingd.Replayed": BillingdReplayed;
+      "billingd.RotateSecret": BillingdRotateSecret;
+      "billingd.SecretRotated": BillingdSecretRotated;
+      "billingd.TestDelivery": BillingdTestDelivery;
+      "billingd.TotalEstimate": BillingdTotalEstimate3;
+      "billingd.VerifyTokenBody": BillingdVerifyTokenBody;
       "edmd.Abdeckung": EdmdAbdeckung;
+      "edmd.ApiError": EdmdApiError;
+      "edmd.Delivery": EdmdDelivery;
+      "edmd.DeliveryFilter": EdmdDeliveryFilter;
+      "edmd.DeliveryStatus": EdmdDeliveryStatus2;
+      "edmd.Endpoint": EdmdEndpoint1;
+      "edmd.EndpointCreate": EdmdEndpointCreate;
+      "edmd.EndpointCreated": EdmdEndpointCreated;
+      "edmd.EndpointUpdate": EdmdEndpointUpdate;
       "edmd.Korrektur": EdmdKorrektur;
       "edmd.Korrekturen": EdmdKorrekturen;
       "edmd.Messwert": EdmdMesswert;
       "edmd.Messwerte": EdmdMesswerte;
       "edmd.Messwertqualitaet": EdmdMesswertqualitaet;
       "edmd.Note": EdmdNote;
+      "edmd.Owner": EdmdOwner2;
+      "edmd.Page_Delivery": EdmdPageDelivery;
+      "edmd.Page_Endpoint": EdmdPageEndpoint;
+      "edmd.Page_Value": EdmdPageValue;
       "edmd.Qualitaetsbefund": EdmdQualitaetsbefund;
+      "edmd.ReplayWindow": EdmdReplayWindow;
+      "edmd.Replayed": EdmdReplayed;
+      "edmd.RotateSecret": EdmdRotateSecret;
+      "edmd.SecretRotated": EdmdSecretRotated;
       "edmd.Tag": EdmdTag;
       "edmd.Tageszustand": EdmdTageszustand;
+      "edmd.TestDelivery": EdmdTestDelivery;
+      "edmd.TotalEstimate": EdmdTotalEstimate3;
       "einsd.Abrechnungen": EinsdAbrechnungen;
       "einsd.AbrechnungsErklaerung": EinsdAbrechnungsErklaerung;
       "einsd.Abrechnungsposition": EinsdAbrechnungsposition;
       "einsd.AnlageOhneMastr": EinsdAnlageOhneMastr;
       "einsd.AnlageRow": EinsdAnlageRow;
       "einsd.AnlagenOhneMastr": EinsdAnlagenOhneMastr;
+      "einsd.ApiError": EinsdApiError;
       "einsd.AuslaufendeAnlagen": EinsdAuslaufendeAnlagen;
+      "einsd.BatchSettleRequest": EinsdBatchSettleRequest;
+      "einsd.CorrectionSettleRequest": EinsdCorrectionSettleRequest;
+      "einsd.Einspeiser": EinsdEinspeiser;
+      "einsd.EpexPriceBody": EinsdEpexPriceBody;
+      "einsd.MarktwertBody": EinsdMarktwertBody;
+      "einsd.MastrRegistrierungRequest": EinsdMastrRegistrierungRequest;
+      "einsd.PflichtverstossAnlegenRequest": EinsdPflichtverstossAnlegenRequest;
+      "einsd.PflichtverstossBehobenRequest": EinsdPflichtverstossBehobenRequest;
+      "einsd.RegionalnachweisRequest": EinsdRegionalnachweisRequest;
+      "einsd.RepoweringRequest": EinsdRepoweringRequest;
+      "einsd.Sect54DefektRequest": EinsdSect54DefektRequest;
+      "einsd.Sect54NachweisRequest": EinsdSect54NachweisRequest;
+      "einsd.SettleTriggerRequest": EinsdSettleTriggerRequest;
       "einsd.SettlementReceipt": EinsdSettlementReceipt;
+      "einsd.SpotPriceEntry": EinsdSpotPriceEntry;
+      "einsd.SpotPriceLoadBody": EinsdSpotPriceLoadBody;
+      "einsd.StromsteuerbefreiungRequest": EinsdStromsteuerbefreiungRequest;
       "einsd.UnabgerechneteAnlagen": EinsdUnabgerechneteAnlagen;
+      "einsd.UpsertEinspeiser": EinsdUpsertEinspeiser;
+      "einsd.VeraeusserungsformWechselRequest": EinsdVeraeusserungsformWechselRequest;
+      "einsd.VerguetungssatzLookupRequest": EinsdVerguetungssatzLookupRequest;
+      "einsd.WindReevaluationRequest": EinsdWindReevaluationRequest;
+      "einsd.ZusammenlegungRequest": EinsdZusammenlegungRequest;
+      "invoicd.ApiError": InvoicdApiError;
+      "invoicd.Delivery": InvoicdDelivery;
+      "invoicd.DeliveryFilter": InvoicdDeliveryFilter;
+      "invoicd.DeliveryStatus": InvoicdDeliveryStatus2;
+      "invoicd.Endpoint": InvoicdEndpoint1;
+      "invoicd.EndpointCreate": InvoicdEndpointCreate;
+      "invoicd.EndpointCreated": InvoicdEndpointCreated;
+      "invoicd.EndpointUpdate": InvoicdEndpointUpdate;
+      "invoicd.Owner": InvoicdOwner2;
+      "invoicd.Page_Delivery": InvoicdPageDelivery;
+      "invoicd.Page_Endpoint": InvoicdPageEndpoint;
+      "invoicd.Page_Value": InvoicdPageValue;
+      "invoicd.ReceiptSummary": InvoicdReceiptSummary;
+      "invoicd.ReplayWindow": InvoicdReplayWindow;
+      "invoicd.Replayed": InvoicdReplayed;
+      "invoicd.ResolveDisputeBody": InvoicdResolveDisputeBody;
+      "invoicd.RotateSecret": InvoicdRotateSecret;
+      "invoicd.SecretRotated": InvoicdSecretRotated;
+      "invoicd.TestDelivery": InvoicdTestDelivery;
+      "invoicd.TotalEstimate": InvoicdTotalEstimate3;
+      "makod.ApiError": MakodApiError;
+      "makod.CandidateInfo": MakodCandidateInfo;
+      "makod.CommandAccepted": MakodCommandAccepted;
+      "makod.DeleteResponse": MakodDeleteResponse;
+      "makod.ErpCommand": MakodErpCommand;
+      "makod.HealthResponse": MakodHealthResponse;
+      "makod.Impact": MakodImpact;
+      "makod.ImpactRow": MakodImpactRow;
+      "makod.ImportResponse": MakodImportResponse;
+      "makod.IngestResponse": MakodIngestResponse;
+      "makod.ListResponse": MakodListResponse;
+      "makod.MessageResult": MakodMessageResult;
+      "makod.MessageStatus": MakodMessageStatus1;
+      "makod.PartnerResponse": MakodPartnerResponse;
+      "makod.PidChange": MakodPidChange;
+      "makod.Probe": MakodProbe;
+      "makod.ProbeBefund": MakodProbeBefund;
+      "makod.ProbeNachricht": MakodProbeNachricht;
+      "makod.ProbeRequest": MakodProbeRequest;
+      "makod.ProbeSegment": MakodProbeSegment;
+      "makod.SourceDoc": MakodSourceDoc;
+      "makod.StatsResponse": MakodStatsResponse;
+      "makod.Stufe": MakodStufe1;
+      "makod.TenantStats": MakodTenantStats;
+      "makod.UpsertRequest": MakodUpsertRequest;
+      "makod.UpsertResponse": MakodUpsertResponse;
+      "makod.Urteil": MakodUrteil1;
+      "makod.Window": MakodWindow1;
       "marktd.Angaben": MarktdAngaben1;
+      "marktd.ApiError": MarktdApiError;
+      "marktd.Delivery": MarktdDelivery;
+      "marktd.DeliveryFilter": MarktdDeliveryFilter;
+      "marktd.DeliveryStatus": MarktdDeliveryStatus2;
       "marktd.DispatchLogEntry": MarktdDispatchLogEntry;
+      "marktd.Endpoint": MarktdEndpoint1;
+      "marktd.EndpointCreate": MarktdEndpointCreate;
+      "marktd.EndpointCreated": MarktdEndpointCreated;
+      "marktd.EndpointUpdate": MarktdEndpointUpdate;
+      "marktd.Format": MarktdFormat;
       "marktd.Granularitaet": MarktdGranularitaet;
       "marktd.Kante": MarktdKante;
+      "marktd.KonfigurationenEntry": MarktdKonfigurationenEntry;
       "marktd.Lieferstatus": MarktdLieferstatus;
       "marktd.Lokationsbuendel": MarktdLokationsbuendel;
       "marktd.Lokationsbuendelstruktur": MarktdLokationsbuendelstruktur;
@@ -1176,24 +25650,219 @@ export interface Api {
       "marktd.MsbRvPruefung": MarktdMsbRvPruefung;
       "marktd.MsbRvStatus": MarktdMsbRvStatus;
       "marktd.MsbRvUpsertRequest": MarktdMsbRvUpsertRequest;
+      "marktd.NbContractResponse": MarktdNbContractResponse;
+      "marktd.NbContractUpsertRequest": MarktdNbContractUpsertRequest;
+      "marktd.NeLoUpsertRequest": MarktdNeLoUpsertRequest;
       "marktd.Nna": MarktdNna;
       "marktd.Obis": MarktdObis;
       "marktd.Objekt": MarktdObjekt;
       "marktd.Objekttyp": MarktdObjekttyp;
+      "marktd.Owner": MarktdOwner2;
+      "marktd.Page_Delivery": MarktdPageDelivery;
+      "marktd.Page_Endpoint": MarktdPageEndpoint;
+      "marktd.Page_Value": MarktdPageValue;
+      "marktd.PartnerUpsertRequest": MarktdPartnerUpsertRequest;
+      "marktd.PreisblattDlUpsertRequest": MarktdPreisblattDlUpsertRequest;
+      "marktd.PreisblattHwUpsertRequest": MarktdPreisblattHwUpsertRequest;
+      "marktd.PreisblattKaUpsertRequest": MarktdPreisblattKaUpsertRequest;
+      "marktd.PreisblattMessungResponse": MarktdPreisblattMessungResponse;
+      "marktd.PreisblattMessungUpsertRequest": MarktdPreisblattMessungUpsertRequest;
+      "marktd.PreisblattResponse": MarktdPreisblattResponse;
+      "marktd.PreisblattUpsertRequest": MarktdPreisblattUpsertRequest;
       "marktd.PriCatVersionSummary": MarktdPriCatVersionSummary;
+      "marktd.PutKonfigurationenRequest": MarktdPutKonfigurationenRequest;
+      "marktd.PutKonfigurationsprodukteRequest": MarktdPutKonfigurationsprodukteRequest;
       "marktd.Register": MarktdRegister;
+      "marktd.ReplayWindow": MarktdReplayWindow;
+      "marktd.Replayed": MarktdReplayed;
+      "marktd.RotateSecret": MarktdRotateSecret;
+      "marktd.SecretRotated": MarktdSecretRotated;
+      "marktd.SharingEligibilityEvidence": MarktdSharingEligibilityEvidence1;
+      "marktd.SharingEligibilityResponse": MarktdSharingEligibilityResponse;
       "marktd.StatusBody": MarktdStatusBody;
-      "marktd.SubscriptionResponse": MarktdSubscriptionResponse;
-      "marktd.SubscriptionUpsertRequest": MarktdSubscriptionUpsertRequest;
+      "marktd.TestDelivery": MarktdTestDelivery;
+      "marktd.TotalEstimate": MarktdTotalEstimate3;
+      "marktd.TrancheUpsertRequest": MarktdTrancheUpsertRequest;
+      "marktd.UpsertGeraetRequest": MarktdUpsertGeraetRequest;
+      "marktd.UpsertSrRequest": MarktdUpsertSrRequest;
+      "marktd.UpsertTrRequest": MarktdUpsertTrRequest;
+      "marktd.UpsertZaehlerRequest": MarktdUpsertZaehlerRequest;
       "marktd.Verfahren": MarktdVerfahren;
       "marktd.VersorgungsStatusHistorie": MarktdVersorgungsStatusHistorie;
       "marktd.VersorgungsStatusHistoryResponse": MarktdVersorgungsStatusHistoryResponse;
       "marktd.VersorgungsStatusResponse": MarktdVersorgungsStatusResponse;
+      "marktd.VersorgungsStatusUpsertRequest": MarktdVersorgungsStatusUpsertRequest;
       "marktd.Zaehler": MarktdZaehler;
       "marktd.Zuordnung": MarktdZuordnung;
       "marktd.Zuordnungsstatus": MarktdZuordnungsstatus;
+      "netzbilanzd.ApiError": NetzbilanzdApiError;
+      "netzbilanzd.Delivery": NetzbilanzdDelivery;
+      "netzbilanzd.DeliveryFilter": NetzbilanzdDeliveryFilter;
+      "netzbilanzd.DeliveryStatus": NetzbilanzdDeliveryStatus2;
+      "netzbilanzd.Endpoint": NetzbilanzdEndpoint1;
+      "netzbilanzd.EndpointCreate": NetzbilanzdEndpointCreate;
+      "netzbilanzd.EndpointCreated": NetzbilanzdEndpointCreated;
+      "netzbilanzd.EndpointUpdate": NetzbilanzdEndpointUpdate;
+      "netzbilanzd.Owner": NetzbilanzdOwner2;
+      "netzbilanzd.Page_Delivery": NetzbilanzdPageDelivery;
+      "netzbilanzd.Page_Endpoint": NetzbilanzdPageEndpoint;
+      "netzbilanzd.Page_Value": NetzbilanzdPageValue;
+      "netzbilanzd.ReplayWindow": NetzbilanzdReplayWindow;
+      "netzbilanzd.Replayed": NetzbilanzdReplayed;
+      "netzbilanzd.RotateSecret": NetzbilanzdRotateSecret;
+      "netzbilanzd.SecretRotated": NetzbilanzdSecretRotated;
+      "netzbilanzd.TestDelivery": NetzbilanzdTestDelivery;
+      "netzbilanzd.TotalEstimate": NetzbilanzdTotalEstimate3;
+      "portald.ApiError": PortaldApiError;
+      "portald.PortalKontaktRequest": PortaldPortalKontaktRequest;
+      "portald.PortalKuendigungRequest": PortaldPortalKuendigungRequest;
+      "portald.PortalSepaRequest": PortaldPortalSepaRequest;
+      "portald.PortalTarifwechselRequest": PortaldPortalTarifwechselRequest;
+      "processd.ApiError": ProcessdApiError;
+      "processd.AssignKlaerfallRequest": ProcessdAssignKlaerfallRequest;
+      "processd.Delivery": ProcessdDelivery;
+      "processd.DeliveryFilter": ProcessdDeliveryFilter;
+      "processd.DeliveryStatus": ProcessdDeliveryStatus2;
+      "processd.EndSupplyGasRequest": ProcessdEndSupplyGasRequest;
+      "processd.EndSupplyRequest": ProcessdEndSupplyRequest;
+      "processd.Endpoint": ProcessdEndpoint1;
+      "processd.EndpointCreate": ProcessdEndpointCreate;
+      "processd.EndpointCreated": ProcessdEndpointCreated;
+      "processd.EndpointUpdate": ProcessdEndpointUpdate;
+      "processd.ExecuteRequest": ProcessdExecuteRequest;
+      "processd.FailRequest": ProcessdFailRequest;
+      "processd.NeuanlageIdentifikationRequest": ProcessdNeuanlageIdentifikationRequest;
+      "processd.Owner": ProcessdOwner2;
+      "processd.Page_Delivery": ProcessdPageDelivery;
+      "processd.Page_Endpoint": ProcessdPageEndpoint;
+      "processd.Page_Value": ProcessdPageValue;
+      "processd.ReplayWindow": ProcessdReplayWindow;
+      "processd.Replayed": ProcessdReplayed;
+      "processd.ResolveKlaerfallRequest": ProcessdResolveKlaerfallRequest;
+      "processd.RotateSecret": ProcessdRotateSecret;
+      "processd.SecretRotated": ProcessdSecretRotated;
+      "processd.TestDelivery": ProcessdTestDelivery;
+      "processd.TotalEstimate": ProcessdTotalEstimate3;
+      "productd.ApiError": ProductdApiError;
+      "productd.Delivery": ProductdDelivery;
+      "productd.DeliveryFilter": ProductdDeliveryFilter;
+      "productd.DeliveryStatus": ProductdDeliveryStatus2;
+      "productd.Endpoint": ProductdEndpoint1;
+      "productd.EndpointCreate": ProductdEndpointCreate;
+      "productd.EndpointCreated": ProductdEndpointCreated;
+      "productd.EndpointUpdate": ProductdEndpointUpdate;
+      "productd.Owner": ProductdOwner2;
+      "productd.Page_Delivery": ProductdPageDelivery;
+      "productd.Page_Endpoint": ProductdPageEndpoint;
+      "productd.Page_Value": ProductdPageValue;
+      "productd.ReplayWindow": ProductdReplayWindow;
+      "productd.Replayed": ProductdReplayed;
+      "productd.RotateSecret": ProductdRotateSecret;
+      "productd.SecretRotated": ProductdSecretRotated;
+      "productd.TestDelivery": ProductdTestDelivery;
+      "productd.TotalEstimate": ProductdTotalEstimate3;
+      "vertragd.ApiError": VertragdApiError;
+      "vertragd.Delivery": VertragdDelivery;
+      "vertragd.DeliveryFilter": VertragdDeliveryFilter;
+      "vertragd.DeliveryStatus": VertragdDeliveryStatus2;
+      "vertragd.Endpoint": VertragdEndpoint1;
+      "vertragd.EndpointCreate": VertragdEndpointCreate;
+      "vertragd.EndpointCreated": VertragdEndpointCreated;
+      "vertragd.EndpointUpdate": VertragdEndpointUpdate;
+      "vertragd.Owner": VertragdOwner2;
+      "vertragd.Page_Delivery": VertragdPageDelivery;
+      "vertragd.Page_Endpoint": VertragdPageEndpoint;
+      "vertragd.Page_Value": VertragdPageValue;
+      "vertragd.ReplayWindow": VertragdReplayWindow;
+      "vertragd.Replayed": VertragdReplayed;
+      "vertragd.RotateSecret": VertragdRotateSecret;
+      "vertragd.SecretRotated": VertragdSecretRotated;
+      "vertragd.TestDelivery": VertragdTestDelivery;
+      "vertragd.TotalEstimate": VertragdTotalEstimate3;
     };
   };
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface AccountingdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+export interface AccountingdUpdateAccountRequest {
+  abschlag_ct?: number | null;
+  address?: AccountingdAddressParts;
+  billing_day?: number | null;
+  iban?: string | null;
+  mandatsref?: string | null;
+}
+/**
+ * Postal address (`PstlAdr`). Each part is `COALESCE`d, so an omitted part
+ * leaves the stored value alone — the same shape as every other field here.
+ */
+export interface AccountingdAddressParts {
+  /**
+   * `BldgNb`.
+   */
+  building_number?: string | null;
+  /**
+   * `Ctry` — ISO 3166-1 alpha-2, required whenever any part is set.
+   */
+  country?: string | null;
+  /**
+   * `CtrySubDvsn` (Bundesland / state).
+   */
+  country_subdivision?: string | null;
+  /**
+   * `PstCd`.
+   */
+  post_code?: string | null;
+  /**
+   * `StrtNm`.
+   */
+  street?: string | null;
+  /**
+   * `TwnNm` — required whenever any part is set.
+   */
+  town?: string | null;
+}
+/**
+ * Body of `PUT /api/v1/accounts/{malo_id}/abschlag`.
+ */
+export interface AccountingdPutAbschlagRequest {
+  /**
+   * The new monthly Abschlag in ct (× 10⁻² EUR). Required.
+   */
+  abschlag_ct: number;
+}
+export interface AccountingdAnonymizeRequest {
+  /**
+   * Legal basis for erasure (e.g. `"GDPR Art. 17 - customer request #42"`).
+   */
+  legal_basis: string;
+  /**
+   * Operator identity for the GDPR Art. 5(2) audit log.
+   */
+  requested_by: string;
 }
 /**
  * The account's open-items balance (`get_balance`,
@@ -1221,6 +25890,59 @@ export interface AccountingdKontostand {
    */
   malo_id: string;
   status: AccountingdSaldostatus;
+}
+/**
+ * Request body for `POST /api/v1/accounts/{malo_id}/buchen`.
+ */
+export interface AccountingdBuchenRequest {
+  /**
+   * Amount in ct (× 10⁻² EUR). Positive = debit; negative = credit.
+   */
+  amount_ct: number;
+  /**
+   * ISO 8601 booking date. Defaults to today when absent.
+   */
+  booking_date?: string | null;
+  /**
+   * Human-readable description for the Kontoauszug.
+   */
+  description?: string | null;
+  /**
+   * Buchungsart. Must be a valid `entry_type` value.
+   * Allowed: `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `EEG_GUTSCHRIFT`,
+   * `EEG_MARKTPRAEMIE`, `EEG_AUSZAHLUNG`, `EEG_RUECKZAHLUNG`, `BANKRUECKLAST`,
+   * `MAHNGEBUEHR`, `VERZUGSZINSEN`, `ABSCHLAG`, `ABSCHLAG_VERRECHNUNG`,
+   * `SEPA_STORNO`, `JAHRESABSCHLUSS`, `KORREKTUR`, `STORNO`.
+   *
+   * The same list [`crate::ledger::ENTRY_TYPES`] holds, so an automated path
+   * and the operator interface accept exactly the same kinds.
+   */
+  entry_type: string;
+  lf_mp_id?: string | null;
+  /**
+   * External reference (invoice number, payment reference, etc.).
+   */
+  reference_id?: string | null;
+  /**
+   * ISO 8601 value date. Defaults to `booking_date` when absent.
+   */
+  value_date?: string | null;
+}
+/**
+ * Body of `PUT /api/v1/accounts/{malo_id}/business-partner`.
+ */
+export interface AccountingdPutBusinessPartnerRequest {
+  /**
+   * The vertragd `kunden_nr` the account belongs to. Required, non-blank.
+   */
+  kunden_nr: string;
+}
+export interface AccountingdCreateInterestChargeRequest {
+  invoice_reference?: string | null;
+  lf_mp_id?: string | null;
+  period_from: string;
+  period_to: string;
+  principal_ct: number;
 }
 /**
  * A statement window (`list_ledger`, `GET /api/v1/accounts/{malo_id}/ledger`):
@@ -1283,6 +26005,166 @@ export interface AccountingdKontobewegung {
   signed_ct: number;
 }
 /**
+ * Body of `POST /api/v1/dunning/{id}/locks`.
+ */
+export interface AccountingdPlaceLockRequest {
+  grund: AccountingdLockGrund;
+  note?: string | null;
+  /**
+   * The citation this rests on. Defaults to the ground's own.
+   */
+  rechtsgrundlage?: string | null;
+  /**
+   * When the lock takes effect. Absent = today. Settable because the evidence
+   * a lock rests on has its own dates — a certificate covering January to
+   * March is recorded as it reads, not as of the day it was typed in.
+   */
+  valid_from?: BusinessDate | null;
+  /**
+   * When the lock lapses. Absent = open-ended, and open-ended locks are
+   * listed by `GET /api/v1/dunning/locks/review`.
+   */
+  valid_to?: BusinessDate | null;
+}
+export interface AccountingdCreatePaymentPlanRequest {
+  /**
+   * The live `abwendungsvereinbarung` lock on the same account this plan is
+   * the Ratenzahlung of (§ 41g Abs. 1 S. 3 Nr. 1 EnWG). When the plan goes
+   * `DEFAULTED`, the lock is lifted with `vereinbarung_gebrochen`.
+   */
+  abwendung_lock_id?: string | null;
+  billing_day: number;
+  dunning_case_id?: string | null;
+  first_due_date: string;
+  installment_ct: number;
+  lf_mp_id?: string | null;
+  malo_id: string;
+  note?: string | null;
+  operator_sub?: string | null;
+  total_ct: number;
+}
+/**
+ * `PUT /api/v1/accounts/{malo_id}/verbraucher` — the § 13 BGB status as the
+ * vertragd contract records it. `null` is „not recorded" and clears a status
+ * an earlier contract on the MaLo set; the field is required, so an empty body
+ * cannot be read as either.
+ */
+export interface AccountingdSetVerbraucherRequest {
+  verbraucher?: boolean | null;
+}
+/**
+ * Body of `POST /api/v1/bookings/{key}/discard`.
+ */
+export interface AccountingdDiscardRequest {
+  /**
+   * Why the booking is dropped — kept with the draft for the audit trail.
+   */
+  grund: string;
+}
+/**
+ * Body of `POST /api/v1/bookings/{key}/rebook`.
+ */
+export interface AccountingdRebookRequest {
+  /**
+   * The date to book on (ISO 8601) — an open month; the parked list names
+   * the first one as `vorschlag_datum`.
+   */
+  buchungsdatum: string;
+}
+/**
+ * The payout items (`list_credit_payouts`, `GET /api/v1/credit-payouts`).
+ */
+export interface AccountingdGuthabenauszahlungen {
+  /**
+   * How many items `payouts` holds.
+   */
+  count: number;
+  /**
+   * How many of them are overdue.
+   */
+  overdue_count: number;
+  /**
+   * The items, earliest due date first.
+   */
+  payouts: AccountingdGuthabenauszahlung[];
+  /**
+   * The page is full: more may match than were listed.
+   */
+  saturated: boolean;
+}
+/**
+ * One Guthaben owed back from a Schlussrechnung.
+ */
+export interface AccountingdGuthabenauszahlung {
+  /**
+   * The Guthaben in cents.
+   */
+  amount_ct: number;
+  /**
+   * `amount_ct` as a decimal EUR string.
+   */
+  amount_eur: Decimal;
+  /**
+   * The last day it may be paid out (§ 40c Abs. 3 EnWG, two weeks).
+   */
+  due_on: BusinessDate;
+  /**
+   * The Lieferant's MP-ID the account is kept under.
+   */
+  lf_mp_id: string;
+  /**
+   * 11-digit Marktlokations-ID.
+   */
+  malo_id: string;
+  /**
+   * Open and past `due_on` on today's Europe/Berlin date.
+   */
+  overdue: boolean;
+  /**
+   * The item, as `POST /api/v1/credit-payouts/{payout_id}/paid` names it.
+   */
+  payout_id: string;
+  /**
+   * The Schlussrechnung's date.
+   */
+  rechnungsdatum: BusinessDate;
+  /**
+   * The Schlussrechnung that owes it.
+   */
+  rechnungsnummer: string;
+  status: AccountingdStatus1;
+}
+/**
+ * Body of `POST /api/v1/credit-payouts/{payout_id}/paid`.
+ */
+export interface AccountingdPaidRequest {
+  /**
+   * The value date of the transfer (YYYY-MM-DD).
+   */
+  paid_on: BusinessDate;
+  /**
+   * The bank reference of the transfer.
+   */
+  reference?: string | null;
+}
+/**
+ * What a payout booked.
+ */
+export interface AccountingdGuthabenAusgezahlt {
+  /**
+   * The amount in cents.
+   */
+  amount_ct: number;
+  /**
+   * The ledger entry the payout is (or will be, once the ledger answers).
+   */
+  ledger_entry_id: string;
+  /**
+   * The item that was paid.
+   */
+  payout_id: string;
+}
+/**
  * The open dunning cases (`list_dunning`, `GET /api/v1/dunning`).
  */
 export interface AccountingdMahnfaelle {
@@ -1335,6 +26217,230 @@ export interface AccountingdMahnfall {
    * The Mahnstufe, 1–3.
    */
   stufe: number;
+}
+/**
+ * Body of `DELETE /api/v1/dunning/locks/{lock_id}`.
+ */
+export interface AccountingdLiftLockRequest {
+  /**
+   * Why the lock no longer applies. `vereinbarung_gebrochen` carries the
+   * § 41g Abs. 1 S. 11 side effect described below.
+   */
+  grund: string;
+}
+/**
+ * Body of `POST /api/v1/dunning/{account_id}/escalate`.
+ *
+ * Both fields are required. The Mahnstufe and the Zahlungsfrist are what the
+ * Mahnung tells the customer, and accountingd has no configured policy for a
+ * manual escalation's Zahlungsfrist — so a value the operator did not send is
+ * refused rather than substituted.
+ */
+export interface AccountingdEscalateDunningRequest {
+  /**
+   * Zahlungsfrist in calendar days from today (Europe/Berlin), at least 1.
+   */
+  due_days: number;
+  /**
+   * Mahnstufe, 1–3 (the `dunning_cases.stufe` range).
+   */
+  stufe: number;
+}
+/**
+ * Body of `POST /api/v1/dunning/{id}/einwaende`.
+ */
+export interface AccountingdEinwandRequest {
+  art: AccountingdEinwandArt;
+  betrag_ct: number;
+  /**
+   * The disputed booking, where one can be pointed at.
+   */
+  ledger_entry_id?: string | null;
+  note?: string | null;
+}
+/**
+ * A recorded Aufrechnung, as the operator declares it.
+ */
+export interface AccountingdAufrechnungRequest {
+  /**
+   * The amount extinguished, in euro cent; positive.
+   */
+  amount_ct: number;
+  billing_month: number;
+  /**
+   * The billing month of the extinguished claim.
+   */
+  billing_year: number;
+  /**
+   * The day the Aufrechnung was declared, `YYYY-MM-DD`.
+   */
+  erklaert_am: string;
+  gegenforderung: AccountingdGegenforderung;
+  malo_id: string;
+  /**
+   * The plant whose claim was set off.
+   */
+  tr_id: string;
+  vermerk?: string | null;
+}
+/**
+ * The EEG payout orders (`list_eeg_payouts`, `GET /api/v1/eeg/payouts`).
+ */
+export interface AccountingdEegAuszahlungen {
+  /**
+   * How many orders `payouts` holds.
+   */
+  count: number;
+  /**
+   * The orders, newest first.
+   */
+  payouts: AccountingdEegAuszahlung[];
+  /**
+   * The page is full: more may match than were listed.
+   */
+  saturated: boolean;
+}
+/**
+ * One EEG payout order the Netzbetreiber ran (§ 19 Abs. 1 EEG 2023).
+ */
+export interface AccountingdEegAuszahlung {
+  /**
+   * The amount paid out, in cents.
+   */
+  amount_ct: number;
+  /**
+   * `amount_ct` as a decimal EUR string.
+   */
+  amount_eur: Decimal;
+  /**
+   * Billing month (1–12) of the receipt chain.
+   */
+  billing_month: number;
+  /**
+   * Billing year of the receipt chain.
+   */
+  billing_year: number;
+  /**
+   * When the order was made.
+   */
+  created_at: Instant;
+  /**
+   * The plant operator the order pays.
+   */
+  creditor_name: string;
+  /**
+   * The ISO 20022 `EndToEndId` the pain.002 answers on.
+   */
+  end_to_end_ref: string;
+  /**
+   * The plant's Marktlokation.
+   */
+  malo_id: string;
+  /**
+   * The EPC reason code of a rejection.
+   */
+  pain002_reason?: string | null;
+  /**
+   * The bank's pain.002 status (`PDNG`, `ACCP`, `ACSC`, `RJCT`, `CANC`, …);
+   * absent for an order not yet submitted.
+   */
+  pain002_status?: string | null;
+  /**
+   * `SCT_INST` or `SCT_CORE`.
+   */
+  payment_type: string;
+  /**
+   * The order.
+   */
+  payout_id: string;
+  /**
+   * When the bank confirmed the credit.
+   */
+  settled_at?: Instant | null;
+  /**
+   * When the pain.001 was submitted.
+   */
+  submitted_at?: Instant | null;
+  /**
+   * The plant (Technische Ressource) whose receipt chain the order pays.
+   */
+  tr_id: string;
+}
+/**
+ * Request body for `POST /api/v1/eeg/payouts/run`.
+ */
+export interface AccountingdRunEegPayoutsRequest {
+  /**
+   * The billing month, 1–12.
+   */
+  billing_month: number;
+  /**
+   * The **billing** year of the receipts to pay — the period they settle,
+   * not the day the run happens.
+   */
+  billing_year: number;
+  /**
+   * When `true`, force SCT Inst regardless of `[eeg].sepa_instant` config.
+   * When `false` or absent, use the config flag.
+   */
+  instant_override?: boolean | null;
+  /**
+   * Only pay this MaLo's chains (for a targeted re-run).
+   */
+  malo_id?: string | null;
+}
+/**
+ * Request body for `PUT /api/v1/eeg/payouts/{payout_id}/status`
+ *
+ * Process a pain.002 Payment Status Report from the bank.
+ * Updates the `pain002_status` and `settled_at` / `pain002_reason` columns.
+ *
+ * EPC reason codes (ISO 20022):
+ * - `AC01` — incorrect account number (IBAN)
+ * - `AM04` — insufficient funds
+ * - `AC06` — account blocked
+ * - `MD01` — no mandate (direct debit only — not applicable here)
+ * - `RJCT` + empty reason — generic rejection
+ */
+export interface AccountingdPain002StatusUpdate {
+  /**
+   * EPC/ISO 20022 reason code (e.g. `"AC01"`). Absent for ACCP.
+   */
+  reason_code?: string | null;
+  /**
+   * `ACCP` | `ACSC` | `RJCT` | `CANC`
+   */
+  status: string;
+}
+/**
+ * A plant operator's repayment of an overpaid receipt chain, as the operator
+ * of accountingd records it.
+ */
+export interface AccountingdRueckzahlungRequest {
+  /**
+   * The amount received, in euro cent; positive, at most what is owed back.
+   */
+  amount_ct: number;
+  billing_month: number;
+  billing_year: number;
+  /**
+   * The day the money arrived, `YYYY-MM-DD`.
+   */
+  eingegangen_am: string;
+  /**
+   * The plant and billing month of the overpaid chain.
+   */
+  tr_id: string;
+  vermerk?: string | null;
+}
+/**
+ * Body of `POST /api/v1/einwaende/{einwand_id}/erledigen`.
+ */
+export interface AccountingdCloseEinwandRequest {
+  /**
+   * `stattgegeben` | `zurueckgenommen` | `zurueckgewiesen`.
+   */
+  erledigung: string;
 }
 /**
  * The accounts with an open balance (`list_overdue`,
@@ -1505,6 +26611,774 @@ export interface AccountingdZuordnungskandidat {
   similarity_score?: number | null;
 }
 /**
+ * The bank lines waiting for an account (`list_unmatched_payments`,
+ * `GET /api/v1/payments/unmatched`).
+ */
+export interface AccountingdUnzugeordneteZahlungen {
+  /**
+   * How many lines `payments` holds.
+   */
+  count: number;
+  /**
+   * The lines, oldest value date first.
+   */
+  payments: AccountingdUnzugeordneteZahlung[];
+  /**
+   * The page is full: more may be waiting than were listed.
+   */
+  saturated: boolean;
+}
+/**
+ * One bank line no account claimed.
+ */
+export interface AccountingdUnzugeordneteZahlung {
+  /**
+   * The amount in cents, always positive; `is_return` carries the direction.
+   */
+  amount_ct: number;
+  /**
+   * `amount_ct` as a decimal EUR string.
+   */
+  amount_eur: Decimal;
+  /**
+   * The bank's transaction reference.
+   */
+  bank_transaction_id: string;
+  /**
+   * The `EndToEndId`, when the bank itemised one.
+   */
+  end_to_end_id?: string | null;
+  /**
+   * The payer's IBAN as `DE…3000`, when the bank reported one.
+   */
+  iban_masked?: string | null;
+  /**
+   * A Rücklastschrift (money leaving the account) rather than a payment in.
+   */
+  is_return: boolean;
+  /**
+   * The line, as `POST /api/v1/payments/{payment_id}/assign` names it.
+   */
+  payment_id: string;
+  /**
+   * When it was imported.
+   */
+  received_at: Instant;
+  /**
+   * The Verwendungszweck.
+   */
+  reference: string;
+  source: AccountingdQuelle;
+  /**
+   * The value date.
+   */
+  value_date: BusinessDate;
+}
+/**
+ * Body of `POST /api/v1/payments/{payment_id}/assign`.
+ */
+export interface AccountingdAssignRequest {
+  /**
+   * The Lieferant's MP-ID the account is kept under; defaults to the tenant.
+   */
+  lf_mp_id?: string | null;
+  /**
+   * 11-digit Marktlokations-ID of the account the payment belongs to.
+   */
+  malo_id: string;
+}
+/**
+ * What an assignment booked.
+ */
+export interface AccountingdZahlungZugeordnet {
+  /**
+   * The amount in cents, always positive.
+   */
+  amount_ct: number;
+  /**
+   * `ZAHLUNG` or `BANKRUECKLAST`.
+   */
+  entry_type: string;
+  /**
+   * The ledger entry the booking is (or will be, once the ledger answers).
+   */
+  ledger_entry_id: string;
+  /**
+   * The Lieferant's MP-ID the account is kept under.
+   */
+  lf_mp_id: string;
+  /**
+   * 11-digit Marktlokations-ID.
+   */
+  malo_id: string;
+  /**
+   * The line that was assigned.
+   */
+  payment_id: string;
+}
+export interface AccountingdCreateMandateRequest {
+  bic?: string | null;
+  debtor_address?: AccountingdAddressParts1;
+  iban: string;
+  kontoinhaber?: string | null;
+  lf_mp_id: string;
+  malo_id: string;
+  mandatsref: string;
+  /**
+   * `CORE` (default) or `B2B`.
+   *
+   * Not a formatting detail. A CORE debtor has an unconditional 8-week refund
+   * right; a B2B debtor has none, and their bank must hold the mandate before
+   * a collection will clear. Collecting a B2B mandate under CORE — which is
+   * what happened while this was unmodelled and every group was hard-coded to
+   * CORE — grants the debtor a right their mandate does not carry.
+   */
+  scheme?: string;
+  /**
+   * `FRST` on a new mandate, then `RCUR` once one collection has cleared.
+   *
+   * Defaulted because the sequence is this service's to track across the
+   * mandate's life rather than a caller's input — `portald` omits it, so a
+   * required field would answer every customer-facing mandate registration
+   * with 422.
+   */
+  sequence_type?: string;
+  signed_at: string;
+}
+/**
+ * Debtor postal address (`Dbtr/PstlAdr`). Optional; once any part is set,
+ * `town` + `country` are required.
+ */
+export interface AccountingdAddressParts1 {
+  /**
+   * `BldgNb`.
+   */
+  building_number?: string | null;
+  /**
+   * `Ctry` — ISO 3166-1 alpha-2, required whenever any part is set.
+   */
+  country?: string | null;
+  /**
+   * `CtrySubDvsn` (Bundesland / state).
+   */
+  country_subdivision?: string | null;
+  /**
+   * `PstCd`.
+   */
+  post_code?: string | null;
+  /**
+   * `StrtNm`.
+   */
+  street?: string | null;
+  /**
+   * `TwnNm` — required whenever any part is set.
+   */
+  town?: string | null;
+}
+/**
+ * Body of `POST /api/v1/sepa/recalls`.
+ */
+export interface AccountingdCreateRecallRequest {
+  /**
+   * The `EndToEndId`s to recall. Absent or empty recalls the **whole**
+   * submission (`GrpCxl`), which is a different request, not a shorthand.
+   */
+  end_to_end_ids?: string[] | null;
+  /**
+   * ISO 20022 `CancellationReason5Code` — `DUPL`, `AGNT`, `CURR`, `CUST`,
+   * `UPAY`, `CUTA`, `TECH`, `FRAD`. Defaults to `UPAY`: the ordinary case is
+   * a collection that was not due.
+   */
+  reason_code?: string | null;
+  /**
+   * The submitted run to recall (`sepa_collection_runs.run_id`).
+   */
+  run_id: string;
+}
+/**
+ * Request body for `POST /api/v1/sepa/reversals`.
+ */
+export interface AccountingdCreateReversalRequest {
+  /**
+   * The collected entry to give back (`sepa_collection_entries.entry_id`).
+   */
+  collection_entry_id: string;
+  /**
+   * ISO 20022 `ExternalReversalReason1Code`. Defaults to `MS02` — "no reason
+   * specified by the customer", the code the DK's own reversal example
+   * carries and what a creditor uses when it simply collected in error.
+   */
+  reason_code?: string | null;
+  /**
+   * Partial reversal amount in ct. Absent reverses the whole collection;
+   * more than was collected is refused.
+   */
+  reversed_amount_ct?: number | null;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface AgentdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * Destroy a case's wrapping key, forget a memory subject, or both.
+ */
+export interface AgentdErasureRequest {
+  case_id?: string | null;
+  memory_subject?: string | null;
+  reason: string;
+}
+/**
+ * What a person asks a run for. Every field is named: an unknown one is a
+ * `422`, because a misspelt `agent` read as absent would start every
+ * subscribing specialist instead of the one named.
+ */
+export interface AgentdRunRequest {
+  /**
+   * The specialist to run; absent, every one subscribed to `event_type`.
+   */
+  agent?: string | null;
+  /**
+   * The event type the run answers (`manual` when absent).
+   */
+  event_type?: string | null;
+  /**
+   * The event's data, handed to the specialist as is.
+   */
+  input?: {
+    [k: string]: unknown | undefined;
+  };
+}
+/**
+ * The body every billingd refusal answers with.
+ */
+export interface BillingdProblem {
+  error: BillingdProblemDetail;
+}
+/**
+ * What was refused.
+ */
+export interface BillingdProblemDetail {
+  /**
+   * A stable machine code (`PERIOD_ALREADY_BILLED`); branch on it.
+   */
+  code: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  message: string;
+  /**
+   * On a 502: the upstream service that did not answer.
+   */
+  service?: string | null;
+}
+/**
+ * The body of [`post_public_nachrechnung`].
+ */
+export interface BillingdVerifyTokenBody {
+  /**
+   * The verify token printed on the invoice.
+   */
+  token: string;
+}
+/**
+ * Request body for `POST /api/v1/billing/{id}/correction`.
+ */
+export interface BillingdCorrectionRequest {
+  /**
+   * Human-readable reason for the correction (e.g. "Zählerstandskorrektur").
+   */
+  reason: string;
+  /**
+   * Override the Stornorechnung's number. Absent — the normal case — takes
+   * the next number of the tenant's `ST` series.
+   */
+  rechnungsnummer?: string | null;
+}
+/**
+ * One page of a list.
+ */
+export interface BillingdPageValue {
+  /**
+   * The rows of this page, in the list's order.
+   */
+  items: unknown[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | BillingdTotalEstimate;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface BillingdTotalEstimate {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface BillingdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * How many deliveries a replay queued.
+ */
+export interface BillingdReplayed {
+  /**
+   * Deliveries queued again or for the first time.
+   */
+  queued: number;
+}
+/**
+ * One page of a list.
+ */
+export interface BillingdPageEndpoint {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: A webhook endpoint, as listed. Its secrets are never part of it.
+   */
+  items: {
+    /**
+     * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+     */
+    active: boolean;
+    /**
+     * When the endpoint was registered.
+     */
+    created_at: Instant;
+    /**
+     * Why the endpoint was deactivated (`gone`).
+     */
+    deactivated_reason?: string | null;
+    /**
+     * `mako_events::matches` patterns; empty matches every type.
+     */
+    event_types: string[];
+    /**
+     * CloudEvent extensions an event must carry with these values
+     * (`marktsparte`, `marktrole`).
+     */
+    extensions: {
+      [k: string]: string | undefined;
+    };
+    /**
+     * The endpoint's id.
+     */
+    id: string;
+    /**
+     * Unique per service; `default` is the config URL.
+     */
+    name: string;
+    owner: BillingdOwner;
+    /**
+     * The Vertriebspartner the endpoint is bound to; it receives only events
+     * stamped with that partner.
+     */
+    partner?: string | null;
+    /**
+     * Until when the previous secret still signs, after a rotation.
+     */
+    previous_secret_expires_at?: Instant | null;
+    /**
+     * Where deliveries are POSTed.
+     */
+    url: string;
+    /**
+     * The version `If-Match` names.
+     */
+    version: number;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | BillingdTotalEstimate1;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface BillingdTotalEstimate1 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints`.
+ */
+export interface BillingdEndpointCreate {
+  /**
+   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * Unique per service; `default` is reserved for the config URL.
+   */
+  name: string;
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * A created endpoint and its secret — the only answer that shows it.
+ */
+export interface BillingdEndpointCreated {
+  endpoint: BillingdEndpoint;
+  /**
+   * The `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * The endpoint.
+ */
+export interface BillingdEndpoint {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: BillingdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface BillingdEndpoint1 {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: BillingdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.
+ */
+export interface BillingdEndpointUpdate {
+  /**
+   * Whether deliveries are made.
+   */
+  active: boolean;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * One page of a list.
+ */
+export interface BillingdPageDelivery {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: One event to one endpoint.
+   */
+  items: {
+    /**
+     * Attempts made.
+     */
+    attempts: number;
+    /**
+     * When the delivery was created.
+     */
+    created_at: Instant;
+    /**
+     * The endpoint delivered to.
+     */
+    endpoint_id: string;
+    /**
+     * The CloudEvent `id`, sent as `webhook-id`.
+     */
+    event_id: string;
+    /**
+     * The CloudEvent `type`.
+     */
+    event_type: string;
+    /**
+     * The delivery's id — what a single replay names.
+     */
+    id: string;
+    /**
+     * The last attempt's failure.
+     */
+    last_error?: string | null;
+    /**
+     * The HTTP status of the last attempt; absent when it got no answer.
+     */
+    last_status?: number | null;
+    /**
+     * How long the last answered attempt took, in milliseconds.
+     */
+    latency_ms?: number | null;
+    /**
+     * When the next attempt is due, while pending.
+     */
+    next_attempt_at?: Instant | null;
+    /**
+     * The aggregate the event is about; deliveries of one key arrive in order.
+     */
+    ordering_key?: string | null;
+    status: BillingdDeliveryStatus;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | BillingdTotalEstimate2;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface BillingdTotalEstimate2 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.
+ */
+export interface BillingdReplayWindow {
+  /**
+   * Start of the window, inclusive (RFC 3339).
+   */
+  from: Instant;
+  /**
+   * End of the window, exclusive (RFC 3339).
+   */
+  to: Instant;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.
+ */
+export interface BillingdRotateSecret {
+  /**
+   * How long the previous secret keeps signing, at most 168 hours.
+   */
+  overlap_hours: number;
+}
+/**
+ * A rotated secret — the only answer that shows it.
+ */
+export interface BillingdSecretRotated {
+  /**
+   * Until when the previous secret also signs.
+   */
+  previous_expires_at: Instant;
+  /**
+   * The new `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * What a test delivery came to.
+ */
+export interface BillingdTestDelivery {
+  /**
+   * Whether the endpoint answered 2xx.
+   */
+  delivered: boolean;
+  /**
+   * Why it was not delivered.
+   */
+  error?: string | null;
+  /**
+   * How long it took, when it answered.
+   */
+  latency_ms?: number | null;
+  /**
+   * The HTTP status, when it answered.
+   */
+  status?: number | null;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface EdmdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
  * The corrections recorded for a Marktlokation in a window, newest first.
  */
 export interface EdmdKorrekturen {
@@ -1584,6 +27458,33 @@ export interface EdmdTag {
    */
   tag: BusinessDate;
   zustand: EdmdTageszustand;
+}
+/**
+ * One page of a list.
+ */
+export interface EdmdPageValue {
+  /**
+   * The rows of this page, in the list's order.
+   */
+  items: unknown[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | EdmdTotalEstimate;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface EdmdTotalEstimate {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
 }
 /**
  * The quality verdict over a window, recomputed from the version-resolved
@@ -1679,13 +27580,387 @@ export interface EdmdMesswert {
   quantity_kwh: Decimal;
 }
 /**
- * `list_expiring`'s answer: active plants whose Förderung ends within
- * `horizon_days`, the earliest Förderende first.
+ * How many deliveries a replay queued.
  */
-export interface EinsdAuslaufendeAnlagen {
+export interface EdmdReplayed {
+  /**
+   * Deliveries queued again or for the first time.
+   */
+  queued: number;
+}
+/**
+ * One page of a list.
+ */
+export interface EdmdPageEndpoint {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: A webhook endpoint, as listed. Its secrets are never part of it.
+   */
+  items: {
+    /**
+     * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+     */
+    active: boolean;
+    /**
+     * When the endpoint was registered.
+     */
+    created_at: Instant;
+    /**
+     * Why the endpoint was deactivated (`gone`).
+     */
+    deactivated_reason?: string | null;
+    /**
+     * `mako_events::matches` patterns; empty matches every type.
+     */
+    event_types: string[];
+    /**
+     * CloudEvent extensions an event must carry with these values
+     * (`marktsparte`, `marktrole`).
+     */
+    extensions: {
+      [k: string]: string | undefined;
+    };
+    /**
+     * The endpoint's id.
+     */
+    id: string;
+    /**
+     * Unique per service; `default` is the config URL.
+     */
+    name: string;
+    owner: EdmdOwner;
+    /**
+     * The Vertriebspartner the endpoint is bound to; it receives only events
+     * stamped with that partner.
+     */
+    partner?: string | null;
+    /**
+     * Until when the previous secret still signs, after a rotation.
+     */
+    previous_secret_expires_at?: Instant | null;
+    /**
+     * Where deliveries are POSTed.
+     */
+    url: string;
+    /**
+     * The version `If-Match` names.
+     */
+    version: number;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | EdmdTotalEstimate1;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface EdmdTotalEstimate1 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
   count: number;
-  horizon_days: number;
-  plants: EinsdAnlageRow[];
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints`.
+ */
+export interface EdmdEndpointCreate {
+  /**
+   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * Unique per service; `default` is reserved for the config URL.
+   */
+  name: string;
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * A created endpoint and its secret — the only answer that shows it.
+ */
+export interface EdmdEndpointCreated {
+  endpoint: EdmdEndpoint;
+  /**
+   * The `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * The endpoint.
+ */
+export interface EdmdEndpoint {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: EdmdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface EdmdEndpoint1 {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: EdmdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.
+ */
+export interface EdmdEndpointUpdate {
+  /**
+   * Whether deliveries are made.
+   */
+  active: boolean;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * One page of a list.
+ */
+export interface EdmdPageDelivery {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: One event to one endpoint.
+   */
+  items: {
+    /**
+     * Attempts made.
+     */
+    attempts: number;
+    /**
+     * When the delivery was created.
+     */
+    created_at: Instant;
+    /**
+     * The endpoint delivered to.
+     */
+    endpoint_id: string;
+    /**
+     * The CloudEvent `id`, sent as `webhook-id`.
+     */
+    event_id: string;
+    /**
+     * The CloudEvent `type`.
+     */
+    event_type: string;
+    /**
+     * The delivery's id — what a single replay names.
+     */
+    id: string;
+    /**
+     * The last attempt's failure.
+     */
+    last_error?: string | null;
+    /**
+     * The HTTP status of the last attempt; absent when it got no answer.
+     */
+    last_status?: number | null;
+    /**
+     * How long the last answered attempt took, in milliseconds.
+     */
+    latency_ms?: number | null;
+    /**
+     * When the next attempt is due, while pending.
+     */
+    next_attempt_at?: Instant | null;
+    /**
+     * The aggregate the event is about; deliveries of one key arrive in order.
+     */
+    ordering_key?: string | null;
+    status: EdmdDeliveryStatus;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | EdmdTotalEstimate2;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface EdmdTotalEstimate2 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.
+ */
+export interface EdmdReplayWindow {
+  /**
+   * Start of the window, inclusive (RFC 3339).
+   */
+  from: Instant;
+  /**
+   * End of the window, exclusive (RFC 3339).
+   */
+  to: Instant;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.
+ */
+export interface EdmdRotateSecret {
+  /**
+   * How long the previous secret keeps signing, at most 168 hours.
+   */
+  overlap_hours: number;
+}
+/**
+ * A rotated secret — the only answer that shows it.
+ */
+export interface EdmdSecretRotated {
+  /**
+   * Until when the previous secret also signs.
+   */
+  previous_expires_at: Instant;
+  /**
+   * The new `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * What a test delivery came to.
+ */
+export interface EdmdTestDelivery {
+  /**
+   * Whether the endpoint answered 2xx.
+   */
+  delivered: boolean;
+  /**
+   * Why it was not delivered.
+   */
+  error?: string | null;
+  /**
+   * How long it took, when it answered.
+   */
+  latency_ms?: number | null;
+  /**
+   * The HTTP status, when it answered.
+   */
+  status?: number | null;
 }
 /**
  * Stored plant record returned by GET endpoints.
@@ -1826,6 +28101,41 @@ export interface EinsdAnlageRow {
   zuschlagswert_ct?: Decimal | null;
 }
 /**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface EinsdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * `list_expiring`'s answer: active plants whose Förderung ends within
+ * `horizon_days`, the earliest Förderende first.
+ */
+export interface EinsdAuslaufendeAnlagen {
+  count: number;
+  horizon_days: number;
+  plants: EinsdAnlageRow[];
+}
+/**
  * `list_plants_without_mastr`' answer, the largest plant first.
  */
 export interface EinsdAnlagenOhneMastr {
@@ -1864,6 +28174,191 @@ export interface EinsdUnabgerechneteAnlagen {
   billing_year: number;
   plants: EinsdAnlageRow[];
   unsettled_count: number;
+}
+/**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis`.
+ */
+export interface EinsdRegionalnachweisRequest {
+  /**
+   * First day the Nachweis covers (ISO 8601).
+   */
+  effective_from: string;
+  /**
+   * Last day it covers; open-ended when absent.
+   */
+  effective_until?: string | null;
+  /**
+   * Register reference of the issued Regionalnachweis (§79a EEG).
+   */
+  nachweis_ref: string;
+}
+/**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt`.
+ */
+export interface EinsdSect54DefektRequest {
+  /**
+   * Abs. 3 — Agri-PV Nutzungsnachweis not supplied.
+   */
+  agri_nutzungsnachweis_fehlt?: boolean;
+  bnetza_ref?: string | null;
+  effective_from: string;
+  effective_until?: string | null;
+  /**
+   * Abs. 2 — location does not match the Flurstücke named in the bid.
+   */
+  flurstueck_abweichung?: boolean;
+  /**
+   * Abs. 4 — Landesverordnung under §37c Abs. 2 not met; AW → 0.
+   */
+  landesverordnung_nicht_erfuellt?: boolean;
+  notes?: string | null;
+  /**
+   * Abs. 1 — Zahlungsberechtigung applied for after the 18th Kalendermonat.
+   */
+  zahlungsberechtigung_nach_18_monaten?: boolean;
+}
+/**
+ * Request body for closing a §54 defect period.
+ */
+export interface EinsdSect54NachweisRequest {
+  /**
+   * Last day the defect applied — §54 Abs. 3 Satz 2/3.
+   */
+  effective_until: string;
+}
+/**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung`.
+ */
+export interface EinsdStromsteuerbefreiungRequest {
+  /**
+   * The exemption granted, in ct/kWh. Capped at the §3 StromStG full rate of
+   * 2,05 ct/kWh — an exemption cannot exceed the tax it exempts from.
+   */
+  befreiung_ct_kwh: Decimal;
+  effective_from: string;
+  effective_until?: string | null;
+  /**
+   * Which StromStG provision it rests on, e.g. `"§9 Abs. 1 Nr. 1 StromStG"`.
+   */
+  rechtsgrundlage: string;
+}
+/**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/mastr-registrierung`.
+ */
+export interface EinsdMastrRegistrierungRequest {
+  /**
+   * Date of MaStR registration (ISO 8601). Defaults to today if omitted.
+   */
+  mastr_datum?: string | null;
+  /**
+   * MaStR Registrierungsnummer (format: `SEE000000000000`, `EEE000000000000`, etc.).
+   *
+   * Issued by BNetzA at marktstammdatenregister.de.
+   */
+  mastr_nummer: string;
+}
+/**
+ * Body of `POST /api/v1/anlagen/{tr_id}/pflichtverstoesse`.
+ */
+export interface EinsdPflichtverstossAnlegenRequest {
+  /**
+   * First day the breach subsisted, ISO 8601. §52 Abs. 2 counts calendar
+   * months from here.
+   */
+  beginn: string;
+  /**
+   * What was found, and by whom.
+   */
+  notiz?: string | null;
+  /**
+   * §52 Abs. 3 Satz 2 — the breach was caused by a technical defect, so the
+   * defect month and the following one are waived (Nr. 1/3/4/8, breaches
+   * after 31.12.2023 only). The operator carries the Darlegungs- und
+   * Beweislast, which is why this is stated rather than inferred.
+   */
+  technischer_defekt?: boolean;
+  /**
+   * The §52 Abs. 1 Nummer, as `eeg_billing::SanktionsTyp` names it —
+   * `FERNSTEUERBARKEIT_FEHLEND`, `SECT10B_VORGABEN_VERLETZT`, … The full
+   * vocabulary is `SanktionsTyp::ALL`, and `GET` on this route returns it in
+   * the error body of an unknown value.
+   */
+  typ: string;
+}
+/**
+ * Body of `PUT /api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben`.
+ */
+export interface EinsdPflichtverstossBehobenRequest {
+  /**
+   * Day the obligation was met, ISO 8601. Must not precede `beginn`.
+   */
+  behoben_am: string;
+}
+/**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/repowering`.
+ */
+export interface EinsdRepoweringRequest {
+  /**
+   * New installed capacity in kWp (may differ from original).
+   */
+  leistung_kwp_neu?: Decimal | null;
+  /**
+   * ISO 8601 date when the new components were commissioned.
+   * The Förderendedatum is reset to `repowering_datum + 20 years`.
+   */
+  repowering_datum: string;
+  /**
+   * New Vergütungssatz at the repowering date (ct/kWh).
+   * When absent, auto-lookup via `eeg_verguetungssaetze` table.
+   */
+  verguetungssatz_ct_neu?: Decimal | null;
+}
+/**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}`.
+ */
+export interface EinsdSettleTriggerRequest {
+  /**
+   * §13a EnWG (Redispatch 2.0) — kWh curtailed by the NB this billing month.
+   *
+   * The NB must compensate the operator at the AW rate for these kWh
+   * (§19 Abs. 2 EEG 2023: §51 Negativpreisregel does NOT apply to EInsMan kWh).
+   * Pass the total curtailed kWh from MSCONS IFTSTA messages in this period.
+   */
+  einspeisemanagement_kwh?: Decimal | null;
+  /**
+   * Einspeisemenge kWh for the billing month.
+   * When absent, `einsd` will return `status = "no_data"`.
+   */
+  einspeisemenge_kwh?: Decimal | null;
+  /**
+   * Override EPEX monthly average ct/kWh (only for DIREKTVERMARKTUNG /
+   * POST_EEG_SPOT).  When absent, the value stored in `epex_monthly_prices`
+   * is used automatically.
+   */
+  epex_avg_ct_kwh?: Decimal | null;
+  /**
+   * §51 EEG 2023 — kWh fed in during negative-spot-price intervals.
+   *
+   * The anzulegender Wert for these kWh is reduced to null (Negativpreisregel),
+   * version- and threshold-aware in the engine (EEG 2017 ≥6 h / EEG 2021 ≥4 h /
+   * EEG 2023 any interval; kW-exemptions applied). Pass the feed-in quantity
+   * that fell in negative-price intervals for the billing month; omit (or the
+   * §51 exemption applies) to leave the settlement unreduced. Consistent with
+   * `negative_price_quarter_hours` (§51a), which extends the Förderzeitraum for
+   * the same intervals.
+   */
+  kwh_during_negative_epex?: Decimal | null;
+  /**
+   * §51a EEG 2023 — quarter-hours during which the EPEX price was negative
+   * AND the plant's §51 threshold was met.
+   *
+   * Used to compute the §51a Verlängerungsanspruch. Non-solar plants extend by
+   * whole calendar days (96 QH/day, rounded up once over the total); solar
+   * plants convert at factor 0,5 into Volllastviertelstunden and draw them
+   * down against the §51a Abs. 2 monthly table (73 in December, 508 in June).
+   * Pass the raw qualifying quarter-hour count for the billing month.
+   */
+  negative_price_quarter_hours?: number | null;
 }
 /**
  * `list_settlements`' answer: a plant's receipts, the newest month first.
@@ -1913,6 +28408,28 @@ export interface EinsdSettlementReceipt {
   tr_id: string;
 }
 /**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`.
+ */
+export interface EinsdCorrectionSettleRequest {
+  /**
+   * Corrected Einspeisemenge kWh.
+   */
+  einspeisemenge_kwh?: Decimal | null;
+  /**
+   * Corrected EPEX average ct/kWh (for Direktvermarktung / Post-EEG).
+   */
+  epex_avg_ct_kwh?: Decimal | null;
+  /**
+   * Reason for the correction: an `eeg_billing::scheme::CorrectionReason`
+   * token in SCREAMING_SNAKE_CASE.
+   */
+  reason: string;
+  /**
+   * Free-text explanation for audit trail.
+   */
+  reason_detail?: string | null;
+}
+/**
  * `explain_settlement`'s answer: the newest receipt for the month and its
  * positions as stored.
  */
@@ -1952,6 +28469,1230 @@ export interface EinsdAbrechnungsposition {
    */
   legal_basis: string;
   rate_ct_kwh: Decimal;
+}
+/**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform`.
+ */
+export interface EinsdVeraeusserungsformWechselRequest {
+  /**
+   * For Direktvermarktung switches: the agreed Anzulegender Wert ct/kWh.
+   */
+  direktverm_aw_ct?: Decimal | null;
+  /**
+   * For Direktvermarktung switches: the Direktvermarkter's MP-ID.
+   */
+  direktvermarkter_mp_id?: string | null;
+  /**
+   * Effective date for the switch (must be the 1st of a calendar month).
+   */
+  effective_date: string;
+  /**
+   * The Veräußerungsform to switch to: `"VERGUETUNG"` (Einspeisevergütung,
+   * §21 Abs. 1) or `"DIREKTVERMARKTUNG"` (gleitende Marktprämie, §20).
+   */
+  new_model: string;
+}
+/**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/wind-reevaluation`.
+ */
+export interface EinsdWindReevaluationRequest {
+  /**
+   * Gütefaktor recomputed from the measured 5-year Standortertrag.
+   */
+  guetefaktor: Decimal;
+  /**
+   * Korrekturfaktor certified by the Gutachten (§36h Abs. 3 Nr. 2).
+   *
+   * The Netzbetreiber settles on the certified value, so it is accepted
+   * rather than derived. Omit it to interpolate the Anlage 2 Nr. 7 table
+   * from `guetefaktor`.
+   */
+  korrekturfaktor?: Decimal | null;
+  /**
+   * Year after commissioning from which the adjusted AW takes effect: 6, 11 or 16.
+   */
+  wirksam_ab_jahr: number;
+}
+/**
+ * Request body for `POST /api/v1/anlagen/{tr_id}/zusammenlegen`.
+ */
+export interface EinsdZusammenlegungRequest {
+  /**
+   * Combined installed capacity in kWp after merger.
+   * When absent, the parent's capacity is unchanged.
+   */
+  combined_leistung_kwp?: Decimal | null;
+  /**
+   * TR-ID of the parent (surviving) plant.
+   */
+  parent_tr_id: string;
+  /**
+   * §24 Abs. 1 Satz 1 Nr. 1, second limb — the two plants are in
+   * *unmittelbarer räumlicher Nähe* although they do not share a
+   * `standort_id`.
+   *
+   * A human judgement about the pair, so it is asserted per request rather
+   * than derived. It only matters when the two sites differ; sharing a
+   * `standort_id` already satisfies Nr. 1.
+   */
+  unmittelbare_raeumliche_naehe?: boolean;
+}
+/**
+ * A plant operator.
+ */
+export interface EinsdEinspeiser {
+  bank_bic?: string | null;
+  bank_iban?: string | null;
+  /**
+   * Operator-assigned identity — a customer number, a MaStR Marktakteur-ID,
+   * or a UUID the ERP mints. `einsd` does not invent identities for parties
+   * it did not register.
+   */
+  einspeiser_id: string;
+  /**
+   * MaStR Marktakteursnummer, where the operator has one.
+   */
+  mastr_akteur_id?: string | null;
+  name: string;
+  /**
+   * `KLEINUNTERNEHMER` (§ 19 UStG, 0 %) or `REGELBESTEUERUNG`
+   * (§ 12 Abs. 1 UStG, 19 %).
+   */
+  ust_status: string;
+  zahlungsempfaenger?: string | null;
+}
+/**
+ * Fields accepted when creating or replacing an operator.
+ */
+export interface EinsdUpsertEinspeiser {
+  bank_bic?: string | null;
+  bank_iban?: string | null;
+  mastr_akteur_id?: string | null;
+  name: string;
+  /**
+   * Omitted keeps the stored value on an update and defaults to
+   * `REGELBESTEUERUNG` on a create — the § 19 election is a declaration, and
+   * silence is not one.
+   */
+  ust_status?: string | null;
+  zahlungsempfaenger?: string | null;
+}
+export interface EinsdEpexPriceBody {
+  avg_ct_kwh: Decimal;
+  source?: string | null;
+}
+/**
+ * Bulk spot-price load request body.
+ */
+export interface EinsdSpotPriceLoadBody {
+  prices: EinsdSpotPriceEntry[];
+  source?: string | null;
+}
+/**
+ * One EPEX spot interval in the bulk-load request body.
+ */
+export interface EinsdSpotPriceEntry {
+  /**
+   * Interval start, RFC 3339 (UTC).
+   */
+  delivery_start: string;
+  /**
+   * Price ct/kWh (may be negative).
+   */
+  price_ct_kwh: Decimal;
+  /**
+   * 15 or 60. Defaults to 15.
+   */
+  resolution_min?: number;
+}
+export interface EinsdMarktwertBody {
+  avg_ct_kwh: Decimal;
+  /**
+   * Required for a Monatsmarktwert (Anlage 1 Nr. 3); refused for a
+   * Jahresmarktwert (Nr. 4), which is one figure per year.
+   */
+  billing_month?: number | null;
+  source?: string | null;
+  /**
+   * An ÜNB running estimate rather than the published binding figure. Only a
+   * Jahresmarktwert can be one.
+   */
+  vorlaeufig?: boolean;
+}
+/**
+ * Request body for `POST /api/v1/settle/{year}/{month}`.
+ */
+export interface EinsdBatchSettleRequest {
+  /**
+   * Dry-run mode — calculates but does not persist or emit CloudEvents.
+   */
+  dry_run?: boolean;
+  /**
+   * EPEX monthly average ct/kWh.  When absent, uses stored `epex_monthly_prices`.
+   */
+  epex_avg_ct_kwh?: Decimal | null;
+  /**
+   * Maximum plants to settle in one request (default 500, max 2000).
+   */
+  limit?: number | null;
+}
+/**
+ * Request body for `POST /api/v1/verguetungssatz-lookup`.
+ */
+export interface EinsdVerguetungssatzLookupRequest {
+  erzeugungsart: string;
+  /**
+   * ISO 8601 Inbetriebnahmedatum.
+   */
+  inbetriebnahme: string;
+  leistung_kwp: Decimal;
+  /**
+   * `"UEBERSCHUSS"` (default), `"VOLLEINSPEISUNG"` (§48 Abs. 2a) or
+   * `"KWK_ZUSCHLAG"`. The two solar forms differ by several ct/kWh, so a
+   * lookup that omits it is answered on the Überschuss column.
+   */
+  verguetungsform?: string | null;
+}
+export interface InvoicdReceiptSummary {
+  bo4e_version: string;
+  id: string;
+  invoice_ref?: string | null;
+  outcome: string;
+  pid: number;
+  process_id: string;
+  received_at: Instant;
+  rechnungsnummer?: string | null;
+  sender_mp_id: string;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface InvoicdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * One page of a list.
+ */
+export interface InvoicdPageValue {
+  /**
+   * The rows of this page, in the list's order.
+   */
+  items: unknown[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | InvoicdTotalEstimate;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface InvoicdTotalEstimate {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+export interface InvoicdResolveDisputeBody {
+  note?: string | null;
+}
+/**
+ * How many deliveries a replay queued.
+ */
+export interface InvoicdReplayed {
+  /**
+   * Deliveries queued again or for the first time.
+   */
+  queued: number;
+}
+/**
+ * One page of a list.
+ */
+export interface InvoicdPageEndpoint {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: A webhook endpoint, as listed. Its secrets are never part of it.
+   */
+  items: {
+    /**
+     * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+     */
+    active: boolean;
+    /**
+     * When the endpoint was registered.
+     */
+    created_at: Instant;
+    /**
+     * Why the endpoint was deactivated (`gone`).
+     */
+    deactivated_reason?: string | null;
+    /**
+     * `mako_events::matches` patterns; empty matches every type.
+     */
+    event_types: string[];
+    /**
+     * CloudEvent extensions an event must carry with these values
+     * (`marktsparte`, `marktrole`).
+     */
+    extensions: {
+      [k: string]: string | undefined;
+    };
+    /**
+     * The endpoint's id.
+     */
+    id: string;
+    /**
+     * Unique per service; `default` is the config URL.
+     */
+    name: string;
+    owner: InvoicdOwner;
+    /**
+     * The Vertriebspartner the endpoint is bound to; it receives only events
+     * stamped with that partner.
+     */
+    partner?: string | null;
+    /**
+     * Until when the previous secret still signs, after a rotation.
+     */
+    previous_secret_expires_at?: Instant | null;
+    /**
+     * Where deliveries are POSTed.
+     */
+    url: string;
+    /**
+     * The version `If-Match` names.
+     */
+    version: number;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | InvoicdTotalEstimate1;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface InvoicdTotalEstimate1 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints`.
+ */
+export interface InvoicdEndpointCreate {
+  /**
+   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * Unique per service; `default` is reserved for the config URL.
+   */
+  name: string;
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * A created endpoint and its secret — the only answer that shows it.
+ */
+export interface InvoicdEndpointCreated {
+  endpoint: InvoicdEndpoint;
+  /**
+   * The `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * The endpoint.
+ */
+export interface InvoicdEndpoint {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: InvoicdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface InvoicdEndpoint1 {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: InvoicdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.
+ */
+export interface InvoicdEndpointUpdate {
+  /**
+   * Whether deliveries are made.
+   */
+  active: boolean;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * One page of a list.
+ */
+export interface InvoicdPageDelivery {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: One event to one endpoint.
+   */
+  items: {
+    /**
+     * Attempts made.
+     */
+    attempts: number;
+    /**
+     * When the delivery was created.
+     */
+    created_at: Instant;
+    /**
+     * The endpoint delivered to.
+     */
+    endpoint_id: string;
+    /**
+     * The CloudEvent `id`, sent as `webhook-id`.
+     */
+    event_id: string;
+    /**
+     * The CloudEvent `type`.
+     */
+    event_type: string;
+    /**
+     * The delivery's id — what a single replay names.
+     */
+    id: string;
+    /**
+     * The last attempt's failure.
+     */
+    last_error?: string | null;
+    /**
+     * The HTTP status of the last attempt; absent when it got no answer.
+     */
+    last_status?: number | null;
+    /**
+     * How long the last answered attempt took, in milliseconds.
+     */
+    latency_ms?: number | null;
+    /**
+     * When the next attempt is due, while pending.
+     */
+    next_attempt_at?: Instant | null;
+    /**
+     * The aggregate the event is about; deliveries of one key arrive in order.
+     */
+    ordering_key?: string | null;
+    status: InvoicdDeliveryStatus;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | InvoicdTotalEstimate2;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface InvoicdTotalEstimate2 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.
+ */
+export interface InvoicdReplayWindow {
+  /**
+   * Start of the window, inclusive (RFC 3339).
+   */
+  from: Instant;
+  /**
+   * End of the window, exclusive (RFC 3339).
+   */
+  to: Instant;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.
+ */
+export interface InvoicdRotateSecret {
+  /**
+   * How long the previous secret keeps signing, at most 168 hours.
+   */
+  overlap_hours: number;
+}
+/**
+ * A rotated secret — the only answer that shows it.
+ */
+export interface InvoicdSecretRotated {
+  /**
+   * Until when the previous secret also signs.
+   */
+  previous_expires_at: Instant;
+  /**
+   * The new `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * What a test delivery came to.
+ */
+export interface InvoicdTestDelivery {
+  /**
+   * Whether the endpoint answered 2xx.
+   */
+  delivered: boolean;
+  /**
+   * Why it was not delivered.
+   */
+  error?: string | null;
+  /**
+   * How long it took, when it answered.
+   */
+  latency_ms?: number | null;
+  /**
+   * The HTTP status, when it answered.
+   */
+  status?: number | null;
+}
+export interface MakodStatsResponse {
+  tenants: MakodTenantStats[];
+}
+export interface MakodTenantStats {
+  last_upsert?: string | null;
+  malo_count: number;
+  tenant_id: string;
+}
+/**
+ * Request body for `PUT /admin/malo/{malo_id}`.
+ *
+ * The server scopes all operations to its configured operator MP-ID;
+ * the request body must not include a `tenant_id` — the tenant is
+ * always the operator that holds the bearer token.
+ */
+export interface MakodUpsertRequest {
+  /**
+   * Full positive MaLo identification result from the UTILMD query process.
+   */
+  result: {};
+  /**
+   * Source tag for audit trail (e.g. `"erp-sync"`, `"manual"`, `"partin"`).
+   */
+  source?: string;
+  /**
+   * Optional ISO 8601 effective-from date (informational; not enforced).
+   */
+  valid_from?: string | null;
+}
+export interface MakodUpsertResponse {
+  malo_id: string;
+  updated_at: string;
+}
+export interface MakodDeleteResponse {
+  deleted: boolean;
+  mp_id: string;
+}
+export interface MakodListResponse {
+  count: number;
+  partners: {}[];
+}
+export interface MakodImportResponse {
+  /**
+   * MP-IDs that were upserted.
+   */
+  glns: string[];
+  /**
+   * Number of PARTIN messages that had no extractable MP-ID.
+   */
+  skipped: number;
+  /**
+   * Number of PARTIN records successfully upserted.
+   */
+  upserted: number;
+}
+/**
+ * Inbound ERP command envelope.
+ *
+ * The ERP explicitly names the MaKo process command it wants to trigger and
+ * its own Marktrolle.  The BO4E object(s) carrying domain data are placed in
+ * `payload` — they are never used for routing.
+ */
+export interface MakodErpCommand {
+  /**
+   * Dotted command name: `<domain>.<prozess>.<aktion>`.
+   *
+   * Examples: `gpke.lieferbeginn.anmelden`, `wim.geraetewechsel.beauftragen`
+   */
+  command: string;
+  /**
+   * Marktrolle of the ERP system issuing this command.
+   *
+   * **Required only for multi-role commands** such as
+   * `wim.geraetewechsel.beauftragen` (permitted for both `NB` and `MSB`).
+   * For single-role commands (e.g. `gpke.lieferbeginn.anmelden` → always `LF`)
+   * this field is optional — the role is inferred from the command name.
+   *
+   * Examples: `"NB"`, `"LF"`, `"LFG"`, `"GNB"`, `"MSB"`, `"BKV"`, `"ÜNB"`
+   */
+  marktrolle?: string | null;
+  /**
+   * Command-specific payload.
+   *
+   * Each command defines its own required fields.  For most GPKE/GeLi
+   * commands the minimal payload is a `malo_id` string (the 11-digit
+   * Marktlokations-ID) plus the process-specific date.  The engine
+   * resolves all partner MP-IDs (NB, MSB) and MeLo data from the MaLo cache.
+   *
+   * Example for `gpke.lieferbeginn.anmelden`
+   * (`mako_markt::commands::GpkeLieferbeginnAnmelden`, every field Muss on
+   * the 55001):
+   * ```json
+   * {
+   *   "malo_id":            "51238696012",
+   *   "lieferbeginn_datum": "2026-10-01",
+   *   "transaktionsgrund":  "E03",
+   *   "bilanzkreis":        "11XBK-LF-------9",
+   *   "haushaltskunde":     true,
+   *   "enfg_grundlage":     "ZG1",
+   *   "kunde": { "nachname": "Mustermann", "anschrift": { "strasse": "Hauptstraße",
+   *              "hausnummer": "1", "postleitzahl": "50667", "ort": "Köln", "landescode": "DE" } }
+   * }
+   * ```
+   *
+   * Not a BO4E document: this is a **command** envelope, and each command
+   * names the scalar fields it reads out of it (see the module docs). Even
+   * the invoicing commands are flat — `makod` renders the INVOIC envelope
+   * with an empty detail section and never holds an invoice's positions.
+   *
+   * **Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or
+   * `message_ref` — these are engine-owned and will be ignored or rejected.
+   */
+  payload: {};
+}
+/**
+ * Successful command acceptance response.
+ */
+export interface MakodCommandAccepted {
+  /**
+   * The command name as received.
+   */
+  command: string;
+  /**
+   * Idempotency key echoed back to the caller.
+   */
+  idempotency_key: string;
+  /**
+   * The Marktrolle as received.
+   */
+  marktrolle: string;
+  /**
+   * The reference of the message this command filed (`UNH` DE 0062), when
+   * the command files one whose reference is fixed at acceptance —
+   * `mabis.summenzeitreihe.uebermitteln`. It is what the counterparty's
+   * answer names, so a caller records it rather than a placeholder.
+   */
+  message_ref?: string | null;
+  /**
+   * UUID of the process that was spawned or updated.
+   *
+   * Matches the `subject` field of the corresponding CloudEvent sent to the
+   * ERP webhook. Use this to correlate the command response with the
+   * `de.mako.process.initiated` (or other) event the ERP received.
+   */
+  process_id: string;
+  /**
+   * Always `"accepted"` for HTTP 202.
+   */
+  status: string;
+}
+/**
+ * The impact report of one candidate Formatversion.
+ */
+export interface MakodImpact {
+  /**
+   * Every message type the candidate covers.
+   */
+  candidates: MakodCandidateInfo[];
+  /**
+   * The candidate's directory name, `fv<yyyymmdd>[_gas]`.
+   */
+  fv: string;
+  /**
+   * Interchanges of a message type no candidate covers, per type.
+   */
+  message_types_not_covered: {
+    [k: string]: number | undefined;
+  };
+  /**
+   * Files not read, per reason (`compressed`, `unnamed`, `unparseable`,
+   * `no_binding_profile`).
+   */
+  not_read: {
+    [k: string]: number | undefined;
+  };
+  /**
+   * Messages not re-validated because the candidate does not change their
+   * Prüfidentifikator, per PID (`ohne` for none).
+   */
+  not_revalidated: {
+    [k: string]: number | undefined;
+  };
+  /**
+   * Messages whose Prüfidentifikator the candidate removes or adds.
+   */
+  pid_changes: MakodPidChange[];
+  /**
+   * Each new refusal, one row per rule.
+   */
+  refusals: MakodImpactRow[];
+  /**
+   * Messages re-validated under both profiles.
+   */
+  revalidated: number;
+  window: MakodWindow;
+}
+/**
+ * One message type of the candidate.
+ */
+export interface MakodCandidateInfo {
+  /**
+   * The binding Formatversion it is compared with.
+   */
+  against: string;
+  message_type: string;
+  sources: MakodSourceDoc[];
+  /**
+   * `Konsultationsfassung`.
+   */
+  status: string;
+}
+/**
+ * One consultation PDF.
+ */
+export interface MakodSourceDoc {
+  file: string;
+  sha256: string;
+}
+/**
+ * A message whose Prüfidentifikator one of the two releases lacks.
+ */
+export interface MakodPidChange {
+  /**
+   * `removed` or `added`.
+   */
+  change: string;
+  counterparty: string;
+  date: string;
+  file: string;
+  pid: number;
+  richtung: string;
+}
+/**
+ * One new refusal of one message.
+ */
+export interface MakodImpactRow {
+  /**
+   * Every Bedingung the place cites, with the candidate AHB's text.
+   */
+  bedingungen: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * For an outbound message: what in mako builds it, since mako itself must
+   * change before the Stichtag.
+   */
+  builder?: string | null;
+  counterparty: string;
+  /**
+   * `YYYY-MM-DD`, from the file name.
+   */
+  date: string;
+  file: string;
+  /**
+   * The validator's sentence.
+   */
+  message: string;
+  message_ref: string;
+  message_type: string;
+  pid?: number | null;
+  /**
+   * `eingang` or `ausgang`.
+   */
+  richtung: string;
+  /**
+   * The rule (`AHB-55001-00047-STS-MISSING`, `MIG-…`).
+   */
+  rule_id?: string | null;
+  /**
+   * The candidate AHB's status and operands for the place.
+   */
+  rule_status: string[];
+  /**
+   * The segment tag the refusal sits on.
+   */
+  segment?: string | null;
+  /**
+   * One-based position of the segment in its message, `UNH` = 1.
+   */
+  segment_position?: number | null;
+}
+/**
+ * The days read.
+ */
+export interface MakodWindow {
+  /**
+   * `YYYY-MM-DD`.
+   */
+  from: string;
+  /**
+   * `YYYY-MM-DD`, today.
+   */
+  to: string;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface MakodApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * The body of `POST /api/v1/probe/{command}`.
+ */
+export interface MakodProbeRequest {
+  /**
+   * The Marktrolle to rehearse as — required only where the command is
+   * permitted for more than one, as on `POST /api/v1/commands`.
+   */
+  marktrolle?: string | null;
+  /**
+   * The command's payload, exactly as `POST /api/v1/commands` takes it.
+   */
+  payload: {};
+}
+/**
+ * The answer of a rehearsal.
+ */
+export interface MakodProbe {
+  /**
+   * The command rehearsed.
+   */
+  command: string;
+  /**
+   * The refusal in the door's own words — the sentence the real command
+   * would be answered with.
+   */
+  grund?: string | null;
+  /**
+   * The Marktrolle it was rehearsed as.
+   */
+  marktrolle: string;
+  /**
+   * The messages the door built; empty when it refused before building one.
+   */
+  nachrichten: MakodProbeNachricht[];
+  stufe?: null | MakodStufe;
+  urteil: MakodUrteil;
+}
+/**
+ * One message the door built.
+ */
+export interface MakodProbeNachricht {
+  /**
+   * The AHB version of that profile.
+   */
+  ahb_version?: string | null;
+  /**
+   * Findings the check placed on no single segment.
+   */
+  befunde: MakodProbeBefund[];
+  /**
+   * The MP-ID it is addressed to.
+   */
+  empfaenger: string;
+  /**
+   * The format version whose profile named the segments (`FV2025-10-01`).
+   */
+  formatversion?: string | null;
+  /**
+   * `UTILMD`, ….
+   */
+  nachrichtentyp: string;
+  /**
+   * The Prüfidentifikator the message carries.
+   */
+  pruefidentifikator?: number | null;
+  /**
+   * The message, `UNH` … `UNT`, segment by segment.
+   */
+  segmente: MakodProbeSegment[];
+  /**
+   * The interchange as rendered, `UNA` … `UNZ`.
+   */
+  wire: string;
+}
+/**
+ * One finding of the pre-send check.
+ */
+export interface MakodProbeBefund {
+  /**
+   * Zero-based index into the segment's `elemente`, where the finding
+   * names a data element.
+   */
+  element?: number | null;
+  /**
+   * Zero-based component within that data element.
+   */
+  komponente?: number | null;
+  /**
+   * The profile rule it rests on (`AHB-…`, `MIG-…`), where it names one.
+   */
+  regel?: string | null;
+  /**
+   * The check's own wording.
+   */
+  text: string;
+}
+/**
+ * One segment of the rendered message.
+ */
+export interface MakodProbeSegment {
+  /**
+   * The findings that sit on this segment.
+   */
+  befunde: MakodProbeBefund[];
+  /**
+   * Each data element as written, components joined by `:`.
+   */
+  elemente: string[];
+  /**
+   * The segment groups enclosing the place, outermost first (`SG4/SG8`).
+   */
+  gruppe?: string | null;
+  /**
+   * The MIG's name for the place; absent when the segment fits no place.
+   */
+  name?: string | null;
+  /**
+   * The MIG's running number of the place the segment sits at.
+   */
+  nr?: string | null;
+  /**
+   * One-based position in the message, `UNH` = 1.
+   */
+  position: number;
+  /**
+   * The segment tag.
+   */
+  tag: string;
+  /**
+   * The segment as it goes on the wire, terminator included.
+   */
+  text: string;
+}
+export interface MakodIngestResponse {
+  /**
+   * Number of messages that were parsed and routed (or had a known PID).
+   */
+  accepted: number;
+  messages: MakodMessageResult[];
+  /**
+   * Number of messages that could not be parsed at all.
+   */
+  rejected: number;
+}
+export interface MakodMessageResult {
+  /**
+   * Human-readable error, present when `status` is `"parse_error"` or
+   * `"dispatch_failed"`.
+   */
+  error?: string | null;
+  /**
+   * Marktlokations-ID extracted from the message (LOC+Z16), if present.
+   *
+   * Use this to correlate the ingest response with the corresponding
+   * command API call (`gpke.lieferbeginn.bestaetigen` etc.).
+   */
+  malo_id?: string | null;
+  /**
+   * EDIFACT message type, e.g. `"UTILMD"`, `"MSCONS"`, `"APERAK"`.
+   * `null` when the message type could not be determined (parse error).
+   */
+  message_type?: string | null;
+  /**
+   * The Prüfidentifikator extracted from the BGM segment, if present.
+   * `null` for message types that carry no PID (e.g. CONTRL).
+   */
+  pid?: number | null;
+  /**
+   * UUID of the process that was spawned or resumed.
+   *
+   * Matches the `subject` of the `de.mako.process.initiated` CloudEvent
+   * sent to the ERP webhook. Present only when `status == "routed"` and
+   * Phase 2 dispatch succeeded.
+   */
+  process_id?: string | null;
+  status: MakodMessageStatus;
+  /**
+   * Workflow name from the `PidRouter`, if the PID is registered.
+   * `null` when `pid` is `null` or when the PID is not registered.
+   */
+  workflow?: string | null;
+}
+export interface MakodHealthResponse {
+  /**
+   * `$HOSTNAME-$PID` of the responding `makod` instance.
+   */
+  instance_id: string;
+  /**
+   * Present only when `status == "degraded"`. Stable category string — never
+   * contains internal paths or stack traces.
+   */
+  reason?: string | null;
+  /**
+   * `"ok"` when the probe passes; `"degraded"` when it does not.
+   */
+  status: string;
+  /**
+   * Daemon version (`CARGO_PKG_VERSION`).
+   */
+  version: string;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface MarktdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * One page of a list.
+ */
+export interface MarktdPageValue {
+  /**
+   * The rows of this page, in the list's order.
+   */
+  items: unknown[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | MarktdTotalEstimate;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface MarktdTotalEstimate {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * Request body for `PUT /api/v1/geraete/{geraet_id}`.
+ */
+export interface MarktdUpsertGeraetRequest {
+  /**
+   * Full BO4E `Geraet` payload. The `geraet_typ` column is derived from
+   * `data.geraetetyp`, not supplied beside it.
+   */
+  data: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Owning `zaehler_id`.
+   */
+  zaehler_id: string;
 }
 /**
  * The Codeliste der Lokationsbündelstrukturen (EDI@Energy, BDEW V1.0,
@@ -2211,6 +29952,66 @@ export interface MarktdMeloUpsertRequest {
   malo_id?: string | null;
 }
 /**
+ * Capability verdict for one Messlokation under §42c Abs. 1 EnWG.
+ */
+export interface MarktdSharingEligibilityResponse {
+  /**
+   * Qualifying statutory limb, when one was established — a stable code,
+   * `ZAEHLERSTANDSGANGMESSUNG` or `REGISTRIERENDE_LEISTUNGSMESSUNG`.
+   */
+  basis?: string | null;
+  /**
+   * Bilanzierungsgebiet — §42c Abs. 4 requires all participants to share one
+   * until 1 June 2028.
+   */
+  bilanzierungsgebiet?: string | null;
+  /**
+   * `QUALIFIED` · `DISQUALIFIED` · `UNKNOWN`.
+   */
+  capability: string;
+  evidence: MarktdSharingEligibilityEvidence;
+  /**
+   * Citation for `basis`.
+   */
+  legal_basis?: string | null;
+  /**
+   * Marktlokation the MeLo belongs to, when linked.
+   */
+  malo_id?: string | null;
+  /**
+   * Messlokations-ID that was assessed.
+   */
+  melo_id: string;
+  /**
+   * Why the point does not qualify, or which master data is missing —
+   * stable codes from `metering`'s `Finding`, plus marktd's own
+   * `KEIN_BILANZIERUNGSGEBIET` (§42c Abs. 4 requires a shared Gebiet until
+   * 01.06.2028, which is master data rather than metering).
+   */
+  reasons: string[];
+  /**
+   * What an operator must do to make this point eligible.
+   */
+  required_action: string;
+}
+/**
+ * Inputs the verdict was derived from, for audit.
+ */
+export interface MarktdSharingEligibilityEvidence {
+  /**
+   * `Marktlokation.bilanzierungsmethode`.
+   */
+  bilanzierungsmethode?: string | null;
+  /**
+   * BO4E `Zaehler.istFernauslesbar`.
+   */
+  ist_fernauslesbar?: boolean | null;
+  /**
+   * BO4E `Zaehlertyp` of the meter installed at this MeLo.
+   */
+  zaehlertyp?: string | null;
+}
+/**
  * An MSB framework-contract record **as stored**.
  *
  * The natural key is `(tenant, sparte, nb_mp_id, msb_mp_id, valid_from)` —
@@ -2346,6 +30147,113 @@ export interface MarktdMsbRahmenvertrag1 {
     [k: string]: unknown | undefined;
   };
 }
+export interface MarktdNbContractResponse {
+  bilanzierungsmethode: string;
+  billing_schedule: string;
+  contract_id: string;
+  /**
+   * Full BO4E `Vertrag` payload in canonical camelCase form.
+   * `_typ: "VERTRAG"` is always present after a successful PUT.
+   */
+  data: {};
+  malo_id: string;
+  nb_mp_id: string;
+  netzebene: string;
+  netznutzer_mp_id: string;
+  netznutzer_typ: string;
+  sparte: string;
+  tenant: string;
+  valid_from: string;
+  valid_to?: string | null;
+  version: number;
+  /**
+   * BO4E `Vertragsart` extracted from `data.vertragsart`.
+   */
+  vertragsart?: string | null;
+  /**
+   * BO4E `Vertragsstatus` lifecycle — extracted from `data.vertragsstatus`.
+   */
+  vertragsstatus?: string | null;
+}
+export interface MarktdNbContractUpsertRequest {
+  /**
+   * Billing mode: RLM | SLP | IMS | TLP_GEMEINSAM | TLP_GETRENNT | PAUSCHAL
+   */
+  bilanzierungsmethode: string;
+  /**
+   * MONTHLY | QUARTERLY | ANNUALLY
+   */
+  billing_schedule: string;
+  /**
+   * Full BO4E `Vertrag` payload (L1).
+   *
+   * `_typ` is auto-injected to `"VERTRAG"` if absent.
+   * When omitted, a minimal `Vertrag` is auto-constructed from the other fields.
+   * Returns 422 if `_typ` is present but not `"VERTRAG"`, or if any typed
+   * field (e.g. `vertragsart`, `vertragsstatus`) contains an unknown enum value.
+   */
+  data?: {
+    [k: string]: unknown | undefined;
+  };
+  malo_id: string;
+  nb_mp_id: string;
+  /**
+   * Voltage / pressure level: NS | MS | MSP | HSP | HS | HöS | HöS/HS (Strom)
+   * or GND | GMT | GHD (Gas)
+   */
+  netzebene: string;
+  /**
+   * MP-ID of the Netznutzer this contract is with — the LF in the ordinary
+   * case, the Letztverbraucher itself for a Selbstzahler.
+   */
+  netznutzer_mp_id: string;
+  /**
+   * `LIEFERANT` (default) | `LETZTVERBRAUCHER`.
+   *
+   * `LETZTVERBRAUCHER` marks a **Selbstzahler** — a „Netznutzer ohne
+   * All-Inklusiv-Vertrag" who pays the Netznutzung without an LF and steps
+   * into the LF role (GPKE Teil 1, Vorbemerkung).
+   */
+  netznutzer_typ?: string;
+  sparte: string;
+  /**
+   * Contract start date (ISO 8601, e.g. `"2026-01-01"`)
+   */
+  valid_from: string;
+  valid_to?: string | null;
+}
+/**
+ * PUT body — the BO4E `Netzlokation` in `data`, plus what the BO does not carry.
+ *
+ * `nb_mp_id` is the one envelope field: it is an indexed column and
+ * `Netzlokation` declares no Netzbetreiber. `sparte` is indexed too, but the
+ * BO declares it, so it is derived from the payload and required by the
+ * endpoint's profile.
+ */
+export interface MarktdNeLoUpsertRequest {
+  /**
+   * Full `rubo4e::current::Netzlokation` payload (BO4E camelCase JSON).
+   *
+   * Crosses [the BO4E gate](mako_markt::bo4e::decode), and then this
+   * endpoint's own profile: `sparte` is **required** despite BO4E making it
+   * optional, and must be `STROM` or `GAS` — MaKo is a two-commodity market
+   * by regulation, while BO4E's `Sparte` also covers Fernwärme, Wasser and
+   * Abwasser.
+   *
+   * `sparte` is **not** an envelope field: the BO declares it, and two
+   * sources for one fact would let a caller file a Netzlokation under `GAS`
+   * while its stored document says `STROM`. The column is what every query
+   * reads.
+   */
+  data: {};
+  /**
+   * Owning Netzbetreiber MP-ID (indexed column, required for filtering).
+   *
+   * mako's own: `Netzlokation` declares no Netzbetreiber field, so this is
+   * not a restatement of anything the BO carries.
+   */
+  nb_mp_id: string;
+}
 export interface MarktdStatusBody {
   /**
    * Optimistic-locking guard: the version the caller last read. When
@@ -2361,6 +30269,241 @@ export interface MarktdStatusBody {
    * Target lifecycle state.
    */
   status: string;
+}
+/**
+ * The `PUT /api/v1/partners/{mp_id}` body.
+ *
+ * Separate from [`PartnerRecord`] because the two directions are not
+ * symmetric: what is written must cross the BO4E gate, and what is read is
+ * whatever was stored, possibly under an older schema series. The stored row
+ * also carries a `version` the server owns.
+ */
+export interface MarktdPartnerUpsertRequest {
+  display_name?: string | null;
+  /**
+   * Whether the EDI format agreed with this partner allows the complete
+   * extraction of the invoice data into an EN 16931 format — an E-Rechnung
+   * under § 14 Abs. 1 Satz 6 Nr. 2 UStG. Omitted or `null` is „not
+   * recorded"; from a supply in 2027 that no grace reaches, makod refuses an
+   * outbound INVOIC on it.
+   */
+  edi_extrahierbar?: boolean | null;
+  /**
+   * The partner's Zustimmung to receiving invoices as EDI@Energy INVOIC
+   * (§ 27 Abs. 38 Nr. 1 and 3 UStG). Omitted or `null` is „not recorded",
+   * and makod refuses an outbound INVOIC to the partner on it.
+   */
+  edi_zustimmung?: boolean | null;
+  /**
+   * The partner's BO4E `Geschaeftspartner`, crossing
+   * [the gate](mako_markt::bo4e::decode) as the request deserialises —
+   * `_typ`, schema, strict enums (`marktrolle`, `rollencodetyp`,
+   * `marktteilnehmerstatus`, and every other enum in the tree), BO4E rules.
+   *
+   * A `serde_json::Value` here would be gated only where the handler
+   * remembered to; as `Bo4e<Geschaeftspartner>` the gate is the only way in.
+   */
+  geschaeftspartner?: {};
+  /**
+   * AS4 endpoint URL list (BO4E `Marktteilnehmer.makoadresse`).
+   */
+  makoadresse?: string[];
+  /**
+   * BO4E market role — the BDEW code (`LF`, `NB`, `MSB`, …).
+   */
+  marktrolle?: string;
+  /**
+   * 13-digit Marktpartner-ID.
+   *
+   * Optional, and refused when it names a **different** partner than the
+   * `{mp_id}` path parameter — the same treatment the BO4E gate gives
+   * `_typ`, and for the same reason: the path already fixes which partner
+   * this is, so requiring the caller to repeat it adds a way to be wrong and
+   * no information — and silently letting the path win means a body naming
+   * another partner is neither honoured nor reported.
+   */
+  mp_id?: string;
+  /**
+   * Coding authority: `BDEW` | `DVGW` | `GLN`.
+   */
+  rollencodetyp?: string;
+  sparte?: string;
+}
+export interface MarktdPreisblattDlUpsertRequest {
+  /**
+   * The BO4E `PreisblattDienstleistung`, crossing
+   * [the gate](mako_markt::bo4e::decode) as the request deserialises.
+   */
+  data: {};
+}
+export interface MarktdPreisblattHwUpsertRequest {
+  /**
+   * The BO4E `PreisblattHardware`, crossing
+   * [the gate](mako_markt::bo4e::decode) as the request deserialises.
+   */
+  data: {};
+}
+/**
+ * Request body for `PUT /api/v1/preisblaetter-ka/{nb_mp_id}`.
+ */
+export interface MarktdPreisblattKaUpsertRequest {
+  /**
+   * The BO4E `PreisblattKonzessionsabgabe`, crossing
+   * [the gate](mako_markt::bo4e::decode) as the request deserialises.
+   */
+  data: {};
+  /**
+   * `"Tarifkunden"` | `"Sondervertragskunden"` | omit for both.
+   */
+  kundengruppe_ka?: string | null;
+  /**
+   * `"STROM"` or `"GAS"`. Defaults to `"STROM"`.
+   */
+  sparte?: string;
+}
+/**
+ * Response body for `GET /api/v1/preisblaetter-messung/{msb_mp_id}`.
+ *
+ * ## Typed `zeitvariablePreispositionen`
+ *
+ * `zeitvariable_preispositionen` is exposed as a typed `Vec<ZeitvariablePreisposition>`
+ * (deserialized from stored JSONB). This enables consumers (`invoicd` check 4,
+ * `invoic-checker` MSB position validation) to directly access the `zaehlzeitregister`
+ * band code without JSON path traversal.
+ *
+ * `schema_drift` counts elements that could not be deserialized (indicates stale data
+ * written before the band-code validation — re-PUT to normalize).
+ */
+export interface MarktdPreisblattMessungResponse {
+  /**
+   * Price supplements and discounts (BO4E `AufAbschlag`).
+   *
+   * Extracted from `data.aufAbschlaege` for explicit typed access.
+   * Contains conditional supplements and discounts on the MSB base price:
+   * - remote-read surcharge (`AufAbschlagstyp::AUFSCHLAG`)
+   * - discounts (`AufAbschlagstyp::ABSCHLAG`)
+   * - hardware rental add-ons
+   *
+   * An empty list means no supplements/discounts are configured.
+   */
+  auf_abschlaege?: unknown[];
+  /**
+   * BO4E schema version of `data`.
+   */
+  bo4e_version: string;
+  /**
+   * The full BO4E `PreisblattMessung` payload.
+   */
+  data: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Number of `zeitvariablePreispositionen` elements that failed schema validation.
+   * Non-zero means a stored element no longer decodes under the current
+   * schema — re-PUT the sheet to normalize it.
+   */
+  schema_drift_count?: number;
+  /**
+   * How this record entered the system (`"api"` or `"mako"`).
+   */
+  source: string;
+  /**
+   * Wall-clock time (UTC) when this sheet was last written.
+   */
+  updated_at: Instant;
+  /**
+   * Time-of-use MSB price positions.
+   *
+   * Typed `Vec<ZeitvariablePreisposition>` deserialized from stored JSONB.
+   * Each element carries `zaehlzeitregister` (e.g. `"HT"`, `"NT"`), which
+   * identifies the band. Used by `invoicd` check 4 for INVOIC 31009 MSB
+   * tariff validation. A Messstellenbetrieb price is not a Netzentgelt, so
+   * § 14a does not number these bands.
+   *
+   * Empty = no TOU bands configured (pure flat MSB tariff).
+   */
+  zeitvariable_preispositionen?: {}[];
+}
+/**
+ * Request body for `PUT /api/v1/preisblaetter-messung/{msb_mp_id}`.
+ */
+export interface MarktdPreisblattMessungUpsertRequest {
+  /**
+   * Full BO4E `PreisblattMessung` payload.
+   *
+   * `bo4e_version` is **not** an envelope field: it is provenance, and only
+   * the server knows which schema series it parsed the payload under. A
+   * caller-supplied one let a row be stamped with a version mako never read
+   * it as.
+   */
+  data: {
+    [k: string]: unknown | undefined;
+  };
+}
+/**
+ * Response body for `GET /api/v1/preisblaetter/{nb_mp_id}`.
+ *
+ * Wraps the BO4E payload with metadata so callers can distinguish
+ * operator API uploads from engine-ingested sheets.
+ */
+export interface MarktdPreisblattResponse {
+  /**
+   * BO4E schema version of `data`.
+   */
+  bo4e_version: string;
+  /**
+   * The full BO4E `PreisblattNetznutzung` payload.
+   */
+  data: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Quantity-tiered price positions (`LastvariablePreisposition`).
+   *
+   * Extracted from `data.lastvariablePreispositionen`. Each element is
+   * priced by its `tarifkalkulationsmethode` (`STAFFELN`, `ZONEN`, …) over
+   * its `preisstaffeln`. Not a § 14a module.
+   *
+   * Empty = no quantity-tiered positions on this sheet.
+   */
+  lastvariable_preispositionen?: unknown[];
+  /**
+   * How this record entered the system.
+   * `"api"` — operator REST upload; `"mako"` — PRICAT 27003 engine ingest.
+   */
+  source: string;
+  /**
+   * Wall-clock time (UTC) when this sheet was last written.
+   */
+  updated_at: Instant;
+  /**
+   * The § 14a Modul 3 zeitvariables Netzentgelt (BK8-22/010-A Tenor 3.).
+   *
+   * Extracted from `data.zeitvariablePreispositionen` for explicit typed
+   * access: one `ZeitvariablePreisposition` per Tarifstufe, named by its
+   * `zaehlzeitregister` — `HT`, `ST` and `NT`, all three present (refused on
+   * PUT otherwise). `invoicd` check 4 and `netzbilanzd` read the band prices
+   * from here before falling back to static `Leistungstyp` positions.
+   *
+   * Empty = no zeitvariables Netzentgelt on this sheet.
+   */
+  zeitvariable_preispositionen?: unknown[];
+}
+/**
+ * Request body for `PUT /api/v1/preisblaetter/{nb_mp_id}`.
+ */
+export interface MarktdPreisblattUpsertRequest {
+  /**
+   * Full BO4E `PreisblattNetznutzung` payload.
+   *
+   * `bo4e_version` is **not** an envelope field: it is provenance, and only
+   * the server knows which schema series it parsed the payload under. A
+   * caller-supplied one let a row be stamped with a version mako never read
+   * it as.
+   */
+  data: {
+    [k: string]: unknown | undefined;
+  };
 }
 /**
  * One dispatch audit entry.
@@ -2396,6 +30539,94 @@ export interface MarktdPriCatVersionSummary {
    * End of validity period, or `null` for open-ended.
    */
   valid_to?: string | null;
+}
+/**
+ * Request body for `PUT /api/v1/steuerbare-ressourcen/{sr_id}`.
+ */
+export interface MarktdUpsertSrRequest {
+  /**
+   * Full BO4E `SteuerbareRessource` payload (may be `{}`).
+   *
+   * The contracted iMS control products live **inside** it, as
+   * `konfigurationsprodukte`, **not** beside it: the column `makod` reads
+   * before confirming a Steuerungsauftrag is derived from this payload, so
+   * the two cannot name different product lists.
+   */
+  data: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Associated MaLo-ID, if known.
+   *
+   * mako's own: `SteuerbareRessource` declares no MaLo or MeLo field (only
+   * `lokationszuordnungen`), so this is not a restatement of anything the BO
+   * carries and the upsert leaves it alone when omitted.
+   */
+  malo_id?: string | null;
+  /**
+   * Associated MeLo-ID, if known. mako's own, as above.
+   */
+  melo_id?: string | null;
+}
+/**
+ * `PUT /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` body.
+ *
+ * An object rather than a bare array, so the body has keys of its own that
+ * `mako_service::Json` can refuse: a misspelt `konfigurationsprodukte` is a
+ * `422` naming it, never a list read as absent. The field is mandatory — `[]`
+ * clears the products, an absent list is not an empty one.
+ */
+export interface MarktdPutKonfigurationsprodukteRequest {
+  /**
+   * The full contracted list, replacing the stored one.
+   */
+  konfigurationsprodukte: {}[];
+}
+/**
+ * Request body for `PUT /api/v1/technische-ressourcen/{tr_id}`.
+ */
+export interface MarktdUpsertTrRequest {
+  /**
+   * Full BO4E `TechnischeRessource` payload — and the **only** source of
+   * every queryable field on the row.
+   *
+   * `TechnischeRessource` declares `zugeordneteMarktlokationId`,
+   * `vorgelagerteMesslokationId`, `technischeRessourceNutzung`,
+   * `technischeRessourceVerbrauchsart` and `istFernschaltbar`, so none of
+   * them is an envelope field. `istFernschaltbar` is what §14a steering
+   * reads: a resource whose column says controllable while its document says
+   * otherwise is one mako will try to steer and the field will not answer.
+   */
+  data: {
+    [k: string]: unknown | undefined;
+  };
+}
+/**
+ * PUT body for a Tranche upsert. The typed columns are indexed/patchable; the
+ * open-ended Tranche payload goes in `data` (mako's own — see the module docs
+ * for why there is no BO4E type here).
+ */
+export interface MarktdTrancheUpsertRequest {
+  /**
+   * Bilanzierungsgebiet EIC.
+   */
+  bilanzierungsgebiet?: string | null;
+  /**
+   * mako's own open-ended Tranche payload (**not** BO4E).
+   */
+  data?: {};
+  /**
+   * Energierichtung (`EINSPEISUNG` / `ENTNAHME`).
+   */
+  energierichtung?: string | null;
+  /**
+   * Parent Marktlokation this Tranche belongs to.
+   */
+  malo_id?: string | null;
+  /**
+   * Netzebene.
+   */
+  netzebene?: string | null;
 }
 /**
  * The VersorgungsStatus of a Marktlokation — now, or as it stood on a date.
@@ -2474,6 +30705,32 @@ export interface MarktdZuordnung {
    */
   zuordnungsende?: BusinessDate | null;
 }
+export interface MarktdVersorgungsStatusUpsertRequest {
+  /**
+   * Start of the Ersatz-/Grundversorgung (ISO date). Required when
+   * `lieferstatus` is `Ersatzversorgung`/`Grundversorgung`, forbidden
+   * otherwise (DB CHECK).
+   */
+  eog_seit?: string | null;
+  last_process_id?: string | null;
+  lf_mp_id?: string | null;
+  lf_mp_id_next?: string | null;
+  lf_next_lieferbeginn?: string | null;
+  lieferbeginn?: string | null;
+  lieferende?: string | null;
+  lieferstatus: string;
+  msb_mp_id?: string | null;
+  nb_mp_id: string;
+  /**
+   * The assignment list, written wholesale — what is sent replaces what is
+   * stored, so an omitted assignment is a removed one.
+   *
+   * This is the only way to state a tranchierte Marktlokation. The scalar
+   * `lf_mp_id` / `lf_mp_id_next` below are a shorthand for the ordinary
+   * one-supplier case and are ignored when `zuordnungen` is present.
+   */
+  zuordnungen?: {}[];
+}
 /**
  * One page of a Marktlokation's supply-state history, newest first.
  */
@@ -2514,6 +30771,2692 @@ export interface MarktdVersorgungsStatusHistoryResponse {
   zuordnungen: MarktdZuordnung[];
 }
 /**
+ * How many deliveries a replay queued.
+ */
+export interface MarktdReplayed {
+  /**
+   * Deliveries queued again or for the first time.
+   */
+  queued: number;
+}
+/**
+ * One page of a list.
+ */
+export interface MarktdPageEndpoint {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: A webhook endpoint, as listed. Its secrets are never part of it.
+   */
+  items: {
+    /**
+     * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+     */
+    active: boolean;
+    /**
+     * When the endpoint was registered.
+     */
+    created_at: Instant;
+    /**
+     * Why the endpoint was deactivated (`gone`).
+     */
+    deactivated_reason?: string | null;
+    /**
+     * `mako_events::matches` patterns; empty matches every type.
+     */
+    event_types: string[];
+    /**
+     * CloudEvent extensions an event must carry with these values
+     * (`marktsparte`, `marktrole`).
+     */
+    extensions: {
+      [k: string]: string | undefined;
+    };
+    /**
+     * The endpoint's id.
+     */
+    id: string;
+    /**
+     * Unique per service; `default` is the config URL.
+     */
+    name: string;
+    owner: MarktdOwner;
+    /**
+     * The Vertriebspartner the endpoint is bound to; it receives only events
+     * stamped with that partner.
+     */
+    partner?: string | null;
+    /**
+     * Until when the previous secret still signs, after a rotation.
+     */
+    previous_secret_expires_at?: Instant | null;
+    /**
+     * Where deliveries are POSTed.
+     */
+    url: string;
+    /**
+     * The version `If-Match` names.
+     */
+    version: number;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | MarktdTotalEstimate1;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface MarktdTotalEstimate1 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints`.
+ */
+export interface MarktdEndpointCreate {
+  /**
+   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * Unique per service; `default` is reserved for the config URL.
+   */
+  name: string;
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * A created endpoint and its secret — the only answer that shows it.
+ */
+export interface MarktdEndpointCreated {
+  endpoint: MarktdEndpoint;
+  /**
+   * The `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * The endpoint.
+ */
+export interface MarktdEndpoint {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: MarktdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface MarktdEndpoint1 {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: MarktdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.
+ */
+export interface MarktdEndpointUpdate {
+  /**
+   * Whether deliveries are made.
+   */
+  active: boolean;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * One page of a list.
+ */
+export interface MarktdPageDelivery {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: One event to one endpoint.
+   */
+  items: {
+    /**
+     * Attempts made.
+     */
+    attempts: number;
+    /**
+     * When the delivery was created.
+     */
+    created_at: Instant;
+    /**
+     * The endpoint delivered to.
+     */
+    endpoint_id: string;
+    /**
+     * The CloudEvent `id`, sent as `webhook-id`.
+     */
+    event_id: string;
+    /**
+     * The CloudEvent `type`.
+     */
+    event_type: string;
+    /**
+     * The delivery's id — what a single replay names.
+     */
+    id: string;
+    /**
+     * The last attempt's failure.
+     */
+    last_error?: string | null;
+    /**
+     * The HTTP status of the last attempt; absent when it got no answer.
+     */
+    last_status?: number | null;
+    /**
+     * How long the last answered attempt took, in milliseconds.
+     */
+    latency_ms?: number | null;
+    /**
+     * When the next attempt is due, while pending.
+     */
+    next_attempt_at?: Instant | null;
+    /**
+     * The aggregate the event is about; deliveries of one key arrive in order.
+     */
+    ordering_key?: string | null;
+    status: MarktdDeliveryStatus;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | MarktdTotalEstimate2;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface MarktdTotalEstimate2 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.
+ */
+export interface MarktdReplayWindow {
+  /**
+   * Start of the window, inclusive (RFC 3339).
+   */
+  from: Instant;
+  /**
+   * End of the window, exclusive (RFC 3339).
+   */
+  to: Instant;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.
+ */
+export interface MarktdRotateSecret {
+  /**
+   * How long the previous secret keeps signing, at most 168 hours.
+   */
+  overlap_hours: number;
+}
+/**
+ * A rotated secret — the only answer that shows it.
+ */
+export interface MarktdSecretRotated {
+  /**
+   * Until when the previous secret also signs.
+   */
+  previous_expires_at: Instant;
+  /**
+   * The new `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * What a test delivery came to.
+ */
+export interface MarktdTestDelivery {
+  /**
+   * Whether the endpoint answered 2xx.
+   */
+  delivered: boolean;
+  /**
+   * Why it was not delivered.
+   */
+  error?: string | null;
+  /**
+   * How long it took, when it answered.
+   */
+  latency_ms?: number | null;
+  /**
+   * The HTTP status, when it answered.
+   */
+  status?: number | null;
+}
+/**
+ * Request body for `PUT /api/v1/zaehler/{zaehler_id}`.
+ */
+export interface MarktdUpsertZaehlerRequest {
+  /**
+   * Full BO4E `Zaehler` payload.
+   *
+   * The `zaehler_typ` and `eichung_bis` columns are derived from
+   * `data.zaehlertyp` and `data.eichungBis`, never supplied beside them —
+   * the column drives the replacement workflow, so it must not be able to
+   * disagree with the meter record it shadows.
+   */
+  data: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Owning MeLo-ID.
+   */
+  melo_id: string;
+}
+/**
+ * Request body for `PUT /api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen`.
+ *
+ * The list **replaces** the entire configuration for the device atomically.
+ * `updated_at` on each entry is overwritten server-side — callers must omit it.
+ *
+ * ### Deduplication
+ *
+ * Within a single PUT body, duplicate `parameter` values are allowed (last entry wins)
+ * so that callers can include generated lists with overlapping keys.  The server
+ * deduplicates on write: only the **last** occurrence of each `parameter` is stored.
+ *
+ * ### Example — SMGW with §14a CLS after BSI TR-03109-3 gateway rollout
+ *
+ * ```json
+ * [
+ *   { "parameter": "FIRMWARE_VERSION",       "wert": "3.1.2"         },
+ *   { "parameter": "HARDWARE_REVISION",      "wert": "Rev. C"        },
+ *   { "parameter": "KOMMUNIKATION",          "wert": "GPRS"          },
+ *   { "parameter": "CLS_FAEHIG",             "wert": "true"          },
+ *   { "parameter": "CLS_KANAL_ID",           "wert": "CLS-00042"     },
+ *   { "parameter": "SMGW_TLS_CERT_FINGERPRINT", "wert": "a1b2c3d4..."  },
+ *   { "parameter": "SMGW_CERT_ABLAUFDATUM",  "wert": "2027-06-30"    },
+ *   { "parameter": "GWA_CODENUMMER",         "wert": "9900000000099" },
+ *   { "parameter": "HERSTELLER",             "wert": "Sagemcom"      },
+ *   { "parameter": "INBETRIEBNAHMEDATUM",    "wert": "2024-03-15"    }
+ * ]
+ * ```
+ */
+export interface MarktdPutKonfigurationenRequest {
+  /**
+   * Ordered list of configuration entries.  Keys without a value should be
+   * omitted rather than sent with an empty `wert`.
+   */
+  konfigurationen: MarktdKonfigurationenEntry[];
+}
+/**
+ * A single entry in `PutKonfigurationenRequest`.
+ */
+export interface MarktdKonfigurationenEntry {
+  /**
+   * Optional free-text note or sub-key for `Sonstiges` entries.
+   */
+  notiz?: string | null;
+  parameter: string;
+  wert: string;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface NetzbilanzdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * One page of a list.
+ */
+export interface NetzbilanzdPageValue {
+  /**
+   * The rows of this page, in the list's order.
+   */
+  items: unknown[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | NetzbilanzdTotalEstimate;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface NetzbilanzdTotalEstimate {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * How many deliveries a replay queued.
+ */
+export interface NetzbilanzdReplayed {
+  /**
+   * Deliveries queued again or for the first time.
+   */
+  queued: number;
+}
+/**
+ * One page of a list.
+ */
+export interface NetzbilanzdPageEndpoint {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: A webhook endpoint, as listed. Its secrets are never part of it.
+   */
+  items: {
+    /**
+     * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+     */
+    active: boolean;
+    /**
+     * When the endpoint was registered.
+     */
+    created_at: Instant;
+    /**
+     * Why the endpoint was deactivated (`gone`).
+     */
+    deactivated_reason?: string | null;
+    /**
+     * `mako_events::matches` patterns; empty matches every type.
+     */
+    event_types: string[];
+    /**
+     * CloudEvent extensions an event must carry with these values
+     * (`marktsparte`, `marktrole`).
+     */
+    extensions: {
+      [k: string]: string | undefined;
+    };
+    /**
+     * The endpoint's id.
+     */
+    id: string;
+    /**
+     * Unique per service; `default` is the config URL.
+     */
+    name: string;
+    owner: NetzbilanzdOwner;
+    /**
+     * The Vertriebspartner the endpoint is bound to; it receives only events
+     * stamped with that partner.
+     */
+    partner?: string | null;
+    /**
+     * Until when the previous secret still signs, after a rotation.
+     */
+    previous_secret_expires_at?: Instant | null;
+    /**
+     * Where deliveries are POSTed.
+     */
+    url: string;
+    /**
+     * The version `If-Match` names.
+     */
+    version: number;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | NetzbilanzdTotalEstimate1;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface NetzbilanzdTotalEstimate1 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints`.
+ */
+export interface NetzbilanzdEndpointCreate {
+  /**
+   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * Unique per service; `default` is reserved for the config URL.
+   */
+  name: string;
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * A created endpoint and its secret — the only answer that shows it.
+ */
+export interface NetzbilanzdEndpointCreated {
+  endpoint: NetzbilanzdEndpoint;
+  /**
+   * The `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * The endpoint.
+ */
+export interface NetzbilanzdEndpoint {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: NetzbilanzdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface NetzbilanzdEndpoint1 {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: NetzbilanzdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.
+ */
+export interface NetzbilanzdEndpointUpdate {
+  /**
+   * Whether deliveries are made.
+   */
+  active: boolean;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * One page of a list.
+ */
+export interface NetzbilanzdPageDelivery {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: One event to one endpoint.
+   */
+  items: {
+    /**
+     * Attempts made.
+     */
+    attempts: number;
+    /**
+     * When the delivery was created.
+     */
+    created_at: Instant;
+    /**
+     * The endpoint delivered to.
+     */
+    endpoint_id: string;
+    /**
+     * The CloudEvent `id`, sent as `webhook-id`.
+     */
+    event_id: string;
+    /**
+     * The CloudEvent `type`.
+     */
+    event_type: string;
+    /**
+     * The delivery's id — what a single replay names.
+     */
+    id: string;
+    /**
+     * The last attempt's failure.
+     */
+    last_error?: string | null;
+    /**
+     * The HTTP status of the last attempt; absent when it got no answer.
+     */
+    last_status?: number | null;
+    /**
+     * How long the last answered attempt took, in milliseconds.
+     */
+    latency_ms?: number | null;
+    /**
+     * When the next attempt is due, while pending.
+     */
+    next_attempt_at?: Instant | null;
+    /**
+     * The aggregate the event is about; deliveries of one key arrive in order.
+     */
+    ordering_key?: string | null;
+    status: NetzbilanzdDeliveryStatus;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | NetzbilanzdTotalEstimate2;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface NetzbilanzdTotalEstimate2 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.
+ */
+export interface NetzbilanzdReplayWindow {
+  /**
+   * Start of the window, inclusive (RFC 3339).
+   */
+  from: Instant;
+  /**
+   * End of the window, exclusive (RFC 3339).
+   */
+  to: Instant;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.
+ */
+export interface NetzbilanzdRotateSecret {
+  /**
+   * How long the previous secret keeps signing, at most 168 hours.
+   */
+  overlap_hours: number;
+}
+/**
+ * A rotated secret — the only answer that shows it.
+ */
+export interface NetzbilanzdSecretRotated {
+  /**
+   * Until when the previous secret also signs.
+   */
+  previous_expires_at: Instant;
+  /**
+   * The new `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * What a test delivery came to.
+ */
+export interface NetzbilanzdTestDelivery {
+  /**
+   * Whether the endpoint answered 2xx.
+   */
+  delivered: boolean;
+  /**
+   * Why it was not delivered.
+   */
+  error?: string | null;
+  /**
+   * How long it took, when it answered.
+   */
+  latency_ms?: number | null;
+  /**
+   * The HTTP status, when it answered.
+   */
+  status?: number | null;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface PortaldApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * Request body for `PUT /api/v1/portal/{malo_id}/kontakt`.
+ */
+export interface PortaldPortalKontaktRequest {
+  /**
+   * The BO4E `Geschaeftspartner` (name, address, contact methods).
+   *
+   * **Replaces** the stored document — `vertragd` writes the column whole,
+   * not field by field, so a request carrying only a new telephone number
+   * leaves the customer with only a telephone number. Read
+   * `GET .../kontakt` first and send it back changed.
+   *
+   * Crosses [the BO4E gate](mako_markt::bo4e::decode) here, at the edge the
+   * customer reaches, rather than one hop later inside `vertragd`: a portal
+   * user who mistypes an enum gets the field named back, not a 502.
+   */
+  geschaeftspartner?: {} | null;
+  /**
+   * Updated SEPA consent flag.
+   */
+  sepa_erlaubt?: boolean | null;
+}
+/**
+ * Request body for `POST /api/v1/portal/{malo_id}/kuendigen`.
+ */
+export interface PortaldPortalKuendigungRequest {
+  /**
+   * Free-text note kept with the contract.
+   */
+  bemerkung?: string | null;
+  /**
+   * Why. Decides the notice period: `ORDENTLICH` (default),
+   * `PREISANPASSUNG` (§ 41 Abs. 5 Satz 4 EnWG), `UMZUG` (§ 41b Abs. 5 EnWG)
+   * or `LIEFERANTENWECHSEL`.
+   */
+  grund?: string | null;
+  /**
+   * Last day of supply (`YYYY-MM-DD`).
+   *
+   * `GET /api/v1/portal/{malo_id}/kuendigungsfrist` answers which dates are
+   * reachable before this is sent.
+   */
+  lieferende: string;
+}
+/**
+ * Request body for `PUT /api/v1/portal/{malo_id}/sepa`.
+ */
+export interface PortaldPortalSepaRequest {
+  /**
+   * BIC/SWIFT — optional within the SEPA zone.
+   */
+  bic?: string | null;
+  /**
+   * The debtor's own postal address (`Dbtr/PstlAdr`), forwarded verbatim to
+   * `accountingd`, which validates it.
+   *
+   * Optional: EPC153-22 v2.2 (30 September 2026) permits a collection
+   * without a structured address and sets no end date for that. Shape: `{ "town", "country",
+   * "street", "building_number", "post_code", "country_subdivision" }`.
+   */
+  debtor_address?: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * IBAN in any whitespace-separated form — `accountingd` validates mod-97.
+   */
+  iban: string;
+  /**
+   * Account holder. Defaults to the customer name held by `accountingd`.
+   */
+  kontoinhaber?: string | null;
+}
+/**
+ * Request body for `POST /api/v1/portal/{malo_id}/tarifwechsel`.
+ */
+export interface PortaldPortalTarifwechselRequest {
+  /**
+   * Optional customer reason, kept in the contract audit trail.
+   */
+  grund?: string | null;
+  /**
+   * New product code in `productd`.
+   */
+  new_product_code: string;
+  /**
+   * When the new tariff takes effect (`YYYY-MM-DD`).
+   *
+   * Whether that date is reachable is `vertragd`'s decision: it depends on
+   * the Vertragsart, the running Preisgarantie and the billing cycle.
+   */
+  wirksamkeit: string;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface ProcessdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * `POST /api/v1/end-supply` — GPKE Lieferende (Strom, 55004).
+ */
+export interface ProcessdEndSupplyRequest {
+  /**
+   * Lieferende, ISO-8601 date (`YYYY-MM-DD`).
+   */
+  lieferende_datum: string;
+  /**
+   * 11-digit Strom Marktlokations-ID.
+   */
+  malo_id: string;
+  /**
+   * `SG4 STS+7` DE 9013 — Muss on the Abmeldung 55004 (UTILMD AHB Strom
+   * 2.2 Kap. 5.4); makod holds it against the column's codes. The
+   * Lokationsart Ergänzung is the MaLo's own, which makod reads.
+   */
+  transaktionsgrund: string;
+}
+/**
+ * `POST /api/v1/end-supply-gas` — GeLi Gas Lieferende (44004).
+ *
+ * The fields `makod`'s `geli.lieferende.anmelden` reads
+ * (`mako_markt::commands::GeliLieferendeAnmelden`): the Marktlokation, the
+ * `YYYYMMDD` `process_date` and the Transaktionsgrund the 44004 column makes
+ * Muss (`SG4 STS+7`, UTILMD AHB Gas 1.2 Kap. 5.5).
+ */
+export interface ProcessdEndSupplyGasRequest {
+  /**
+   * Gas-MaLo-ID — `SG5 LOC+172`.
+   */
+  malo_id: string;
+  /**
+   * Lieferende, `YYYYMMDD` (gesetzliche deutsche Zeit).
+   */
+  process_date: string;
+  /**
+   * `SG4 STS+7` DE 9013 — makod holds it against the column's codes.
+   */
+  transaktionsgrund: string;
+}
+/**
+ * One page of a list.
+ */
+export interface ProcessdPageValue {
+  /**
+   * The rows of this page, in the list's order.
+   */
+  items: unknown[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | ProcessdTotalEstimate;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface ProcessdTotalEstimate {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/klaerfaelle/{id}/assign`.
+ */
+export interface ProcessdAssignKlaerfallRequest {
+  /**
+   * Who takes the case; absent or null releases it.
+   */
+  assignee?: string | null;
+}
+/**
+ * The body of `POST /api/v1/klaerfaelle/{id}/resolve`.
+ */
+export interface ProcessdResolveKlaerfallRequest {
+  /**
+   * Why the case closes without a market message.
+   */
+  begruendung: string;
+}
+/**
+ * `PUT /api/v1/neuanlage/{id}/identifikation`.
+ */
+export interface ProcessdNeuanlageIdentifikationRequest {
+  /**
+   * The Marktlokation the NB identified for this Neuanlage.
+   */
+  malo_id: string;
+}
+export interface ProcessdExecuteRequest {
+  /**
+   * `DTM+293 Fertigstellungsdatum` (RFC 3339). Defaults to now.
+   */
+  executed_at?: string | null;
+  /**
+   * `SG25 FTX+ACB` — the field reference the LF sees.
+   */
+  note?: string | null;
+  /**
+   * `SG15 STS DE9013` — the EBD Prüfschritt code for the "erfolgreich"
+   * cluster. The AHB makes it a **Muss**, so an IFTSTA built without one is
+   * invalid; it is optional here only because an operator-created order has
+   * no market correspondent to send an IFTSTA to.
+   */
+  pruefschritt_code?: string | null;
+}
+export interface ProcessdFailRequest {
+  /**
+   * `true` when no further Sperrversuch will be made — a court injunction, a
+   * glaubhaft gemachter Verhinderungsgrund (Kap. 3.5.1.2 Nr. 5), or simply the
+   * field team calling it off.
+   *
+   * Defaults to `false`: GPKE Teil 2 Kap. 3.5.1.2 Nr. 5 gives the NB **two**
+   * Sperrversuche within one Sperrauftrag, so an ordinary "nobody home"
+   * report records the attempt and leaves the order in the queue. The second
+   * failure closes it regardless of this flag.
+   */
+  endgueltig?: boolean;
+  /**
+   * `SG15 STS DE9013` — the EBD Prüfschritt code from the "gescheitert"
+   * cluster (`A04`/`A05`/`A06` under EBD E_0472 for a Sperrung).
+   */
+  pruefschritt_code?: string | null;
+  /**
+   * `SG25 FTX+ACB` — why it could not be carried out.
+   */
+  reason: string;
+}
+/**
+ * How many deliveries a replay queued.
+ */
+export interface ProcessdReplayed {
+  /**
+   * Deliveries queued again or for the first time.
+   */
+  queued: number;
+}
+/**
+ * One page of a list.
+ */
+export interface ProcessdPageEndpoint {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: A webhook endpoint, as listed. Its secrets are never part of it.
+   */
+  items: {
+    /**
+     * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+     */
+    active: boolean;
+    /**
+     * When the endpoint was registered.
+     */
+    created_at: Instant;
+    /**
+     * Why the endpoint was deactivated (`gone`).
+     */
+    deactivated_reason?: string | null;
+    /**
+     * `mako_events::matches` patterns; empty matches every type.
+     */
+    event_types: string[];
+    /**
+     * CloudEvent extensions an event must carry with these values
+     * (`marktsparte`, `marktrole`).
+     */
+    extensions: {
+      [k: string]: string | undefined;
+    };
+    /**
+     * The endpoint's id.
+     */
+    id: string;
+    /**
+     * Unique per service; `default` is the config URL.
+     */
+    name: string;
+    owner: ProcessdOwner;
+    /**
+     * The Vertriebspartner the endpoint is bound to; it receives only events
+     * stamped with that partner.
+     */
+    partner?: string | null;
+    /**
+     * Until when the previous secret still signs, after a rotation.
+     */
+    previous_secret_expires_at?: Instant | null;
+    /**
+     * Where deliveries are POSTed.
+     */
+    url: string;
+    /**
+     * The version `If-Match` names.
+     */
+    version: number;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | ProcessdTotalEstimate1;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface ProcessdTotalEstimate1 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints`.
+ */
+export interface ProcessdEndpointCreate {
+  /**
+   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * Unique per service; `default` is reserved for the config URL.
+   */
+  name: string;
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * A created endpoint and its secret — the only answer that shows it.
+ */
+export interface ProcessdEndpointCreated {
+  endpoint: ProcessdEndpoint;
+  /**
+   * The `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * The endpoint.
+ */
+export interface ProcessdEndpoint {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: ProcessdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface ProcessdEndpoint1 {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: ProcessdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.
+ */
+export interface ProcessdEndpointUpdate {
+  /**
+   * Whether deliveries are made.
+   */
+  active: boolean;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * One page of a list.
+ */
+export interface ProcessdPageDelivery {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: One event to one endpoint.
+   */
+  items: {
+    /**
+     * Attempts made.
+     */
+    attempts: number;
+    /**
+     * When the delivery was created.
+     */
+    created_at: Instant;
+    /**
+     * The endpoint delivered to.
+     */
+    endpoint_id: string;
+    /**
+     * The CloudEvent `id`, sent as `webhook-id`.
+     */
+    event_id: string;
+    /**
+     * The CloudEvent `type`.
+     */
+    event_type: string;
+    /**
+     * The delivery's id — what a single replay names.
+     */
+    id: string;
+    /**
+     * The last attempt's failure.
+     */
+    last_error?: string | null;
+    /**
+     * The HTTP status of the last attempt; absent when it got no answer.
+     */
+    last_status?: number | null;
+    /**
+     * How long the last answered attempt took, in milliseconds.
+     */
+    latency_ms?: number | null;
+    /**
+     * When the next attempt is due, while pending.
+     */
+    next_attempt_at?: Instant | null;
+    /**
+     * The aggregate the event is about; deliveries of one key arrive in order.
+     */
+    ordering_key?: string | null;
+    status: ProcessdDeliveryStatus;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | ProcessdTotalEstimate2;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface ProcessdTotalEstimate2 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.
+ */
+export interface ProcessdReplayWindow {
+  /**
+   * Start of the window, inclusive (RFC 3339).
+   */
+  from: Instant;
+  /**
+   * End of the window, exclusive (RFC 3339).
+   */
+  to: Instant;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.
+ */
+export interface ProcessdRotateSecret {
+  /**
+   * How long the previous secret keeps signing, at most 168 hours.
+   */
+  overlap_hours: number;
+}
+/**
+ * A rotated secret — the only answer that shows it.
+ */
+export interface ProcessdSecretRotated {
+  /**
+   * Until when the previous secret also signs.
+   */
+  previous_expires_at: Instant;
+  /**
+   * The new `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * What a test delivery came to.
+ */
+export interface ProcessdTestDelivery {
+  /**
+   * Whether the endpoint answered 2xx.
+   */
+  delivered: boolean;
+  /**
+   * Why it was not delivered.
+   */
+  error?: string | null;
+  /**
+   * How long it took, when it answered.
+   */
+  latency_ms?: number | null;
+  /**
+   * The HTTP status, when it answered.
+   */
+  status?: number | null;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface ProductdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * One page of a list.
+ */
+export interface ProductdPageValue {
+  /**
+   * The rows of this page, in the list's order.
+   */
+  items: unknown[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | ProductdTotalEstimate;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface ProductdTotalEstimate {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * How many deliveries a replay queued.
+ */
+export interface ProductdReplayed {
+  /**
+   * Deliveries queued again or for the first time.
+   */
+  queued: number;
+}
+/**
+ * One page of a list.
+ */
+export interface ProductdPageEndpoint {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: A webhook endpoint, as listed. Its secrets are never part of it.
+   */
+  items: {
+    /**
+     * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+     */
+    active: boolean;
+    /**
+     * When the endpoint was registered.
+     */
+    created_at: Instant;
+    /**
+     * Why the endpoint was deactivated (`gone`).
+     */
+    deactivated_reason?: string | null;
+    /**
+     * `mako_events::matches` patterns; empty matches every type.
+     */
+    event_types: string[];
+    /**
+     * CloudEvent extensions an event must carry with these values
+     * (`marktsparte`, `marktrole`).
+     */
+    extensions: {
+      [k: string]: string | undefined;
+    };
+    /**
+     * The endpoint's id.
+     */
+    id: string;
+    /**
+     * Unique per service; `default` is the config URL.
+     */
+    name: string;
+    owner: ProductdOwner;
+    /**
+     * The Vertriebspartner the endpoint is bound to; it receives only events
+     * stamped with that partner.
+     */
+    partner?: string | null;
+    /**
+     * Until when the previous secret still signs, after a rotation.
+     */
+    previous_secret_expires_at?: Instant | null;
+    /**
+     * Where deliveries are POSTed.
+     */
+    url: string;
+    /**
+     * The version `If-Match` names.
+     */
+    version: number;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | ProductdTotalEstimate1;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface ProductdTotalEstimate1 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints`.
+ */
+export interface ProductdEndpointCreate {
+  /**
+   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * Unique per service; `default` is reserved for the config URL.
+   */
+  name: string;
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * A created endpoint and its secret — the only answer that shows it.
+ */
+export interface ProductdEndpointCreated {
+  endpoint: ProductdEndpoint;
+  /**
+   * The `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * The endpoint.
+ */
+export interface ProductdEndpoint {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: ProductdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface ProductdEndpoint1 {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: ProductdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.
+ */
+export interface ProductdEndpointUpdate {
+  /**
+   * Whether deliveries are made.
+   */
+  active: boolean;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * One page of a list.
+ */
+export interface ProductdPageDelivery {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: One event to one endpoint.
+   */
+  items: {
+    /**
+     * Attempts made.
+     */
+    attempts: number;
+    /**
+     * When the delivery was created.
+     */
+    created_at: Instant;
+    /**
+     * The endpoint delivered to.
+     */
+    endpoint_id: string;
+    /**
+     * The CloudEvent `id`, sent as `webhook-id`.
+     */
+    event_id: string;
+    /**
+     * The CloudEvent `type`.
+     */
+    event_type: string;
+    /**
+     * The delivery's id — what a single replay names.
+     */
+    id: string;
+    /**
+     * The last attempt's failure.
+     */
+    last_error?: string | null;
+    /**
+     * The HTTP status of the last attempt; absent when it got no answer.
+     */
+    last_status?: number | null;
+    /**
+     * How long the last answered attempt took, in milliseconds.
+     */
+    latency_ms?: number | null;
+    /**
+     * When the next attempt is due, while pending.
+     */
+    next_attempt_at?: Instant | null;
+    /**
+     * The aggregate the event is about; deliveries of one key arrive in order.
+     */
+    ordering_key?: string | null;
+    status: ProductdDeliveryStatus;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | ProductdTotalEstimate2;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface ProductdTotalEstimate2 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.
+ */
+export interface ProductdReplayWindow {
+  /**
+   * Start of the window, inclusive (RFC 3339).
+   */
+  from: Instant;
+  /**
+   * End of the window, exclusive (RFC 3339).
+   */
+  to: Instant;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.
+ */
+export interface ProductdRotateSecret {
+  /**
+   * How long the previous secret keeps signing, at most 168 hours.
+   */
+  overlap_hours: number;
+}
+/**
+ * A rotated secret — the only answer that shows it.
+ */
+export interface ProductdSecretRotated {
+  /**
+   * Until when the previous secret also signs.
+   */
+  previous_expires_at: Instant;
+  /**
+   * The new `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * What a test delivery came to.
+ */
+export interface ProductdTestDelivery {
+  /**
+   * Whether the endpoint answered 2xx.
+   */
+  delivered: boolean;
+  /**
+   * Why it was not delivered.
+   */
+  error?: string | null;
+  /**
+   * How long it took, when it answered.
+   */
+  latency_ms?: number | null;
+  /**
+   * The HTTP status, when it answered.
+   */
+  status?: number | null;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface VertragdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * One page of a list.
+ */
+export interface VertragdPageValue {
+  /**
+   * The rows of this page, in the list's order.
+   */
+  items: unknown[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | VertragdTotalEstimate;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface VertragdTotalEstimate {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * How many deliveries a replay queued.
+ */
+export interface VertragdReplayed {
+  /**
+   * Deliveries queued again or for the first time.
+   */
+  queued: number;
+}
+/**
+ * One page of a list.
+ */
+export interface VertragdPageEndpoint {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: A webhook endpoint, as listed. Its secrets are never part of it.
+   */
+  items: {
+    /**
+     * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+     */
+    active: boolean;
+    /**
+     * When the endpoint was registered.
+     */
+    created_at: Instant;
+    /**
+     * Why the endpoint was deactivated (`gone`).
+     */
+    deactivated_reason?: string | null;
+    /**
+     * `mako_events::matches` patterns; empty matches every type.
+     */
+    event_types: string[];
+    /**
+     * CloudEvent extensions an event must carry with these values
+     * (`marktsparte`, `marktrole`).
+     */
+    extensions: {
+      [k: string]: string | undefined;
+    };
+    /**
+     * The endpoint's id.
+     */
+    id: string;
+    /**
+     * Unique per service; `default` is the config URL.
+     */
+    name: string;
+    owner: VertragdOwner;
+    /**
+     * The Vertriebspartner the endpoint is bound to; it receives only events
+     * stamped with that partner.
+     */
+    partner?: string | null;
+    /**
+     * Until when the previous secret still signs, after a rotation.
+     */
+    previous_secret_expires_at?: Instant | null;
+    /**
+     * Where deliveries are POSTed.
+     */
+    url: string;
+    /**
+     * The version `If-Match` names.
+     */
+    version: number;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | VertragdTotalEstimate1;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface VertragdTotalEstimate1 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints`.
+ */
+export interface VertragdEndpointCreate {
+  /**
+   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * Unique per service; `default` is reserved for the config URL.
+   */
+  name: string;
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * A created endpoint and its secret — the only answer that shows it.
+ */
+export interface VertragdEndpointCreated {
+  endpoint: VertragdEndpoint;
+  /**
+   * The `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * The endpoint.
+ */
+export interface VertragdEndpoint {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: VertragdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * A webhook endpoint, as listed. Its secrets are never part of it.
+ */
+export interface VertragdEndpoint1 {
+  /**
+   * Whether deliveries are made. A `410 Gone` deactivates an endpoint.
+   */
+  active: boolean;
+  /**
+   * When the endpoint was registered.
+   */
+  created_at: Instant;
+  /**
+   * Why the endpoint was deactivated (`gone`).
+   */
+  deactivated_reason?: string | null;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values
+   * (`marktsparte`, `marktrole`).
+   */
+  extensions: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * The endpoint's id.
+   */
+  id: string;
+  /**
+   * Unique per service; `default` is the config URL.
+   */
+  name: string;
+  owner: VertragdOwner1;
+  /**
+   * The Vertriebspartner the endpoint is bound to; it receives only events
+   * stamped with that partner.
+   */
+  partner?: string | null;
+  /**
+   * Until when the previous secret still signs, after a rotation.
+   */
+  previous_secret_expires_at?: Instant | null;
+  /**
+   * Where deliveries are POSTed.
+   */
+  url: string;
+  /**
+   * The version `If-Match` names.
+   */
+  version: number;
+}
+/**
+ * The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.
+ */
+export interface VertragdEndpointUpdate {
+  /**
+   * Whether deliveries are made.
+   */
+  active: boolean;
+  /**
+   * `mako_events::matches` patterns; empty matches every type.
+   */
+  event_types?: string[];
+  /**
+   * CloudEvent extensions an event must carry with these values.
+   */
+  extensions?: {
+    [k: string]: string | undefined;
+  };
+  /**
+   * `https` URL deliveries are POSTed to.
+   */
+  url: string;
+}
+/**
+ * One page of a list.
+ */
+export interface VertragdPageDelivery {
+  /**
+   * The rows of this page, in the list's order.
+   *
+   * Items: One event to one endpoint.
+   */
+  items: {
+    /**
+     * Attempts made.
+     */
+    attempts: number;
+    /**
+     * When the delivery was created.
+     */
+    created_at: Instant;
+    /**
+     * The endpoint delivered to.
+     */
+    endpoint_id: string;
+    /**
+     * The CloudEvent `id`, sent as `webhook-id`.
+     */
+    event_id: string;
+    /**
+     * The CloudEvent `type`.
+     */
+    event_type: string;
+    /**
+     * The delivery's id — what a single replay names.
+     */
+    id: string;
+    /**
+     * The last attempt's failure.
+     */
+    last_error?: string | null;
+    /**
+     * The HTTP status of the last attempt; absent when it got no answer.
+     */
+    last_status?: number | null;
+    /**
+     * How long the last answered attempt took, in milliseconds.
+     */
+    latency_ms?: number | null;
+    /**
+     * When the next attempt is due, while pending.
+     */
+    next_attempt_at?: Instant | null;
+    /**
+     * The aggregate the event is about; deliveries of one key arrive in order.
+     */
+    ordering_key?: string | null;
+    status: VertragdDeliveryStatus;
+  }[];
+  /**
+   * The cursor of the next page; absent on the last.
+   */
+  next_cursor?: string | null;
+  total_estimate?: null | VertragdTotalEstimate2;
+}
+/**
+ * How many rows the whole list holds, where the list counts them.
+ */
+export interface VertragdTotalEstimate2 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.
+ */
+export interface VertragdReplayWindow {
+  /**
+   * Start of the window, inclusive (RFC 3339).
+   */
+  from: Instant;
+  /**
+   * End of the window, exclusive (RFC 3339).
+   */
+  to: Instant;
+}
+/**
+ * The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.
+ */
+export interface VertragdRotateSecret {
+  /**
+   * How long the previous secret keeps signing, at most 168 hours.
+   */
+  overlap_hours: number;
+}
+/**
+ * A rotated secret — the only answer that shows it.
+ */
+export interface VertragdSecretRotated {
+  /**
+   * Until when the previous secret also signs.
+   */
+  previous_expires_at: Instant;
+  /**
+   * The new `whsec_` signing secret; shown once.
+   */
+  secret: string;
+}
+/**
+ * What a test delivery came to.
+ */
+export interface VertragdTestDelivery {
+  /**
+   * Whether the endpoint answered 2xx.
+   */
+  delivered: boolean;
+  /**
+   * Why it was not delivered.
+   */
+  error?: string | null;
+  /**
+   * How long it took, when it answered.
+   */
+  latency_ms?: number | null;
+  /**
+   * The HTTP status, when it answered.
+   */
+  status?: number | null;
+}
+/**
+ * The parts of an ISO 20022 `PstlAdr` that accountingd stores and emits.
+ *
+ * ## Which form
+ *
+ * EPC153-22 v2.2 (30 September 2026) describes three address forms —
+ * structured, hybrid (`TwnNm` + `Ctry` plus free-text lines) and unstructured
+ * — and permits all three, with no end date set for the unstructured form
+ * (EPC Payment Scheme Management Board decision of 9 September 2026, applied
+ * to all five scheme rulebooks). accountingd emits the **structured** form only:
+ * [`PostalAddress::new`] takes `TwnNm` and `Ctry`, so the unstructured form is
+ * unrepresentable here. `pain.001.001.09` and `pain.008.001.08` carry it.
+ *
+ * An address is optional. Absent parts emit no `PstlAdr` at all; a
+ * **partially** filled address is an error rather than a silent omission,
+ * because an address someone entered and the bank never received is a
+ * failure nobody sees.
+ */
+export interface AccountingdAddressParts2 {
+  /**
+   * `BldgNb`.
+   */
+  building_number?: string | null;
+  /**
+   * `Ctry` — ISO 3166-1 alpha-2, required whenever any part is set.
+   */
+  country?: string | null;
+  /**
+   * `CtrySubDvsn` (Bundesland / state).
+   */
+  country_subdivision?: string | null;
+  /**
+   * `PstCd`.
+   */
+  post_code?: string | null;
+  /**
+   * `StrtNm`.
+   */
+  street?: string | null;
+  /**
+   * `TwnNm` — required whenever any part is set.
+   */
+  town?: string | null;
+}
+/**
+ * One event to one endpoint.
+ */
+export interface BillingdDelivery {
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The last attempt's failure.
+   */
+  last_error?: string | null;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status?: number | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms?: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at?: Instant | null;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key?: string | null;
+  status: BillingdDeliveryStatus1;
+}
+/**
+ * The refusal inside [`Problem`]. A conflict or an unprocessable request
+ * carries further keys that name what decided it (`record_id`, `warnings`, …).
+ */
+export interface BillingdProblemDetail1 {
+  /**
+   * A stable machine code (`PERIOD_ALREADY_BILLED`); branch on it.
+   */
+  code: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  message: string;
+  /**
+   * On a 502: the upstream service that did not answer.
+   */
+  service?: string | null;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface BillingdTotalEstimate3 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * One event to one endpoint.
+ */
+export interface EdmdDelivery {
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The last attempt's failure.
+   */
+  last_error?: string | null;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status?: number | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms?: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at?: Instant | null;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key?: string | null;
+  status: EdmdDeliveryStatus1;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface EdmdTotalEstimate3 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * One event to one endpoint.
+ */
+export interface InvoicdDelivery {
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The last attempt's failure.
+   */
+  last_error?: string | null;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status?: number | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms?: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at?: Instant | null;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key?: string | null;
+  status: InvoicdDeliveryStatus1;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface InvoicdTotalEstimate3 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * The first and last day read.
+ */
+export interface MakodWindow1 {
+  /**
+   * `YYYY-MM-DD`.
+   */
+  from: string;
+  /**
+   * `YYYY-MM-DD`, today.
+   */
+  to: string;
+}
+/**
  * The NB's Angaben of the bündel no BO4E object carries — one dated row.
  */
 export interface MarktdAngaben1 {
@@ -2527,22 +33470,342 @@ export interface MarktdAngaben1 {
   valid_from: BusinessDate;
   valid_to?: BusinessDate | null;
 }
-export interface MarktdSubscriptionResponse {
-  active: boolean;
-  event_types: string[];
-  roles: string[];
-  sparten: string[];
-  subscriber_id: string;
-  version: number;
-  webhook_url: string;
+/**
+ * One event to one endpoint.
+ */
+export interface MarktdDelivery {
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The last attempt's failure.
+   */
+  last_error?: string | null;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status?: number | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms?: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at?: Instant | null;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key?: string | null;
+  status: MarktdDeliveryStatus1;
 }
-export interface MarktdSubscriptionUpsertRequest {
-  active?: boolean;
-  event_types?: string[];
-  roles?: string[];
-  sparten?: string[];
-  webhook_secret?: string | null;
-  webhook_url: string;
+/**
+ * Master-data inputs behind a [`SharingEligibilityResponse`].
+ */
+export interface MarktdSharingEligibilityEvidence1 {
+  /**
+   * `Marktlokation.bilanzierungsmethode`.
+   */
+  bilanzierungsmethode?: string | null;
+  /**
+   * BO4E `Zaehler.istFernauslesbar`.
+   */
+  ist_fernauslesbar?: boolean | null;
+  /**
+   * BO4E `Zaehlertyp` of the meter installed at this MeLo.
+   */
+  zaehlertyp?: string | null;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface MarktdTotalEstimate3 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * One event to one endpoint.
+ */
+export interface NetzbilanzdDelivery {
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The last attempt's failure.
+   */
+  last_error?: string | null;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status?: number | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms?: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at?: Instant | null;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key?: string | null;
+  status: NetzbilanzdDeliveryStatus1;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface NetzbilanzdTotalEstimate3 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * One event to one endpoint.
+ */
+export interface ProcessdDelivery {
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The last attempt's failure.
+   */
+  last_error?: string | null;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status?: number | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms?: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at?: Instant | null;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key?: string | null;
+  status: ProcessdDeliveryStatus1;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface ProcessdTotalEstimate3 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * One event to one endpoint.
+ */
+export interface ProductdDelivery {
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The last attempt's failure.
+   */
+  last_error?: string | null;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status?: number | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms?: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at?: Instant | null;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key?: string | null;
+  status: ProductdDeliveryStatus1;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface ProductdTotalEstimate3 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
+}
+/**
+ * One event to one endpoint.
+ */
+export interface VertragdDelivery {
+  /**
+   * Attempts made.
+   */
+  attempts: number;
+  /**
+   * When the delivery was created.
+   */
+  created_at: Instant;
+  /**
+   * The endpoint delivered to.
+   */
+  endpoint_id: string;
+  /**
+   * The CloudEvent `id`, sent as `webhook-id`.
+   */
+  event_id: string;
+  /**
+   * The CloudEvent `type`.
+   */
+  event_type: string;
+  /**
+   * The delivery's id — what a single replay names.
+   */
+  id: string;
+  /**
+   * The last attempt's failure.
+   */
+  last_error?: string | null;
+  /**
+   * The HTTP status of the last attempt; absent when it got no answer.
+   */
+  last_status?: number | null;
+  /**
+   * How long the last answered attempt took, in milliseconds.
+   */
+  latency_ms?: number | null;
+  /**
+   * When the next attempt is due, while pending.
+   */
+  next_attempt_at?: Instant | null;
+  /**
+   * The aggregate the event is about; deliveries of one key arrive in order.
+   */
+  ordering_key?: string | null;
+  status: VertragdDeliveryStatus1;
+}
+/**
+ * A count bounded at [`COUNT_CAP`]: a list over a million rows reports
+ * `{count: 10000, capped: true}` rather than counting them.
+ */
+export interface VertragdTotalEstimate3 {
+  /**
+   * `true` when there are more rows than `count`.
+   */
+  capped: boolean;
+  /**
+   * The rows counted, at most 10 000.
+   */
+  count: number;
 }
 
 /** What `openapi-fetch` reads: every path the gateway forwards, by method. */

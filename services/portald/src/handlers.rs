@@ -121,6 +121,20 @@ fn relay_write(
 ///
 /// A field is `null` when its upstream is not configured or has no data — one
 /// unreachable backend degrades a tile rather than the whole screen.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/dashboard",
+    tag = "read",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    responses(
+        (status = 200, description = "Supply status, balance, latest invoice, billing period and advance-payment schedule; a field is null when its upstream has no answer", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_dashboard(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -176,7 +190,8 @@ pub async fn get_dashboard(
 /// Both bounds are passed upstream only when **both** are present: every
 /// upstream that takes them reads them as a pair, and half a range is not a
 /// period. Absent, the caller gets the whole series or account.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct PeriodQuery {
     /// Inclusive start, ISO 8601 (`YYYY-MM-DD`).
     pub from: Option<String>,
@@ -190,6 +205,23 @@ pub struct PeriodQuery {
 ///
 /// Proxies `edmd GET /api/v1/lastgang/{malo_id}`. Both bounds are passed only
 /// when both are present — `edmd` reads them as a pair.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/lastgang",
+    tag = "read",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+        PeriodQuery,
+    ),
+    responses(
+        (status = 200, description = "edmd's Lastgang for the Marktlokation", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "The upstream holds nothing for this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_lastgang(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -207,9 +239,12 @@ pub async fn get_lastgang(
 
 // ── Invoices ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct InvoicesQuery {
+    /// Page size, clamped to 1..=100; 24 when absent.
     pub limit: Option<u32>,
+    /// billingd outcome filter, passed through.
     pub outcome: Option<String>,
 }
 
@@ -218,6 +253,23 @@ pub struct InvoicesQuery {
 /// Proxies `billingd GET /api/v1/billing?malo_id=…`. The page size is clamped
 /// here: an unbounded `limit` reaches `billingd` as a full-table read on a
 /// customer-facing route.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/invoices",
+    tag = "read",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+        InvoicesQuery,
+    ),
+    responses(
+        (status = 200, description = "billingd's billing records for the Marktlokation", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "The upstream holds nothing for this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_invoices(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -245,6 +297,23 @@ pub const MAX_INVOICE_PAGE: u32 = 100;
 /// before anything is rendered. Authorising only the path's `malo_id` would let
 /// any authenticated customer download any invoice in the tenant by id — the id
 /// is a UUID, but that is obscurity, not authorization.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/invoices/{record_id}/download",
+    tag = "read",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+        ("record_id" = String, Path, description = "billingd record id"),
+    ),
+    responses(
+        (status = 200, description = "The invoice as XRechnung 3.0 CII XML", body = String, content_type = "application/xml"),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "No such record, or it belongs to another Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_portal_invoice_download(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -305,6 +374,22 @@ pub async fn get_portal_invoice_download(
 // ── Account ledger ────────────────────────────────────────────────────────────
 
 /// `GET /api/v1/portal/{malo_id}/balance` — open-items balance.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/balance",
+    tag = "read",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    responses(
+        (status = 200, description = "accountingd's open-items balance", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "The upstream holds nothing for this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_balance(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -326,6 +411,23 @@ pub async fn get_balance(
 /// Both bounds are passed only when both are present — `accountingd` reads them
 /// as a pair and answers a period statement, opening at the balance the period
 /// started from. Without them the customer gets the whole account.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/kontoauszug",
+    tag = "read",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+        PeriodQuery,
+    ),
+    responses(
+        (status = 200, description = "accountingd's account statement", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "The upstream holds nothing for this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_kontoauszug(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -344,6 +446,22 @@ pub async fn get_kontoauszug(
 }
 
 /// `GET /api/v1/portal/{malo_id}/vorauszahlung` — Abschlag schedule (§ 40 Abs. 1 EnWG).
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/vorauszahlung",
+    tag = "read",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    responses(
+        (status = 200, description = "accountingd's Abschlag schedule", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "The upstream holds nothing for this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_portal_vorauszahlung(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -362,6 +480,22 @@ pub async fn get_portal_vorauszahlung(
 // ── EEG + supply status ───────────────────────────────────────────────────────
 
 /// `GET /api/v1/portal/{malo_id}/eeg` — EEG/KWKG plants and settlements.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/eeg",
+    tag = "read",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    responses(
+        (status = 200, description = "einsd's EEG/KWKG plants and settlements", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "The upstream holds nothing for this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_eeg_status(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -378,6 +512,22 @@ pub async fn get_eeg_status(
 }
 
 /// `GET /api/v1/portal/{malo_id}/versorgung` — supply status.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/versorgung",
+    tag = "read",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    responses(
+        (status = 200, description = "marktd's supply status", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "The upstream holds nothing for this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_versorgung(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -465,6 +615,22 @@ async fn require_vertrag<'a>(
 /// The active supply contract: product and tariff, delivery dates, notice
 /// periods, and the Vertragskomponenten with their OBIS codes. A portal calls
 /// this before offering Tarifwechsel or Kündigung.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/vertrag",
+    tag = "contract",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    responses(
+        (status = 200, description = "vertragd's active supply contract", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "No contract carries this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_portal_vertrag(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -479,7 +645,7 @@ pub async fn get_portal_vertrag(
 // ── Self-service writes (§ 41 EnWG customer rights) ──────────────────────────
 
 /// Request body for `POST /api/v1/portal/{malo_id}/tarifwechsel`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PortalTarifwechselRequest {
     /// New product code in `productd`.
@@ -503,6 +669,25 @@ pub struct PortalTarifwechselRequest {
 /// rule here could only disagree with the one that decides. Only the date
 /// *format* is this service's business; `vertragd` answers 422 with the rule it
 /// applied, relayed unchanged.
+#[utoipa::path(
+    post,
+    path = "/api/v1/portal/{malo_id}/tarifwechsel",
+    tag = "contract",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    request_body = PortalTarifwechselRequest,
+    responses(
+        (status = 202, description = "vertragd registered the switch", body = serde_json::Value),
+        (status = 400, description = "`wirksamkeit` is not YYYY-MM-DD", body = ApiError),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "No contract carries this Marktlokation", body = ApiError),
+        (status = 422, description = "vertragd refused; its status (any 4xx) and body are relayed unchanged", body = serde_json::Value),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn post_portal_tarifwechsel(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -549,7 +734,7 @@ pub async fn post_portal_tarifwechsel(
 }
 
 /// Request body for `POST /api/v1/portal/{malo_id}/kuendigen`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PortalKuendigungRequest {
     /// Last day of supply (`YYYY-MM-DD`).
@@ -572,6 +757,22 @@ pub struct PortalKuendigungRequest {
 /// show the customer the date *before* they pick one, and the statutes behind
 /// it (§ 20 Abs. 1 StromGVV/GasGVV, § 41b Abs. 5 EnWG, § 41 Abs. 5 Satz 4 EnWG,
 /// § 309 Nr. 9 lit. c BGB) live in `vertragd`, not in a second implementation.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/kuendigungsfrist",
+    tag = "contract",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    responses(
+        (status = 200, description = "The earliest end date per termination reason, with the rule that produced it", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "No contract carries this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_portal_kuendigungsfrist(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -591,6 +792,25 @@ pub async fn get_portal_kuendigungsfrist(
 ///
 /// Customer-initiated termination. Format-checked here, decided by `vertragd`
 /// — see [`get_portal_kuendigungsfrist`] for why the period is not duplicated.
+#[utoipa::path(
+    post,
+    path = "/api/v1/portal/{malo_id}/kuendigen",
+    tag = "contract",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    request_body = PortalKuendigungRequest,
+    responses(
+        (status = 202, description = "vertragd registered the Kündigung", body = serde_json::Value),
+        (status = 400, description = "`lieferende` is not YYYY-MM-DD", body = ApiError),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "No contract carries this Marktlokation", body = ApiError),
+        (status = 422, description = "vertragd refused; its status (any 4xx) and body are relayed unchanged", body = serde_json::Value),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn post_portal_kuendigen(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -637,6 +857,22 @@ pub async fn post_portal_kuendigen(
 /// Projected, not proxied whole: `vertragd`'s customer record also carries
 /// operator notes, the ERP key and the tenant, and none of those are the
 /// customer's to see.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/kontakt",
+    tag = "contract",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    responses(
+        (status = 200, description = "The Geschaeftspartner, SEPA consent and Kundentyp held for the customer", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "vertragd holds no customer record", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_portal_kontakt(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -665,7 +901,7 @@ pub async fn get_portal_kontakt(
 }
 
 /// Request body for `PUT /api/v1/portal/{malo_id}/kontakt`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PortalKontaktRequest {
     /// The BO4E `Geschaeftspartner` (name, address, contact methods).
@@ -678,6 +914,7 @@ pub struct PortalKontaktRequest {
     /// Crosses [the BO4E gate](mako_markt::bo4e::decode) here, at the edge the
     /// customer reaches, rather than one hop later inside `vertragd`: a portal
     /// user who mistypes an enum gets the field named back, not a 502.
+    #[schema(value_type = Option<Object>)]
     pub geschaeftspartner: Option<mako_markt::bo4e::Bo4e<rubo4e::current::Geschaeftspartner>>,
     /// Updated SEPA consent flag.
     pub sepa_erlaubt: Option<bool>,
@@ -688,6 +925,24 @@ pub struct PortalKontaktRequest {
 /// Update contact details (GDPR Art. 16 right to rectification). Proxies to
 /// `PUT /api/v1/kunden/{kunden_id}` on `vertragd` — the customer id comes from
 /// the authorization result, never from the request body.
+#[utoipa::path(
+    put,
+    path = "/api/v1/portal/{malo_id}/kontakt",
+    tag = "contract",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    request_body = PortalKontaktRequest,
+    responses(
+        (status = 204, description = "Updated"),
+        (status = 400, description = "Nothing to update", body = ApiError),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 422, description = "The BO4E gate refused the Geschaeftspartner, or vertragd refused; its status (any 4xx) and body are relayed unchanged", body = serde_json::Value),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn put_portal_kontakt(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -727,7 +982,7 @@ pub async fn put_portal_kontakt(
 // ── SEPA mandate self-service ─────────────────────────────────────────────────
 
 /// Request body for `PUT /api/v1/portal/{malo_id}/sepa`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PortalSepaRequest {
     /// IBAN in any whitespace-separated form — `accountingd` validates mod-97.
@@ -757,6 +1012,23 @@ pub struct PortalSepaRequest {
 /// - **`mandatsref`** — derived here with a random suffix, so a customer
 ///   correcting a mistyped IBAN the same day gets a new mandate rather than
 ///   reusing the reference of the one being replaced.
+#[utoipa::path(
+    put,
+    path = "/api/v1/portal/{malo_id}/sepa",
+    tag = "sepa",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+    ),
+    request_body = PortalSepaRequest,
+    responses(
+        (status = 201, description = "accountingd registered the mandate", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 422, description = "accountingd refused; its status (any 4xx) and body are relayed unchanged", body = serde_json::Value),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn put_portal_sepa(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -866,6 +1138,23 @@ mod tests {
 ///
 /// Scoped by the authorised MaLo; `outputd` refuses an unscoped document query
 /// outright, so the scope is enforced on both sides of the hop.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/dokumente",
+    tag = "documents",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+        DokumenteQuery,
+    ),
+    responses(
+        (status = 200, description = "outputd's documents issued to the customer", body = serde_json::Value),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "The upstream holds nothing for this Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_dokumente(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
@@ -886,10 +1175,12 @@ pub async fn get_dokumente(
 }
 
 /// Filters for the document inbox.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct DokumenteQuery {
     /// `INVOICE`, `MAHNUNG` or `PREISANPASSUNG`. Anything else is ignored.
     pub kind: Option<String>,
+    /// Page size, clamped to 1..=200; 50 when absent.
     pub limit: Option<u32>,
 }
 
@@ -903,6 +1194,23 @@ pub struct DokumenteQuery {
 ///
 /// Fetching it also marks the portal delivery **read** — the evidence a
 /// § 41f EnWG dispute asks about.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portal/{malo_id}/dokumente/{document_id}",
+    tag = "documents",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID the caller must own"),
+        ("document_id" = String, Path, description = "outputd document id"),
+    ),
+    responses(
+        (status = 200, description = "The issued document's bytes, with the media type outputd recorded", body = String, content_type = "application/pdf"),
+        (status = 401, description = "No bearer token, an unverifiable one, or no customer behind it", body = ApiError),
+        (status = 403, description = "The customer does not own this Marktlokation", body = ApiError),
+        (status = 404, description = "No such document, or it belongs to another Marktlokation", body = ApiError),
+        (status = 502, description = "The upstream service failed; its body is only logged", body = ApiError),
+        (status = 503, description = "vertragd cannot answer the ownership check, or the upstream is not configured", body = ApiError),
+    ),
+)]
 pub async fn get_dokument(
     Extension(cfg): Cfg,
     Extension(clients): Clients,

@@ -379,25 +379,14 @@ async fn o2c(estate: &Estate) -> anyhow::Result<()> {
     );
     pass("outputd: the invoice is an issued PDF document");
 
-    let open = estate
-        .get("accountingd", "/api/v1/offene-posten?min_balance_eur=0.01")
+    let konto = estate
+        .get("accountingd", &format!("/api/v1/accounts/{malo}/balance"))
         .await?
-        .ok("GET offene-posten")?;
+        .ok("GET account balance")?;
     ensure!(
-        !list(&open).iter().any(|p| p["malo_id"] == malo),
-        "the Offener Posten for {malo} is still open: {open}"
+        konto["balance_ct"] == 0 && konto["status"] == "settled",
+        "the account for {malo} is not settled: {konto}"
     );
-    let all = estate
-        .get("accountingd", "/api/v1/offene-posten")
-        .await?
-        .ok("GET offene-posten")?;
-    if let Some(p) = list(&all).into_iter().find(|p| p["malo_id"] == malo) {
-        ensure!(
-            p["balance_ct"] == 0,
-            "the account for {malo} stands at {} ct",
-            p["balance_ct"]
-        );
-    }
     pass("accountingd: the 132.48 receivable is settled by the payment");
     Ok(())
 }

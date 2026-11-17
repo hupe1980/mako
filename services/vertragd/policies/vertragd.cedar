@@ -83,6 +83,12 @@
 //   "pflegen-rechtsdokument"       — PUT  /api/v1/rechtsdokumente/{art}
 //   "read-rechtsdokument"          — GET  /api/v1/rechtsdokumente/{sha256}
 //
+// Operator, webhooks (checked by the shared subscription module):
+//   "manage-subscription"          — /api/v1/webhooks/endpoints/** (endpoints,
+//                                    secrets, deliveries, replay) and the MCP
+//                                    tools list_webhook_endpoints/_deliveries
+//   "read-events"                  — GET /api/v1/events (the outbox as a feed)
+//
 // Operator, MCP:
 //   "use-mcp"                      — the whole `/mcp` surface, gated once by the
 //                                    shared `McpAuth` middleware rather than per
@@ -188,6 +194,25 @@ permit(
         Action::"widerrufen",
         Action::"pflegen-rechtsdokument",
         Action::"read-rechtsdokument"
+    ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("LF") ||
+     context.principal_roles.contains("ADMIN"))
+};
+
+// ── Webhook subscriptions ────────────────────────────────────────────────────
+// A webhook endpoint receives every `de.vertrag.*` event that matches it — a
+// customer's contract, Kündigung and § 41 Abs. 5 EnWG notice included — so
+// registering one is an outbound data-export decision, and its test delivery
+// reports the target's HTTP status. The supplier's own decision: an MSB or
+// ESA credential exports no supply contract.
+permit(
+    principal,
+    action in [
+        Action::"manage-subscription",
+        Action::"read-events"
     ],
     resource
 ) when {

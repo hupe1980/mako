@@ -17,6 +17,8 @@
 //! - [`policy`] — operator policy settings ([`policy::PolicyChoice`]), the
 //!   report the runner logs, exports and records, and `GET /api/v1/policy`
 //! - [`webhook`] — the one HMAC-SHA256 signer/verifier
+//! - [`openapi`] — `ApiError` as a schema component, the served and committed document
+//! - [`page`] — keyset pagination: `limit`, `cursor`, [`page::Page`]
 //! - [`ServiceBuilder`] — composable Axum router builder (infra routes)
 //! - [`health`] — `/health/live` and `/health/ready` route helpers
 //! - [`telemetry`] — structured logging + optional OpenTelemetry OTLP export
@@ -52,6 +54,8 @@ pub mod health;
 pub mod http;
 pub mod json;
 pub mod mcp_snapshot;
+pub mod openapi;
+pub mod page;
 
 #[cfg(feature = "mcp")]
 pub mod mcp;
@@ -77,6 +81,11 @@ pub mod mcp_auth;
 #[cfg(all(feature = "cedar", feature = "oidc"))]
 pub mod cedar_schema;
 
+// Webhook subscriptions on the service's `event_outbox`; requires both `cedar`
+// and `oidc`.
+#[cfg(all(feature = "cedar", feature = "oidc"))]
+pub mod subscriptions;
+
 #[cfg(feature = "cedar")]
 pub mod cedar;
 
@@ -91,13 +100,15 @@ pub mod rate_limit;
 
 pub use befund::{Befund, Schwere};
 pub use builder::ServiceBuilder;
-pub use cloudevent::{CloudEvent, PublishError, post_ce_for_reply, post_ce_with_retry, source};
+pub use cloudevent::{
+    CloudEvent, EventPayload, PublishError, post_ce_for_reply, post_ce_with_retry, source,
+};
 pub use config::{
     ConfigError, ConfigFile, ConfigProblem, DatabaseConfig, HttpConfig, load_config,
     load_config_file,
 };
 pub use error::{ApiError, ApiResult, UpstreamFailure};
-pub use json::{DETAIL_SENTINEL, Json, Lenient, from_value as json_from_value};
+pub use json::{DETAIL_SENTINEL, Json, Lenient, from_value as json_from_value, nur_json};
 pub use service::{
     Daemon, Listener, ServiceConfig, ServiceContext, check_config, einrichtung, run, serve,
     validate_config,

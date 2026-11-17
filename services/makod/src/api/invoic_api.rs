@@ -18,11 +18,7 @@
 
 use std::sync::Arc;
 
-use axum::{
-    Router,
-    extract::{Path, State},
-    routing::get,
-};
+use axum::extract::{Path, State};
 use mako_engine::{
     event_store::EventStore as _,
     ids::{ProcessId, StreamId, TenantId},
@@ -46,9 +42,12 @@ pub struct InvoicApiState {
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-pub fn router(state: Arc<InvoicApiState>) -> Router {
-    Router::new()
-        .route("/api/v1/invoic/{process_id}/rechnung", get(get_rechnung))
+/// The route with its document entry.
+pub fn routes<S: Clone + Send + Sync + 'static>(
+    state: Arc<InvoicApiState>,
+) -> utoipa_axum::router::OpenApiRouter<S> {
+    utoipa_axum::router::OpenApiRouter::new()
+        .routes(utoipa_axum::routes!(get_rechnung))
         .with_state(state)
 }
 
@@ -65,6 +64,21 @@ pub fn router(state: Arc<InvoicApiState>) -> Router {
 /// - **500** — the stream could not be read, or its `WimInvoicReceived` event
 ///   carries no `rechnung` (the adapter embeds one on every such event, so its
 ///   absence is a malformed stream, not an invoice that has yet to arrive)
+#[utoipa::path(
+    get,
+    path = "/api/v1/invoic/{process_id}/rechnung",
+    tag = "invoic",
+    params(("process_id" = String, Path, description = "The WiM billing process (UUID)")),
+    responses(
+        (status = 200, description = "The BO4E `Rechnung` the INVOIC carried", body = serde_json::Value),
+        (status = 401, description = "No valid bearer token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar `ReadRechnung` denied", body = mako_service::ApiError),
+        (status = 404, description = "No such process, or no INVOIC received on it", body = mako_service::ApiError),
+        (status = 422, description = "`process_id` is not a UUID", body = mako_service::ApiError),
+        (status = 500, description = "The stream could not be read or is malformed", body = mako_service::ApiError),
+    ),
+    security(("bearer_token" = []))
+)]
 async fn get_rechnung(
     State(state): State<Arc<InvoicApiState>>,
     headers: axum::http::HeaderMap,

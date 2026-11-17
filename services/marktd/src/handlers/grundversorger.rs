@@ -36,7 +36,8 @@ pub type GrundversorgerRepoExt = Arc<PgGrundversorgerRepository>;
 
 // ── Request / response DTOs ───────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct GrundversorgerQuery {
     /// Commodity: `STROM` (default) or `GAS`.
     pub sparte: Option<String>,
@@ -81,6 +82,18 @@ impl From<GrundversorgerRecord> for GrundversorgerResponse {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `GET /api/v1/grundversorger/{nb_mp_id}?sparte=STROM`
+#[utoipa::path(
+    get,
+    path = "/api/v1/grundversorger/{nb_mp_id}",
+    tag = "grundversorger",
+    params(("nb_mp_id" = String, Path, description = "13-digit MP-ID of the Netzbetreiber"), GrundversorgerQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_grundversorger(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -108,6 +121,19 @@ pub async fn get_grundversorger(
 }
 
 /// `PUT /api/v1/grundversorger/{nb_mp_id}` — upsert the Feststellung.
+#[utoipa::path(
+    put,
+    path = "/api/v1/grundversorger/{nb_mp_id}",
+    tag = "grundversorger",
+    params(("nb_mp_id" = String, Path, description = "13-digit MP-ID of the Netzbetreiber")),
+    request_body(content = serde_json::Value, description = "`PutGrundversorgerBody`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_grundversorger(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

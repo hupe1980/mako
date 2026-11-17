@@ -332,6 +332,406 @@
     "outputSchema": null
   },
   {
+    "name": "list_webhook_deliveries",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "endpoint_id"
+      ],
+      "properties": {
+        "endpoint_id": {
+          "description": "The endpoint's id.",
+          "type": "string"
+        },
+        "status": {
+          "description": "`all` (the default), `pending`, `delivered` or `failed`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Rows per page, 1–200; 50 when absent.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "description": "The `next_cursor` of the previous page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Delivery": {
+          "description": "One event to one endpoint.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The delivery's id — what a single replay names.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "endpoint_id": {
+              "description": "The endpoint delivered to.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "event_id": {
+              "description": "The CloudEvent `id`, sent as `webhook-id`.",
+              "type": "string"
+            },
+            "event_type": {
+              "description": "The CloudEvent `type`.",
+              "type": "string"
+            },
+            "ordering_key": {
+              "description": "The aggregate the event is about; deliveries of one key arrive in order.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "description": "`pending`, `delivered` or `dead_lettered`.",
+              "$ref": "#/$defs/DeliveryStatus"
+            },
+            "attempts": {
+              "description": "Attempts made.",
+              "type": "integer",
+              "format": "int16",
+              "minimum": -32768,
+              "maximum": 32767
+            },
+            "last_status": {
+              "description": "The HTTP status of the last attempt; absent when it got no answer.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int16",
+              "minimum": -32768,
+              "maximum": 32767
+            },
+            "last_error": {
+              "description": "The last attempt's failure.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "latency_ms": {
+              "description": "How long the last answered attempt took, in milliseconds.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "next_attempt_at": {
+              "description": "When the next attempt is due, while pending.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "created_at": {
+              "description": "When the delivery was created.",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "endpoint_id",
+            "event_id",
+            "event_type",
+            "ordering_key",
+            "status",
+            "attempts",
+            "last_status",
+            "last_error",
+            "latency_ms",
+            "next_attempt_at",
+            "created_at"
+          ]
+        },
+        "DeliveryStatus": {
+          "description": "A delivery's state.",
+          "oneOf": [
+            {
+              "description": "Owed: not yet attempted, or retrying.",
+              "type": "string",
+              "const": "pending"
+            },
+            {
+              "description": "Accepted by the endpoint with a 2xx.",
+              "type": "string",
+              "const": "delivered"
+            },
+            {
+              "description": "Given up after its attempts, or refused with `410 Gone`.",
+              "type": "string",
+              "const": "dead_lettered"
+            }
+          ]
+        },
+        "TotalEstimate": {
+          "description": "A count bounded at [`COUNT_CAP`]: a list over a million rows reports\n`{count: 10000, capped: true}` rather than counting them.",
+          "type": "object",
+          "properties": {
+            "count": {
+              "description": "The rows counted, at most 10 000.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "capped": {
+              "description": "`true` when there are more rows than `count`.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "count",
+            "capped"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "The rows of this page, in the list's order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Delivery"
+          }
+        },
+        "next_cursor": {
+          "description": "The cursor of the next page; absent on the last.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_estimate": {
+          "description": "How many rows the whole list holds, where the list counts them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TotalEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "list_webhook_endpoints",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "limit": {
+          "description": "Rows per page, 1–200; 50 when absent.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "description": "The `next_cursor` of the previous page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Endpoint": {
+          "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The endpoint's id.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "name": {
+              "description": "Unique per service; `default` is the config URL.",
+              "type": "string"
+            },
+            "url": {
+              "description": "Where deliveries are POSTed.",
+              "type": "string"
+            },
+            "event_types": {
+              "description": "`mako_events::matches` patterns; empty matches every type.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "extensions": {
+              "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "owner": {
+              "description": "`config` or `api`.",
+              "$ref": "#/$defs/Owner"
+            },
+            "partner": {
+              "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "active": {
+              "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint.",
+              "type": "boolean"
+            },
+            "deactivated_reason": {
+              "description": "Why the endpoint was deactivated (`gone`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous_secret_expires_at": {
+              "description": "Until when the previous secret still signs, after a rotation.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "version": {
+              "description": "The version `If-Match` names.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "created_at": {
+              "description": "When the endpoint was registered.",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "url",
+            "event_types",
+            "extensions",
+            "owner",
+            "partner",
+            "active",
+            "deactivated_reason",
+            "previous_secret_expires_at",
+            "version",
+            "created_at"
+          ]
+        },
+        "Owner": {
+          "description": "Who owns an endpoint.",
+          "oneOf": [
+            {
+              "description": "The service's config names it (`default`); listed, delivered to and\nreplayable, never writable through the API.",
+              "type": "string",
+              "const": "config"
+            },
+            {
+              "description": "Registered through the API.",
+              "type": "string",
+              "const": "api"
+            }
+          ]
+        },
+        "TotalEstimate": {
+          "description": "A count bounded at [`COUNT_CAP`]: a list over a million rows reports\n`{count: 10000, capped: true}` rather than counting them.",
+          "type": "object",
+          "properties": {
+            "count": {
+              "description": "The rows counted, at most 10 000.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "capped": {
+              "description": "`true` when there are more rows than `count`.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "count",
+            "capped"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "The rows of this page, in the list's order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Endpoint"
+          }
+        },
+        "next_cursor": {
+          "description": "The cursor of the next page; absent on the last.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_estimate": {
+          "description": "How many rows the whole list holds, where the list counts them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TotalEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
     "name": "summarize_billing_month",
     "annotations": {
       "readOnlyHint": true,

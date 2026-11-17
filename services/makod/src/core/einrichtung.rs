@@ -45,8 +45,6 @@ pub struct Eingabe<'a> {
     pub policy: &'a MakodPolicy,
     /// `[marktd] url`.
     pub marktd_url: Option<&'a str>,
-    /// `[marktd] webhook_url`.
-    pub marktd_webhook_url: Option<&'a str>,
     /// `--http-addr` is set.
     pub http_enabled: bool,
     /// `webdienste.signing_key_pem_file` is set.
@@ -259,34 +257,17 @@ pub fn codenummer_befunde(parties: &[PartyConfig]) -> Vec<Befund> {
 }
 
 /// The MaLo-Ident cache follows marktd through the fan-out, which delivers to
-/// the HTTP port. A marktd without the subscription address would leave the
-/// cache answering counterparties from whatever it last held.
+/// the HTTP port. Without it the cache answers counterparties from whatever it
+/// last held.
 fn marktd_befunde(e: &Eingabe<'_>) -> Vec<Befund> {
     let mut out = Vec::new();
-    if e.marktd_url.is_none() {
-        return out;
-    }
-    if e.marktd_webhook_url.is_none() {
-        out.push(
-            Befund::blockiert(
-                "marktd.webhook_url",
-                format!(
-                    "[marktd] url is set without [marktd] webhook_url (MAKOD_MARKTD_WEBHOOK_URL): \
-                     makod's MaLo cache follows marktd through its fan-out and needs the address \
-                     marktd delivers to, e.g. http://makod:8080{}",
-                    crate::malo_sync::WEBHOOK_PATH
-                ),
-            )
-            .bereich(Bereich::Erreichbarkeit),
-        );
-    }
-    if !e.http_enabled {
+    if e.marktd_url.is_some() && !e.http_enabled {
         out.push(
             Befund::blockiert(
                 "http.addr",
                 format!(
-                    "[marktd] webhook_url needs the HTTP port (--http-addr): the fan-out delivers \
-                     to {}",
+                    "[marktd] url needs the HTTP port (--http-addr): marktd delivers MaLo \
+                     changes to {}",
                     crate::malo_sync::WEBHOOK_PATH
                 ),
             )
@@ -635,7 +616,6 @@ mod tests {
             as4,
             policy,
             marktd_url: None,
-            marktd_webhook_url: None,
             http_enabled: true,
             webdienste_signing_key: false,
             webdienste_signing_cert: false,
@@ -646,7 +626,7 @@ mod tests {
     }
 
     /// Two independent defects — a Gas role under a BDEW-Codenummer and a
-    /// `[marktd] url` without its webhook — are two findings, each at its path.
+    /// `[marktd] url` without the HTTP port — are two findings, each at its path.
     #[test]
     fn a_config_with_two_defects_reports_both() {
         let parties = [party("9900001000001", &["GNB"])];
@@ -654,6 +634,7 @@ mod tests {
         let policy = MakodPolicy::default();
         let e = Eingabe {
             marktd_url: Some("http://marktd:8180"),
+            http_enabled: false,
             ..eingabe(&parties, &[Rolle::NbGas], &as4, &policy)
         };
         let p = pruefe(&e);
@@ -665,7 +646,7 @@ mod tests {
             .map(|b| b.pfad.as_str())
             .collect();
         assert!(pfade.contains(&"party[0].mp_id"), "{pfade:?}");
-        assert!(pfade.contains(&"marktd.webhook_url"), "{pfade:?}");
+        assert!(pfade.contains(&"http.addr"), "{pfade:?}");
         let ident = p
             .einrichtung
             .befunde

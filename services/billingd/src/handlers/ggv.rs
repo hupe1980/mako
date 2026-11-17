@@ -141,6 +141,23 @@ pub struct TarifwechselRequest {
 /// §41 Abs. 1 Nr. 4 EnWG: every price change requires transparent itemisation
 /// on the next invoice showing the old and new price with their respective
 /// applicable periods.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/{malo_id}/tarifwechsel",
+    tag = "billing",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+    ),
+    request_body(content = serde_json::Value, description = "`TarifwechselRequest`: the period, the switch date and both tariffs"),
+    responses(
+        (status = 201, description = "One invoice across the price change", body = serde_json::Value),
+        (status = 400, description = "Malformed period or switch date", body = crate::openapi::Problem),
+        (status = 403, description = "Cedar `run-billing` refused", body = crate::openapi::Problem),
+        (status = 409, description = "The period already carries an issued document, or the number is in use", body = crate::openapi::Problem),
+        (status = 422, description = "Well-formed, but it cannot be billed as asked — the code names the rule", body = crate::openapi::Problem),
+        (status = 502, description = "An upstream service the calculation reads did not answer", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_tarifwechsel(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -322,6 +339,22 @@ pub async fn post_tarifwechsel(
 ///
 /// The price advantage on the shared portion is contractual (§42b Abs. 2 Nr. 2
 /// EnWG names the Vergütung as a contract term), not a statutory rebate.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/ggv/{ggv_id}",
+    tag = "billing",
+    params(
+        ("ggv_id" = String, Path, description = "The Gemeinschaftliche Gebäudeversorgung"),
+    ),
+    request_body(content = serde_json::Value, description = "`GgvBillingRequest`: participants, Aufteilungsschlüssel and the generation"),
+    responses(
+        (status = 201, description = "One invoice per participant and the bundle", body = serde_json::Value),
+        (status = 400, description = "Malformed period or participants", body = crate::openapi::Problem),
+        (status = 403, description = "Cedar `run-billing` refused", body = crate::openapi::Problem),
+        (status = 409, description = "The period already carries an issued document, or the number is in use", body = crate::openapi::Problem),
+        (status = 422, description = "Well-formed, but it cannot be billed as asked — the code names the rule", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_ggv_billing(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,

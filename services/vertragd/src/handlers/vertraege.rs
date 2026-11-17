@@ -28,7 +28,8 @@ fn heute() -> Date {
 }
 
 /// Query parameters of the `by-malo` lookup.
-#[derive(Debug, Default, serde::Deserialize)]
+#[derive(Debug, Default, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ByMaloQuery {
     /// `?stichtag=YYYY-MM-DD` — the date a Kündigungsfrist is measured from.
     /// Absent means today.
@@ -61,6 +62,22 @@ pub struct ByMaloQuery {
 ///   contract fact the column makes Muss — the Anlass, the Netznutzungsvertrag
 ///   and its Zahler, the Gemeinderabatt, an Abrechnungsintervall, or the
 ///   Kunde's name and address (UTILMD AHB Gas 1.2 Kap. 5.6). Each is named.
+#[utoipa::path(
+    post,
+    path = "/api/v1/kunden/{id}/vertraege",
+    tag = "vertraege",
+    operation_id = "create_vertrag",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`CreateVersorgungsvertragInput`"),
+    responses(
+        (status = 201, body = serde_json::Value),
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn create(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -182,6 +199,19 @@ fn unprocessable_json(body: serde_json::Value) -> ApiError {
 // ── Read ──────────────────────────────────────────────────────────────────────
 
 /// `GET /api/v1/vertraege/{id}` — contract with its components.
+#[utoipa::path(
+    get,
+    path = "/api/v1/vertraege/{id}",
+    tag = "vertraege",
+    operation_id = "get_vertrag",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn get(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -196,12 +226,25 @@ pub async fn get(
     ok(serde_json::json!({ "vertrag": vertrag, "komponenten": komponenten }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListQuery {
     pub limit: Option<i64>,
 }
 
 /// `GET /api/v1/vertraege` — open contracts.
+#[utoipa::path(
+    get,
+    path = "/api/v1/vertraege",
+    tag = "vertraege",
+    params(ListQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn list_open(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -220,6 +263,19 @@ pub async fn list_open(
 }
 
 /// `GET /api/v1/kunden/{id}/vertraege`
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/{id}/vertraege",
+    tag = "vertraege",
+    operation_id = "list_vertraege_by_kunde",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn list_by_kunde(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -249,6 +305,19 @@ pub async fn list_by_kunde(
 /// Berücksichtigung des Eingangsdatums der Kündigung". Inside the one-Werktag
 /// answer window the two usually agree; across a month boundary they do not,
 /// and the answer would otherwise state a date a whole notice period out.
+#[utoipa::path(
+    get,
+    path = "/api/v1/vertraege/by-malo/{malo_id}",
+    tag = "vertraege",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), ByMaloQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn by_malo(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -339,7 +408,8 @@ fn naechster_kuendigungstermin(
     frist
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ProdukteQuery {
     /// Point form: the product in force on this day. Defaults to today.
     pub as_of: Option<Date>,
@@ -350,7 +420,8 @@ pub struct ProdukteQuery {
 }
 
 /// Period of `GET /api/v1/malo/{malo_id}/sect14a`, both ends inclusive.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct Sect14aQuery {
     pub from: Date,
     pub to: Date,
@@ -362,6 +433,19 @@ pub struct Sect14aQuery {
 /// `billingd` selects the Modul 1/2/3 reductions it bills from this answer. A
 /// period no slice covers has no recorded state, and one two slices share
 /// changed module inside it; the caller sees both rather than a single value.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malo/{malo_id}/sect14a",
+    tag = "vertraege",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), Sect14aQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn malo_sect14a(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -389,6 +473,20 @@ pub async fn malo_sect14a(
 ///
 /// The slice in force on that day ends there and the new one opens; a later
 /// recorded state is `409`, since history is not rewritten here.
+#[utoipa::path(
+    post,
+    path = "/api/v1/malo/{malo_id}/sect14a",
+    tag = "vertraege",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "`Sect14aInput`"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn record_sect14a(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -424,6 +522,19 @@ pub async fn record_sect14a(
 ///
 /// **Point form** (`?as_of=`, default today) answers the single-product
 /// question.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malo/{malo_id}/produkte",
+    tag = "vertraege",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), ProdukteQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn malo_produkte(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -479,6 +590,19 @@ pub async fn malo_produkte(
 /// request, and an operator answering a letter has to quote the rule. Computing
 /// it in the portal would put four statutes in a second place; asking here
 /// keeps one answer.
+#[utoipa::path(
+    get,
+    path = "/api/v1/vertraege/{id}/kuendigungsfrist",
+    tag = "vertraege",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id"), KuendigungsfristQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn kuendigungsfrist(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -522,7 +646,8 @@ pub async fn kuendigungsfrist(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct KuendigungsfristQuery {
     /// When the notice arrives; defaults to today.
     pub eingang: Option<Date>,
@@ -531,6 +656,16 @@ pub struct KuendigungsfristQuery {
 }
 
 /// `GET /api/v1/vertraege/billing-candidates` — § 40b EnWG billing cadence feed.
+#[utoipa::path(
+    get,
+    path = "/api/v1/vertraege/billing-candidates",
+    tag = "vertraege",
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn billing_candidates(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -543,7 +678,8 @@ pub async fn billing_candidates(
     ok(serde_json::json!({ "count": rows.len(), "candidates": rows }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ExpiringQuery {
     /// Calendar days to look ahead. Default 30.
     pub days: Option<i64>,
@@ -551,6 +687,18 @@ pub struct ExpiringQuery {
 
 /// `GET /api/v1/vertraege/expiring` — contracts whose term or price guarantee
 /// runs out soon.
+#[utoipa::path(
+    get,
+    path = "/api/v1/vertraege/expiring",
+    tag = "vertraege",
+    params(ExpiringQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn expiring(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -586,6 +734,21 @@ pub async fn expiring(
 /// `de.vertrag.kuendigung` CloudEvent — which carries the § 41 Abs. 8 Nr. 2
 /// EnWG Textform confirmation the supplier owes the customer — goes into the
 /// outbox.
+#[utoipa::path(
+    post,
+    path = "/api/v1/vertraege/{id}/kuendigen",
+    tag = "vertraege",
+    operation_id = "kuendigen_vertrag",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`KuendigungInput`"),
+    responses(
+        (status = 202, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn kuendigen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -691,6 +854,18 @@ pub async fn kuendigen(
 /// and Schlussablesung are parked in the same transaction; one that already
 /// reached `processd` is the operator's to cancel there, and the response
 /// names its component in `lieferende_bereits_versandt`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/vertraege/{id}/widerruf-kuendigung",
+    tag = "vertraege",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn widerruf_kuendigung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -741,6 +916,18 @@ pub async fn widerruf_kuendigung(
 /// Valid for `ANGELEGT` and `IN_BEARBEITUNG`. A registration still waiting in
 /// the outbound queue is withdrawn with it; one already sent to `processd` has
 /// to be cancelled there, and the response says which case this was.
+#[utoipa::path(
+    post,
+    path = "/api/v1/vertraege/{id}/stornieren",
+    tag = "vertraege",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn stornieren(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -810,6 +997,20 @@ pub async fn stornieren(
 /// A retroactive correction (`wirksamkeit <= today`) is exempt from the notice
 /// rules — it is not an announced price change but the repair of one already
 /// agreed.
+#[utoipa::path(
+    post,
+    path = "/api/v1/vertraege/{id}/tarifwechsel",
+    tag = "vertraege",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`TarifwechselInput`"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn tarifwechsel(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1025,6 +1226,20 @@ pub async fn tarifwechsel(
 ///
 /// Deriving `preisgarantie_bis` from the stored document means the Tarifwechsel
 /// guard and the document the customer holds can never disagree.
+#[utoipa::path(
+    put,
+    path = "/api/v1/vertraege/{id}/preisgarantie",
+    tag = "vertraege",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`Bo4e<Preisgarantie>`"),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_preisgarantie(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1065,6 +1280,18 @@ pub async fn put_preisgarantie(
 }
 
 /// `GET /api/v1/vertraege/{id}/preisgarantie`
+#[utoipa::path(
+    get,
+    path = "/api/v1/vertraege/{id}/preisgarantie",
+    tag = "vertraege",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn get_preisgarantie(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

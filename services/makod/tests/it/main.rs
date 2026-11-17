@@ -84,6 +84,7 @@ mod mcp_round_trips;
 mod meldepflicht_coverage;
 mod mscons_conformance;
 mod occupancy_verdicts;
+mod openapi_coverage;
 mod orders_columns;
 mod outbound_utilmd_sweep;
 mod pid_reference_guard;

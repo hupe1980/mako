@@ -43,7 +43,7 @@ async fn build(mut cfg: toml::Value, url: String, pool: sqlx::PgPool) -> axum::R
 
 /// The router `just dev` and `just demo` start, over a throwaway PostgreSQL, with
 /// a pool on the same database and the container that must outlive both.
-async fn dev_app() -> Option<(axum::Router, sqlx::PgPool, ContainerAsync<Postgres>)> {
+pub(crate) async fn dev_app() -> Option<(axum::Router, sqlx::PgPool, ContainerAsync<Postgres>)> {
     let (pg, url, pool) = postgres().await?;
     let cfg = toml::from_str(include_str!("../../../../deploy/demo/accountingd.toml"))
         .expect("the demo configuration parses");
@@ -51,7 +51,7 @@ async fn dev_app() -> Option<(axum::Router, sqlx::PgPool, ContainerAsync<Postgre
     Some((app, pool, pg))
 }
 
-async fn call(
+pub(crate) async fn call(
     app: axum::Router,
     request: axum::http::Request<axum::body::Body>,
 ) -> (axum::http::StatusCode, serde_json::Value) {
@@ -256,4 +256,28 @@ async fn a_payment_match_logs_no_iban() {
     )
     .await;
     assert_eq!(status, axum::http::StatusCode::METHOD_NOT_ALLOWED);
+}
+
+/// The MCP surface's authentication covers `/mcp` alone: an unknown
+/// `/api/v1` path carrying a bearer and an MCP-shaped body is the router's
+/// `404`. A layer on the MCP router would also wrap the merged router's
+/// fallback and answer such a request with the MCP gate's 401 or 403.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_unknown_api_path_with_a_bearer_is_404() {
+    let Some((app, _pool, _pg)) = dev_app().await else {
+        return;
+    };
+    let (status, body) = call(
+        app,
+        axum::http::Request::post("/api/v1/no-such-route")
+            .header(axum::http::header::AUTHORIZATION, "Bearer not-a-key")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"post_buchung"}}"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
 }

@@ -18,6 +18,8 @@
 //   "use-mcp"             — /mcp (Streamable HTTP MCP server)
 //   "read-policy"         — GET /api/v1/policy (the operator policy report)
 //   "read-config"         — GET /admin/einrichtung (the configuration findings)
+//   "manage-subscription" — /api/v1/webhooks/* (webhook endpoints, deliveries, replay)
+//   "read-events"         — GET /api/v1/events (the event outbox as a feed)
 
 // Same-tenant read: any authenticated caller may read their own meter data.
 permit(
@@ -135,4 +137,22 @@ permit(
     (context.principal_roles.contains("NB") ||
      context.principal_roles.contains("MSB") ||
      context.principal_roles.contains("ADMIN"))
+};
+
+// Webhook subscriptions on edmd's event outbox — ADMIN only.
+//
+// manage-subscription — an endpoint receives every event edmd emits, and those
+//   name Marktlokationen and their metering state. Registering one is an
+//   outbound data-export decision, and a test delivery returns the target's
+//   HTTP status, which makes an unrestricted version of it a network probe.
+//   Both are operator capabilities, not market-role ones.
+// read-events — the outbox as a feed carries the same events, so it carries
+//   the same audience.
+permit(
+    principal,
+    action in [Action::"manage-subscription", Action::"read-events"],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("ADMIN")
 };

@@ -1,0 +1,27 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Zustellungen" [level=1]
+  - paragraph: "Die Webhooks jedes Dienstes: Endpunkte, ein Testereignis, jede Zustellung mit Status und Laufzeit."
+  - navigation "Dienste":
+    - button "Prozessüberwachung"
+    - button "Marktstammdaten"
+    - button "Kundenverwaltung"
+    - button "Messwerte"
+    - button "Rechnungseingang"
+    - button "Abrechnung"
+    - button "Netzentgelte"
+    - button "Produktkatalog"
+  - region "Endpunkte":
+    - heading "Endpunkte" [level=2]
+    - list "Endpunkte":
+      - listitem:
+        - button "ERP Abrechnung https://erp.stadtwerke-musterstadt.example/mako/hooks aus der Konfiguration, nur lesen aktiv"
+      - listitem:
+        - button "Kundenportal https://portal.stadtwerke-musterstadt.example/hooks/mako aktiv"
+  - heading "Neuer Endpunkt" [level=2]
+  - text: Name
+  - textbox "Name"
+  - text: URL
+  - textbox "URL"
+  - button "Endpunkt anlegen" [disabled]

@@ -45,6 +45,17 @@ pub(crate) const FORECAST_LEGAL_BASIS: &str =
 /// - Setting Abschlag (advance payment) amounts
 /// - Anticipating the Mehr-/Mindermengensaldo at year-end
 /// - Feeding a Jahresverbrauchsprognose into SLP-Bilanzierung
+#[utoipa::path(
+    get,
+    path = "/api/v1/forecast/{malo_id}",
+    tag = "forecast",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), SimpleTimeParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_annual_forecast(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -185,6 +196,19 @@ pub(crate) async fn annual_forecast(
 /// quantity. Accuracy is bounded by metering coverage — unmetered infeed
 /// or offtake shows up as phantom loss/gain, which is why the response
 /// labels itself indicative rather than settlement-grade.
+#[utoipa::path(
+    get,
+    path = "/api/v1/netzverlust",
+    tag = "forecast",
+    params(SimpleTimeParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_netzverlust(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

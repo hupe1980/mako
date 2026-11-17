@@ -24,10 +24,6 @@
 //! [webhook]
 //! inbound_secret = "env:INVOICD_INBOUND_SECRET"
 //!
-//! [subscription]
-//! webhook_url   = "http://invoicd:8280/webhook"
-//! subscriber_id = "invoicd"
-//!
 //! [check]
 //! # All tolerances are relative (0.01 = 1 %)
 //! arithmetic_tolerance = 0.01
@@ -58,12 +54,14 @@ pub struct Config {
     #[serde(default)]
     pub webhook: WebhookConfig,
     #[serde(default)]
-    pub subscription: SubscriptionConfig,
-    #[serde(default)]
     pub check: CheckSectionConfig,
-    /// Optional ERP webhook for outbound payment CloudEvents (A8).
+    /// The ERP: the webhook endpoint `default` every emitted CloudEvent reaches.
     #[serde(default)]
     pub erp: ErpConfig,
+    /// `[subscriptions]` — how long emitted events stay replayable, and whether
+    /// an endpoint registered through the API may be a loopback address.
+    #[serde(default)]
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
     /// OIDC token verification for the HTTP API. Without it every request is
     /// admitted with synthetic dev-admin claims, which is a posture
     /// [`Self::check_auth_posture`] refuses to start in.
@@ -257,34 +255,6 @@ pub struct WebhookConfig {
     pub inbound_secret: Option<String>,
 }
 
-/// The `marktd` subscription registered at startup.
-///
-/// The event type and the PID filter are deliberately not configurable:
-/// `invoicd` acts on `de.mako.process.initiated` as
-/// [`crate::routing::disposition_for`] decides and nothing else, so a key offering to change
-/// either would promise a behaviour the service does not have.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SubscriptionConfig {
-    /// URL that `marktd` will POST events to.
-    pub webhook_url: String,
-    #[serde(default = "default_subscriber_id")]
-    pub subscriber_id: String,
-}
-
-fn default_subscriber_id() -> String {
-    "invoicd".to_owned()
-}
-
-impl Default for SubscriptionConfig {
-    fn default() -> Self {
-        Self {
-            webhook_url: "http://invoicd:8280/webhook".to_owned(),
-            subscriber_id: default_subscriber_id(),
-        }
-    }
-}
-
 /// `invoic-checker` plausibility tolerances and dispute policy.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -383,7 +353,8 @@ pub use mako_service::oidc::OidcConfig;
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ErpConfig {
-    /// ERP webhook URL for `de.invoic.receipt.*` CloudEvents.
+    /// ERP webhook URL — the endpoint `default`, receiving every CloudEvent
+    /// invoicd emits (`de.invoic.receipt.*`, `de.invoic.payment.overdue`).
     pub webhook_url: Option<String>,
     /// Optional secret for Standard Webhooks signing on outbound requests.
     /// Use `"env:INVOICD_ERP_HMAC_SECRET"` to load from environment.

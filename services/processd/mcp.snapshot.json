@@ -105,6 +105,156 @@
     "outputSchema": null
   },
   {
+    "name": "assign_klaerfall",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "OperatorAnswer": {
+          "description": "The answer an operator states on approve or reject.\n\nEvery field is optional because a held Accept carries its answer already;\nan escalated decision does not, and is refused without the ones its command\nneeds.",
+          "type": "object",
+          "properties": {
+            "antwort_code": {
+              "description": "The EBD Antwortcode (`SG4 STS+E01` / `AJT`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "antwort_tree": {
+              "description": "The Entscheidungsbaum the code is resolved in (`E_0622`, …).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "antwort_codeliste": {
+              "description": "The Codeliste DE 1131 written on the wire, where the MIG carries one.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "bemerkung": {
+              "description": "`FTX+ACB` Erläuterung.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "bilanzkreis": {
+              "description": "The Bilanzkreis an E/G Zustimmung names, where the entry's own facts\ndid not resolve one.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "versorgungsart": {
+              "description": "`SG10 CCI+Z36` on a Strom 55014 — `ZC9`, `ZD0` or `ZE3`.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "abrechnungsintervall_monate": {
+              "description": "`SG6 DTM+Z20` on a Gas 44014 — 1, 3, 6 or 12.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint8",
+              "minimum": 0,
+              "maximum": 255,
+              "default": null
+            },
+            "enfg": {
+              "description": "The Grundlage nach EnFG on a Strom 55014 — `ZG0`, `ZG1` or\n`ZF9+<Grund der Privilegierung>` ([`enfg_werte`]).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "body_sha256": {
+              "description": "The `body_sha256` of the body the person was shown\n(`rehearse_decision`); the decision is refused 412 when the body it\nwould dispatch is another. Never part of the dispatched body.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the Klärfall.",
+          "type": "string"
+        },
+        "decided_by": {
+          "description": "Who acts, as **verified by the MCP middleware** — never the caller;\nwhatever arrives here is overwritten.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "assignee": {
+          "description": "`assign_klaerfall`: who takes the case; absent releases it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "befehl": {
+          "description": "`dispatch_klaerfall`: the command to send; absent sends the proposal.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "begruendung": {
+          "description": "`resolve_klaerfall`: why the case closes without a message (required).\n`dispatch_klaerfall`: why another command than the proposal is sent.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "antwort": {
+          "description": "`dispatch_klaerfall`: what the decision states beside the Freigabe's\nfrozen answer (`antwort_code`, `antwort_tree`, `bemerkung`, …), as\n`approve_queue_entry` takes it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperatorAnswer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
     "name": "count_open_processes",
     "annotations": {
       "readOnlyHint": true,
@@ -163,6 +313,157 @@
       },
       "type": "object"
     }
+  },
+  {
+    "name": "dispatch_klaerfall",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "OperatorAnswer": {
+          "description": "The answer an operator states on approve or reject.\n\nEvery field is optional because a held Accept carries its answer already;\nan escalated decision does not, and is refused without the ones its command\nneeds.",
+          "type": "object",
+          "properties": {
+            "antwort_code": {
+              "description": "The EBD Antwortcode (`SG4 STS+E01` / `AJT`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "antwort_tree": {
+              "description": "The Entscheidungsbaum the code is resolved in (`E_0622`, …).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "antwort_codeliste": {
+              "description": "The Codeliste DE 1131 written on the wire, where the MIG carries one.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "bemerkung": {
+              "description": "`FTX+ACB` Erläuterung.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "bilanzkreis": {
+              "description": "The Bilanzkreis an E/G Zustimmung names, where the entry's own facts\ndid not resolve one.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "versorgungsart": {
+              "description": "`SG10 CCI+Z36` on a Strom 55014 — `ZC9`, `ZD0` or `ZE3`.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "abrechnungsintervall_monate": {
+              "description": "`SG6 DTM+Z20` on a Gas 44014 — 1, 3, 6 or 12.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint8",
+              "minimum": 0,
+              "maximum": 255,
+              "default": null
+            },
+            "enfg": {
+              "description": "The Grundlage nach EnFG on a Strom 55014 — `ZG0`, `ZG1` or\n`ZF9+<Grund der Privilegierung>` ([`enfg_werte`]).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "body_sha256": {
+              "description": "The `body_sha256` of the body the person was shown\n(`rehearse_decision`); the decision is refused 412 when the body it\nwould dispatch is another. Never part of the dispatched body.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the Klärfall.",
+          "type": "string"
+        },
+        "decided_by": {
+          "description": "Who acts, as **verified by the MCP middleware** — never the caller;\nwhatever arrives here is overwritten.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "assignee": {
+          "description": "`assign_klaerfall`: who takes the case; absent releases it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "befehl": {
+          "description": "`dispatch_klaerfall`: the command to send; absent sends the proposal.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "begruendung": {
+          "description": "`resolve_klaerfall`: why the case closes without a message (required).\n`dispatch_klaerfall`: why another command than the proposal is sent.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "antwort": {
+          "description": "`dispatch_klaerfall`: what the decision states beside the Freigabe's\nfrozen answer (`antwort_code`, `antwort_tree`, `bemerkung`, …), as\n`approve_queue_entry` takes it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperatorAnswer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "outputSchema": null
   },
   {
     "name": "get_counterparty_record",
@@ -548,6 +849,331 @@
       }
     },
     "outputSchema": null
+  },
+  {
+    "name": "get_klaerfall",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the Klärfall.",
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Klaerfall": {
+          "description": "One case as the Desk's Heute and an integrator read it.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "message_ref": {
+              "description": "The message the case concerns, `process:<id>`, or `dead-letter:<reason>`.",
+              "type": "string"
+            },
+            "partner_mp_id": {
+              "description": "The MP-ID whose signal opened the case; `None` for a case on a process.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "process_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pid": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "owner_role": {
+              "description": "The Marktrolle that owns the case — the role mako acted in on its\nprocess; `None` for a case on no process (`ADMIN`'s).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "origins": {
+              "description": "The origins of every signal attached, the first one first.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "zustand": {
+              "$ref": "#/$defs/Zustand"
+            },
+            "ursache_code": {
+              "description": "The cause's code and the list that defines it.",
+              "type": "string"
+            },
+            "ursache_liste": {
+              "type": "string"
+            },
+            "bedeutung": {
+              "description": "The BDEW's own wording of the cause, where the list publishes one\n(an Antwortcode in its Entscheidungsbaum); `None` otherwise — never a\nparaphrase.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "aktion": {
+              "description": "The tabulated action and what it says to do.",
+              "$ref": "#/$defs/Aktion"
+            },
+            "hinweis": {
+              "type": "string"
+            },
+            "korrektur": {
+              "description": "The `mako_markt::commands` command that corrects the case and the ones\na dispatch may send instead ([`korrektur`]); `None` where the case's\nanswer is not correctable here, and it escalates.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Korrektur"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "due_at": {
+              "description": "The business Antwortfrist the case races (`mako_fristen::antwort`, via\nthe read model), RFC 3339; `None` is „keine Frist\", never a default.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "due_source": {
+              "description": "The Fundstelle of `due_at`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "overdue": {
+              "description": "`due_at` has passed and the case is still open.",
+              "type": "boolean"
+            },
+            "operator_window_ends_at": {
+              "description": "A Freigabe's `expires_at` — the Frist less the operator's headroom.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "assignee": {
+              "description": "The person working the case, if somebody took it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decided_by": {
+              "description": "The authenticated principal that closed it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "occurrences": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "opened_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "closed_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "message_ref",
+            "partner_mp_id",
+            "process_id",
+            "pid",
+            "owner_role",
+            "origins",
+            "zustand",
+            "ursache_code",
+            "ursache_liste",
+            "bedeutung",
+            "aktion",
+            "hinweis",
+            "korrektur",
+            "due_at",
+            "due_source",
+            "overdue",
+            "operator_window_ends_at",
+            "assignee",
+            "decided_by",
+            "occurrences",
+            "opened_at",
+            "closed_at"
+          ]
+        },
+        "Zustand": {
+          "description": "Where a case stands.",
+          "oneOf": [
+            {
+              "description": "Waiting for somebody.",
+              "type": "string",
+              "const": "open"
+            },
+            {
+              "description": "Closed by a person without a market message.",
+              "type": "string",
+              "const": "resolved"
+            },
+            {
+              "description": "Closed by dispatching a command.",
+              "type": "string",
+              "const": "dispatched"
+            }
+          ]
+        },
+        "Aktion": {
+          "description": "What a case proposes, from the cause table of its origin.",
+          "oneOf": [
+            {
+              "description": "Correct the message and send it again.",
+              "type": "string",
+              "const": "retry_with_correction"
+            },
+            {
+              "description": "A person has to look.",
+              "type": "string",
+              "const": "escalate_to_operator"
+            },
+            {
+              "description": "The counterparty decided; the process ends.",
+              "type": "string",
+              "const": "abort_process"
+            },
+            {
+              "description": "Wait for a conflicting process, then retry.",
+              "type": "string",
+              "const": "wait_and_retry"
+            }
+          ]
+        },
+        "Korrektur": {
+          "description": "The command that corrects a case, and the commands a dispatch may send\ninstead.",
+          "type": "object",
+          "properties": {
+            "befehl": {
+              "description": "The proposed `mako_markt::commands` command.",
+              "type": "string"
+            },
+            "erlaubt": {
+              "description": "Every command a dispatch may send: the Freigabe's approve/reject pair.\nAnother one than `befehl` needs a reason.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "befehl",
+            "erlaubt"
+          ]
+        },
+        "VerlaufEintrag": {
+          "description": "One step taken on a case.",
+          "type": "object",
+          "properties": {
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "akteur": {
+              "description": "The authenticated principal.",
+              "type": "string"
+            },
+            "schritt": {
+              "description": "`assign`, `resolve` or `dispatch`.",
+              "type": "string"
+            },
+            "vorgeschlagen": {
+              "description": "On a dispatch: the proposed command and the one sent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "befehl": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "begruendung": {
+              "description": "The operator's reason (a resolve, an override).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "assignee": {
+              "description": "On an assign: who took it (`None` releases it).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "at",
+            "akteur",
+            "schritt",
+            "vorgeschlagen",
+            "befehl",
+            "begruendung",
+            "assignee"
+          ]
+        }
+      },
+      "required": [
+        "klaerfall",
+        "verlauf"
+      ],
+      "type": "object",
+      "properties": {
+        "klaerfall": {
+          "$ref": "#/$defs/Klaerfall"
+        },
+        "verlauf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VerlaufEintrag"
+          }
+        }
+      }
+    }
   },
   {
     "name": "get_kpi_report",
@@ -1651,7 +2277,7 @@
               "type": "string"
             },
             "message_ref": {
-              "description": "The message the case concerns, or `process:<id>`.",
+              "description": "The message the case concerns, `process:<id>`, or `dead-letter:<reason>`.",
               "type": "string"
             },
             "partner_mp_id": {
@@ -1675,12 +2301,22 @@
               "format": "uint32",
               "minimum": 0
             },
+            "owner_role": {
+              "description": "The Marktrolle that owns the case — the role mako acted in on its\nprocess; `None` for a case on no process (`ADMIN`'s).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "origins": {
               "description": "The origins of every signal attached, the first one first.",
               "type": "array",
               "items": {
                 "type": "string"
               }
+            },
+            "zustand": {
+              "$ref": "#/$defs/Zustand"
             },
             "ursache_code": {
               "description": "The cause's code and the list that defines it.",
@@ -1703,11 +2339,15 @@
             "hinweis": {
               "type": "string"
             },
-            "befehl": {
-              "description": "The `mako_markt::commands` command that corrects the case, where one is\na function of the cause. No ERC code, dead-letter reason or refusal\nnames one today: the correction re-issues the process's own command, so\nthis is `None` until a table supplies it.",
-              "type": [
-                "string",
-                "null"
+            "korrektur": {
+              "description": "The `mako_markt::commands` command that corrects the case and the ones\na dispatch may send instead ([`korrektur`]); `None` where the case's\nanswer is not correctable here, and it escalates.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Korrektur"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "due_at": {
@@ -1726,8 +2366,30 @@
               ]
             },
             "overdue": {
-              "description": "`due_at` has passed.",
+              "description": "`due_at` has passed and the case is still open.",
               "type": "boolean"
+            },
+            "operator_window_ends_at": {
+              "description": "A Freigabe's `expires_at` — the Frist less the operator's headroom.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "assignee": {
+              "description": "The person working the case, if somebody took it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decided_by": {
+              "description": "The authenticated principal that closed it.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "occurrences": {
               "type": "integer",
@@ -1735,6 +2397,13 @@
             },
             "opened_at": {
               "type": "string",
+              "format": "date-time"
+            },
+            "closed_at": {
+              "type": [
+                "string",
+                "null"
+              ],
               "format": "date-time"
             }
           },
@@ -1744,18 +2413,44 @@
             "partner_mp_id",
             "process_id",
             "pid",
+            "owner_role",
             "origins",
+            "zustand",
             "ursache_code",
             "ursache_liste",
             "bedeutung",
             "aktion",
             "hinweis",
-            "befehl",
+            "korrektur",
             "due_at",
             "due_source",
             "overdue",
+            "operator_window_ends_at",
+            "assignee",
+            "decided_by",
             "occurrences",
-            "opened_at"
+            "opened_at",
+            "closed_at"
+          ]
+        },
+        "Zustand": {
+          "description": "Where a case stands.",
+          "oneOf": [
+            {
+              "description": "Waiting for somebody.",
+              "type": "string",
+              "const": "open"
+            },
+            {
+              "description": "Closed by a person without a market message.",
+              "type": "string",
+              "const": "resolved"
+            },
+            {
+              "description": "Closed by dispatching a command.",
+              "type": "string",
+              "const": "dispatched"
+            }
           ]
         },
         "Aktion": {
@@ -1781,6 +2476,27 @@
               "type": "string",
               "const": "wait_and_retry"
             }
+          ]
+        },
+        "Korrektur": {
+          "description": "The command that corrects a case, and the commands a dispatch may send\ninstead.",
+          "type": "object",
+          "properties": {
+            "befehl": {
+              "description": "The proposed `mako_markt::commands` command.",
+              "type": "string"
+            },
+            "erlaubt": {
+              "description": "Every command a dispatch may send: the Freigabe's approve/reject pair.\nAnother one than `befehl` needs a reason.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "befehl",
+            "erlaubt"
           ]
         }
       },
@@ -2498,6 +3214,408 @@
     "outputSchema": null
   },
   {
+    "name": "list_webhook_deliveries",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "endpoint_id"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "endpoint_id": {
+          "description": "The endpoint's id.",
+          "type": "string"
+        },
+        "status": {
+          "description": "`all` (default), `pending`, `delivered` or `failed`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Rows per page, 1–200; 50 when absent.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "description": "The `next_cursor` of the previous page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Delivery": {
+          "description": "One event to one endpoint.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The delivery's id — what a single replay names.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "endpoint_id": {
+              "description": "The endpoint delivered to.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "event_id": {
+              "description": "The CloudEvent `id`, sent as `webhook-id`.",
+              "type": "string"
+            },
+            "event_type": {
+              "description": "The CloudEvent `type`.",
+              "type": "string"
+            },
+            "ordering_key": {
+              "description": "The aggregate the event is about; deliveries of one key arrive in order.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "description": "`pending`, `delivered` or `dead_lettered`.",
+              "$ref": "#/$defs/DeliveryStatus"
+            },
+            "attempts": {
+              "description": "Attempts made.",
+              "type": "integer",
+              "format": "int16",
+              "minimum": -32768,
+              "maximum": 32767
+            },
+            "last_status": {
+              "description": "The HTTP status of the last attempt; absent when it got no answer.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int16",
+              "minimum": -32768,
+              "maximum": 32767
+            },
+            "last_error": {
+              "description": "The last attempt's failure.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "latency_ms": {
+              "description": "How long the last answered attempt took, in milliseconds.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "next_attempt_at": {
+              "description": "When the next attempt is due, while pending.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "created_at": {
+              "description": "When the delivery was created.",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "endpoint_id",
+            "event_id",
+            "event_type",
+            "ordering_key",
+            "status",
+            "attempts",
+            "last_status",
+            "last_error",
+            "latency_ms",
+            "next_attempt_at",
+            "created_at"
+          ]
+        },
+        "DeliveryStatus": {
+          "description": "A delivery's state.",
+          "oneOf": [
+            {
+              "description": "Owed: not yet attempted, or retrying.",
+              "type": "string",
+              "const": "pending"
+            },
+            {
+              "description": "Accepted by the endpoint with a 2xx.",
+              "type": "string",
+              "const": "delivered"
+            },
+            {
+              "description": "Given up after its attempts, or refused with `410 Gone`.",
+              "type": "string",
+              "const": "dead_lettered"
+            }
+          ]
+        },
+        "TotalEstimate": {
+          "description": "A count bounded at [`COUNT_CAP`]: a list over a million rows reports\n`{count: 10000, capped: true}` rather than counting them.",
+          "type": "object",
+          "properties": {
+            "count": {
+              "description": "The rows counted, at most 10 000.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "capped": {
+              "description": "`true` when there are more rows than `count`.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "count",
+            "capped"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "The rows of this page, in the list's order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Delivery"
+          }
+        },
+        "next_cursor": {
+          "description": "The cursor of the next page; absent on the last.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_estimate": {
+          "description": "How many rows the whole list holds, where the list counts them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TotalEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "list_webhook_endpoints",
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "description": "Rows per page, 1–200; 50 when absent.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "description": "The `next_cursor` of the previous page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "Endpoint": {
+          "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The endpoint's id.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "name": {
+              "description": "Unique per service; `default` is the config URL.",
+              "type": "string"
+            },
+            "url": {
+              "description": "Where deliveries are POSTed.",
+              "type": "string"
+            },
+            "event_types": {
+              "description": "`mako_events::matches` patterns; empty matches every type.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "extensions": {
+              "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "owner": {
+              "description": "`config` or `api`.",
+              "$ref": "#/$defs/Owner"
+            },
+            "partner": {
+              "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "active": {
+              "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint.",
+              "type": "boolean"
+            },
+            "deactivated_reason": {
+              "description": "Why the endpoint was deactivated (`gone`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous_secret_expires_at": {
+              "description": "Until when the previous secret still signs, after a rotation.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "version": {
+              "description": "The version `If-Match` names.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "created_at": {
+              "description": "When the endpoint was registered.",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "url",
+            "event_types",
+            "extensions",
+            "owner",
+            "partner",
+            "active",
+            "deactivated_reason",
+            "previous_secret_expires_at",
+            "version",
+            "created_at"
+          ]
+        },
+        "Owner": {
+          "description": "Who owns an endpoint.",
+          "oneOf": [
+            {
+              "description": "The service's config names it (`default`); listed, delivered to and\nreplayable, never writable through the API.",
+              "type": "string",
+              "const": "config"
+            },
+            {
+              "description": "Registered through the API.",
+              "type": "string",
+              "const": "api"
+            }
+          ]
+        },
+        "TotalEstimate": {
+          "description": "A count bounded at [`COUNT_CAP`]: a list over a million rows reports\n`{count: 10000, capped: true}` rather than counting them.",
+          "type": "object",
+          "properties": {
+            "count": {
+              "description": "The rows counted, at most 10 000.",
+              "type": "integer",
+              "format": "int64"
+            },
+            "capped": {
+              "description": "`true` when there are more rows than `count`.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "count",
+            "capped"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "The rows of this page, in the list's order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Endpoint"
+          }
+        },
+        "next_cursor": {
+          "description": "The cursor of the next page; absent on the last.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_estimate": {
+          "description": "How many rows the whole list holds, where the list counts them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TotalEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
     "name": "rehearse_decision",
     "annotations": {
       "readOnlyHint": true,
@@ -2745,6 +3863,156 @@
           "type": [
             "string",
             "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "outputSchema": null
+  },
+  {
+    "name": "resolve_klaerfall",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "OperatorAnswer": {
+          "description": "The answer an operator states on approve or reject.\n\nEvery field is optional because a held Accept carries its answer already;\nan escalated decision does not, and is refused without the ones its command\nneeds.",
+          "type": "object",
+          "properties": {
+            "antwort_code": {
+              "description": "The EBD Antwortcode (`SG4 STS+E01` / `AJT`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "antwort_tree": {
+              "description": "The Entscheidungsbaum the code is resolved in (`E_0622`, …).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "antwort_codeliste": {
+              "description": "The Codeliste DE 1131 written on the wire, where the MIG carries one.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "bemerkung": {
+              "description": "`FTX+ACB` Erläuterung.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "bilanzkreis": {
+              "description": "The Bilanzkreis an E/G Zustimmung names, where the entry's own facts\ndid not resolve one.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "versorgungsart": {
+              "description": "`SG10 CCI+Z36` on a Strom 55014 — `ZC9`, `ZD0` or `ZE3`.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "abrechnungsintervall_monate": {
+              "description": "`SG6 DTM+Z20` on a Gas 44014 — 1, 3, 6 or 12.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint8",
+              "minimum": 0,
+              "maximum": 255,
+              "default": null
+            },
+            "enfg": {
+              "description": "The Grundlage nach EnFG on a Strom 55014 — `ZG0`, `ZG1` or\n`ZF9+<Grund der Privilegierung>` ([`enfg_werte`]).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "body_sha256": {
+              "description": "The `body_sha256` of the body the person was shown\n(`rehearse_decision`); the decision is refused 412 when the body it\nwould dispatch is another. Never part of the dispatched body.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "UUID of the Klärfall.",
+          "type": "string"
+        },
+        "decided_by": {
+          "description": "Who acts, as **verified by the MCP middleware** — never the caller;\nwhatever arrives here is overwritten.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "assignee": {
+          "description": "`assign_klaerfall`: who takes the case; absent releases it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "befehl": {
+          "description": "`dispatch_klaerfall`: the command to send; absent sends the proposal.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "begruendung": {
+          "description": "`resolve_klaerfall`: why the case closes without a message (required).\n`dispatch_klaerfall`: why another command than the proposal is sent.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "antwort": {
+          "description": "`dispatch_klaerfall`: what the decision states beside the Freigabe's\nfrozen answer (`antwort_code`, `antwort_tree`, `bemerkung`, …), as\n`approve_queue_entry` takes it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperatorAnswer"
+            },
+            {
+              "type": "null"
+            }
           ],
           "default": null
         }

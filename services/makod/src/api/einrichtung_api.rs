@@ -61,7 +61,16 @@ pub fn router(state: Arc<EinrichtungState>) -> Router {
         .route("/admin/einrichtung", get(get_einrichtung))
         .route("/admin/einrichtung/deployment", get(get_deployment))
         .route("/admin/einrichtung/vorschlag", post(post_vorschlag))
-        .route("/api/v1/policy", get(get_policy))
+        .with_state(state)
+}
+
+/// `GET /api/v1/policy` with its document entry; the `/admin` routes above
+/// are operator setup, outside the API document.
+pub fn api_routes<S: Clone + Send + Sync + 'static>(
+    state: Arc<EinrichtungState>,
+) -> utoipa_axum::router::OpenApiRouter<S> {
+    utoipa_axum::router::OpenApiRouter::new()
+        .routes(utoipa_axum::routes!(get_policy))
         .with_state(state)
 }
 
@@ -85,6 +94,17 @@ async fn get_einrichtung(
     Ok(Json(state.aktuell()))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/policy",
+    tag = "admin",
+    responses(
+        (status = 200, description = "The policy report: each `[policy]` setting with its value and source, `deployment.rollen`, every `allow_*` posture", body = serde_json::Value),
+        (status = 401, description = "No valid bearer token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar `AdminEinrichtung` denied", body = mako_service::ApiError),
+    ),
+    security(("bearer_token" = []))
+)]
 async fn get_policy(
     State(state): State<Arc<EinrichtungState>>,
     headers: HeaderMap,
@@ -175,8 +195,7 @@ mod tests {
             as4: &as4,
             policy: &policy,
             marktd_url: Some("http://marktd:8180"),
-            marktd_webhook_url: None,
-            http_enabled: true,
+            http_enabled: false,
             webdienste_signing_key: false,
             webdienste_signing_cert: false,
             posture: &[],
@@ -246,8 +265,7 @@ mod tests {
             as4: &as4,
             policy: &policy,
             marktd_url: Some("http://127.0.0.1:8180"),
-            marktd_webhook_url: None,
-            http_enabled: true,
+            http_enabled: false,
             webdienste_signing_key: false,
             webdienste_signing_cert: false,
             posture: &[],
@@ -356,7 +374,6 @@ mod tests {
                 as4: &As4Config::default(),
                 policy: &MakodPolicy::default(),
                 marktd_url: None,
-                marktd_webhook_url: None,
                 http_enabled: true,
                 webdienste_signing_key: false,
                 webdienste_signing_cert: false,
@@ -441,7 +458,6 @@ mod tests {
                 as4: &As4Config::default(),
                 policy: &MakodPolicy::default(),
                 marktd_url: None,
-                marktd_webhook_url: None,
                 http_enabled: true,
                 webdienste_signing_key: false,
                 webdienste_signing_cert: false,

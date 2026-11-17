@@ -38,7 +38,7 @@ person decides; every answer, amount and Frist carries its source.
 | **Market data** | `mako-markt` · `marktd` hub: master data, registries, Referenzreihen, durable CloudEvents fan-out |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer** | `vertragd` contracts and online Vertragsschluss · `productd` catalogue · `accountingd` ledger · `outputd` documents · `portald` portal |
-| **Agents** | 11 of the 14 services expose an MCP server — **189 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
+| **Agents** | 11 of the 14 services expose an MCP server — **212 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
 | **Desk** | [`desk/`](desk/) — one inbox per Rolle, the rule behind every item, an assistant that cites every sentence ([guide](https://hupe1980.github.io/mako/docs/guide/desk/)) |
 | **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties and a `pytest` plugin |
 
@@ -154,20 +154,22 @@ Each crate's README carries its scope, PIDs and regulatory sources.
 ## Services
 
 One PostgreSQL schema per daemon; routes, configuration and deployment are in
-[mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
+[mako docs · Services](https://hupe1980.github.io/mako/docs/services/). Each
+service's OpenAPI 3.1 document is published at
+[mako docs · HTTP APIs](https://hupe1980.github.io/mako/docs/reference/api/).
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 77 workflows over 499 Prüfidentifikatoren, AS4 · REST · iMS |
 | [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, Zuordnungsermächtigungen, Referenzreihen, CloudEvents fan-out |
 | [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Answers the Entscheidungsbäume and escalates what it cannot decide; process KPIs, Fristen, the § 7a Abs. 5 EnWG report, the Sperrauftrag queue |
-| [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 17 MCP tools |
-| [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — online Vertragsschluss with its Bestellnachweis, Widerruf, every contract with a Kunde on one side · 20 MCP tools |
-| [`productd`](services/productd/) | `:9080` | LF | Product catalogue — 14 categories (13 billable kinds and Bundle), Endkunden-Angebote, EPEX and BEHG price series · 14 MCP tools |
-| [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement — NNE, KA, MMM, MSB, AWH and the MaBiS Summenzeitreihen; issues the INVOIC · 13 MCP tools |
+| [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 19 MCP tools |
+| [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — online Vertragsschluss with its Bestellnachweis, Widerruf, every contract with a Kunde on one side · 22 MCP tools |
+| [`productd`](services/productd/) | `:9080` | LF | Product catalogue — 14 categories (13 billable kinds and Bundle), Endkunden-Angebote, EPEX and BEHG price series · 16 MCP tools |
+| [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement — NNE, KA, MMM, MSB, AWH and the MaBiS Summenzeitreihen; issues the INVOIC · 15 MCP tools |
 | [`einsd`](services/einsd/) | `:9180` | NB · LF | Einspeiser registry and EEG/KWKG settlement · 20 MCP tools + 6 prompts |
-| [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle · 9 MCP tools |
-| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 16 MCP tools |
+| [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle · 11 MCP tools |
+| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 18 MCP tools |
 | [`accountingd`](services/accountingd/) | `:9380` | LF | Massenkontokorrent — tamper-evident double-entry ledger, SEPA, Mahnwesen |
 | [`outputd`](services/outputd/) | `:9880` | — | Customer documents and their delivery, addressed by `[policy] anrede` |
 | [`portald`](services/portald/) | `:9480` | LF | Customer portal gateway and the § 41 EnWG self-service writes |
@@ -250,7 +252,7 @@ generated from the BDEW PDFs — fix the reader in `xtask/src/bdew/` and run
 |---|---|
 | [Guide](https://hupe1980.github.io/mako/docs/guide/) | Start the estate, set up a deployment, use the Desk |
 | [Architecture](https://hupe1980.github.io/mako/docs/architecture/) | Engine, domain model, deadlines, ERP integration |
-| [Reference](https://hupe1980.github.io/mako/docs/reference/) | Parsing, validation, builders, process catalogue, AS4, operator policy, `makotest` |
+| [Reference](https://hupe1980.github.io/mako/docs/reference/) | Parsing, validation, builders, process catalogue, AS4, operator policy, the HTTP APIs, the event catalog, `makotest` |
 | [Services](https://hupe1980.github.io/mako/docs/services/) | One operator guide per daemon |
 | [Regulatory](https://hupe1980.github.io/mako/docs/regulatory/) | Festlegungen and the Prüfidentifikator catalogue |
 | [Release & Compliance](https://hupe1980.github.io/mako/docs/compliance/) | Format releases, licences, what a release carries |

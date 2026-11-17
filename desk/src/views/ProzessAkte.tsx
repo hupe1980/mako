@@ -185,7 +185,9 @@ function Nachweise({
                     <span className="ml-1 text-text-2">{k.stehtAus}</span>
                   </>
                 )}
-                {n.belegt && <span className="sr-only"> — {k.belegt}</span>}
+                {/* The history records the message; whether it was delivered is the
+                    Zustellquittung's, which the history does not carry (SR-045). */}
+                {n.belegt && <span className="ml-2 text-caption text-text-2">{k.belegt}</span>}
               </span>
               {n.ref && <span className="block text-caption text-text-2">{n.ref}</span>}
             </span>

@@ -128,7 +128,8 @@ async fn every_freigabe_proposal_carries_the_gates_verdict_stored_once() {
         .map(|name| (name, Arc::clone(&dienste) as Arc<dyn ToolClient>))
         .collect();
     let provider = FakeProvider::new();
-    for _ in 0..4 {
+    // Four open entries, and the one follow-up the refused one gets.
+    for _ in 0..5 {
         provider.will_answer(proposal());
     }
     let plane = Plane::new(
@@ -158,7 +159,12 @@ async fn every_freigabe_proposal_carries_the_gates_verdict_stored_once() {
     for id in ["abgelehnt", "ungeprobt", "bestanden", "stumm"] {
         concluded(&plane, id).await;
     }
-    // The next tick finds every run concluded and stores each verdict.
+    // The next tick finds every run concluded and stores each verdict; the
+    // refused one's follow-up concludes, and the tick after stores its own.
+    agentd::plane::vorschlag::tick(&plane, Art::Freigabe, client)
+        .await
+        .expect("the tick reads the queue");
+    concluded(&plane, "abgelehnt").await;
     agentd::plane::vorschlag::tick(&plane, Art::Freigabe, client)
         .await
         .expect("the tick reads the queue");
@@ -399,4 +405,121 @@ async fn a_client_reported_sent_on_an_edited_proposal_records_edited() {
         None,
         "the client's report is not the fate"
     );
+}
+
+/// The input `run` was admitted with, read off its `RunAdmitted` record.
+async fn input_of(plane: &Plane, run: &str) -> Value {
+    use agentplane::journal::RecordKind;
+    let id = agentplane::core::RunId::parse(run).expect("a run id");
+    let records = plane
+        .runtime()
+        .journal()
+        .read(id, 0)
+        .await
+        .expect("the journal reads");
+    records
+        .iter()
+        .find_map(|r| match r.kind() {
+            RecordKind::RunAdmitted { input, .. } => Some(input.clone()),
+            _ => None,
+        })
+        .expect("every run is admitted")
+}
+
+/// How many runs the entry's proposal case holds.
+async fn runs_of(plane: &Plane, id: &str) -> usize {
+    let cases = plane.runtime().cases().cloned().expect("a case store");
+    let key = agentplane::core::CorrelationKey::new(
+        "event",
+        agentd::plane::vorschlag::ereignis(Art::Freigabe, id),
+    );
+    let case = cases
+        .correlate(&[key])
+        .await
+        .expect("readable")
+        .expect("the entry has its case");
+    cases
+        .case(case)
+        .await
+        .expect("readable")
+        .expect("the case exists")
+        .runs
+        .len()
+}
+
+/// A refused proposal gets one follow-up run, admitted once by the tick,
+/// carrying the refusal the gate gave as fields; the follow-up refused again
+/// starts none. The verdict is computed after a run concluded, so the repair
+/// is a second run on the same case, never a turn inside the first.
+#[tokio::test]
+async fn a_refused_proposal_gets_exactly_one_follow_up_run_carrying_the_refusal() {
+    let tenant = agentplane::core::TenantId::new("9900357000004").expect("a usable key scope");
+    let policy = agentd::plane::policy::engine(agentd::plane::policy::DEFAULT_POLICY)
+        .expect("the embedded policy set compiles");
+    let dienste = Arc::new(Dienste::default());
+    let servers = agentd::plane::tools::servers_named_in_grants()
+        .into_iter()
+        .map(|name| (name, Arc::clone(&dienste) as Arc<dyn ToolClient>))
+        .collect();
+    let provider = FakeProvider::new();
+    // Four open entries, and one follow-up for the one the gate refuses.
+    for _ in 0..5 {
+        provider.will_answer(proposal());
+    }
+    let plane = Plane::new(
+        Stores::redb(RedbStore::open_in_memory().expect("store"), &tenant),
+        PlaneConfig {
+            outbox: None,
+            signer: None,
+            quota: agentplane::quota::TenantQuota::default(),
+            owner: "agentd-nachbesserung",
+            tenant: &tenant,
+            activated: &Activation::all(),
+            providers: vec![(
+                "anthropic".to_owned(),
+                Arc::clone(&provider) as Arc<dyn agentplane::model::ModelProvider>,
+            )],
+            tool_servers: servers,
+            policy,
+            keyring: None,
+        },
+    )
+    .expect("the plane assembles");
+    let client: &dyn ToolClient = dienste.as_ref();
+    let tick = || agentd::plane::vorschlag::tick(&plane, Art::Freigabe, client);
+
+    // The first tick admits the proposals, the second finds them concluded:
+    // the refused one gets its follow-up there at the latest. (Reading a
+    // proposal starts nothing — `a_decided_entry_still_resolves…` reads one
+    // refused proposal many times and stays on its run.)
+    tick().await.expect("the tick reads the queue");
+    for id in ["abgelehnt", "ungeprobt", "bestanden", "stumm"] {
+        concluded(&plane, id).await;
+    }
+    tick().await.expect("the tick reads the queue");
+    assert_eq!(runs_of(&plane, "abgelehnt").await, 2);
+    let second = concluded(&plane, "abgelehnt").await;
+    let input = input_of(&plane, &second.run).await;
+    let ablehnung = &input["ablehnung"];
+    assert_eq!(ablehnung["stufe"], "entscheidung", "{input}");
+    assert_eq!(ablehnung["code"], "code_outside_tree", "{input}");
+    assert_eq!(ablehnung["regel"], "E_0622", "{input}");
+    assert_eq!(input["freigabe"], "abgelehnt", "{input}");
+
+    // Refused again: the follow-up is checked like the first and starts none,
+    // however often the tick runs. Only the refused entry got one.
+    tick().await.expect("the tick reads the queue");
+    tick().await.expect("the tick reads the queue");
+    let again = concluded(&plane, "abgelehnt").await;
+    assert_eq!(again.run, second.run);
+    assert_eq!(
+        again.pruefvermerk.as_ref().map(|v| v.urteil),
+        Some(PruefUrteil::Abgelehnt)
+    );
+    assert_eq!(runs_of(&plane, "abgelehnt").await, 2);
+    for id in ["ungeprobt", "bestanden", "stumm"] {
+        assert_eq!(runs_of(&plane, id).await, 1, "{id}");
+    }
+    assert_eq!(provider.calls(), 5, "one model call per run");
+    assert!(provider.script_exhausted());
 }

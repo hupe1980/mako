@@ -17,7 +17,17 @@
 //! cargo xtask import-profiles                    # all profiles
 //! cargo xtask import-profiles --profile utilmd/fv20261001
 //! cargo xtask import-profiles --check            # drift guard (needs the mirror)
+//! cargo xtask import-profiles --candidate utilmd/fv20270401
 //! ```
+//!
+//! `--candidate <type>/<fv>` imports a **Konsultationsfassung** named in
+//! `candidates/sources.json` with the same reader, into
+//! `candidates/<type>/<fv>/` — outside `crates/edi-energy/profiles/`, because
+//! `build.rs` embeds every directory there as a selectable Release and the
+//! crate is published. It writes `candidate.json` beside the profile: the
+//! SHA-256 of each consultation PDF and the Prüfidentifikatoren
+//! `profile-diff` reports changed against the binding Formatversion the entry
+//! names in `against`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -29,6 +39,26 @@ use crate::bdew::{self, ahb, mig};
 
 const PROFILES_DIR: &str = "crates/edi-energy/profiles";
 const MIRROR_DIR: &str = "regulatories/bdew-mako";
+/// The candidates tree: Konsultationsfassungen, loaded at runtime only.
+pub const CANDIDATES_DIR: &str = "candidates";
+
+/// `candidates/sources.json`.
+#[derive(Debug, Deserialize)]
+pub struct CandidateSources {
+    pub candidates: BTreeMap<String, CandidateEntry>,
+}
+
+/// One Konsultationsfassung: the binding profile's fields, its status and the
+/// binding Formatversion it is compared with.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CandidateEntry {
+    /// Always `Konsultationsfassung`.
+    pub status: String,
+    /// The binding Formatversion directory it is compared with (`fv20261001`).
+    pub against: String,
+    #[serde(flatten)]
+    pub source: Source,
+}
 
 #[derive(Debug, Deserialize)]
 struct Sources {
@@ -79,6 +109,22 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         .position(|a| a == "--profile")
         .and_then(|i| args.get(i + 1))
         .map(String::as_str);
+    if let Some(dir) = args
+        .iter()
+        .position(|a| a == "--candidate")
+        .and_then(|i| args.get(i + 1))
+    {
+        return match import_candidate(root, dir) {
+            Ok(written) => {
+                eprintln!("ok      {}", written.display());
+                true
+            }
+            Err(e) => {
+                eprintln!("error   {dir}: {e}");
+                false
+            }
+        };
+    }
 
     let sources: Sources =
         match std::fs::read_to_string(root.join(PROFILES_DIR).join("sources.json"))
@@ -168,6 +214,76 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         eprintln!("import-profiles: {written} files written");
     }
     ok
+}
+
+/// Import the Konsultationsfassung `dir` (`<type>/<fv>`) of
+/// `candidates/sources.json` into `candidates/<dir>/`.
+fn import_candidate(root: &Path, dir: &str) -> Result<PathBuf, String> {
+    let sources: CandidateSources =
+        std::fs::read_to_string(root.join(CANDIDATES_DIR).join("sources.json"))
+            .map_err(|e| format!("candidates/sources.json: {e}"))
+            .and_then(|s| {
+                serde_json::from_str(&s).map_err(|e| format!("candidates/sources.json: {e}"))
+            })?;
+    let entry = sources
+        .candidates
+        .get(dir)
+        .ok_or_else(|| format!("{dir} is not in candidates/sources.json"))?;
+    if entry.status != edi_energy::candidate::KONSULTATIONSFASSUNG {
+        return Err(format!(
+            "status {:?}: a candidate is a Konsultationsfassung",
+            entry.status
+        ));
+    }
+    let manifest: BTreeMap<String, ManifestEntry> =
+        std::fs::read_to_string(root.join(MIRROR_DIR).join("manifest.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Manifest>(&s).ok())
+            .map(|m| m.files)
+            .unwrap_or_default();
+    let (mig_json, ahb_json) = import_one(root, &manifest, dir, &entry.source)?;
+    let out = root.join(CANDIDATES_DIR).join(dir);
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    for (name, value) in [("mig.json", &mig_json), ("ahb.json", &ahb_json)] {
+        let text = serde_json::to_string_pretty(value).unwrap_or_default() + "\n";
+        std::fs::write(out.join(name), text).map_err(|e| format!("{name}: {e}"))?;
+    }
+    let ty = dir.split('/').next().unwrap_or_default();
+    let against =
+        crate::profile_diff::load(&root.join(PROFILES_DIR).join(ty).join(&entry.against))?;
+    let delta = crate::profile_diff::pid_delta(&against, &crate::profile_diff::load(&out)?);
+    let mut docs = Vec::new();
+    for file in [&entry.source.mig, &entry.source.ahb] {
+        let bytes = std::fs::read(mirror_path(root, file)?).map_err(|e| format!("{file}: {e}"))?;
+        docs.push(json!({ "file": file, "sha256": sha256_hex(&bytes) }));
+    }
+    let candidate = json!({
+        "message_type": ty.to_ascii_uppercase(),
+        "fv": dir.split('/').nth(1).unwrap_or_default(),
+        "status": entry.status,
+        "against": entry.against,
+        "sources": docs,
+        "changed_pids": delta.changed_pids,
+        "added_pids": delta.added_pids,
+        "removed_pids": delta.removed_pids,
+    });
+    std::fs::write(
+        out.join("candidate.json"),
+        serde_json::to_string_pretty(&candidate).unwrap_or_default() + "\n",
+    )
+    .map_err(|e| format!("candidate.json: {e}"))?;
+    Ok(out)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
 }
 
 fn import_one(

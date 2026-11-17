@@ -760,7 +760,7 @@ pub async fn bestaetige_auszahlung(
 
 /// A plant operator's repayment of an overpaid receipt chain, as the operator
 /// of accountingd records it.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RueckzahlungRequest {
     /// The plant and billing month of the overpaid chain.

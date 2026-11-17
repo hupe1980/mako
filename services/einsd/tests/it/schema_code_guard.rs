@@ -729,8 +729,8 @@ fn the_sect44b_quota_uses_the_statutory_hours() {
 // ── Documented routes exist ──────────────────────────────────────────────────
 
 const ROUTES: &str = include_str!("../../src/routes.rs");
-/// The shared reads mount their GETs through utoipa's `OpenApiRouter`; each
-/// route is the `path = "…"` of its `#[utoipa::path]`.
+/// Every route mounts through utoipa's `OpenApiRouter`; each route is the
+/// `path = "…"` of its handler's `#[utoipa::path]`.
 const READS: &str = include_str!("../../src/reads.rs");
 const CONFIG: &str = include_str!("../../src/config.rs");
 const ENFG: &str = include_str!("../../src/enfg.rs");
@@ -817,15 +817,15 @@ fn every_documented_api_path_is_a_route_einsd_serves() {
         out
     }
 
+    // Every `/api/v1` route mounts through the `OpenApiRouter`, so a served
+    // path is the `path = "…"` of a handler's `#[utoipa::path]` — in the shared
+    // reads (`reads.rs`) or the handlers routes.rs mounts (`handlers.rs`).
+    // `openapi_coverage` holds the document to the router both ways.
     let mut served: std::collections::BTreeSet<String> =
         paths(ROUTES).into_iter().map(|p| normalise(&p)).collect();
-    // The shared reads are served only while routes.rs merges their router;
-    // without the merge their documented paths would be the 404s this guard
-    // exists to catch.
-    if ROUTES.contains("crate::reads::router()") {
+    for src in [READS, HANDLERS] {
         served.extend(
-            READS
-                .lines()
+            src.lines()
                 .filter_map(|l| l.trim().strip_prefix("path = \""))
                 .filter_map(|l| l.split('"').next())
                 .filter(|p| p.starts_with("/api/v1/"))
@@ -834,7 +834,7 @@ fn every_documented_api_path_is_a_route_einsd_serves() {
     }
     assert!(
         served.len() > 20,
-        "parsed only {} routes from routes.rs — the parser broke, not the router",
+        "parsed only {} routes from the `#[utoipa::path]` attributes — the parser broke, not the router",
         served.len()
     );
     let foreign: std::collections::BTreeSet<&str> = FOREIGN_PATHS.iter().map(|(p, _)| *p).collect();
@@ -867,7 +867,7 @@ fn every_documented_api_path_is_a_route_einsd_serves() {
     assert!(
         dangling.is_empty(),
         "these `/api/v1/...` paths are printed or documented by einsd but are neither \
-         registered in `routes.rs` nor declared in `FOREIGN_PATHS`, so a caller \
+         a route einsd mounts nor declared in `FOREIGN_PATHS`, so a caller \
          following them gets a 404:\n  {dangling:#?}"
     );
 }
@@ -917,4 +917,42 @@ fn enfg_ledger_posten_check_equals_the_enum() {
         .map(|p| p.token().to_owned())
         .collect();
     assert_eq!(check, tokens);
+}
+
+/// `settlement_receipts.status` is pinned both ways to the statuses einsd
+/// writes (`pg::RECEIPT_STATUSES`): a status the code writes and the `CHECK`
+/// omits is a refused INSERT at run time, and one the `CHECK` admits and no
+/// code writes is a value no reader handles. einsd has no paid state — whether
+/// a Gutschrift was paid out is accountingd's (`GET /api/v1/eeg/payouts`).
+#[test]
+fn the_receipt_status_check_is_the_statuses_einsd_writes() {
+    mako_service::schema_check::assert_agrees_in(
+        SCHEMA,
+        "settlement_receipts",
+        "status",
+        &einsd::pg::RECEIPT_STATUSES,
+    );
+    for s in einsd::pg::SETTLED_STATUSES {
+        assert!(
+            einsd::pg::RECEIPT_STATUSES.contains(&s),
+            "settled status {s} is not a receipt status"
+        );
+    }
+    use eeg_billing::SettlementStatus as S;
+    for v in [
+        S::Calculated,
+        S::NoData,
+        S::PriceMissing,
+        S::FoerderungBeendet,
+        S::JahreskontingentErschoepft,
+        S::Sanctioned,
+        S::KeinAnspruch,
+        S::FassungNichtTabelliert,
+    ] {
+        let stored = einsd::pg::receipt_status(v);
+        assert!(
+            einsd::pg::RECEIPT_STATUSES.contains(&stored),
+            "{v:?} stores as {stored}, which is not a receipt status"
+        );
+    }
 }

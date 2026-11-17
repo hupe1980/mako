@@ -18,7 +18,6 @@ use marktd::handlers::{
     mmma_preise::{MmmStromUpsertRequest, MmmaGasUpsertRequest},
     partner::PartnerUpsertRequest,
     preisblatt::PreisblattMessungUpsertRequest,
-    subscription::SubscriptionUpsertRequest,
 };
 
 /// The pages whose examples this checks.
@@ -227,9 +226,9 @@ type Check = fn(&str) -> Result<(), String>;
 const ROUTES: &[(&str, &str, Check)] = &[
     ("PUT", "/api/v1/partners/{}", parses::<PartnerUpsertRequest>),
     (
-        "PUT",
-        "/api/v1/subscriptions/{}",
-        parses::<SubscriptionUpsertRequest>,
+        "POST",
+        "/api/v1/webhooks/endpoints",
+        parses::<mako_service::subscriptions::EndpointCreate>,
     ),
     (
         "PUT",
@@ -315,7 +314,7 @@ fn every_printed_write_example_is_a_body_marktd_accepts() {
 /// type does not have, and one missing a field the type requires.
 #[test]
 fn a_planted_subscription_example_with_the_wrong_field_names_is_refused() {
-    let md = "```bash\ncurl -X PUT http://localhost:8180/api/v1/subscriptions/erp \\\n  \
+    let md = "```bash\ncurl -X POST http://localhost:8180/api/v1/webhooks/endpoints \\\n  \
               -H \"Content-Type: application/json\" \\\n  \
               -d '{\"endpoint_url\": \"https://erp.example.com/hook\", \"secret\": \"s\"}'\n```\n";
     let ws = writes("fixture.md", md);

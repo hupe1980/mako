@@ -17,8 +17,9 @@ entity state in a MaKo deployment, on port **8180**. It stores:
   §20b EnWG Netzzugang requests.
 
 It also runs the **durable fan-out**: inbound `de.mako.*` events from `makod`
-and its own `de.markt.*` events reach every registered subscriber (ERP,
-`processd`, `invoicd`, `edmd`) as signed webhooks.
+and its own `de.markt.*` events reach every webhook endpoint whose filter
+matches (`makod`, `processd`, `invoicd`, `edmd` from its config, an ERP through
+the API) as signed webhooks.
 
 `marktd` holds **no domain policy**. Automated Anmeldung decisions belong to
 [`processd`](@/docs/services/processd.md), which reads `marktd` and decides with
@@ -51,10 +52,11 @@ graph TB
 ## Quick start
 
 `just dev` starts PostgreSQL and runs `marktd` with `deploy/demo/marktd.toml`,
-first of the estate, since every other service subscribes to its fan-out;
-`just demo` runs the same configuration in Docker (`compose.yaml`). Under `just
-dev` every subscriber listens on loopback, so marktd runs with `[webhook]
-allow_loopback_subscribers = true` there; any other deployment leaves it off.
+first of the estate, since every other service receives its fan-out;
+`just demo` runs the same configuration in Docker (`compose.yaml`). The demo
+names makod, processd, edmd and invoicd as `[[subscriptions.endpoints]]` and
+sets `[subscriptions] allow_loopback = true`, so `just listen` can register an
+`http` endpoint on this machine; any other deployment leaves it off.
 
 A minimal container:
 
@@ -122,10 +124,21 @@ base_url  = "http://makod:8080"   # required
 api_key   = "env:MAKOD_API_KEY"   # required
 
 [webhook]
-inbound_path          = "/api/v1/mako/events"        # default; must match makod's [erp] webhook_url
-inbound_secret        = "env:MAKOD_WEBHOOK_SECRET"   # required unless allow_insecure_no_auth
-delivery_timeout_secs = 10                           # default; per outbound delivery
-max_retry_attempts    = 3                            # default; then dead-lettered
+inbound_path   = "/api/v1/mako/events"        # default; must match makod's [erp] webhook_url
+inbound_secret = "env:MAKOD_WEBHOOK_SECRET"   # required unless allow_insecure_no_auth
+
+[subscriptions]
+# How long events stay in event_outbox for replay and GET /api/v1/events. It
+# also bounds how far back processd's read model can be rebuilt
+# (POST /api/v1/obs/rebuild pages this feed).
+retention_days = 30                           # default
+
+# One entry per in-cluster receiver; see „Fan-out".
+[[subscriptions.endpoints]]
+name        = "makod"
+url         = "http://makod:8080/webhooks/marktd"
+secret      = "env:MAKOD_MARKTD_WEBHOOK_SECRET"   # makod's [marktd] webhook_secret
+event_types = ["de.markt.malo.updated"]
 
 [oidc]              # required unless allow_insecure_no_auth
 issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -179,7 +192,7 @@ statements over 56 actions**, each starting from tenant equality:
 | Ordinary writes | `write-malo`, `write-melo`, `write-nb-contract`, `write-partner`, `write-versorgungsstatus`, `write-device`, `write-sr`, `write-netzzugang`, `write-msb-rv`, `write-melo-msb`, `write-bilanzierung`, `write-mabis-zp`, `write-lokationszuordnung` | none |
 | Grid-operator writes | `write-preisblatt`, `write-nelo`, `write-tranche`, `write-malo-grid`, `write-grundversorger`, `write-energiemix`, `write-mmma-preis`, `write-netznutzungsdaten`, `dispatch-pricat` | `mako_roles` contains `NB` |
 | ESA consent | `read-einwilligung`, `write-einwilligung` | `MSB` **or** `ESA` |
-| Operations | `manage-subscription`, `manage-fanout`, `import-referenzreihen` | `ADMIN` |
+| Operations | `manage-subscription`, `read-events`, `import-referenzreihen` | `ADMIN` |
 
 Tenant and roles arrive in the **context** — `context.principal_tenant`
 (`mako_tenant`), `context.principal_roles` (`mako_roles`),
@@ -228,10 +241,9 @@ longer deserialises, an outbox write — is a `500` whose body carries only
 `"detail": "internal server error"` and an `error_id`; the error's own text is
 logged beside the same id.
 
-A failed call to `makod` is a `502` naming it. A
-`POST /api/v1/subscriptions/{id}/test` probe the subscriber refuses is a `502`
-(a `503` when unreachable, a `504` on timeout) naming the subscriber; its
-status is in the log under the `error_id`. Client errors carry a sentence in
+A failed call to `makod` is a `502` naming it. A test delivery
+(`POST /api/v1/webhooks/endpoints/{id}/test`) answers `200` with what the
+endpoint answered. Client errors carry a sentence in
 `detail`; a domain refusal raised by the repositories (an invalid identifier,
 a validity overlap, an `If-Match` mismatch as `412`) carries its stable reason
 in `code` — `invalid_malo_id`, `unprocessable`, `not_found`,
@@ -361,15 +373,10 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/nb-contracts/by-malo/{malo_id}` | `read-nb-contract` | Contract in force on `?on=` |
 | `GET/PUT` | `/api/v1/energiemix/{nb_mp_id}` | `read-energiemix` / `write-energiemix` | §42 EnWG Energiemix (`?year=`) |
 | `GET` | `/api/v1/energiemix/{nb_mp_id}/history` | `read-energiemix` | Every published year |
-| `GET` | `/api/v1/subscriptions` | `manage-subscription` | List subscribers |
-| `GET/PUT/DELETE` | `/api/v1/subscriptions/{id}` | `manage-subscription` | One subscriber |
-| `POST` | `/api/v1/subscriptions/{id}/test` | `manage-subscription` | Send a `de.markt.subscription.test` probe |
+| `…` | `/api/v1/webhooks/**` | `manage-subscription` | Webhook endpoints, deliveries, replay — see „Webhooks" |
+| `GET` | `/api/v1/events` | `read-events` | The outbox as a feed, in commit order |
 | `GET` | `/api/v1/correlations` · `/{id}` | `read-correlation` | Process correlations (`?malo_id=`, `?workflow=`); one by `process_id` or `erp_order_id` |
 | `POST` | `[webhook] inbound_path` | — | Signed CloudEvent from makod, logged before fan-out |
-| `GET` | `/admin/fanout/dlq` | `manage-fanout` | Dead-lettered deliveries |
-| `POST` | `/admin/fanout/dlq/{event_id}/{subscriber_id}/retry` | `manage-fanout` | Re-deliver |
-| `DELETE` | `/admin/fanout/dlq/{event_id}/{subscriber_id}` | `manage-fanout` | Discard |
-| `GET` | `/admin/events` | `manage-fanout` | Replay log (`?from=&to=&type=&limit=`) |
 
 ### Notes on the endpoints
 
@@ -762,7 +769,7 @@ them. `lokationsbuendel_objektcode` on `malo` and `melo` is validated on write.
 
 The `PUT` calls no other service. It enqueues `de.markt.malo.updated` (data
 `{"version"}`) in the write's transaction; makod's MaLo-Ident cache follows it
-through the [fan-out](#fan-out) like any subscriber and reads the record back —
+through the [fan-out](#fan-out) as a config endpoint and reads the record back —
 see [makod's MaLo cache](@/docs/services/makod.md#malo-cache-follows-marktd).
 
 ```json
@@ -919,7 +926,7 @@ before deciding an Anmeldung.
 | `malo_netznutzungsdaten` | The NB's facts of a MaLo's UTILMD record no BO4E object carries — Gruppenzuordnung, Betriebszustand, Termine and Intervall der Netznutzungsabrechnung, Abrechnungsvariante, Gemeinderabatt, Turnusablesung, Netznutzungsvertrag and Zahler; dated, half-open, non-overlapping |
 | `lokationszuordnungen` | Location graph edges, typed `Lokationstyp` (`MALO`/`MELO`/`NELO`/`SR`/`TR`) |
 | `malo_lokationsbuendel_angaben` | The NB's Angaben of a MaLo's Lokationsbündel a Geschäftsdatenanfrage answer carries and no BO4E object holds — ÜNB, technische Einrichtungen, normiertes Profil, NNA-Positionen, OBIS Verwendungszwecke, register Wertegranularität; dated, half-open, non-overlapping |
-| `partners` · `subscriptions` | Marktpartner; webhook subscribers |
+| `partners` | Marktpartner |
 | `process_correlation` · `processed_events` | Process tracking per MaLo; inbound idempotency |
 | `preisblaetter` · `preisblaetter_messung` · `preisblaetter_konzessionsabgabe` · `preisblaetter_dienstleistung` · `preisblaetter_hardware` | Price sheets |
 | `pricat_versions` · `pricat_dispatch_log` | PRICAT snapshots and dispatch attempts |
@@ -933,7 +940,7 @@ before deciding an Anmeldung.
 | `nelo` · `tranche` · `malo_grid` | NeLos; Tranchen (open `data`, no BO4E type exists); grid topology |
 | `steuerbare_ressourcen` · `technische_ressourcen` | SR (`C[A-Z0-9]{9}[0-9]`); TR |
 | `zaehler` · `geraete` · `zaehler_register` · `zaehler_saisons` | Device registry and TOU definitions |
-| `event_log` · `event_delivery` | Fan-out outbox and per-subscriber delivery queue |
+| `event_outbox` · `webhook_endpoints` · `webhook_deliveries` | The shared outbox, the webhook endpoints and the per-endpoint delivery log (`mako_service::subscriptions`) |
 | `esa_einwilligungen` · `esa_framework_agreements` · `esa_messprodukt_preise` · `esa_messprodukt_katalog` | ESA consents, agreements, accepted prices, product catalogue |
 | `netzzugang_antraege` · `msb_rahmenvertraege` | §20b requests; MSB-Rahmenverträge, both Sparten |
 
@@ -1361,95 +1368,44 @@ Content-Type: application/json
 
 ## Fan-out
 
-Every produced or relayed event is written to `event_log` **before** delivery.
-A two-phase worker drains it:
+Every produced or relayed event is written to `event_outbox` in the
+transaction of the write that caused it, and delivered by the shared webhook
+module — see [Webhooks](#webhooks). The ordering key is the Marktlokation,
+else the Messlokation: a delivery waits while an earlier event about the same
+MaLo is outstanding to the same endpoint, and events about other MaLos never
+wait. Every envelope carries the `marktsparte` and `marktrole` extensions; an
+event without `marktsparte` whose `data` names a `sparte` carries that one.
 
-1. **Fan-out** claims pending `event_log` rows, resolves matching subscribers and
-   writes one `event_delivery` row each, in one transaction.
-2. **Deliver** claims due deliveries (`FOR UPDATE SKIP LOCKED`), signs and POSTs
-   them, and backs off 30 s → 5 min → 30 min → 2 h; after
-   `max_retry_attempts` the row is marked `dead_lettered_at`.
+The other mako services receive marktd's events as **config-owned endpoints**,
+one `[[subscriptions.endpoints]]` entry each: the API refuses a private
+address, and an in-cluster receiver is private by design. The receiver
+registers nothing; its entry names the types it reads and the secret it
+verifies with (`env:VAR` reads it from the environment):
 
-The worker polls every 30 s and is woken by a Postgres `NOTIFY` from an
-`AFTER INSERT` trigger, which fires only on commit. The **claim** counts the
-attempt, so a lost outcome write still spends budget; a sweep dead-letters rows
-whose budget is spent and whose lease has lapsed. Delivery is at-least-once —
-deduplicate on the CloudEvent `id`. Retention of every event follows § 147 AO /
-GoBD.
+| Endpoint | `url` | `event_types` | The receiver's secret |
+|---|---|---|---|
+| `makod` | `http://makod:8080/webhooks/marktd` | `de.markt.malo.updated` | `[marktd] webhook_secret` |
+| `processd` | `http://processd:8580/webhook` | the `de.mako.*` lifecycle types and `de.markt.versorgung.{gap-detected,eog-begonnen,changed}` | `[webhook] inbound_secret` |
+| `edmd` | `http://edmd:8380/webhook` | `de.mako.process.completed`, `de.markt.malo.updated` | `[webhook] inbound_secret` |
+| `invoicd` | `http://invoicd:8280/webhook` | `de.mako.process.initiated` | `[webhook] inbound_secret` |
 
-**Ordering is per aggregate.** A delivery waits while an earlier event about the
-same MaLo (`ordering_key`) is outstanding to the same subscriber; a
-dead-lettered delivery stops blocking its key.
+`deploy/demo/marktd.toml` is the full set; a processd entry that leaves out a
+type processd reads silently disables a module, which processd's
+`published_config` test refuses for the demo. An entry narrows on an extension
+with `extensions = { marktsparte = "GAS" }` — an event without the extension
+then does not match.
 
-**Filters.** `roles` and `sparten` match the `marktrole` / `marktsparte`
-extensions; an empty array matches everything, and an event without the
-extension matches every filter on that axis. `event_types` uses
-`mako_events::matches`: exact types, trailing `*` (`de.markt.*`), mid-pattern
-globs (`de.*.rechnung.erstellt`) and `?`.
+## Webhooks
 
-```bash
-curl -X PUT http://localhost:8180/api/v1/subscriptions/erp \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "webhook_url":    "https://erp.example.com/mdm/events",
-    "webhook_secret": "mysecret64hexchars",
-    "event_types":    ["de.markt.malo.updated", "de.markt.pricat.published",
-                       "de.mako.process.completed"]
-  }'
-```
-
-### Signature verification
-
-Deliveries are signed [Standard Webhooks](https://www.standardwebhooks.com/)
-style by `mako_service::webhook::sign`:
-
-```text
-webhook-id:        de.markt.malo.updated/3f2b…    ← also the dedup key
-webhook-timestamp: 1786012800                     ← seconds since epoch
-webhook-signature: v1,K5oT9r…                     ← base64, space-separated list
-```
-
-The signature is the base64 HMAC-SHA256 of `{webhook-id}.{webhook-timestamp}.{body}`
-under the subscription secret. The list form allows secret rotation.
-
-```python
-import base64, hmac, hashlib
-
-def verify(secret: str, headers, body: bytes) -> bool:
-    signed = b"%s.%s.%s" % (headers["webhook-id"].encode(),
-                            headers["webhook-timestamp"].encode(), body)
-    expected = base64.b64encode(
-        hmac.new(secret.encode(), signed, hashlib.sha256).digest()).decode()
-    return any(hmac.compare_digest(expected, sig.split(",", 1)[1])
-               for sig in headers["webhook-signature"].split()
-               if sig.startswith("v1,"))
-```
-
-Also refuse a `webhook-timestamp` more than **5 minutes** from your clock,
-deduplicate on `webhook-id`, and answer `200` to a duplicate (non-2xx is
-retried). The secret is stored in plaintext in `subscriptions.webhook_secret`;
-protect it with database grants and storage encryption.
-
-### Dead-letter queue
-
-Dead-lettered deliveries stay on `event_delivery`, keyed by
-`(event_id, subscriber_id)`:
-
-```bash
-curl http://localhost:8180/admin/fanout/dlq \
-  -H "Authorization: Bearer $TOKEN" | jq '.[] | {event_id, subscriber_id, attempts, last_error}'
-
-curl -X POST http://localhost:8180/admin/fanout/dlq/$EVENT_ID/$SUBSCRIBER_ID/retry \
-  -H "Authorization: Bearer $TOKEN"
-
-curl -X DELETE http://localhost:8180/admin/fanout/dlq/$EVENT_ID/$SUBSCRIBER_ID \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-A retry signs with the subscriber's current secret. `GET /admin/events`
-replays `event_log` oldest first (`?from=&to=&type=&limit=`) — for onboarding a
-subscriber or re-delivering after a consumer fix.
+marktd mounts the shared subscription module: endpoint CRUD with a `whsec_`
+secret shown once, rotation, test deliveries, the delivery log, replay of one
+delivery or a window, and `GET /api/v1/events`. The routes, the signature, the
+ordering and the retention are described once, in
+[Webhook subscriptions](@/docs/architecture/erp-integration.md#webhook-subscriptions).
+A failed delivery is listed with
+`GET /api/v1/webhooks/endpoints/{id}/deliveries?status=failed` and replayed
+from there; the MCP tools `list_webhook_endpoints` and
+`list_webhook_deliveries` read the same.
 
 ### Metrics
 
@@ -1457,9 +1413,9 @@ Four gauges, sampled together once a minute:
 
 | Metric | Meaning |
 |---|---|
-| `marktd_fanout_dlq_depth` | Dead-lettered deliveries; non-zero means a subscriber is missing events |
-| `marktd_fanout_pending` | Logged but not yet fanned out; rising means the worker is behind or stopped |
-| `marktd_active_subscriptions` | Active subscribers |
+| `marktd_fanout_dlq_depth` | Dead-lettered webhook deliveries; non-zero means an endpoint is missing events |
+| `marktd_fanout_pending` | In `event_outbox` but not yet fanned out; rising means the worker is behind or stopped |
+| `marktd_active_subscriptions` | Active webhook endpoints |
 | `marktd_processed_events` | Rows in the inbound idempotency table, bounded by the retention sweep; unbounded growth means the sweep is not running |
 
 `mako_service` adds request count, latency and the BO4E decimal-spelling
@@ -1487,7 +1443,6 @@ Source: `urn:mako:marktd:tenant:{tenant}`.
 | `de.markt.netzzugang.antrag.updated` | request id | §20b request upserted or advanced | `makod`, ERP |
 | `de.markt.einwilligung.erteilt` | consent id | Consent granted | `makod`, ERP |
 | `de.markt.einwilligung.widerrufen` | consent id | Revoked, expired or replaced (`grund`); the 17008 travels as its own outbox command | ERP |
-| `de.markt.subscription.test` | subscriber id | Test probe | the subscriber |
 | `de.markt.versorgung.changed` | `malo_id` | Every supply transition and the REST upsert | `vertragd`, `billingd`, ERP |
 | `de.markt.versorgung.gap-detected` | `malo_id` | Uncovered interval (§38 EnWG) | `processd` |
 | `de.markt.versorgung.eog-begonnen` | `malo_id` | 55013/44013 completed | `processd`, ERP |
@@ -1546,7 +1501,7 @@ Inbound delivery is idempotent on `event_id`.
 credential layer, `[mcp]` (API key or OIDC), independent of the REST `[oidc]`;
 the principal is then checked against the single Cedar action `use-mcp`.
 
-**Tools (22)**, every one a read:
+**Tools (24)**, every one a read:
 
 | Tool | Description |
 |---|---|
@@ -1566,6 +1521,7 @@ the principal is then checked against the single Cedar action `use-mcp`.
 | `get_correlation` | Process correlation |
 | `get_technische_ressource` / `get_steuerbare_ressource` | §14a device registry |
 | `list_referenzreihen` / `get_referenzwert` | The [Referenzreihen](#referenzreihen) catalogue; one value as known at `stand`, or `referenzwert_fehlt` |
+| `list_webhook_endpoints` / `list_webhook_deliveries` | The [webhook](#webhooks) endpoints and one endpoint's deliveries; twins of the REST reads, Cedar `manage-subscription` |
 
 **Prompts (4):** `lookup-malo`, `investigate-supply-gap`,
 `versorgungswechsel-tracking`, `grid-topology`.
@@ -1578,7 +1534,7 @@ the principal is then checked against the single Cedar action `use-mcp`.
 |---|---|
 | Container exits at start | A CLI flag other than `--check`/`--print-config`/`--help`, or a missing `[markt] tenant` — the config path is `MARKTD_CONFIG` |
 | `401` | `[oidc] issuer`, an expired token, or no `mako_tenant` claim |
-| `403` | `mako_tenant` ≠ `[markt] tenant`, or the role is missing (`NB` for grid-operator writes, `ADMIN` for subscriptions and the DLQ) |
+| `403` | `mako_tenant` ≠ `[markt] tenant`, or the role is missing (`NB` for grid-operator writes, `ADMIN` for webhooks and the event feed) |
 | `404` on a Preisblatt | No sheet valid on `?date=` |
 | A PRICAT ingest does not replace a sheet | Intended: an `api` row is never overwritten by a `mako` row |
 | `422` naming a `*_no_overlap` constraint | The new window overlaps the row in force; close its `valid_to` |

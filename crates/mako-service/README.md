@@ -74,12 +74,15 @@ What an implementer needs beyond the snippet:
 | `einrichtung` | `router`, `checkliste`, `befragung::vorschlag` | readiness report, deployment checklist, setup interview (`befragung::Rolle`, `lf-strom` … `bkv-strom`) |
 | `policy` | `policy_choice!`, `Policy`, `PolicyReport`, `router` | operator settings under `[policy]`, logged, exported, served at `GET /api/v1/policy` |
 | `error` | `ApiError`, `ApiResult` | problem body; a 500 or upstream failure carries an `error_id`, never the error text |
-| `json` | `Json`, `Lenient` | request bodies; an undeclared key is a 422 naming its JSON path |
+| `json` | `Json`, `Lenient`, `nur_json` | request bodies; an undeclared key is a 422 naming its JSON path; a state-changing route without a body still requires `application/json` (`415 json_required`) |
 | `headers`, `dates` | `single_str`, `parse_iso_date` | a repeated header and a malformed date are refused by name |
 | `config` | `load_config`, `DatabaseConfig`, `HttpConfig` | layered TOML and environment config |
-| `webhook` | `sign`, `headers`, `verify_request` | [Standard Webhooks](https://www.standardwebhooks.com/): `webhook-signature: v1,<base64>` over `{id}.{timestamp}.{body}` |
-| `cloudevent` | `CloudEvent`, `source`, `post_ce_with_retry` | CloudEvents 1.0 envelope and the signed, retried publisher |
-| `outbox` | `enqueue`, `OutboxWorker`, `ensure_schema` | transactional outbox, drained by a worker |
+| `webhook` | `sign`, `sign_all`, `signing_key`, `headers`, `verify_request` | [Standard Webhooks](https://www.standardwebhooks.com/): `webhook-signature: v1,<base64>` over `{id}.{timestamp}.{body}` |
+| `cloudevent` | `CloudEvent`, `CloudEvent::typed`, `EventPayload`, `source`, `post_ce_with_retry` | CloudEvents 1.0 envelope, a payload bound to its type and schema (`dataschema`), the signed, retried publisher |
+| `outbox` | `enqueue`, `enqueue_ordered`, `OutboxWorker`, `ensure_schema` | transactional outbox in commit order (`txid`, `seq`) with an ordering key, drained by a worker |
+| `subscriptions` | `Subscriptions`, `SubscriptionsConfig`, `Partner` | webhook endpoints, signed fan-out ordered per key, rotation, replay and `GET /api/v1/events` on the outbox (features `cedar` + `oidc`) |
+| `openapi` | `serve`, `assert_committed`, `ApiError` as a schema | `GET /api/v1/openapi.json`, the committed copy held to it |
+| `page` | `PageQuery`, `Page`, `capped_count` | keyset pagination: `limit` ≤ 200, a cursor bound to its filter |
 | `oidc`, `cedar`, `mcp_auth` | `OidcVerifier`, `Claims`, `CedarEnforcer`, `McpAuth` | authentication and Cedar authorisation |
 | `mcp`, `mcp_snapshot` | `REVISIONS` | the MCP revisions served; the pinned tool contract |
 | `telemetry`, `metrics` | `init_tracing`, `init_metrics` | JSON logs, OTLP export, Prometheus |

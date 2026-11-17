@@ -51,7 +51,7 @@ graph TB
     end
 
     subgraph b2c ["Contract & Customer (LF)"]
-        vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 20 MCP tools"]
+        vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 22 MCP tools"]
         portald[":9480 portald<br/>customer portal read-model<br/>§41 self-service"]
     end
 
@@ -83,13 +83,13 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [invoicd](@/docs/services/invoicd.md) | `:8280` | LF | INVOIC plausibility-check — eight stages plus the WiM 31003 send window (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, § 147 AO / GoBD receipts |
-| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB/ÜNB | NNE/KA/MMM/MSB/AWH billing — INVOIC 31001/31002/31005/31009/31011, REMADV lifecycle, §14a Modul 3 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt; MaBiS Summenzeitreihen filed with the BIKO as MSCONS 13003 on the 10. Werktag; 13-tool MCP server |
+| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB/ÜNB | NNE/KA/MMM/MSB/AWH billing — INVOIC 31001/31002/31005/31009/31011, REMADV lifecycle, §14a Modul 3 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt; MaBiS Summenzeitreihen filed with the BIKO as MSCONS 13003 on the 10. Werktag; 15-tool MCP server |
 
 ## Energy Data & Observability
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, quality scoring and validation, virtual meters, tiered storage; 17-tool MCP server |
+| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, quality scoring and validation, virtual meters, tiered storage; 19-tool MCP server |
 | [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 20-tool MCP server |
 
 ## Retail Billing (LF)
@@ -153,17 +153,17 @@ What every service gets for free from the runner:
 | **Shutdown** | SIGINT/SIGTERM graceful drain; workers observe `ctx.shutdown` |
 | **Health probe** | `--check` in-container HEALTHCHECK (no shell, no curl) |
 
-Event-emitting services — accountingd, billingd, edmd, einsd,
-netzbilanzd, processd and vertragd — use the SDK's **transactional outbox**: each
+Event-emitting services use the SDK's **transactional outbox**: each
 CloudEvent is written to `event_outbox` *in the same transaction* as the
-business change and drained by an `OutboxWorker` with retry and a status-column
-dead-letter queue. `marktd` keeps its own `event_log` outbox ahead of the durable
-fan-out, and `invoicd` retries ERP notifications from columns on
-`invoic_receipts`. Emission always goes through `CloudEvent::new` +
-`post_ce_with_retry`, signed as Standard Webhooks (`webhook-signature`).
+business change, and the shared webhook module (`mako_service::subscriptions`)
+fans it out to every matching endpoint — the configured ERP URL as `default`,
+in-cluster receivers as `[[subscriptions.endpoints]]`, integrators through the
+API — with retry, a dead-letter state and replay. `marktd` reaches the other
+services this way. Commands owed to another service drain through
+`OutboxWorker::commands`. Every envelope is built by `CloudEvent::new` and
+signed as Standard Webhooks (`webhook-signature`).
 
-The SDK outbox and marktd's `event_log` wake their worker from an `AFTER INSERT`
-trigger's `NOTIFY`, which Postgres holds until commit; the 30 s poll is the fallback.
+The SDK outbox wakes its workers from an `AFTER INSERT` trigger's `NOTIFY`, which Postgres holds until commit; the 30 s poll is the fallback.
 
 `makod` alone keeps its own `main` (SlateDB event store, AS4 runtime); every
 other service runs on `mako_service::run`.

@@ -6,6 +6,7 @@ mod cedar_actions;
 mod demo_config;
 mod dtm_qualifiers;
 mod mcp_round_trips;
+mod openapi_coverage;
 mod receipts_pg;
 mod receiving_has_no_grace;
 mod startup;

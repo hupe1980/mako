@@ -24,6 +24,8 @@ const GRANT: &str = "a GRANT naming the configured runtime role, quoted as an id
 /// Every file that builds SQL at runtime: `(path, calls, why)`.
 const SITES: &[(&str, usize, &str)] = &[
     ("crates/mako-service/src/service.rs", 1, GRANT),
+    ("crates/mako-service/src/subscriptions/routes.rs", 7, SPLICE),
+    ("crates/mako-service/src/subscriptions/worker.rs", 2, SPLICE),
     ("services/accountingd/src/pg.rs", 6, SPLICE),
     ("services/einsd/src/pg_einspeiser.rs", 3, SPLICE),
     (
@@ -38,7 +40,6 @@ const SITES: &[(&str, usize, &str)] = &[
     ("services/marktd/src/pg/nb_contract.rs", 3, SPLICE),
     ("services/marktd/src/pg/netzzugang.rs", 3, SPLICE),
     ("services/marktd/src/pg/partner.rs", 2, SPLICE),
-    ("services/marktd/src/pg/subscription.rs", 3, SPLICE),
     ("services/marktd/src/pg/versorgung.rs", 3, SPLICE),
     ("services/netzbilanzd/src/pg.rs", 4, SPLICE),
     ("services/outputd/src/delivery/store.rs", 2, SPLICE),
@@ -46,7 +47,8 @@ const SITES: &[(&str, usize, &str)] = &[
     ("services/processd/src/obs/pg.rs", 5, SPLICE),
     ("services/processd/src/obs/rest.rs", 2, SPLICE),
     ("services/processd/src/obs/worker.rs", 2, SPLICE),
-    ("services/processd/src/pg/approval.rs", 3, SPLICE),
+    ("services/processd/src/klaerfall.rs", 2, SPLICE),
+    ("services/processd/src/pg/approval.rs", 4, SPLICE),
     ("services/processd/src/pg/neuanlage.rs", 3, SPLICE),
     ("services/processd/src/sperr/pg.rs", 3, SPLICE),
     ("services/vertragd/src/pg/aggregator.rs", 2, SPLICE),

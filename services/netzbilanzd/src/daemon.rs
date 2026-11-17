@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 use crate::{ausfallarbeit_api, autorun, config, handlers, kostenblatt, mabis, mcp_server};
 use anyhow::Context as _;
-use axum::{
-    Extension, Router,
-    routing::{get, post, put},
-};
+use axum::{Extension, Router};
 use mako_markt::{makod_client::MakodClient, marktd_client::MarktdClient};
+use mako_service::subscriptions::Subscriptions;
 use mako_service::{Daemon, ServiceContext};
 use secrecy::SecretString;
 use sqlx::PgPool;
 use tracing::info;
+use utoipa::OpenApi as _;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use config::NetzbilanzConfig;
 
@@ -34,6 +34,9 @@ impl Daemon for Netzbilanzd {
         mako_service::outbox::ensure_schema(pool)
             .await
             .context("ensure outbox schema")?;
+        mako_service::subscriptions::ensure_schema(pool)
+            .await
+            .context("ensure webhook subscription schema")?;
         Ok(())
     }
 
@@ -52,6 +55,7 @@ impl Daemon for Netzbilanzd {
                     .bereich(mako_service::befund::Bereich::Zugriff),
             );
         }
+        out.extend(cfg.subscriptions.befunde());
         out
     }
 
@@ -92,6 +96,22 @@ impl Daemon for Netzbilanzd {
             (*http).clone(),
         ));
 
+        // ── Webhook subscriptions on the outbox ──────────────────────────────
+        // Every CloudEvent netzbilanzd commits fans out to the endpoints an
+        // operator registers through `/api/v1/webhooks/endpoints`, and to the
+        // `default` endpoint `erp_webhook_url` names.
+        let subs = Subscriptions::new(
+            pool.clone(),
+            Self::NAME,
+            &cfg.tenant,
+            cfg.subscriptions.clone(),
+        )
+        .with_default_endpoint(
+            cfg.erp_webhook_url.clone(),
+            cfg.erp_webhook_secret.clone().map(SecretString::from),
+        );
+        subs.spawn(shutdown.clone());
+
         // The MCP tools read the whole invoice register, so they are gated by
         // the same verifier and the same policy as the REST surface: a JWT is
         // verified and checked for `use-mcp`, and a configured `[mcp]` key
@@ -106,21 +126,19 @@ impl Daemon for Netzbilanzd {
                 &cfg.tenant,
             ),
             policy: ctx.einrichtung.policy.clone(),
+            subscriptions: subs.clone(),
         });
 
         spawn_workers(&pool, &cfg, &shutdown);
 
-        let mut app = Router::new()
-            .nest("/api/v1/billing", billing_routes())
-            .nest("/api/v1/redispatch", redispatch_routes());
+        // The MaBiS routes are documented always and served with `[mabis]`.
+        let (api, doc) = api(&subs).split_for_parts();
+        let mut app = Router::new().merge(api);
         if let Some(state) = mabis_state(&pool, &cfg, &shutdown) {
-            app = app.nest("/api/v1/mabis", mabis_routes(state));
+            app = app.merge(mabis_api().split_for_parts().0.with_state(state));
         }
         let app = app
-            .route(
-                "/api/v1/webhooks/remadv",
-                post(handlers::post_remadv_webhook),
-            )
+            .merge(mako_service::openapi::serve(openapi_document(doc)))
             // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
             // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
             .merge(mako_service::einrichtung::router(ctx.einrichtung.clone()))
@@ -141,39 +159,6 @@ impl Daemon for Netzbilanzd {
     }
 }
 
-fn billing_routes() -> Router {
-    Router::new()
-        .route("/run", post(handlers::run_billing))
-        .route("/drafts", get(handlers::list_drafts))
-        // Registered before `/drafts/{id}` so the literal segment is not
-        // captured as a UUID path parameter.
-        .route(
-            "/drafts/dispatch-batch",
-            post(handlers::post_dispatch_batch),
-        )
-        .route("/drafts/{id}", get(handlers::get_draft))
-        .route("/drafts/{id}/dispatch", put(handlers::dispatch_draft))
-        .route("/drafts/{id}/reject", put(handlers::reject_draft))
-        .route("/drafts/{id}/storno", post(handlers::post_storno))
-        .route("/drafts/{id}/korrektur", post(handlers::post_korrektur))
-        .route("/drafts/{id}/mark-paid", put(handlers::mark_paid))
-        .route("/drafts/{id}/mark-disputed", put(handlers::mark_disputed))
-        .route("/mmm-run/{malo_id}", post(autorun::post_mmm_run))
-        .route("/ggv-nne/{ggv_malo_id}", post(autorun::post_ggv_nne))
-        .route("/malo/{malo_id}", get(handlers::get_malo_billing_history))
-        .route("/summary", get(handlers::get_billing_summary))
-        .route("/audit", get(handlers::get_billing_audit))
-        .route(
-            "/fremdkosten/{draft_id}",
-            put(handlers::put_fremdkosten).get(handlers::get_fremdkosten),
-        )
-}
-
-/// The MaBiS module's state, and its scheduler started — `None` without `[mabis]`.
-///
-/// The engine reads `edmd` with a longer request timeout than the shared
-/// default, because one Lastgang fetch carries a month of quarter-hourly
-/// values; `marktd` and `makod` keep the default.
 fn mabis_state(
     pool: &PgPool,
     cfg: &Arc<NetzbilanzConfig>,
@@ -220,97 +205,100 @@ fn mabis_state(
     })
 }
 
-fn mabis_routes(state: mabis::server::ServerState) -> Router {
-    Router::new()
-        .route("/sync", post(mabis::server::trigger_sync))
-        .route("/runs", get(mabis::server::list_runs))
-        .route("/runs/{id}", get(mabis::server::get_run))
-        .route("/runs/{id}/retry", put(mabis::server::retry_run))
-        .route("/datenstatus", post(mabis::server::post_datenstatus))
-        .route(
-            "/pruefmitteilung",
-            post(mabis::server::post_pruefmitteilung),
-        )
-        .route("/korrekturbedarf", get(mabis::server::list_korrekturbedarf))
-        .with_state(state)
+/// Every `/api/v1` route netzbilanzd serves outside MaBiS, each with its
+/// document entry, and the subscription routes of `subs`.
+pub fn api(subs: &Subscriptions) -> OpenApiRouter {
+    OpenApiRouter::with_openapi(ApiDoc::openapi())
+        // ── Netznutzungs- and MMM-Abrechnung ──────────────────────────────────
+        .routes(routes!(handlers::run_billing))
+        .routes(routes!(handlers::list_drafts))
+        .routes(routes!(handlers::post_dispatch_batch))
+        .routes(routes!(handlers::get_draft))
+        .routes(routes!(handlers::dispatch_draft))
+        .routes(routes!(handlers::reject_draft))
+        .routes(routes!(handlers::post_storno))
+        .routes(routes!(handlers::post_korrektur))
+        .routes(routes!(handlers::mark_paid))
+        .routes(routes!(handlers::mark_disputed))
+        .routes(routes!(autorun::post_mmm_run))
+        .routes(routes!(autorun::post_ggv_nne))
+        .routes(routes!(handlers::get_malo_billing_history))
+        .routes(routes!(handlers::get_billing_summary))
+        .routes(routes!(handlers::get_billing_audit))
+        .routes(routes!(
+            handlers::put_fremdkosten,
+            handlers::get_fremdkosten
+        ))
+        // ── Redispatch 2.0: Kostenblatt, Vergütung, Ausfallarbeit ─────────────
+        .routes(routes!(kostenblatt::list_kostenblatt))
+        .routes(routes!(kostenblatt::get_kostenblatt_gaps))
+        .routes(routes!(kostenblatt::post_submit_kostenblatt))
+        .routes(routes!(
+            kostenblatt::put_kostenblatt,
+            kostenblatt::get_kostenblatt
+        ))
+        .routes(routes!(kostenblatt::post_compute))
+        .routes(routes!(kostenblatt::post_verguetung))
+        .routes(routes!(ausfallarbeit_api::post_ausfallarbeit_compute))
+        .routes(routes!(ausfallarbeit_api::post_ausfallarbeit_ueberbauung))
+        .routes(routes!(ausfallarbeit_api::post_ausfallarbeit_kf_bin))
+        .routes(routes!(ausfallarbeit_api::post_ausfallarbeit_malo_split))
+        .routes(routes!(ausfallarbeit_api::post_ausfallarbeit_vergleichstag))
+        .routes(routes!(
+            ausfallarbeit_api::post_ausfallarbeit_vergleichszeitraum
+        ))
+        // ── The REMADV webhook (HMAC, no bearer) ──────────────────────────────
+        .routes(routes!(handlers::post_remadv_webhook))
+        .merge(subs.router())
 }
 
-fn redispatch_routes() -> Router {
-    Router::new()
-        .route("/kostenblatt", get(kostenblatt::list_kostenblatt))
-        // Both literals precede `/kostenblatt/{activation_id}`.
-        .route(
-            "/kostenblatt/gaps/{year}/{month}",
-            get(kostenblatt::get_kostenblatt_gaps),
-        )
-        .route(
-            "/kostenblatt/submit/{year}/{month}",
-            post(kostenblatt::post_submit_kostenblatt),
-        )
-        .route(
-            "/kostenblatt/{activation_id}",
-            put(kostenblatt::put_kostenblatt).get(kostenblatt::get_kostenblatt),
-        )
-        .route(
-            "/kostenblatt/{activation_id}/compute",
-            post(kostenblatt::post_compute),
-        )
-        // §13a Abs. 2 EnWG — the compensation owed to a curtailed operator.
-        .route(
-            "/verguetung/{activation_id}/compute",
-            post(kostenblatt::post_verguetung),
-        )
-        // BilAReM Kap. 3 (BK6-23-241) — the stateless Ausfallarbeit engine.
-        .route(
-            "/ausfallarbeit/compute",
-            post(ausfallarbeit_api::post_ausfallarbeit_compute),
-        )
-        .route(
-            "/ausfallarbeit/ueberbauung",
-            post(ausfallarbeit_api::post_ausfallarbeit_ueberbauung),
-        )
-        .route(
-            "/ausfallarbeit/kf-bin",
-            post(ausfallarbeit_api::post_ausfallarbeit_kf_bin),
-        )
-        .route(
-            "/ausfallarbeit/malo-split",
-            post(ausfallarbeit_api::post_ausfallarbeit_malo_split),
-        )
-        .route(
-            "/ausfallarbeit/vergleichstag",
-            post(ausfallarbeit_api::post_ausfallarbeit_vergleichstag),
-        )
-        .route(
-            "/ausfallarbeit/vergleichszeitraum",
-            post(ausfallarbeit_api::post_ausfallarbeit_vergleichszeitraum),
-        )
+/// The MaBiS Summenzeitreihe routes, served only with `[mabis]`.
+pub fn mabis_api() -> OpenApiRouter<mabis::server::ServerState> {
+    OpenApiRouter::new()
+        .routes(routes!(mabis::server::trigger_sync))
+        .routes(routes!(mabis::server::list_runs))
+        .routes(routes!(mabis::server::get_run))
+        .routes(routes!(mabis::server::retry_run))
+        .routes(routes!(mabis::server::post_datenstatus))
+        .routes(routes!(mabis::server::post_pruefmitteilung))
+        .routes(routes!(mabis::server::list_korrekturbedarf))
 }
 
-/// Start the outbox drain and the two alert workers.
+/// The document netzbilanzd serves: `doc` (from [`api`]) with the MaBiS
+/// paths, which it documents whether or not `[mabis]` mounts them.
+#[must_use]
+pub fn openapi_document(mut doc: utoipa::openapi::OpenApi) -> utoipa::openapi::OpenApi {
+    doc.merge(mabis_api().split_for_parts().1);
+    doc
+}
+
+/// The document's header; the paths come from [`api`] and [`mabis_api`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    info(
+        title = "netzbilanzd — Netzbilanzierung and Netzabrechnung",
+        description = "The Netzbetreiber's invoicing (Netznutzung, MMM, GGV), Redispatch 2.0 Kostenblätter and Ausfallarbeit, MaBiS Summenzeitreihen (served with `[mabis]`), the inbound REMADV webhook, and webhook subscriptions on netzbilanzd's events."
+    ),
+    tags(
+        (name = "billing", description = "INVOIC drafts, dispatch, Storno and Korrektur"),
+        (name = "redispatch", description = "Redispatch 2.0 Kostenblatt, Vergütung and Ausfallarbeit"),
+        (name = "mabis", description = "MaBiS Summenzeitreihen — served only with `[mabis]`"),
+        (name = "webhooks-inbound", description = "Signed CloudEvents netzbilanzd receives"),
+        (name = "webhooks", description = "Webhook endpoints, deliveries and the event feed"),
+    )
+)]
+pub struct ApiDoc;
+
+/// Start the two alert workers.
 ///
-/// All three are gated on `erp_webhook_url`: without a delivery target the
-/// outbox would grow unbounded and the alerts would have nowhere to go. The
-/// alerts enqueue on that same outbox rather than posting for themselves, so
-/// every `de.netzbilanz.*` event takes one path with one retry policy.
+/// The alerts enqueue on the outbox rather than posting for themselves, so
+/// every `de.netzbilanz.*` event takes one path — the subscription fan-out —
+/// with one retry policy.
 fn spawn_workers(
     pool: &PgPool,
     cfg: &Arc<NetzbilanzConfig>,
     shutdown: &tokio_util::sync::CancellationToken,
 ) {
-    let Some(url) = cfg.erp_webhook_url.clone() else {
-        info!("netzbilanzd: no erp_webhook_url — outbox and alert workers not started");
-        return;
-    };
-
-    let worker = mako_service::outbox::OutboxWorker::new(
-        pool.clone(),
-        url,
-        cfg.erp_webhook_secret.clone().map(Into::into),
-    );
-    tokio::spawn(worker.run(shutdown.clone()));
-    info!("netzbilanzd: transactional outbox worker started");
-
     let stale_hours = cfg.dispatch_stale_hours.unwrap_or(48);
     spawn_ticker(
         cfg.dispatch_alert_interval_secs.unwrap_or(3_600),

@@ -67,7 +67,8 @@ pub async fn katalog(pool: &PgPool) -> ApiResult<Vec<ReiheMitStand>> {
 }
 
 /// Query of `GET …/werte`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct WerteQuery {
     /// First Berlin calendar day (inclusive).
     pub von: Option<Date>,
@@ -83,7 +84,8 @@ pub struct WerteQuery {
 }
 
 /// Query of `GET …/wert`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct WertQuery {
     /// The calendar year.
     pub jahr: i32,
@@ -135,11 +137,13 @@ pub async fn wert_fuer(
 }
 
 /// Query of `POST …/import`; the body is the file itself.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ImportQuery {
     /// The file's native format.
     pub format: Format,
     /// Whether the file's values are provisional or final.
+    #[param(value_type = String)]
     pub status: WertStatus,
     /// Where the file was published (`https://…`).
     pub quelle_url: String,

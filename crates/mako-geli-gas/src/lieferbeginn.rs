@@ -1207,6 +1207,14 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
         MELDEPFLICHT_INFORMATION_LABEL,
         MELDEPFLICHT_BEENDIGUNG_LABEL,
     ];
+    /// The answer is owed by its Antwortfrist and each Meldepflicht by its
+    /// date — every label bounds something owed. The workflow builds the
+    /// answer window's lapse notice itself.
+    const FRIST_LABELS: &'static [&'static str] = &[
+        RESPONSE_WINDOW_LABEL,
+        MELDEPFLICHT_INFORMATION_LABEL,
+        MELDEPFLICHT_BEENDIGUNG_LABEL,
+    ];
 
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         let label = deadline.label();

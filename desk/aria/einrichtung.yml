@@ -48,9 +48,9 @@
         - paragraph: Jeder Dienst und jede Gegenstelle ist erreichbar.
         - list "Befunde zu Erreichbarkeit":
           - listitem:
-            - paragraph: "blockiert: [marktd] url is set without [marktd] webhook_url (MAKOD_MARKTD_WEBHOOK_URL): makod's MaLo cache follows marktd through its fan-out and needs the address marktd delivers to, e.g. http://makod:8080/webhooks/marktd"
+            - paragraph: "blockiert: [marktd] url needs the HTTP port (--http-addr): marktd delivers MaLo changes to /webhooks/marktd"
             - text: Marktkommunikation
-            - code: marktd.webhook_url
+            - code: http.addr
           - listitem:
             - paragraph: "Warnung: nicht erreichbar: error sending request for url (http://127.0.0.1:8380/admin/einrichtung)"
             - text: Messwerte

@@ -14,6 +14,7 @@
 //! | `clients` | `vertragd` (who the customer is) and `outputd` (the document) |
 //! | `daemon` | the [`Accountingd`] daemon `mako_service::run` starts |
 //! | `config` | TOML + env configuration |
+//! | `guthaben` | the Guthaben a Schlussrechnung owes back (§ 40c Abs. 3 EnWG) |
 //! | `enfg` | the EEG/KWKG payments made, for the EnFG Belastungsausgleich |
 //! | `handlers` | the REST surface |
 //! | `ledger` | the `doubleentry`-backed Kontokorrent and its GL chart |
@@ -21,6 +22,7 @@
 //! | `pg` | PostgreSQL persistence for the customer/SEPA satellites |
 //! | `sepa` | pain.001/.007/.008, camt and pain.002 |
 //! | `sperr` | the §§ 41f/41g EnWG disconnection sequence |
+//! | `unmatched` | bank lines no account claimed, until an operator assigns them |
 
 pub mod booking;
 pub mod clients;
@@ -28,6 +30,7 @@ pub mod config;
 pub mod daemon;
 pub mod eeg_auszahlung;
 pub mod enfg;
+pub mod guthaben;
 pub mod handlers;
 pub mod ledger;
 pub mod mahnung;
@@ -37,5 +40,6 @@ pub mod pg;
 pub mod reads;
 pub mod sepa;
 pub mod sperr;
+pub mod unmatched;
 
 pub use daemon::Accountingd;

@@ -1,0 +1,68 @@
+{
+  "specialist": "desk-assistant",
+  "event_type": "manual",
+  "expected_citations": [],
+  "provenance": "synthetic",
+  "id": "freigabe-ablehnen",
+  "event": {
+    "frage": "Was schlägst du vor?",
+    "freigabe": "f-55001"
+  },
+  "tool_results": {
+    "processd/get_queue_entry": [
+      {
+        "id": "f-55001",
+        "process_id": "123e4567-e89b-12d3-a456-426614174000",
+        "pid": 55001,
+        "malo_id": "51238696012",
+        "marktrolle": "NB",
+        "grund": "Eskaliert: das Entscheidungsbaum-Ergebnis ist offen, Antwortfrist 18.11.2026 10:00",
+        "art": "eskalation",
+        "antwort": null,
+        "codes_freigeben": {
+          "ebd": "E_0622",
+          "codes": []
+        },
+        "codes_ablehnen": {
+          "ebd": "E_0622",
+          "codes": [
+            {
+              "code": "A07",
+              "bedeutung": "Vorlauffrist wurde nicht eingehalten (Prüfschritt 15)"
+            }
+          ]
+        },
+        "fakten_freigeben": [],
+        "fakten_ablehnen": [],
+        "kann_freigeben": true,
+        "kann_ablehnen": true,
+        "status": "Pending"
+      }
+    ],
+    "makod/get_process_history": [
+      {
+        "process_id": "123e4567-e89b-12d3-a456-426614174000",
+        "entries": [
+          {
+            "sequence": 1,
+            "recorded_at": "2026-11-16T08:12:00Z",
+            "event_type": "AnmeldungEingegangen",
+            "richtung": "eingang",
+            "pid": 55001,
+            "message_ref": "ANM-0001",
+            "antwortcode": null,
+            "codeliste": null,
+            "bedeutung": null,
+            "akteur": "system"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "label": "positive",
+    "findings": [
+      "/vorschlag/aktion=ablehnen;/vorschlag/antwortcode=A07;/vorschlag/befund=null"
+    ]
+  }
+}

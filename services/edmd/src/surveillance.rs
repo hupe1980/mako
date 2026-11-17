@@ -604,6 +604,19 @@ mod tests {
 ///
 /// `?state=SILENT|UNDER_COVERED` narrows it; `?include_resolved=true` adds the
 /// points that recovered, so an operator can see a flapping delivery path.
+#[utoipa::path(
+    get,
+    path = "/api/v1/surveillance/delivery",
+    tag = "surveillance",
+    params(SurveillanceQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub async fn get_delivery_surveillance(
     claims: mako_service::oidc::Claims,
     axum::Extension(enforcer): axum::Extension<std::sync::Arc<mako_service::cedar::CedarEnforcer>>,
@@ -693,7 +706,8 @@ pub async fn get_delivery_surveillance(
 }
 
 /// Query parameters for `GET /api/v1/surveillance/delivery`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct SurveillanceQuery {
     /// `SILENT` or `UNDER_COVERED`. Defaults to both.
     pub state: Option<String>,
@@ -707,6 +721,17 @@ pub struct SurveillanceQuery {
 ///
 /// Run a sweep now: reconcile the register and emit the transitions. The daily
 /// worker calls the same function.
+#[utoipa::path(
+    post,
+    path = "/api/v1/surveillance/delivery/scan",
+    tag = "surveillance",
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub async fn post_delivery_surveillance_scan(
     claims: mako_service::oidc::Claims,
     axum::Extension(enforcer): axum::Extension<std::sync::Arc<mako_service::cedar::CedarEnforcer>>,

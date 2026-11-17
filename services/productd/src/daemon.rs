@@ -61,13 +61,13 @@
 
 use crate::{config, handlers, mcp_server};
 use anyhow::Context as _;
-use axum::{
-    Extension, Router,
-    routing::{get, post, put},
-};
+use axum::{Extension, Router};
+use mako_service::subscriptions::Subscriptions;
 use mako_service::{Daemon, ServiceContext};
 use std::sync::Arc;
 use tracing::info;
+use utoipa::OpenApi as _;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// The `productd` daemon. `mako_service::run` owns the lifecycle (tracing, tuned
 /// pool, real DB-ping readiness, graceful shutdown); this only supplies the
@@ -88,7 +88,10 @@ impl Daemon for Productd {
         // announcements commit with their business write here.
         mako_service::outbox::ensure_schema(pool)
             .await
-            .context("ensure event_outbox schema")
+            .context("ensure event_outbox schema")?;
+        mako_service::subscriptions::ensure_schema(pool)
+            .await
+            .context("ensure webhook subscription schema")
     }
 
     fn validate(cfg: &Self::Config) -> Vec<mako_service::Befund> {
@@ -130,6 +133,22 @@ impl Daemon for Productd {
             .context("productd.cedar must parse at startup")?,
         );
 
+        // ── Webhook subscriptions on the outbox ──────────────────────────────
+        // Every CloudEvent productd commits fans out to the endpoints an
+        // operator registers through `/api/v1/webhooks/endpoints`, and to the
+        // `default` endpoint the config names.
+        let subs = Subscriptions::new(
+            pool.clone(),
+            Self::NAME,
+            &cfg.tenant,
+            cfg.subscriptions.clone(),
+        )
+        .with_default_endpoint(
+            cfg.erp_webhook_url.clone(),
+            cfg.erp_hmac_secret.clone().map(secrecy::SecretString::from),
+        );
+        subs.spawn(ctx.shutdown.clone());
+
         // ── MCP server state ──────────────────────────────────────────────────
         // Gated by the same verifier and the same policy as the REST surface: a
         // JWT is verified and checked for `use-mcp`, and a configured `[mcp]`
@@ -144,6 +163,7 @@ impl Daemon for Productd {
                 &cfg.tenant,
             ),
             policy: Arc::new(ctx.einrichtung.policy.clone()),
+            subscriptions: subs.clone(),
         });
 
         // ── The 2027 BEHG regime: billingd's `[policy] behg_regime` ──────────
@@ -162,6 +182,7 @@ impl Daemon for Productd {
             }
         };
 
+        let (api, doc) = api(&subs).split_for_parts();
         let app = Router::new()
             .merge(mcp_server::router(mcp_state, ctx.shutdown.clone()))
             // ── Readiness and operator posture: GET /admin/einrichtung (Cedar
@@ -169,106 +190,8 @@ impl Daemon for Productd {
             .merge(mako_service::einrichtung::router(Arc::clone(
                 &ctx.einrichtung,
             )))
-            // ── Product CRUD ────────────────────────────────────────────────
-            .route(
-                "/api/v1/products/{lf_mp_id}/{product_code}",
-                put(handlers::put_product)
-                    .get(handlers::get_product)
-                    .delete(handlers::delete_product),
-            )
-            .route(
-                "/api/v1/products/{lf_mp_id}/{product_code}/history",
-                get(handlers::get_product_history),
-            )
-            // ── Energiemix sub-resource (§42 EnWG) ───────────────────────────────
-            .route(
-                "/api/v1/products/{lf_mp_id}/{product_code}/energiemix",
-                put(handlers::put_energiemix)
-                    .get(handlers::get_energiemix)
-                    .delete(handlers::delete_energiemix_handler),
-            )
-            .route(
-                "/api/v1/products/{lf_mp_id}",
-                get(handlers::list_products_handler),
-            )
-            // ── Customer → product assignment ─────────────────────────────────────
-            // Resolve product definitions in one round trip: billingd needs
-            // one per leg of a period split by a Tarifwechsel, and asking per
-            // leg is an N+1 on every invoice.
-            .route(
-                "/api/v1/products/{lf_mp_id}/resolve",
-                post(handlers::post_resolve_products),
-            )
-            // ── EPEX Spot prices ──────────────────────────────────────────────────
-            .route("/api/v1/epex-prices/{date}", put(handlers::put_epex_prices))
-            .route(
-                "/api/v1/epex-prices/{date}/quarter-hourly",
-                get(handlers::get_epex_prices_quarter_hourly),
-            )
-            .route(
-                "/api/v1/epex-prices/{year}/{month}/average",
-                get(handlers::get_epex_monthly_average),
-            )
-            // ── nEHS certificate prices (BEHG CO₂, auctioned since 2026) ──────────
-            .route("/api/v1/nehs-prices/{date}", put(handlers::put_nehs_price))
-            .route(
-                "/api/v1/nehs-prices/latest",
-                get(handlers::get_nehs_price_latest),
-            )
-            // ── Angebot (B2B Quotation, L4) ───────────────────────────────────────
-            .route(
-                "/api/v1/angebote",
-                get(handlers::list_angebote_handler).post(handlers::post_angebot),
-            )
-            .route(
-                "/api/v1/angebote/expire",
-                post(handlers::post_expire_angebote),
-            )
-            .route("/api/v1/angebote/{id}", get(handlers::get_angebot_handler))
-            // ── Endkunden-Angebot (the frozen B2C offer an online order cites) ──
-            .route(
-                "/api/v1/products/{lf_mp_id}/endkunden-angebote",
-                post(handlers::post_endkunden_angebot),
-            )
-            .route(
-                "/api/v1/endkunden-angebote/{id}",
-                get(handlers::get_endkunden_angebot),
-            )
-            .route(
-                "/api/v1/angebote/{id}/comparison",
-                get(handlers::get_angebot_comparison),
-            )
-            .route(
-                "/api/v1/angebote/{id}/versenden",
-                post(handlers::post_angebot_versenden),
-            )
-            .route(
-                "/api/v1/angebote/{id}/annehmen",
-                post(handlers::post_angebot_annehmen),
-            )
-            .route(
-                "/api/v1/angebote/{id}/ablehnen",
-                post(handlers::post_angebot_ablehnen),
-            )
-            // ── Angebot editing (before VERSANDT) ────────────────────────────────
-            .route(
-                "/api/v1/angebote/{id}",
-                axum::routing::put(handlers::put_angebot),
-            )
-            // ── Comparison portal feed (public, ETag-cached) ──────────────────────
-            // GET /api/v1/comparison-feed?sparte=STROM&verbrauch_kwh=3500&limit=100
-            // No auth required — returns public product data only.
-            // Responses cached 5 minutes (Cache-Control: public, max-age=300).
-            .route(
-                "/api/v1/comparison-feed",
-                get(handlers::get_comparison_feed),
-            )
-            // GET /api/v1/comparison-feed/bo4e — the § 41c Abs. 5 EnWG feed as a BO4E
-            // Tarifinfo array, for schema-validated import by comparison portals.
-            .route(
-                "/api/v1/comparison-feed/bo4e",
-                get(handlers::get_comparison_feed_bo4e),
-            )
+            .merge(api)
+            .merge(mako_service::openapi::serve(doc))
             .layer(Extension(mako_service::oidc::ExpectedTenant(
                 cfg.tenant.clone(),
             )))
@@ -287,7 +210,7 @@ impl Daemon for Productd {
 
         info!("productd starting");
 
-        // ── Background: deliver the outbox to the ERP webhook ────────────────
+        // ── Background: the contract request an accepted Angebot owes ────────
         if let Some(url) = cfg.erp_webhook_url.clone() {
             let secret = cfg.erp_hmac_secret.clone().map(secrecy::SecretString::from);
             tokio::spawn(angebot_worker(pool.clone(), url, secret).run(ctx.shutdown.clone()));
@@ -334,41 +257,116 @@ impl Daemon for Productd {
     }
 }
 
-/// The worker that delivers productd's `event_outbox` to the ERP webhook.
+/// The worker that delivers the contract request of an accepted Angebot —
+/// `de.tarif.angebot.angenommen`, enqueued for [`crate::pg::ANGEBOT_TARGET`] —
+/// to the ERP webhook.
 ///
-/// A delivered `de.tarif.angebot.angenommen` is answered by `vertragd` with the
-/// Rahmenvertrag it created; the worker links it onto the Angebot in the
-/// transaction that marks the delivery done, so the Angebot names its contract
-/// exactly when the contract exists.
+/// `vertragd` answers it with the Rahmenvertrag it created; the worker links
+/// that onto the Angebot in the transaction that marks the delivery done, so
+/// the Angebot names its contract exactly when the contract exists. It is a
+/// delivery to one receiver whose answer is written back, which a fan-out to
+/// subscribers does not carry, so it is not one of the subscription
+/// deliveries.
 #[must_use]
 pub fn angebot_worker(
     pool: sqlx::PgPool,
     webhook_url: impl Into<String>,
     secret: Option<secrecy::SecretString>,
 ) -> mako_service::outbox::OutboxWorker {
-    mako_service::outbox::OutboxWorker::new(pool, webhook_url, secret).on_delivered(Arc::new(
-        |conn, delivered| {
-            Box::pin(async move {
-                if delivered.ce_type != mako_events::tarif::ANGEBOT_ANGENOMMEN {
-                    return Ok(());
-                }
-                let angebot = delivered
-                    .subject
-                    .as_deref()
-                    .and_then(|s| s.parse::<uuid::Uuid>().ok());
-                let rahmenvertrag = delivered
-                    .reply
-                    .as_ref()
-                    .and_then(|r| r.get("rahmenvertrag_id"))
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|s| s.parse::<uuid::Uuid>().ok());
-                let (Some(angebot), Some(rahmenvertrag)) = (angebot, rahmenvertrag) else {
-                    // A replay answer names no contract: the first delivery
-                    // already linked it.
-                    return Ok(());
-                };
-                crate::pg::link_angebot_rahmenvertrag(conn, angebot, rahmenvertrag).await
-            })
-        },
-    ))
+    mako_service::outbox::OutboxWorker::for_target(
+        pool,
+        crate::pg::ANGEBOT_TARGET,
+        webhook_url,
+        secret,
+    )
+    .on_delivered(Arc::new(|conn, delivered| {
+        Box::pin(async move {
+            if delivered.ce_type != mako_events::tarif::ANGEBOT_ANGENOMMEN {
+                return Ok(());
+            }
+            let angebot = delivered
+                .subject
+                .as_deref()
+                .and_then(|s| s.parse::<uuid::Uuid>().ok());
+            let rahmenvertrag = delivered
+                .reply
+                .as_ref()
+                .and_then(|r| r.get("rahmenvertrag_id"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(|s| s.parse::<uuid::Uuid>().ok());
+            let (Some(angebot), Some(rahmenvertrag)) = (angebot, rahmenvertrag) else {
+                // A replay answer names no contract: the first delivery
+                // already linked it.
+                return Ok(());
+            };
+            crate::pg::link_angebot_rahmenvertrag(conn, angebot, rahmenvertrag).await
+        })
+    }))
 }
+
+/// Every `/api/v1` route productd serves, each with its document entry, and
+/// the subscription routes of `subs`.
+pub fn api(subs: &Subscriptions) -> OpenApiRouter {
+    OpenApiRouter::with_openapi(ApiDoc::openapi())
+        // ── Product CRUD and the § 42 EnWG Energiemix ─────────────────────────
+        .routes(routes!(
+            handlers::put_product,
+            handlers::get_product,
+            handlers::delete_product
+        ))
+        .routes(routes!(handlers::get_product_history))
+        .routes(routes!(
+            handlers::put_energiemix,
+            handlers::get_energiemix,
+            handlers::delete_energiemix_handler
+        ))
+        .routes(routes!(handlers::list_products_handler))
+        // billingd resolves one definition per leg of a period split by a
+        // Tarifwechsel in one round trip, not one per leg.
+        .routes(routes!(handlers::post_resolve_products))
+        // ── EPEX Spot and nEHS (BEHG) prices ──────────────────────────────────
+        .routes(routes!(handlers::put_epex_prices))
+        .routes(routes!(handlers::get_epex_prices_quarter_hourly))
+        .routes(routes!(handlers::get_epex_monthly_average))
+        .routes(routes!(handlers::put_nehs_price))
+        .routes(routes!(handlers::get_nehs_price_latest))
+        // ── Angebot (B2B quotation) ───────────────────────────────────────────
+        .routes(routes!(
+            handlers::list_angebote_handler,
+            handlers::post_angebot
+        ))
+        .routes(routes!(handlers::post_expire_angebote))
+        .routes(routes!(
+            handlers::get_angebot_handler,
+            handlers::put_angebot
+        ))
+        .routes(routes!(handlers::get_angebot_comparison))
+        .routes(routes!(handlers::post_angebot_versenden))
+        .routes(routes!(handlers::post_angebot_annehmen))
+        .routes(routes!(handlers::post_angebot_ablehnen))
+        // ── Endkunden-Angebot (the frozen B2C offer an online order cites) ────
+        .routes(routes!(handlers::post_endkunden_angebot))
+        .routes(routes!(handlers::get_endkunden_angebot))
+        // ── § 41c Abs. 5 EnWG comparison feed (public, ETag-cached) ───────────
+        .routes(routes!(handlers::get_comparison_feed))
+        .routes(routes!(handlers::get_comparison_feed_bo4e))
+        .merge(subs.router())
+}
+
+/// The document's header; the paths come from [`api`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    info(
+        title = "productd — Product and Tariff Catalog",
+        description = "The retail products and tariffs a Lieferant sells, the market price series they are billed against, B2B Angebote, the frozen Endkunden-Angebot, the § 41c EnWG comparison feed, and webhook subscriptions on productd's events."
+    ),
+    tags(
+        (name = "products", description = "Products, their Tarifpreisblatt and Energiemix"),
+        (name = "marktpreise", description = "EPEX day-ahead and nEHS certificate prices"),
+        (name = "angebote", description = "B2B quotations"),
+        (name = "endkunden-angebote", description = "Frozen B2C offers"),
+        (name = "comparison-feed", description = "§ 41c Abs. 5 EnWG feed, served without a credential"),
+        (name = "webhooks", description = "Webhook endpoints, deliveries and the event feed"),
+    )
+)]
+pub struct ApiDoc;

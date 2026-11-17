@@ -203,6 +203,7 @@ test-edmd-db:
     {{ just_executable() }} suite edmd mcp_round_trips --include-ignored
     {{ just_executable() }} suite edmd kafka_ingest --include-ignored --test-threads=1
     {{ just_executable() }} suite edmd sharing_participation --include-ignored
+    {{ just_executable() }} suite edmd openapi_coverage --include-ignored
 
 # Handler + SQL integration tests for einsd (EEG settlement).
 test-einsd-db:
@@ -218,6 +219,8 @@ test-accountingd-db:
     {{ just_executable() }} suite accountingd sharing_booking --include-ignored
     {{ just_executable() }} suite accountingd router_builds --include-ignored --test-threads=1
     {{ just_executable() }} suite accountingd mcp_round_trips --include-ignored
+    {{ just_executable() }} suite accountingd desk_money --include-ignored --test-threads=1
+    {{ just_executable() }} suite accountingd openapi_coverage --include-ignored --test-threads=1
 
 # Records integration tests for billingd.
 test-billingd-db:
@@ -233,12 +236,14 @@ test-vertragd-db:
     {{ just_executable() }} suite vertragd bo4e_bodies --include-ignored --test-threads=1
     {{ just_executable() }} suite vertragd inbound_marker --include-ignored --test-threads=1
     {{ just_executable() }} suite vertragd online_vertragsschluss --include-ignored --test-threads=1
+    {{ just_executable() }} suite vertragd webhooks --include-ignored --test-threads=1
 
 # Catalog integration tests for productd.
 test-productd-db:
     {{ just_executable() }} suite productd catalog_integration --include-ignored --test-threads=1
     {{ just_executable() }} suite productd angebot_acceptance --include-ignored --test-threads=1
     {{ just_executable() }} suite productd endkunden_angebot --include-ignored --test-threads=1
+    {{ just_executable() }} suite productd webhooks --include-ignored --test-threads=1
 
 # All marktd integration suites (VersorgungsStatus, MeLo graph, ESA, registries,
 # durable fan-out, MaBiS-Zählpunkt, temporal constraints, tenant isolation, and
@@ -247,7 +252,7 @@ test-marktd-db:
     cargo test -p marktd --test it -- --include-ignored --test-threads=1 \
         versorgung_integration:: melo_graph_integration:: \
         esa_integration:: registries_integration:: \
-        fanout_durable_integration:: mabis_zp_integration:: \
+        webhooks_integration:: mabis_zp_integration:: \
         zuordnungsermaechtigung_integration:: \
         temporal_constraints_integration:: tenant_isolation_integration:: \
         overlap_is_a_client_error:: konfigurationsprodukte_body:: \
@@ -271,8 +276,11 @@ test-netzbilanzd-db:
 
 # The shared transactional outbox: atomicity with the caller's write, the retry
 # schedule and the dead-letter hand-off. Every service that emits depends on it.
+# And the webhook subscriptions on it: fan-out, ordered signed delivery,
+# rotation, partner binding, replay and the event feed.
 test-outbox-db:
     {{ just_executable() }} suite mako-service outbox_integration --include-ignored --test-threads=1
+    CARGO_ARGS="--features cedar,oidc" {{ just_executable() }} suite mako-service subscriptions --include-ignored --test-threads=4
 
 # The runner's `service_policy_log`: a changed operator setting appends a row,
 # an unchanged boot appends none. And `[database] migration_url`: the owner
@@ -293,7 +301,7 @@ test-policy-db:
 test-processd-db:
     cargo test -p processd --no-default-features --features integrated --test it -- \
         --include-ignored --test-threads=1 \
-        sql_integration:: worker_integration:: rebuild:: webhook_fanout:: db_scenarios:: klaerfall::
+        sql_integration:: worker_integration:: rebuild:: webhook_fanout:: db_scenarios:: webhook_delivery:: klaerfall::
 
 # Every real-PostgreSQL suite is `#[ignore]`d and named by a `test-*-db` recipe.
 #
@@ -592,7 +600,7 @@ ci:
     RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
 
 [private]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-referenzreihen check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-translations check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-referenzreihen check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-openapi-routes api-catalog-check event-catalog-check check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-eval-cases check-translations check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -879,6 +887,30 @@ check-workflow-interpolation:
 check-outbox-notify:
     cargo xtask check-outbox-notify
 
+# Refuse a bare `.route("/api/v1…")` beyond each service's ratchet: an /api/v1
+# route is mounted through `OpenApiRouter`, so the OpenAPI document lists it.
+check-openapi-routes:
+    cargo xtask check-openapi-routes
+
+# Every committed `services/<svc>/openapi.json` is published byte for byte under
+# site/static/api/, with one reference page linking each; refuse a stale one.
+api-catalog-check:
+    cargo xtask api-catalog --check
+
+# Republish site/static/api/ and the HTTP APIs reference page.
+api-catalog:
+    cargo xtask api-catalog
+
+# The event catalog page and the per-type JSON Schemas are generated from
+# mako_events and the committed `events/*.json`; refuse a stale one, and a type
+# that left the untyped ratchet without a schema.
+event-catalog-check:
+    cargo xtask event-catalog --check
+
+# Regenerate the event catalog page and site/static/schemas/events/.
+event-catalog:
+    cargo xtask event-catalog
+
 # A correlation key is written in the batch of its events
 check-atomic-spawn:
     cargo xtask check-atomic-spawn
@@ -1151,6 +1183,12 @@ check-publish-order:
 # a mutation declared read-only is dispatched unattended.
 check-tool-grants:
     cargo xtask check-tool-grants
+
+# Every tool-calling agentd specialist has labelled eval cases (or a shrink-only
+# ratchet entry), and no case carries personal data. The scores the cases yield
+# are reported, never a gate.
+check-eval-cases:
+    cargo xtask check-eval-cases
 
 # Every MCP server speaks the declared revisions (`mako_service::mcp`), holds no
 # session and enables no capability MCP 2026-07-28 deprecates; agentd's client

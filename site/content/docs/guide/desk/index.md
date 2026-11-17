@@ -505,6 +505,26 @@ every process behind a figure. The terms are defined under „Begriffe";
 [![A Gegenpartei's record: figures, refusals with their wording, the processes, export as evidence](gegenpartei-light.png)](gegenpartei-light.png)
 [![A Gegenpartei's record: figures, refusals with their wording, the processes, export as evidence](gegenpartei-dark.png)](gegenpartei-dark.png)
 
+## Klärfälle, Zahlungen, Anlagen
+
+A **Klärfall** in Heute opens its own page: the cause in the words of the
+list that defines its code, where it came from, when it is due, and its
+Verlauf. Where the Prozessüberwachung proposes a correction the one action is
+„Korrigieren & senden" — choosing another allowed command asks for a reason —
+otherwise „Erledigt" with a reason, or „Zuweisen". Each is held for undo like
+every decision, and a refusal is said in words.
+
+**Zahlungen** lists, for the Lieferant, every payment no account took — each
+with the account the Kundenkonten propose and one key, <kbd>A</kbd>, to assign
+it — and every Guthaben past its due date with „Ausgezahlt". Both are rows of
+the Arbeitsvorrat. An IBAN is shown only as the service masks it.
+
+An **Anlage** page — opened from a Marktlokation's „Erzeugung" or a Netz
+Arbeitsvorrat row (no MaStR entry, support ending, not settled last month) —
+shows the EEG-Abrechnung's facts with the Förderende large and the last twelve
+settled months, paid where the Kundenkonten say so; a month opens its
+statement with the legal basis of every position.
+
 ## The Lieferant starts from the customer
 
 **Kunden** finds a customer: type the start of any word of a name, a
@@ -534,6 +554,31 @@ on — under a process, a customer or a Freigabe — and is answered there.
 
 [![The command palette handing a question to the assistant](palette-fragen-light.png)](palette-fragen-light.png)
 [![The command palette handing a question to the assistant](palette-fragen-dark.png)](palette-fragen-dark.png)
+
+## Zustellungen: who receives the events
+
+**Zustellungen** is the webhook surface of every service that carries one —
+Prozessüberwachung, Marktstammdaten, Kundenverwaltung, Messwerte,
+Rechnungseingang, Abrechnung, Netzentgelte and Produktkatalog — read and written through that
+service's own subscription API (see
+[Webhook subscriptions](@/docs/architecture/erp-integration.md#webhook-subscriptions));
+the Desk keeps none of it. Pick the service; its endpoints are listed with
+their URL and whether they are active. An endpoint from the service's
+`[[subscriptions.endpoints]]` is marked **aus der Konfiguration, nur lesen**:
+it changes in the TOML, not here.
+
+Open an endpoint for its deliveries — each with the event type, the service's
+status and the last HTTP status code, the latency, and **Erneut senden**.
+**Testereignis senden** shows the answer at once, **Letzten Tag erneut senden**
+queues everything since yesterday's midnight (Europe/Berlin) again, and
+**Schlüssel erneuern** issues a new signing secret while the previous one keeps
+signing for 24 hours. A new endpoint is created below the list; its signing
+secret is shown exactly once, with a button to copy it — the service never
+returns it again. Whether you may do any of this is the service's Cedar
+decision (`manage-subscription`); a refusal arrives with its reason.
+
+[![Zustellungen: a configured endpoint read-only and the portal's deliveries with status code, latency and replay](zustellungen-light.png)](zustellungen-light.png)
+[![Zustellungen: a configured endpoint read-only and the portal's deliveries with status code, latency and replay](zustellungen-dark.png)](zustellungen-dark.png)
 
 ## Einrichtung: ready for go-live
 

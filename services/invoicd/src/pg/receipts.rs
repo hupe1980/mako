@@ -208,13 +208,12 @@ pub async fn receipt_outcome(
 }
 
 /// Conclude a checked receipt: stamp `dispatched_at` when the market answer
-/// went out, and enqueue the receipt's CloudEvent for the ERP, in one
-/// transaction.
+/// went out, and enqueue the receipt's CloudEvent, in one transaction.
 ///
 /// The `de.invoic.receipt.*` event states whether the answer went out, so it
 /// cannot commit with the receipt itself; it commits with the stamp that
-/// records the answer, and the `mako_service::outbox` worker delivers it with
-/// retry. A failure before this commit leaves the inbound event unanswered, and
+/// records the answer, and `mako_service::subscriptions` delivers it to every
+/// matching webhook endpoint with retry. A failure before this commit leaves the inbound event unanswered, and
 /// makod redelivers it.
 ///
 /// # Errors
@@ -225,15 +224,13 @@ pub async fn conclude(
     tenant: &str,
     process_id: Uuid,
     dispatched_at: Option<OffsetDateTime>,
-    event: Option<&mako_service::CloudEvent>,
+    event: &mako_service::CloudEvent,
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     if let Some(at) = dispatched_at {
         mark_dispatched(&mut *tx, tenant, process_id, at).await?;
     }
-    if let Some(ce) = event {
-        mako_service::outbox::enqueue(&mut tx, ce).await?;
-    }
+    mako_service::outbox::enqueue(&mut tx, event).await?;
     tx.commit().await
 }
 

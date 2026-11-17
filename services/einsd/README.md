@@ -39,7 +39,7 @@ EINSD_CONFIG=deploy/demo/einsd.toml cargo run -p einsd -- --check-config
 | `/api/v1/enfg/ledger/{year}/{month}` · `/enfg/mitteilung/{year}/{month}` | EnFG Belastungsausgleich |
 | `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` | the form in force, for `processd` |
 | `GET /api/v1/anlagen/ohne-mastr` · `/anlagen/unabgerechnet/{year}/{month}` · `/settlements/{year}/{month}/erklaerung` | the reads the Anlage page needs, each also an MCP tool answering the same type |
-| `GET /api/v1/openapi.json` | the OpenAPI 3.1 document of the typed reads, committed as `openapi.json` |
+| `GET /api/v1/openapi.json` | the OpenAPI 3.1 document of every `/api/v1` route, committed as `openapi.json` |
 
 The full list with each Cedar action is the guide's
 [Endpoints](https://hupe1980.github.io/mako/docs/services/einsd/#endpoints).

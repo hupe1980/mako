@@ -48,6 +48,18 @@ pub struct OrdersQuery {
 }
 
 /// `POST /api/v1/sperr-orders`
+#[utoipa::path(
+    post,
+    path = "/api/v1/sperr-orders",
+    tag = "sperr",
+    request_body = serde_json::Value,
+    responses(
+        (status = 201, description = "The order's id", body = serde_json::Value),
+        (status = 403, description = "Cedar `create-sperr-order` refused", body = ApiError),
+        (status = 409, description = "An order for this process already exists", body = ApiError),
+        (status = 422, description = "The order fails its validation", body = ApiError),
+    ),
+)]
 pub async fn create_order(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -70,6 +82,17 @@ pub async fn create_order(
 }
 
 /// `GET /api/v1/sperr-orders`
+#[utoipa::path(
+    get,
+    path = "/api/v1/sperr-orders",
+    tag = "sperr",
+    params(("status" = Option<String>, Query, description = "`pending`, `executed`, `failed` or `cancelled`"), ("malo_id" = Option<String>, Query, description = "One Marktlokation"), ("limit" = Option<i64>, Query, description = "1–1000; 100 when absent"), ("due" = Option<bool>, Query, description = "Only orders whose requested execution date has arrived")),
+    responses(
+        (status = 200, description = "The orders", body = serde_json::Value),
+        (status = 400, description = "An unknown status", body = ApiError),
+        (status = 403, description = "Cedar `read-sperr-order` refused", body = ApiError),
+    ),
+)]
 pub async fn list_orders(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -106,6 +129,17 @@ pub async fn list_orders(
 }
 
 /// `GET /api/v1/sperr-orders/{id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/sperr-orders/{id}",
+    tag = "sperr",
+    params(("id" = uuid::Uuid, Path, description = "The order id")),
+    responses(
+        (status = 200, description = "The order", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-sperr-order` refused", body = ApiError),
+        (status = 404, description = "No such order", body = ApiError),
+    ),
+)]
 pub async fn get_order(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -123,7 +157,7 @@ pub async fn get_order(
     Ok(Json(SperrOrderView::new(row, &lesart.0)).into_response())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExecuteRequest {
     /// `SG25 FTX+ACB` — the field reference the LF sees.
@@ -141,6 +175,20 @@ pub struct ExecuteRequest {
 ///
 /// The field team carried the order out. Records the outcome and dispatches
 /// IFTSTA 21039 (`STS Z14 erfolgreich`).
+#[utoipa::path(
+    put,
+    path = "/api/v1/sperr-orders/{id}/execute",
+    tag = "sperr",
+    params(("id" = uuid::Uuid, Path, description = "The order id")),
+    request_body = ExecuteRequest,
+    responses(
+        (status = 202, description = "Recorded; its IFTSTA 21039 is queued", body = serde_json::Value),
+        (status = 204, description = "Recorded; an operator-created order owes no IFTSTA"),
+        (status = 403, description = "Cedar `execute-sperr-order` refused", body = ApiError),
+        (status = 404, description = "No such order", body = ApiError),
+        (status = 422, description = "`executed_at` is not RFC 3339 or lies in the future", body = ApiError),
+    ),
+)]
 pub async fn execute_order(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -176,7 +224,7 @@ pub async fn execute_order(
     finish(&pool, id, &tenant, &outcome).await
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FailRequest {
     /// `SG25 FTX+ACB` — why it could not be carried out.
@@ -206,6 +254,20 @@ pub struct FailRequest {
 /// second. The second attempt — or `endgueltig: true` for a legal or factual
 /// impossibility — closes the order and dispatches IFTSTA 21039 so the Lieferant
 /// learns *why* instead of waiting out their window.
+#[utoipa::path(
+    put,
+    path = "/api/v1/sperr-orders/{id}/fail",
+    tag = "sperr",
+    params(("id" = uuid::Uuid, Path, description = "The order id")),
+    request_body = FailRequest,
+    responses(
+        (status = 202, description = "Recorded; its IFTSTA 21039 is queued, or the order stays open for a second Sperrversuch", body = serde_json::Value),
+        (status = 204, description = "Recorded; an operator-created order owes no IFTSTA"),
+        (status = 403, description = "Cedar `execute-sperr-order` refused", body = ApiError),
+        (status = 404, description = "No such order", body = ApiError),
+        (status = 422, description = "An empty `reason`", body = ApiError),
+    ),
+)]
 pub async fn fail_order(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -284,6 +346,17 @@ async fn finish(
 /// `PUT /api/v1/sperr-orders/{id}/cancel`
 ///
 /// Withdraw a pending order. No IFTSTA is dispatched — nothing happened.
+#[utoipa::path(
+    put,
+    path = "/api/v1/sperr-orders/{id}/cancel",
+    tag = "sperr",
+    params(("id" = uuid::Uuid, Path, description = "The order id")),
+    responses(
+        (status = 204, description = "Withdrawn"),
+        (status = 403, description = "Cedar `cancel-sperr-order` refused", body = ApiError),
+        (status = 404, description = "No pending order with that id", body = ApiError),
+    ),
+)]
 pub async fn cancel_order(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -316,6 +389,15 @@ pub async fn cancel_order(
 }
 
 /// `GET /api/v1/sperr-orders/stats`
+#[utoipa::path(
+    get,
+    path = "/api/v1/sperr-orders/stats",
+    tag = "sperr",
+    responses(
+        (status = 200, description = "Counts per status and the orders past their Frist", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-sperr-order` refused", body = ApiError),
+    ),
+)]
 pub async fn get_stats(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,

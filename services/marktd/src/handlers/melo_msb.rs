@@ -32,7 +32,8 @@ use crate::pg::PgMeloMsbRepository;
 /// Extension alias — concrete type so AFIT dispatches statically.
 pub type MeloMsbRepoExt = Arc<PgMeloMsbRepository>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct MsbAtQuery {
     /// Point-in-time date (ISO `YYYY-MM-DD`). Defaults to today.
     pub at: Option<String>,
@@ -57,6 +58,18 @@ pub struct PutMeloMsbBody {
 }
 
 /// `GET /api/v1/melos/{melo_id}/msb?at=YYYY-MM-DD` — the MSB responsible on a date.
+#[utoipa::path(
+    get,
+    path = "/api/v1/melos/{melo_id}/msb",
+    tag = "melo-msb",
+    params(("melo_id" = String, Path, description = "33-character Messlokations-ID"), MsbAtQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_melo_msb_at(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -90,6 +103,18 @@ pub async fn get_melo_msb_at(
 }
 
 /// `GET /api/v1/melos/{melo_id}/msb/history` — full dated MSB timeline.
+#[utoipa::path(
+    get,
+    path = "/api/v1/melos/{melo_id}/msb/history",
+    tag = "melo-msb",
+    params(("melo_id" = String, Path, description = "33-character Messlokations-ID")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_melo_msb_history(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -109,6 +134,19 @@ pub async fn get_melo_msb_history(
 }
 
 /// `PUT /api/v1/melos/{melo_id}/msb` — record a new dated MSB assignment.
+#[utoipa::path(
+    put,
+    path = "/api/v1/melos/{melo_id}/msb",
+    tag = "melo-msb",
+    params(("melo_id" = String, Path, description = "33-character Messlokations-ID")),
+    request_body(content = serde_json::Value, description = "`PutMeloMsbBody`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_melo_msb(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

@@ -24,6 +24,8 @@ transport, and the `makotest` Python toolkit.
 | [BDEW AS4](@/docs/reference/as4-bdew.md) | The transport that carries every EDIFACT interchange between market partners |
 | [makotest](@/docs/reference/makotest.md) | Writing tests in Python against the real Fristen and the real validator |
 | [Operator policy](@/docs/reference/operator-policy.md) | Every operator setting: its key, its options with their primary sources, its default or that it is required |
+| [HTTP APIs](@/docs/reference/api.md) | The OpenAPI 3.1 document of every service, as it commits and serves it |
+| [Event catalog](@/docs/reference/events.md) | Every CloudEvent type: who emits it, who names it, and the JSON Schema of its `data` |
 
 The process catalogue and the [PID reference](@/docs/regulatory/pid-reference.md)
 are lookup tables, ordered by regulatory framework and by message type.

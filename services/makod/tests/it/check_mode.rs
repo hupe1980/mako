@@ -785,7 +785,8 @@ api_key = "k"
     let out = makod()
         .args(["--config"])
         .arg(&cfg)
-        .args(&STARTABLE[1..])
+        // Without `--http-addr`: marktd's deliveries would have no port.
+        .args(&STARTABLE[3..])
         .args(["--check-config", "--json"])
         .output()
         .expect("spawn makod");
@@ -806,7 +807,7 @@ api_key = "k"
         .filter_map(|b| b["pfad"].as_str())
         .collect();
     assert!(pfade.contains(&"party[0].mp_id"), "{pfade:?}");
-    assert!(pfade.contains(&"marktd.webhook_url"), "{pfade:?}");
+    assert!(pfade.contains(&"http.addr"), "{pfade:?}");
 }
 
 /// A startable config passes `--check-config` with exit 0 and a ready report.

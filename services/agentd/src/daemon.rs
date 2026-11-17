@@ -590,21 +590,14 @@ impl Daemon for Agentd {
             )))
             .layer(Extension(oidc.clone()));
 
+        let (documented, doc) = crate::openapi::api_router();
         let mut app = Router::new()
             // CloudEvent ingest
             .route("/webhook", post(handlers::webhook))
-            // Manual trigger (OIDC-protected)
-            .route("/api/v1/runs", post(handlers::start_runs))
-            .route("/api/v1/runs/{run}/antwort", get(handlers::answer))
-            .route("/api/v1/runs/{run}/schritte", get(handlers::schritte))
-            .route("/api/v1/runs/{run}/stopp", post(handlers::stopp))
-            .route("/api/v1/runs/{run}/bewertung", post(handlers::bewerten))
-            .route("/api/v1/hinweise", get(handlers::hinweise))
-            .route("/api/v1/vorschlaege", get(handlers::vorschlaege))
-            .route("/api/v1/erasure", post(handlers::erase))
-            // What this deployment runs, and what it could run
-            .route("/api/v1/agents", get(handlers::list_agents))
-            .route("/api/v1/agents/catalog", get(handlers::agents_catalog))
+            // Every `/api/v1` route agentd serves itself (`openapi::api_router`),
+            // each in the document `GET /api/v1/openapi.json` serves: runs a
+            // person starts and follows, the Desk's reads, erasure, inventory.
+            .merge(documented)
             // A2A Agent Cards, derived from each manifest
             .route("/.well-known/agents/{name}", get(handlers::agent_card))
             // **This deployment's tenant, pinned at extraction.**
@@ -626,7 +619,8 @@ impl Daemon for Agentd {
             // OIDC verifier extension for the Claims Axum extractor
             .layer(Extension(oidc))
             .with_state(state)
-            .merge(einrichtung);
+            .merge(einrichtung)
+            .merge(mako_service::openapi::serve(doc));
 
         if let Some(surface) = oversight {
             info!(

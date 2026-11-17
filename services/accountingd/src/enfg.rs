@@ -36,7 +36,7 @@ pub fn ist_geleistet(status: Option<&str>) -> bool {
 ///
 /// Each variant is one of the set-offs the EEG 2023 admits against a § 19
 /// Abs. 1 claim.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Gegenforderung {
     /// A § 52 EEG 2023 Pflichtzahlung — § 52 Abs. 6 Satz 2 lets it be set off
@@ -268,7 +268,7 @@ mod tests {
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 /// A recorded Aufrechnung, as the operator declares it.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AufrechnungRequest {
     /// The plant whose claim was set off.

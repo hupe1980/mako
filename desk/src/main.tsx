@@ -9,7 +9,6 @@ import { router } from "./app/router";
 import { applyRememberedSprache } from "./i18n";
 
 applyRememberedAppearance();
-applyRememberedSprache();
 
 const queries = new QueryClient({
   defaultOptions: {
@@ -20,12 +19,16 @@ const queries = new QueryClient({
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html has no #root");
 
-createRoot(root).render(
-  <StrictMode>
-    <QueryClientProvider client={queries}>
-      <RolleProvider>
-        <RouterProvider router={router} />
-      </RolleProvider>
-    </QueryClientProvider>
-  </StrictMode>,
+const mount = root;
+// An English Desk waits for its catalogue before the first paint; a German one does not wait.
+void applyRememberedSprache().then(() =>
+  createRoot(mount).render(
+    <StrictMode>
+      <QueryClientProvider client={queries}>
+        <RolleProvider>
+          <RouterProvider router={router} />
+        </RolleProvider>
+      </QueryClientProvider>
+    </StrictMode>,
+  ),
 );

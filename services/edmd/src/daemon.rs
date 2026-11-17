@@ -37,11 +37,19 @@ impl Daemon for Edmd {
         mako_service::outbox::ensure_schema(pool)
             .await
             .context("ensure event_outbox schema")?;
+        // The webhook endpoints and deliveries integrators register on that
+        // outbox (`/api/v1/webhooks/*`); it indexes `event_outbox`, so it
+        // runs after it.
+        mako_service::subscriptions::ensure_schema(pool)
+            .await
+            .context("ensure webhook subscription schema")?;
         Ok(())
     }
 
     fn validate(cfg: &Config) -> Vec<mako_service::Befund> {
-        cfg.validate()
+        let mut out = cfg.validate();
+        out.extend(cfg.subscriptions.befunde());
+        out
     }
 
     fn policy(cfg: &Config) -> mako_service::policy::PolicyReport {
@@ -81,6 +89,13 @@ impl Daemon for Edmd {
             .map(config::resolve_env_secret)
             .transpose()
             .context("webhook.inbound_secret")?;
+        let erp_webhook_secret = cfg
+            .webhook
+            .erp_webhook_secret
+            .as_deref()
+            .map(config::resolve_env_secret)
+            .transpose()
+            .context("webhook.erp_webhook_secret")?;
 
         // Resolve `env:` references in the S3 credentials before they reach the
         // warehouse builder.
@@ -108,9 +123,6 @@ impl Daemon for Edmd {
             marktd_url: cfg.marktd.url.clone(),
             marktd_api_key,
             own_mp_id: cfg.identity.own_mp_id.clone(),
-            subscriber_id: cfg.subscription.subscriber_id.clone(),
-            webhook_url: cfg.subscription.webhook_url.clone(),
-            webhook_secret: inbound_secret.clone(),
             inbound_secret,
             tenant: cfg.identity.tenant.clone(),
             oidc,
@@ -118,7 +130,8 @@ impl Daemon for Edmd {
             mcp: cfg.mcp.clone(),
             shutdown: ctx.shutdown.clone(),
             erp_webhook_url: cfg.webhook.erp_webhook_url.clone(),
-            erp_webhook_secret: cfg.webhook.erp_webhook_secret.clone(),
+            erp_webhook_secret,
+            subscriptions: cfg.subscriptions.clone(),
             rate_limit: cfg.rate_limit.clone(),
             kafka_ingest: cfg.kafka_ingest.clone(),
             confirmation: cfg.confirmation.clone(),

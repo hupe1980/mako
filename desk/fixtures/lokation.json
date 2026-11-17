@@ -1496,5 +1496,96 @@
         "running_ct": 0
       }
     ]
+  },
+  "/svc/processd/api/v1/webhooks/endpoints": {
+    "items": [
+      {
+        "id": "ep-erp",
+        "name": "ERP Abrechnung",
+        "url": "https://erp.stadtwerke-musterstadt.example/mako/hooks",
+        "owner": "config",
+        "active": true,
+        "event_types": ["de.mako.process.completed", "de.mako.process.rejected"],
+        "extensions": {},
+        "created_at": "2026-10-12T07:30:00Z",
+        "deactivated_reason": null,
+        "partner": null,
+        "previous_secret_expires_at": null,
+        "version": 1
+      },
+      {
+        "id": "ep-portal",
+        "name": "Kundenportal",
+        "url": "https://portal.stadtwerke-musterstadt.example/hooks/mako",
+        "owner": "api",
+        "active": true,
+        "event_types": ["de.mako.process.completed"],
+        "extensions": {},
+        "created_at": "2026-10-12T07:30:00Z",
+        "deactivated_reason": null,
+        "partner": null,
+        "previous_secret_expires_at": null,
+        "version": 3
+      }
+    ],
+    "next_cursor": null,
+    "total_estimate": null
+  },
+  "/svc/processd/api/v1/webhooks/endpoints/ep-portal/deliveries": {
+    "items": [
+      {
+        "id": "d-3",
+        "endpoint_id": "ep-portal",
+        "event_id": "ev-d-3",
+        "event_type": "de.mako.process.completed",
+        "status": "delivered",
+        "attempts": 1,
+        "last_status": 200,
+        "latency_ms": 84,
+        "last_error": null,
+        "created_at": "2026-11-04T09:12:00Z",
+        "next_attempt_at": null,
+        "ordering_key": null
+      },
+      {
+        "id": "d-2",
+        "endpoint_id": "ep-portal",
+        "event_id": "ev-d-2",
+        "event_type": "de.mako.process.completed",
+        "status": "dead_lettered",
+        "attempts": 8,
+        "last_status": 503,
+        "latency_ms": 2100,
+        "last_error": "service unavailable",
+        "created_at": "2026-11-03T16:40:00Z",
+        "next_attempt_at": null,
+        "ordering_key": null
+      },
+      {
+        "id": "d-1",
+        "endpoint_id": "ep-portal",
+        "event_id": "ev-d-1",
+        "event_type": "de.mako.process.completed",
+        "status": "delivered",
+        "attempts": 2,
+        "last_status": 200,
+        "latency_ms": 112,
+        "last_error": null,
+        "created_at": "2026-11-03T08:05:00Z",
+        "next_attempt_at": null,
+        "ordering_key": null
+      }
+    ],
+    "next_cursor": null,
+    "total_estimate": null
+  },
+  "/svc/einsd/api/v1/anlagen/ohne-mastr": {
+    "plants": []
+  },
+  "/svc/einsd/api/v1/anlagen/foerderung-auslaufend": {
+    "plants": []
+  },
+  "/svc/einsd/api/v1/anlagen/unabgerechnet/2026/10": {
+    "plants": []
   }
 }

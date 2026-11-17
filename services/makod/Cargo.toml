@@ -95,7 +95,8 @@ ecdsa              = { version = "0.17", default-features = false, features = ["
 p256               = { version = "0.14", default-features = false, features = ["ecdsa"] }
 bp256              = { version = "0.14", default-features = false, features = ["ecdsa", "arithmetic"] }
 bp384              = { version = "0.14", default-features = false, features = ["ecdsa", "arithmetic"] }
-utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
+utoipa             = { workspace = true }
+utoipa-axum        = { workspace = true }
 rmcp = { workspace = true }
 schemars = { version = "1.2.1", features = ["chrono04"] }
 governor = "0.6"
@@ -120,7 +121,7 @@ tokio        = { version = "1", features = ["full"] }
 serde_json   = { workspace = true }
 time         = { workspace = true }
 # Router-level exercise of the :8090 auth layer (ServiceExt::oneshot).
-tower        = "0.5"
+tower        = { workspace = true }
 # The reader of the INVOIC facts BO4E has no field for: the inbound adapter's
 # `ZusatzAttribut` names are held to its constants.
 invoic-checker = { workspace = true }

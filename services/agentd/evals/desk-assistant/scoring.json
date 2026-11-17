@@ -1,0 +1,11 @@
+{
+  "fields": [
+    "/vorschlag/aktion",
+    "/vorschlag/antwortcode",
+    "/vorschlag/befund"
+  ],
+  "escalation": {
+    "pointer": "/vorschlag",
+    "equals": null
+  }
+}

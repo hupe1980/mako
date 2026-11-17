@@ -39,10 +39,6 @@
 //! [webhook]
 //! inbound_secret = "env:INBOUND_WEBHOOK_SECRET"
 //!
-//! [subscription]
-//! webhook_url   = "http://processd:8580/webhook"
-//! subscriber_id = "processd"
-//!
 //! [nb]
 //! auto_accept = false   # true: dispatch bestaetigen automatically on Accept
 //!
@@ -82,8 +78,6 @@ pub struct Config {
     #[serde(default)]
     pub webhook: WebhookConfig,
     #[serde(default)]
-    pub subscription: SubscriptionConfig,
-    #[serde(default)]
     pub nb: NbConfig,
     #[serde(default)]
     pub lf: LfConfig,
@@ -101,6 +95,11 @@ pub struct Config {
     /// `[sperr]` — the Sperr-/Entsperrauftrag queue's ERP notices (NB role).
     #[serde(default)]
     pub sperr: SperrConfig,
+    /// `[subscriptions]` — the webhook endpoints every plain CloudEvent on
+    /// `event_outbox` fans out to, registered at `/api/v1/webhooks/endpoints`;
+    /// `[sperr] erp_webhook_url` is the endpoint `default`.
+    #[serde(default)]
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
     /// `[policy]` — processd's operator readings.
     #[serde(default)]
     pub policy: ProcessdPolicy,
@@ -166,7 +165,7 @@ impl Config {
                     .to_owned(),
             );
         }
-        // `OutboxWorker` signs only when it has a secret, so a configured ERP
+        // The endpoint `default` signs only when it has a secret, so a configured ERP
         // webhook without one ships every de.sperr.* notice unsigned — a
         // disconnection announcement the receiver cannot tell from a forged one.
         if self.sperr.erp_webhook_url.is_some() && self.sperr.erp_hmac_secret.is_none() {
@@ -288,41 +287,18 @@ pub struct VertragdConfig {
 #[serde(deny_unknown_fields)]
 pub struct WebhookConfig {
     /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
-    /// Must match `marktd`'s subscription `webhook_secret`.
+    /// Must match the `secret` of processd's endpoint in marktd's
+    /// `[[subscriptions.endpoints]]`.
     /// Leave unset to disable signature verification (dev only).
     /// Use `"env:INBOUND_WEBHOOK_SECRET"`.
     pub inbound_secret: Option<String>,
 }
 
-// ── Self-registration with marktd ─────────────────────────────────────────────
+// ── What marktd delivers ──────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SubscriptionConfig {
-    /// URL that `marktd` will POST the subscribed CloudEvents to.
-    ///
-    /// When set, `processd` calls `PUT {marktd.url}/api/v1/subscriptions/{subscriber_id}`
-    /// on startup and self-registers as a subscriber.  Retries for up to 30 s to
-    /// tolerate `marktd` startup ordering.
-    ///
-    /// Typical value: `http://<processd-service-dns>:8580/webhook`
-    pub webhook_url: Option<String>,
-    /// Unique subscription ID for this deployment.  Used as the path segment in
-    /// `PUT /api/v1/subscriptions/:id` — idempotent upsert.
-    #[serde(default = "default_subscriber_id")]
-    pub subscriber_id: String,
-    /// CloudEvent types to subscribe to — one subscription for every module.
-    ///
-    /// The default is the union every compiled module reads: narrowing it
-    /// disables a module with no other signal.
-    #[serde(default = "default_event_types")]
-    pub event_types: Vec<String>,
-}
-
-fn default_subscriber_id() -> String {
-    "processd".to_owned()
-}
-/// The union of the CloudEvent types processd's modules read.
+/// The union of the CloudEvent types processd's modules read — the
+/// `event_types` processd's endpoint in marktd's `[[subscriptions.endpoints]]`
+/// must name.
 ///
 /// - `PROCESS_INITIATED` drives the NB/LF/MSB STP modules, opens a Sperrauftrag
 ///   for ORDERS 17115/17117 and opens a row in the process read model;
@@ -330,7 +306,7 @@ fn default_subscriber_id() -> String {
 /// - the versorgung events drive the EoG gap-closure automation (§38 EnWG) —
 ///   CHANGED closes a case once regular supply resumes.
 #[must_use]
-pub fn default_event_types() -> Vec<String> {
+pub fn read_event_types() -> Vec<String> {
     [
         mako_events::mako::PROCESS_INITIATED,
         mako_events::mako::PROCESS_COMPLETED,
@@ -344,16 +320,6 @@ pub fn default_event_types() -> Vec<String> {
     ]
     .map(str::to_owned)
     .to_vec()
-}
-
-impl Default for SubscriptionConfig {
-    fn default() -> Self {
-        Self {
-            webhook_url: None,
-            subscriber_id: default_subscriber_id(),
-            event_types: default_event_types(),
-        }
-    }
 }
 
 // ── NB module ─────────────────────────────────────────────────────────────────
@@ -540,12 +506,15 @@ impl Default for ObsConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SperrConfig {
-    /// ERP webhook the `de.sperr.*` CloudEvents are delivered to.
+    /// ERP webhook the `de.sperr.*` CloudEvents are delivered to — the
+    /// webhook endpoint `default`.
     ///
     /// `sperr::events` enqueues all seven types into `event_outbox`
-    /// transactionally. Without a URL nothing drains that table: the Sperrung,
-    /// Entsperrung and Ankündigung notices accumulate undelivered, which is why
-    /// startup says so.
+    /// transactionally, and the subscription module fans each out to this URL
+    /// and to every endpoint registered at `/api/v1/webhooks/endpoints`.
+    /// Without a URL and without a registered endpoint the Sperrung,
+    /// Entsperrung and Ankündigung notices reach nobody, which is why startup
+    /// says so.
     #[serde(default)]
     pub erp_webhook_url: Option<String>,
     /// HMAC secret the outbound `de.sperr.*` deliveries are signed with.

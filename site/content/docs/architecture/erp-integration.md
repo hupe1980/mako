@@ -104,8 +104,10 @@ unconditionally, for a deployment without a secret.
 mako signs with [Standard Webhooks]. **Use a library**; the code below shows
 what one checks. All three must hold:
 
-1. The signature matches `base64(HMAC-SHA256(secret, "{id}.{timestamp}.{body}"))`.
-   Note it covers the id and the timestamp, **not the body alone**.
+1. The signature matches `base64(HMAC-SHA256(key, "{id}.{timestamp}.{body}"))`.
+   Note it covers the id and the timestamp, **not the body alone**. The key of a
+   `whsec_…` secret is the base64 after the prefix, decoded (Standard Webhooks);
+   any other secret is its own bytes.
 2. `webhook-timestamp` is within **5 minutes** of now, in either direction.
    Without this a captured request replays forever.
 3. `webhook-id` has not been seen before. Reject or ignore the duplicate.
@@ -122,8 +124,10 @@ def verify_mako_webhook(body: bytes, secret: str, headers) -> str:
     if abs(time.time() - ts) > TOLERANCE:
         raise ValueError("stale or future timestamp — possible replay")
 
+    key = (base64.b64decode(secret[len("whsec_"):]) if secret.startswith("whsec_")
+           else secret.encode())
     signed  = f"{msg_id}.{ts}.".encode() + body
-    digest  = hmac.new(secret.encode(), signed, hashlib.sha256).digest()
+    digest  = hmac.new(key, signed, hashlib.sha256).digest()
     expected = "v1," + base64.b64encode(digest).decode()
 
     # The header is a space-separated list, so a key rotation presents both.
@@ -145,8 +149,11 @@ function verifyMakoWebhook(body: Buffer, secret: string, headers: Record<string,
     throw new Error("stale or future timestamp — possible replay");
   }
 
+  const key = secret.startsWith("whsec_")
+    ? Buffer.from(secret.slice("whsec_".length), "base64")
+    : Buffer.from(secret);
   const signed = Buffer.concat([Buffer.from(`${id}.${ts}.`), body]);
-  const expected = "v1," + createHmac("sha256", secret).update(signed).digest("base64");
+  const expected = "v1," + createHmac("sha256", key).update(signed).digest("base64");
 
   const ok = headers["webhook-signature"].split(" ").some((part) =>
     part.length === expected.length &&
@@ -191,6 +198,48 @@ with `200 OK` without re-processing.
 | ERP → marktd | `PUT /api/v1/nb-contracts/{id}` | Upsert NB contract with full BO4E `Vertrag` payload |
 | processd API → ERP | `GET /obs/kpis` | BNetzA KPI report — § 7a Abs. 5 EnWG Gleichbehandlung parity, STP rates, decision times |
 
+### Webhook subscriptions
+
+`mako_service::subscriptions` is the shared subscription module: a service that
+mounts it serves these routes on its own port, each documented in its OpenAPI
+document and each behind the Cedar action `manage-subscription` (the feed:
+`read-events`).
+
+| Route | Does |
+|---|---|
+| `POST /api/v1/webhooks/endpoints` | register an `https` endpoint with `event_types` patterns (`de.vertrag.*`) and extension equality (`marktsparte`); the answer shows its `whsec_` secret once |
+| `GET`/`PUT`/`DELETE /api/v1/webhooks/endpoints/{id}` | read (with `ETag`), replace or delete under `If-Match`; deleting cancels its pending deliveries |
+| `POST …/{id}/rotate-secret` | a new secret; the previous one keeps signing for `overlap_hours` (≤ 168) |
+| `POST …/{id}/test` | send `de.mako.webhook.test` now, signed like a delivery |
+| `GET …/{id}/deliveries` | the delivery log, `status`, `last_status`, `latency_ms`, keyset-paged |
+| `POST …/{id}/replay` · `POST /api/v1/webhooks/deliveries/{id}/replay` | queue a time window (also events that never had a delivery to the endpoint) or one delivery again |
+| `GET /api/v1/events` | the service's outbox as a feed, in commit order, `type` pattern, keyset-paged |
+
+A delivery carries `webhook-id` (the CloudEvent `id`, the deduplication key),
+a per-attempt `webhook-timestamp` and one `v1,` signature per active secret,
+computed with the key the `whsec_` secret encodes, as every Standard Webhooks
+library does. Deliveries of one ordering key — the event's `subject`, unless
+the emitter names another — reach an endpoint in commit order; other keys
+never wait, and a dead-lettered delivery stops holding its key back. A
+`410 Gone` deactivates the endpoint. An API endpoint naming a loopback,
+private or link-local address, as written or as resolved at delivery, is
+refused with `endpoint_url_not_allowed`; redirects are failures. The URL the
+service's config names is the endpoint `default`: listed, delivered to and
+replayable, and refused for writes with `endpoint_config_owned`. An
+in-cluster receiver — another mako service, whose private address the API
+refuses — is a `[[subscriptions.endpoints]]` entry (`name`, `url`, `secret`,
+which may be `env:VAR`, `event_types`, `extensions`), config-owned the same way
+and deactivated once the config drops it; the receiver registers nothing. A partner
+credential sees only its own endpoints, and they receive only events whose
+`vertriebspartner` extension names it. Events stay replayable for
+`[subscriptions] retention_days` (default 30); older is `outside_retention`,
+naming `oldest_replayable`.
+
+Every list answers `{items, next_cursor, total_estimate?}`: `limit` defaults
+to 50 and above 200 is refused with `limit_too_large`, and a cursor carried to
+another filter is refused with `cursor_invalid`. The types and the schema of
+each type's `data` are in the [event catalog](@/docs/reference/events.md).
+
 ### ERP-facing integration topology
 
 The services an ERP integration touches directly; the full mesh is in
@@ -230,9 +279,10 @@ graph TB
     ERP -.->|"GET /api/v1/offene-posten<br/>GET /api/v1/trial-balance"| accountingd
 ```
 
-`marktd`'s fan-out is persist-before-fan-out: an event lands in `event_log`
-before any delivery, and each per-subscriber delivery is tracked, retried and
-dead-lettered in `event_delivery`.
+`marktd`'s fan-out is persist-before-fan-out: an event lands in its
+`event_outbox` with the write that caused it, and each per-endpoint delivery is
+tracked, retried and dead-lettered by the [webhook module](#webhook-subscriptions);
+the other services receive it as config-owned endpoints.
 
 ### Delivery pipeline
 
@@ -304,10 +354,10 @@ against a settled invoice whose REMADV never left.
 Payment events use `source: "urn:mako:invoicd:tenant:{tenant}"` and `subject: "{process_id}"`.
 
 **Durable at-least-once.** The event is enqueued in `event_outbox` with the
-receipt's dispatch stamp and delivered by the `mako_service::outbox` worker: a
-transport error, `429` or `5xx` is retried (30 s × 4ⁿ capped at 2 h,
-dead-lettered after 8 attempts); any other `4xx` dead-letters at once. Track the
-`invoicd_erp_dead_lettered_total` gauge.
+receipt's dispatch stamp and delivered to the endpoint `default`
+(`[erp] webhook_url`) and every other matching endpoint by the
+[webhook module](#webhook-subscriptions); a dead-lettered delivery shows in
+`GET /api/v1/webhooks/endpoints/{id}/deliveries?status=failed`.
 
 **Request signing:** when `[erp] hmac_secret` is configured, every POST includes
 [Standard Webhooks] headers computed over `{webhook-id}.{webhook-timestamp}.{body}`.

@@ -1,9 +1,6 @@
 //! The router state every core handler receives.
 
-use crate::pg::{
-    PgCorrelationIndex, PgMaloRepository, PgMeloRepository, PgPartnerRepository,
-    PgSubscriptionRepository,
-};
+use crate::pg::{PgCorrelationIndex, PgMaloRepository, PgMeloRepository, PgPartnerRepository};
 
 /// The repositories and identity behind the core routes, passed to handlers as
 /// `State<Arc<AppState>>`.
@@ -17,8 +14,6 @@ pub struct AppState {
     pub malo_repo: PgMaloRepository,
     /// MeLo master data.
     pub melo_repo: PgMeloRepository,
-    /// Webhook subscriptions.
-    pub subscription_repo: PgSubscriptionRepository,
     /// Process correlation index.
     pub correlation_index: PgCorrelationIndex,
     /// Market partners.
@@ -30,7 +25,4 @@ pub struct AppState {
     /// is compared against the caller's `mako_tenant` claim and written on
     /// tenant-scoped rows, never parsed.
     pub tenant: String,
-    /// `[webhook] allow_loopback_subscribers` — a subscriber endpoint on a
-    /// loopback host is admitted (`just dev`).
-    pub allow_loopback_subscribers: bool,
 }

@@ -18,6 +18,11 @@
 //! | `approve_queue_entry`       | Approve a pending queue entry (dispatch its answer) |
 //! | `reject_queue_entry`        | Reject a pending queue entry (dispatch its refusal) |
 //! | `rehearse_decision`         | A decision rehearsed: the route's checks and the body it would send, nothing claimed or sent |
+//! | `list_klaerfaelle`          | Open Klärfälle of the caller's Marktrollen, the earliest due date first |
+//! | `get_klaerfall`             | One Klärfall with its history (typed `KlaerfallAkte`) |
+//! | `assign_klaerfall`          | Take a Klärfall, or release it |
+//! | `resolve_klaerfall`         | Close a Klärfall without a market message, with a reason |
+//! | `dispatch_klaerfall`        | „Korrigieren & senden": the correcting command through the Freigabe path |
 //! | `get_counterparty_record`   | One counterparty's Akte in one role over a period (typed `CounterpartyRecord`) |
 //! | `list_counterparties`       | Every counterparty and role that owed answers in a period |
 //!
@@ -115,6 +120,43 @@ pub struct ProcessdMcpState {
     pub makod_api_key: secrecy::SecretString,
     /// The operator policy and posture the runner built at boot.
     pub policy: mako_service::policy::PolicyReport,
+    /// The webhook endpoints and deliveries the two `list_webhook_*` tools read.
+    pub subscriptions: mako_service::subscriptions::Subscriptions,
+}
+
+/// A page of the webhook endpoints.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListWebhookEndpointsParams {
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+/// A page of one endpoint's deliveries.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListWebhookDeliveriesParams {
+    /// The endpoint's id.
+    pub endpoint_id: String,
+    /// `all` (default), `pending`, `delivered` or `failed`.
+    pub status: Option<String>,
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+/// A refusal of the shared subscription store as an MCP error: a caller's
+/// mistake is `invalid_params`, anything else `internal_error`.
+fn api_to_mcp(e: &mako_service::ApiError) -> McpError {
+    let text = e.to_string();
+    if e.status().is_client_error() {
+        McpError::invalid_params(text, None)
+    } else {
+        McpError::internal_error(text, None)
+    }
 }
 
 impl ProcessdMcpState {
@@ -223,6 +265,38 @@ pub struct ListKlaerfaelleParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetKlaerfallParams {
+    /// UUID of the Klärfall.
+    pub id: String,
+}
+
+/// Parameters of the three tools that work a Klärfall.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct KlaerfallActionParams {
+    /// UUID of the Klärfall.
+    pub id: String,
+    /// Who acts, as **verified by the MCP middleware** — never the caller;
+    /// whatever arrives here is overwritten.
+    #[serde(default)]
+    pub decided_by: Option<String>,
+    /// `assign_klaerfall`: who takes the case; absent releases it.
+    #[serde(default)]
+    pub assignee: Option<String>,
+    /// `dispatch_klaerfall`: the command to send; absent sends the proposal.
+    #[serde(default)]
+    pub befehl: Option<String>,
+    /// `resolve_klaerfall`: why the case closes without a message (required).
+    /// `dispatch_klaerfall`: why another command than the proposal is sent.
+    #[serde(default)]
+    pub begruendung: Option<String>,
+    /// `dispatch_klaerfall`: what the decision states beside the Freigabe's
+    /// frozen answer (`antwort_code`, `antwort_tree`, `bemerkung`, …), as
+    /// `approve_queue_entry` takes it.
+    #[serde(default)]
+    pub antwort: Option<crate::pg::approval::OperatorAnswer>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueueActionParams {
     /// UUID of the approval queue entry to approve or reject.
     pub id: String,
@@ -322,6 +396,59 @@ impl ProcessdMcpHandler {
     }
 }
 
+impl ProcessdMcpHandler {
+    /// One Klärfall step, through processd's own REST route over the loopback
+    /// so its Cedar checks — the step's action and, for a dispatch, the
+    /// command's own — run rather than being bypassed. The verified caller
+    /// rides as `X-Decided-By`.
+    async fn case_action(
+        &self,
+        route: crate::server::QueueRoute,
+        p: &KlaerfallActionParams,
+        body: &serde_json::Value,
+        verb: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let Ok(id) = p.id.parse::<uuid::Uuid>() else {
+            return Err(McpError::invalid_params("id must be a valid UUID", None));
+        };
+        let Some(decided_by) = p.decided_by.as_deref() else {
+            return Err(McpError::internal_error(
+                "this step is not attributable to a verified caller",
+                None,
+            ));
+        };
+        let Some(base) = self_base_url(&self.state.makod_url) else {
+            return Err(McpError::internal_error(
+                "cannot derive processd's own base URL from the configured makod_url",
+                None,
+            ));
+        };
+        let up = mako_service::http::Upstream::new(
+            "processd",
+            &base,
+            Some(self.state.makod_api_key.clone()),
+            mako_service::http::default_client(),
+        );
+        match route
+            .request(&up, id)
+            .header("X-Decided-By", decided_by)
+            .json(body)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                let akte: serde_json::Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                Ok(CallToolResult::structured(akte))
+            }
+            Ok(resp) => Ok(decision_refused(verb, resp).await),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+}
+
 #[tool_router]
 impl ProcessdMcpHandler {
     fn new(state: Arc<ProcessdMcpState>) -> Self {
@@ -341,6 +468,69 @@ impl ProcessdMcpHandler {
         ContentBlock::json(serde_json::to_value(&self.state.policy).unwrap_or_default())
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// The agent twin of `GET /api/v1/webhooks/endpoints`.
+    #[tool(
+        description = "List the webhook endpoints processd delivers its CloudEvents (de.sperr.*) to, a page ordered by name: url, event-type patterns, extension filters, owner (`config` for the endpoint `default`, the configured [sperr] erp_webhook_url; `api` for one registered through REST), whether it is active and the last delivery status. Secrets are never listed. Page on `next_cursor`.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
+    )]
+    async fn list_webhook_endpoints(
+        &self,
+        Parameters(p): Parameters<ListWebhookEndpointsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        let endpoints = self
+            .state
+            .subscriptions
+            .list_endpoints(None, &page)
+            .await
+            .map_err(|e| api_to_mcp(&e))?;
+        serde_json::to_value(endpoints)
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    /// The agent twin of `GET /api/v1/webhooks/endpoints/{id}/deliveries`.
+    #[tool(
+        description = "List one webhook endpoint's deliveries, newest first: the CloudEvent id and type, attempts, the last HTTP status, latency and error, and whether it was delivered or dead-lettered. `status` narrows to `pending`, `delivered` or `failed`. Page on `next_cursor`.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Delivery>>()
+    )]
+    async fn list_webhook_deliveries(
+        &self,
+        Parameters(p): Parameters<ListWebhookDeliveriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use mako_service::subscriptions::DeliveryFilter;
+        let status = match p.status.as_deref().unwrap_or("all") {
+            "all" => DeliveryFilter::All,
+            "pending" => DeliveryFilter::Pending,
+            "delivered" => DeliveryFilter::Delivered,
+            "failed" => DeliveryFilter::Failed,
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("status {other:?} is none of all, pending, delivered, failed"),
+                    None,
+                ));
+            }
+        };
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        let deliveries = self
+            .state
+            .subscriptions
+            .list_deliveries(None, &p.endpoint_id, status, &page)
+            .await
+            .map_err(|e| api_to_mcp(&e))?;
+        serde_json::to_value(deliveries)
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
     #[tool(
@@ -527,6 +717,110 @@ Read-only.",
             serde_json::to_value(cases)
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?,
         ))
+    }
+
+    #[tool(
+        description = "One Klärfall by its UUID, with its history (`verlauf`: who assigned, \
+resolved or dispatched it, the proposed command beside the one sent, the reason). The case is in \
+the shape `list_klaerfaelle` lists it — `korrektur.befehl` is the correcting command where the \
+case's answer is one a Freigabe sends, `korrektur.erlaubt` the commands a dispatch may send \
+instead; null escalates. Every field is a table lookup. Read-only.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<crate::klaerfall::KlaerfallAkte>()
+    )]
+    async fn get_klaerfall(
+        &self,
+        Parameters(params): Parameters<GetKlaerfallParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        let rollen = self.state.caller_roles(&parts.headers)?;
+        let Ok(id) = params.id.parse::<uuid::Uuid>() else {
+            return Err(McpError::invalid_params("id must be a valid UUID", None));
+        };
+        match crate::klaerfall::get(
+            &self.state.pool,
+            &self.state.tenant,
+            id,
+            &rollen,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await
+        {
+            Ok(Some(akte)) => Ok(CallToolResult::structured(
+                serde_json::to_value(akte)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+            )),
+            Ok(None) => Err(McpError::invalid_params(
+                format!("Klärfall {id} not found"),
+                None,
+            )),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Take a Klärfall (`assignee`), or release it (no `assignee`). Journaled \
+against the verified caller. The owner stays the Marktrolle either way.",
+        annotations(
+            read_only_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn assign_klaerfall(
+        &self,
+        Parameters(p): Parameters<KlaerfallActionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = serde_json::json!({ "assignee": p.assignee });
+        self.case_action(crate::server::KLAERFALL_ASSIGN, &p, &body, "assign")
+            .await
+    }
+
+    #[tool(
+        description = "Close a Klärfall without a market message; `begruendung` is required and \
+journaled against the verified caller. To send the correcting command use `dispatch_klaerfall`.",
+        annotations(
+            read_only_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn resolve_klaerfall(
+        &self,
+        Parameters(p): Parameters<KlaerfallActionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = serde_json::json!({ "begruendung": p.begruendung.clone().unwrap_or_default() });
+        self.case_action(crate::server::KLAERFALL_RESOLVE, &p, &body, "resolve")
+            .await
+    }
+
+    #[tool(
+        description = "„Korrigieren & senden“: send a Klärfall's correcting command to makod \
+through the Freigabe decision path — the frozen answer, the code against its \
+Entscheidungsbaum and makod's pre-send check, whose refusal comes back in place. Absent \
+`befehl` sends `korrektur.befehl`; another command of `korrektur.erlaubt` needs a \
+`begruendung`. The proposal, the command sent and the reason are journaled against the \
+verified caller. Irreversible: the market message cannot be withdrawn.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn dispatch_klaerfall(
+        &self,
+        Parameters(p): Parameters<KlaerfallActionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = serde_json::json!({
+            "befehl": p.befehl,
+            "begruendung": p.begruendung,
+            "antwort": p.antwort.clone().unwrap_or_default(),
+        });
+        self.case_action(crate::server::KLAERFALL_DISPATCH, &p, &body, "dispatch")
+            .await
     }
 
     #[tool(
@@ -901,6 +1195,7 @@ fn instructions() -> String {
         "processd MCP — NB Anmeldung STP decisions, §20 EnWG compliance, LF E_0624 queue.\n\
          NB: `list_decisions`, `get_decision`, `get_stp_rate`, `get_stp_breakdown_by_erc`, `list_affiliate_decisions`.\n\
          LF: `list_pending_approvals`, `get_queue_entry`, `approve_queue_entry`, `reject_queue_entry`.\n\
+         Webhooks: `list_webhook_endpoints`, `list_webhook_deliveries` — where the CloudEvents go, failed deliveries included.\n\
          Prompts: `triage-nb-rejection`, `investigate-stp-drop`, `triage-msb-wechsel`, `trigger-lieferbeginn`.\n\n",
     );
     text.push_str(&crate::obs::mcp::instructions());
@@ -933,7 +1228,14 @@ fn tool_action(name: &str) -> Option<&'static str> {
         | "get_stp_breakdown_by_erc"
         | "list_affiliate_decisions" => "read-decisions",
         "list_pending_approvals" | "get_queue_entry" | "rehearse_decision" => "read-queue",
-        "list_klaerfaelle" => "read-case",
+        "list_klaerfaelle" | "get_klaerfall" => "read-case",
+        // The same action as their REST twins under `/api/v1/webhooks`.
+        "list_webhook_endpoints" | "list_webhook_deliveries" => "manage-subscription",
+        "assign_klaerfall" => "assign-case",
+        "resolve_klaerfall" => "resolve-case",
+        // Irreversible: sends a market message through the Freigabe path; the
+        // route also checks the command's own `decide-queue`.
+        "dispatch_klaerfall" => "dispatch-case",
         // Irreversible: dispatches `gpke.nb-lieferende.bestaetigen` (PID 55008)
         // or `geli.stornierung.initiieren`. The market message cannot be
         // withdrawn once sent.
@@ -1037,7 +1339,10 @@ async fn mcp_auth_middleware(
             // `McpIdentity` reaches Axum extensions, which an MCP tool never
             // reads. Whatever arrived under this key is overwritten, so a
             // caller cannot name somebody else as the decider.
-            if action == "decide-queue" {
+            if matches!(
+                action,
+                "decide-queue" | "assign-case" | "resolve-case" | "dispatch-case"
+            ) {
                 let Some(identity) = state.auth.identify(&parts.headers) else {
                     return mako_service::ApiError::forbidden(
                         "this decision cannot be attributed to a verified caller, and an \
@@ -1208,6 +1513,29 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("mcp.snapshot.json");
         if let Err(e) = mako_service::mcp_snapshot::compare(&tools, &path) {
             panic!("{e}");
+        }
+    }
+
+    /// `list_webhook_endpoints` and `list_webhook_deliveries` answer with the
+    /// shape their REST twins document, and need the action those check.
+    #[tokio::test]
+    async fn the_webhook_tools_are_twins_of_the_rest_reads() {
+        let doc =
+            serde_json::to_value(crate::openapi::document()).expect("the document serializes");
+        let tools = ProcessdMcpHandler::tool_router().list_all();
+        for (tool, path) in [
+            ("list_webhook_endpoints", "/api/v1/webhooks/endpoints"),
+            (
+                "list_webhook_deliveries",
+                "/api/v1/webhooks/endpoints/{id}/deliveries",
+            ),
+        ] {
+            mako_service::mcp::conformance::assert_rest_twin(&tools, tool, &doc, path);
+            assert_eq!(
+                tool_action(tool),
+                Some(mako_service::subscriptions::MANAGE),
+                "{tool}"
+            );
         }
     }
 

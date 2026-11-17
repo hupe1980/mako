@@ -6,6 +6,18 @@ use en16931_formats::zugferd::Profile;
 
 // ── Records ────────────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing",
+    tag = "records",
+    params(
+        RecordsQuery,
+    ),
+    responses(
+        (status = 200, description = "Billing records, newest first", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+    )
+)]
 pub async fn list_records(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -34,7 +46,8 @@ pub async fn list_records(
     Ok(Json(rows))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct RecordsQuery {
     pub malo_id: Option<String>,
     pub lf_mp_id: Option<String>,
@@ -46,6 +59,19 @@ pub struct RecordsQuery {
     pub limit: Option<i64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/{id}",
+    tag = "records",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    responses(
+        (status = 200, description = "The record with its BO4E Rechnung", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+    )
+)]
 pub async fn get_record(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -170,6 +196,20 @@ fn papier_oder_verweigerung(
 }
 
 /// `GET /api/v1/billing/{id}/xrechnung` — ZUGFeRD 2.3 / XRechnung 3.0 CII XML.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/{id}/xrechnung",
+    tag = "documents",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    responses(
+        (status = 200, description = "EN 16931 CII XML rendered from the stored model", content_type = "application/xml", body = String),
+        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+        (status = 422, description = "No stored EN 16931 model, or one that does not satisfy its profile", body = crate::openapi::Problem),
+    )
+)]
 pub async fn get_xrechnung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -436,6 +476,22 @@ pub async fn render_record(
 ///
 /// A **draft** carries neither header: it re-renders with whatever template is
 /// current, so it is not the same document twice and must not be cached.
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/{id}/pdf",
+    tag = "documents",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    responses(
+        (status = 200, description = "ZUGFeRD PDF/A-3 with the CII XML embedded", content_type = "application/pdf", body = Vec<u8>),
+        (status = 304, description = "A pinned record's PDF is unchanged (`If-None-Match`)"),
+        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+        (status = 422, description = "The record cannot be rendered", body = crate::openapi::Problem),
+        (status = 502, description = "An upstream service the calculation reads did not answer", body = crate::openapi::Problem),
+    )
+)]
 pub async fn get_invoice_pdf(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -607,6 +663,22 @@ async fn render_bescheid(
 /// recipient's channels, idempotent on the Rechnungsnummer. A **draft** the
 /// risk gate is holding is refused: it has no booked receivable, so sending it
 /// would demand money the ledger does not record as owed.
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/{id}/versenden",
+    tag = "documents",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    responses(
+        (status = 202, description = "Recorded in outputd for 8 years and queued on the customer's channels", body = serde_json::Value),
+        (status = 403, description = "Cedar `issue-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+        (status = 409, description = "A draft the risk gate holds", body = crate::openapi::Problem),
+        (status = 422, description = "The record cannot be rendered", body = crate::openapi::Problem),
+        (status = 502, description = "An upstream service the calculation reads did not answer", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_invoice_versenden(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,

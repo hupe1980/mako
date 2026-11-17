@@ -23,6 +23,9 @@
 //                          customer on their channels
 //   "read-policy"        — GET  /api/v1/policy — the operator policy report
 //   "read-config"        — GET  /admin/einrichtung — the configuration findings
+//   "manage-subscription" — /api/v1/webhooks/** — webhook endpoints, deliveries,
+//                          replay; the `list_webhook_*` MCP tools
+//   "read-events"        — GET  /api/v1/events — the emitted events as a feed
 //
 // The MCP surface is authenticated separately by `[mcp]` (McpAuth) and is
 // read-only by construction, so it carries no Cedar action. The VPP dispatch
@@ -88,6 +91,23 @@ permit(
     (context.principal_roles.contains("LF") ||
      context.principal_roles.contains("MSB") ||
      context.principal_roles.contains("ESA"))
+};
+
+// ── Webhooks: an operator capability ─────────────────────────────────────────
+// An endpoint receives every invoice event that matches its filter — amounts,
+// Marktlokationen, Lieferanten — so registering one is an outbound data-export
+// decision, and a test delivery reports the target's HTTP status, which makes
+// it a network probe. The event feed discloses the same. ADMIN alone.
+permit(
+    principal,
+    action in [
+        Action::"manage-subscription",
+        Action::"read-events"
+    ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("ADMIN")
 };
 
 // ── On four-eyes, and why it is not here ──────────────────────────────────────

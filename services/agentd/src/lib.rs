@@ -25,6 +25,7 @@
 pub mod builtin;
 pub mod config;
 pub mod handlers;
+pub mod openapi;
 pub mod plane;
 pub mod skills;
 

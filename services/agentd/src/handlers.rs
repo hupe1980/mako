@@ -293,7 +293,7 @@ fn admission_response(event_id: &str, event_type: &str, accepted: &[Accepted]) -
 /// What a person asks a run for. Every field is named: an unknown one is a
 /// `422`, because a misspelt `agent` read as absent would start every
 /// subscribing specialist instead of the one named.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunRequest {
     /// The specialist to run; absent, every one subscribed to `event_type`.
@@ -305,6 +305,20 @@ pub struct RunRequest {
     pub input: Value,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/runs",
+    tag = "runs",
+    params(("Idempotency-Key" = Option<String>, Header, description = "A retried request with the same key is answered with the runs it already admitted")),
+    request_body = RunRequest,
+    responses(
+        (status = 202, description = "The runs admitted, each with its journal key", body = serde_json::Value),
+        (status = 403, description = "Cedar `api:run.start` refused", body = ApiError),
+        (status = 404, description = "No activated specialist has that name", body = ApiError),
+        (status = 422, description = "No subscribing specialist can act on the request", body = ApiError),
+        (status = 429, description = "No specialist could be admitted now; resend", body = ApiError),
+    ),
+)]
 pub async fn start_runs(
     State(state): State<Arc<AppState>>,
     claims: Claims,
@@ -393,6 +407,15 @@ pub async fn start_runs(
 /// `GET /api/v1/hinweise` — the open worklist rows the caller's roles may
 /// answer, each filed under its Anker: the Desk's Hinweise. Read under the
 /// verb the oversight worklist is.
+#[utoipa::path(
+    get,
+    path = "/api/v1/hinweise",
+    tag = "desk",
+    responses(
+        (status = 200, description = "The open worklist rows the caller's roles may answer, each under its Anker", body = serde_json::Value),
+        (status = 403, description = "Cedar `api:task.list` refused", body = ApiError),
+    ),
+)]
 pub async fn hinweise(
     State(state): State<Arc<AppState>>,
     claims: Claims,
@@ -413,6 +436,17 @@ pub async fn hinweise(
 /// figures. Read under the verb the oversight run view is (`RUN_READ`); a run
 /// a person started is read only by that person, a run nobody started by
 /// anyone holding the verb.
+#[utoipa::path(
+    get,
+    path = "/api/v1/runs/{run}/antwort",
+    tag = "runs",
+    params(("run" = String, Path, description = "The run id the admission answered")),
+    responses(
+        (status = 200, description = "The run's answer, sentence by sentence, each with the call it cites", body = serde_json::Value),
+        (status = 403, description = "Cedar `api:run.read` refused, or the run is another person's", body = ApiError),
+        (status = 404, description = "No such run", body = ApiError),
+    ),
+)]
 pub async fn answer(
     State(state): State<Arc<AppState>>,
     claims: Claims,
@@ -496,6 +530,21 @@ async fn zugriff(
 /// started only for that person.
 ///
 /// [`Answer`]: crate::plane::Answer
+#[utoipa::path(
+    get,
+    path = "/api/v1/runs/{run}/schritte",
+    tag = "runs",
+    params(
+        ("run" = String, Path, description = "The run id the admission answered"),
+        ("Last-Event-ID" = Option<String>, Header, description = "Continue after this journal sequence"),
+    ),
+    responses(
+        (status = 200, description = "Server-Sent Events: `schritt` per settled tool call, then `antwort` or `abgebrochen`", content_type = "text/event-stream", body = String),
+        (status = 403, description = "Cedar `api:run.read` refused, or the run is another person's", body = ApiError),
+        (status = 404, description = "No such run", body = ApiError),
+        (status = 422, description = "`Last-Event-ID` repeated or not an id this stream sent", body = ApiError),
+    ),
+)]
 pub async fn schritte(
     State(state): State<Arc<AppState>>,
     claims: Claims,
@@ -654,6 +703,19 @@ const STOPP_GRUND: &str = "stopped by the person who started the run";
 /// stream ends with `abgebrochen` and the answer read reports `cancelled`. `202`, because
 /// the stop is recorded, not yet carried out. Only the starter stops a run
 /// here; anyone else's stop is the oversight surface's `RUN_CANCEL`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/runs/{run}/stopp",
+    tag = "runs",
+    params(("run" = String, Path, description = "The run id the admission answered")),
+    request_body(content = Option<serde_json::Value>, description = "No body, or an empty object"),
+    responses(
+        (status = 202, description = "The stop is recorded and acted on before the run's next effect", body = serde_json::Value),
+        (status = 403, description = "Cedar `api:run.start` refused, or the caller did not start this run", body = ApiError),
+        (status = 404, description = "No such run", body = ApiError),
+        (status = 409, description = "The run has already concluded", body = ApiError),
+    ),
+)]
 pub async fn stopp(
     State(state): State<Arc<AppState>>,
     claims: Claims,
@@ -682,7 +744,8 @@ pub async fn stopp(
 
 /// `?freigabe=<id>,…&disput=<id>,…&buchung=<key>,…` — the entries, per kind, whose waiting
 /// proposal is asked for.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub struct VorschlaegeQuery {
     #[serde(default)]
@@ -706,6 +769,17 @@ pub type Vorschlaege = std::collections::BTreeMap<
 /// waiting proposal, under its kind: its run's answer (`running`, or
 /// concluded with its checked `vorschlag`), or `null` where none was
 /// admitted. Read under the verb a run's answer is; it never starts a run.
+#[utoipa::path(
+    get,
+    path = "/api/v1/vorschlaege",
+    tag = "desk",
+    params(VorschlaegeQuery),
+    responses(
+        (status = 200, description = "Each entry's waiting proposal per kind and id, `null` where none was admitted", body = serde_json::Value),
+        (status = 403, description = "Cedar `api:run.read` refused", body = ApiError),
+        (status = 422, description = "More entries than one request reads", body = ApiError),
+    ),
+)]
 pub async fn vorschlaege(
     State(state): State<Arc<AppState>>,
     claims: Claims,
@@ -791,6 +865,19 @@ impl BewertungRequest {
 /// person replaces theirs; the judged run is never changed. A Freigabe
 /// proposal's fate is read off processd's decided entry; the `vorschlag` sent
 /// here is kept only as the verdict's rationale (`Plane::bewerten`).
+#[utoipa::path(
+    post,
+    path = "/api/v1/runs/{run}/bewertung",
+    tag = "runs",
+    params(("run" = String, Path, description = "The run id the admission answered")),
+    request_body(content = serde_json::Value, description = "Exactly one of `hilfreich` (with an optional `begruendung`) or `vorschlag`"),
+    responses(
+        (status = 204, description = "The verdict is recorded under the caller's name"),
+        (status = 403, description = "Cedar `api:run.assess` refused", body = ApiError),
+        (status = 409, description = "The run cannot be judged", body = ApiError),
+        (status = 422, description = "Neither or both of `hilfreich` and `vorschlag`", body = ApiError),
+    ),
+)]
 pub async fn bewerten(
     State(state): State<Arc<AppState>>,
     claims: Claims,
@@ -815,7 +902,8 @@ pub async fn bewerten(
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
+/// Destroy a case's wrapping key, forget a memory subject, or both.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ErasureRequest {
     pub case_id: Option<String>,
@@ -824,6 +912,18 @@ pub struct ErasureRequest {
 }
 
 /// Destroy a case wrapping key and/or forget a memory subject.
+#[utoipa::path(
+    post,
+    path = "/api/v1/erasure",
+    tag = "erasure",
+    request_body = ErasureRequest,
+    responses(
+        (status = 200, description = "What was erased", body = serde_json::Value),
+        (status = 403, description = "Cedar `api:erasure.execute` refused", body = ApiError),
+        (status = 409, description = "This deployment holds no key ring", body = ApiError),
+        (status = 422, description = "No reason, or neither `case_id` nor `memory_subject`", body = ApiError),
+    ),
+)]
 pub async fn erase(
     State(state): State<Arc<AppState>>,
     claims: Claims,
@@ -887,6 +987,15 @@ fn erase_failure(error: EraseError) -> ApiError {
 /// advertising, and a token is not a reason to be shown it. The Agent Cards
 /// under `/.well-known/agents/{name}` stay open — a card is what an agent *is*,
 /// and carries no endpoint credential.
+#[utoipa::path(
+    get,
+    path = "/api/v1/agents",
+    tag = "agents",
+    responses(
+        (status = 200, description = "The specialists this deployment activated", body = serde_json::Value),
+        (status = 403, description = "Cedar `api:agent.list` refused", body = ApiError),
+    ),
+)]
 pub async fn list_agents(claims: Claims, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::AGENT_LIST) {
         return refused.into_response();
@@ -954,6 +1063,15 @@ pub async fn agent_card(
 ///
 /// Gated by the same verb as `/api/v1/agents`: the catalogue is the compiled
 /// set, which in a role-scoped build is the deployment's Marktrolle.
+#[utoipa::path(
+    get,
+    path = "/api/v1/agents/catalog",
+    tag = "agents",
+    responses(
+        (status = 200, description = "Every specialist compiled into this binary, activated or not", body = serde_json::Value),
+        (status = 403, description = "Cedar `api:agent.list` refused", body = ApiError),
+    ),
+)]
 pub async fn agents_catalog(
     claims: Claims,
     State(state): State<Arc<AppState>>,

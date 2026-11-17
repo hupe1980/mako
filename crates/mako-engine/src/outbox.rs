@@ -384,6 +384,17 @@ pub struct OutboxMessage {
     /// `makoakteur` extension, so the process's terminal notification states
     /// how the process was handled even when the person's act enqueued none.
     pub akteur: crate::envelope::Eingriffsklasse,
+
+    /// The answer the write that caused this message records — the Antwortcode
+    /// and Codeliste of the latest event up to and including the causing one
+    /// that carries one ([`EventEnvelope::antwort`]), or `None`.
+    ///
+    /// The ERP notification reads it, so a process's completion states the
+    /// code it ended on without every workflow restating it in its payload.
+    ///
+    /// [`EventEnvelope::antwort`]: crate::envelope::EventEnvelope::antwort
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antwort: Option<crate::envelope::Antwortcode>,
 }
 
 /// Materialise `pending` into the [`OutboxMessage`] a store enqueues, from the
@@ -425,6 +436,10 @@ pub(crate) fn materialise(
         workflow_name: env.workflow_id.name.clone(),
         format_version: Some(env.workflow_id.format_version.clone()),
         akteur: pending.eingriff.unwrap_or_else(|| env.akteur.klasse()),
+        antwort: envelopes[..=idx]
+            .iter()
+            .rev()
+            .find_map(|e| e.antwort.clone()),
     }
 }
 
@@ -474,6 +489,7 @@ impl OutboxMessage {
             format_version: None,
             trace_context: crate::trace_ctx::current().map(Into::into),
             akteur: crate::envelope::Eingriffsklasse::System,
+            antwort: None,
         }
     }
 
@@ -541,6 +557,7 @@ pub fn process_failed_notice(undelivered: &OutboxMessage, reason: &str) -> Outbo
         format_version: undelivered.format_version.clone(),
         trace_context: undelivered.trace_context.clone(),
         akteur: undelivered.akteur,
+        antwort: None,
     }
 }
 

@@ -73,7 +73,7 @@ impl PgEinwilligungRepository {
     ///
     /// # Why `FOR UPDATE SKIP LOCKED`
     ///
-    /// The claim is the same shape [`crate::fanout`] uses on `event_log`. A row
+    /// The claim is the shape the subscription fan-out uses on `event_outbox`. A row
     /// another transaction already holds — a second replica's sweep, or a
     /// customer's Widerruf arriving at the same instant — is left to that
     /// transaction rather than waited on, because the wait would now last for
@@ -220,7 +220,7 @@ impl PgEinwilligungRepository {
                 "location_ids": rec.location_ids,
             }),
         );
-        crate::outbox::enqueue(&mut *tx, &erteilt)
+        crate::outbox::enqueue(&mut tx, &erteilt)
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?;
 

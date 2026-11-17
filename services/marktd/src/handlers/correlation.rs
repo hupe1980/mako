@@ -5,6 +5,7 @@
 //!   GET /api/v1/correlations            (query by erp_order_id, malo_id, status)
 
 use crate::state::AppState;
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -24,7 +25,8 @@ use mako_service::cedar::CedarEnforcer;
 
 use super::{Claims, IntoMdmResponse as _};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct CorrelationQuery {
     pub erp_order_id: Option<String>,
     pub malo_id: Option<String>,
@@ -32,6 +34,18 @@ pub struct CorrelationQuery {
 }
 
 /// `GET /api/v1/correlations/:process_id`
+#[utoipa::path(
+    get,
+    path = "/api/v1/correlations/{id}",
+    tag = "correlation",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_correlation(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -59,6 +73,17 @@ pub async fn get_correlation(
 }
 
 /// `GET /api/v1/correlations`
+#[utoipa::path(
+    get,
+    path = "/api/v1/correlations",
+    tag = "correlation",
+    params(CorrelationQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_correlations(
     State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

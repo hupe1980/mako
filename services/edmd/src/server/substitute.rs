@@ -108,6 +108,20 @@ pub struct SubstituteRequest {
 ///    and every span that was refused.
 ///
 /// **Cedar action**: `write-meter-reads`
+#[utoipa::path(
+    post,
+    path = "/api/v1/meter-reads/{malo_id}/substitute",
+    tag = "ingest",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `SubstituteRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+    )
+)]
 pub async fn post_substitute_values(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

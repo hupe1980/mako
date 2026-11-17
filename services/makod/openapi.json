@@ -1,0 +1,1803 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "makod — MaKo process engine",
+    "description": "German energy market process engine (BDEW EDI@Energy / MaKo).\n\nImplements the full EDIFACT ingest pipeline, ERP command gateway, and administrative APIs for MaLo cache and partner directory management.",
+    "contact": {
+      "name": "EDI-Energy-RS",
+      "url": "https://github.com/hupe1980/edi-energy-rs"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0"
+    },
+    "version": "0.38.0"
+  },
+  "paths": {
+    "/admin/malo/stats": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /admin/malo/stats` — per-tenant cache statistics.",
+        "operationId": "handle_stats",
+        "responses": {
+          "200": {
+            "description": "Cache statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/admin/malo/{malo_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /admin/malo/{malo_id}` — retrieve a cached MaLo record.",
+        "operationId": "handle_get",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "MaLo record found"
+          },
+          "400": {
+            "description": "X-Tenant-Id sent more than once"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Tenant mismatch"
+          },
+          "404": {
+            "description": "MaLo not found"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`PUT /admin/malo/{malo_id}` — upsert a MaLo record.",
+        "operationId": "handle_put",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "MaLo record to upsert",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpsertResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Tenant mismatch"
+          },
+          "422": {
+            "description": "malo_id in path does not match maloId in body"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`DELETE /admin/malo/{malo_id}` — remove a MaLo record.",
+        "operationId": "handle_delete",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "X-Tenant-Id sent more than once"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Tenant mismatch"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/admin/partners": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /admin/partners` — list all partner records for this tenant.",
+        "operationId": "handle_list",
+        "responses": {
+          "200": {
+            "description": "List of partners",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/admin/partners/import": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`POST /admin/partners/import` — import partners from a raw PARTIN EDIFACT\ninterchange.",
+        "description": "Accepts a raw EDIFACT interchange (`Content-Type: text/plain; charset=utf-8`\nor `application/edifact`). Each PARTIN message in the interchange is parsed,\nthe sender's communication data (MP-ID, AS4 endpoint, email, phone) is\nextracted, and the result is upserted into the [`PartnerStore`].\n\nThis endpoint is idempotent — reimporting the same interchange is safe and\nwill update existing records according to the `valid_from` merge rules of\n[`PartnerRecord::merge_from_partin`].\n\nReturns a JSON summary of how many records were upserted/skipped.",
+        "operationId": "handle_import",
+        "requestBody": {
+          "description": "Raw EDIFACT PARTIN interchange",
+          "content": {
+            "text/plain; charset=utf-8": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Import result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "422": {
+            "description": "EDIFACT parse error"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/admin/partners/{mp_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /admin/partners/{mp_id}` — retrieve a single partner record.",
+        "operationId": "handle_get",
+        "parameters": [
+          {
+            "name": "mp_id",
+            "in": "path",
+            "description": "Marktpartner-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Partner record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PartnerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Partner not found"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`PUT /admin/partners/{mp_id}` — create or update a partner record.",
+        "description": "The `gln` in the path must match `record.mp_id` in the body; a mismatch is\nrejected with `400 Bad Request`.",
+        "operationId": "handle_put",
+        "parameters": [
+          {
+            "name": "mp_id",
+            "in": "path",
+            "description": "Marktpartner-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A full `PartnerRecord`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PartnerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MP-ID mismatch"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`DELETE /admin/partners/{mp_id}` — remove a partner record.",
+        "operationId": "handle_delete",
+        "parameters": [
+          {
+            "name": "mp_id",
+            "in": "path",
+            "description": "Marktpartner-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/commands": {
+      "post": {
+        "tags": [
+          "commands"
+        ],
+        "operationId": "handle_command",
+        "requestBody": {
+          "description": "ERP command envelope",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErpCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Command accepted, or the recorded response for a repeated Idempotency-Key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Cedar policy denied this command"
+          },
+          "404": {
+            "description": "No active process for the referenced business key"
+          },
+          "409": {
+            "description": "duplicate_process (adopt the returned process_id) or invalid_state"
+          },
+          "422": {
+            "description": "Unknown command, missing marktrolle, missing or reused Idempotency-Key, or an invalid payload"
+          },
+          "501": {
+            "description": "Command registered but not dispatchable in this release"
+          },
+          "503": {
+            "description": "The idempotency record could not be read; retry"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/format-candidates/{fv}/impact": {
+      "get": {
+        "tags": [
+          "format-candidates"
+        ],
+        "summary": "Which of the operator's archived messages candidate `fv` would newly\nrefuse.",
+        "description": "# Errors\n\n`invalid_format_version`, `candidate_not_found`, `candidate_invalid`,\n`archive_unavailable`, `invalid_format`.",
+        "operationId": "impact_route",
+        "parameters": [
+          {
+            "name": "fv",
+            "in": "path",
+            "description": "The candidate's directory name, fv<yyyymmdd>[_gas]",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`json` (the default) or `csv`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The impact report; text/csv on ?format=csv or Accept: text/csv",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Impact"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_format_version or invalid_format"
+          },
+          "404": {
+            "description": "candidate_not_found"
+          },
+          "422": {
+            "description": "candidate_invalid"
+          },
+          "503": {
+            "description": "archive_unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/invoic/{process_id}/rechnung": {
+      "get": {
+        "tags": [
+          "invoic"
+        ],
+        "summary": "`GET /api/v1/invoic/{process_id}/rechnung`",
+        "description": "Returns the BO4E `Rechnung` object embedded in the `WimInvoicReceived`\nevent for the given process.\n\n- **200 OK** — JSON `Rechnung` (BO4E v202607 schema)\n- **404 Not Found** — process does not exist or has no `InvoicReceived` event\n- **422 Unprocessable Entity** — `process_id` is not a valid UUID\n- **500** — the stream could not be read, or its `WimInvoicReceived` event\n  carries no `rechnung` (the adapter embeds one on every such event, so its\n  absence is a malformed stream, not an invoice that has yet to arrive)",
+        "operationId": "get_rechnung",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "The WiM billing process (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The BO4E `Rechnung` the INVOIC carried",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `ReadRechnung` denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such process, or no INVOIC received on it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`process_id` is not a UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The stream could not be read or is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/policy": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "get_policy",
+        "responses": {
+          "200": {
+            "description": "The policy report: each `[policy]` setting with its value and source, `deployment.rollen`, every `allow_*` posture",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `AdminEinrichtung` denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/probe/{command}": {
+      "post": {
+        "tags": [
+          "commands"
+        ],
+        "summary": "`POST /api/v1/probe/{command}` — rehearse a command.",
+        "description": "`200` carries the verdict whether the message passes or not: the rehearsal\nran. A refusal *to rehearse* — an unknown command, one whose door cannot be\nstopped before it writes, a Marktrolle the deployment does not declare — is\na `422` naming it. No Idempotency-Key: nothing is written, so a repeat is\nanother rehearsal.",
+        "operationId": "handle_probe",
+        "parameters": [
+          {
+            "name": "command",
+            "in": "path",
+            "description": "Dotted command name, e.g. `gpke.lieferbeginn.anmelden`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The command's Marktrolle and payload",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProbeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rehearsal ran: the verdict and the message the door built",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Probe"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Cedar policy denied RehearseCommand"
+          },
+          "422": {
+            "description": "Unknown command, a command that cannot be rehearsed, or a Marktrolle the deployment does not declare"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/edifact": {
+      "post": {
+        "tags": [
+          "edifact"
+        ],
+        "operationId": "ingest_edifact",
+        "requestBody": {
+          "description": "Raw EDIFACT interchange (UNA+UNB…UNZ)",
+          "content": {
+            "application/edifact": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Ingest report: at least one message accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "415": {
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "description": "Ingest report: no message accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A refusal's dead letter could not be written; resubmit"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness probe — reports that the process is running and its HTTP stack\nresponds.",
+        "description": "Deliberately checks nothing else. A dependency this handler could fail on is\na dependency a restart would not fix, and Kubernetes answers a liveness\nfailure with a restart.",
+        "operationId": "live",
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness probe — reports whether this instance can serve traffic.",
+        "description": "Fails while a startup step registered as a [`ReadinessGate`] has not\nfinished, when the event store is unreachable, or when a background worker\nhas stopped heartbeating, because in each case an accepted message would not\nbe processed to the point of durability or answered from current data.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "description": "Store is alive and all workers are healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Store is unavailable or a worker has stalled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "CandidateInfo": {
+        "type": "object",
+        "description": "One message type of the candidate.",
+        "required": [
+          "message_type",
+          "status",
+          "against",
+          "sources"
+        ],
+        "properties": {
+          "against": {
+            "type": "string",
+            "description": "The binding Formatversion it is compared with."
+          },
+          "message_type": {
+            "type": "string"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceDoc"
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "`Konsultationsfassung`."
+          }
+        }
+      },
+      "CommandAccepted": {
+        "type": "object",
+        "description": "Successful command acceptance response.",
+        "required": [
+          "idempotency_key",
+          "command",
+          "marktrolle",
+          "status",
+          "process_id"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The command name as received.",
+            "example": "gpke.lieferbeginn.anmelden"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Idempotency key echoed back to the caller.",
+            "example": "01HZX1234567890ABCDEFGHIJK"
+          },
+          "marktrolle": {
+            "type": "string",
+            "description": "The Marktrolle as received.",
+            "example": "LF"
+          },
+          "message_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reference of the message this command filed (`UNH` DE 0062), when\nthe command files one whose reference is fixed at acceptance —\n`mabis.summenzeitreihe.uebermitteln`. It is what the counterparty's\nanswer names, so a caller records it rather than a placeholder.",
+            "example": "3181967a02d14d"
+          },
+          "process_id": {
+            "type": "string",
+            "description": "UUID of the process that was spawned or updated.\n\nMatches the `subject` field of the corresponding CloudEvent sent to the\nERP webhook. Use this to correlate the command response with the\n`de.mako.process.initiated` (or other) event the ERP received.",
+            "example": "3181967a-02d1-4d0e-9105-0cc46f3b25c9"
+          },
+          "status": {
+            "type": "string",
+            "description": "Always `\"accepted\"` for HTTP 202.",
+            "example": "accepted"
+          }
+        }
+      },
+      "DeleteResponse": {
+        "type": "object",
+        "required": [
+          "mp_id",
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "mp_id": {
+            "type": "string",
+            "example": "9904829000001"
+          }
+        }
+      },
+      "ErpCommand": {
+        "type": "object",
+        "description": "Inbound ERP command envelope.\n\nThe ERP explicitly names the MaKo process command it wants to trigger and\nits own Marktrolle.  The BO4E object(s) carrying domain data are placed in\n`payload` — they are never used for routing.",
+        "required": [
+          "command",
+          "payload"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Dotted command name: `<domain>.<prozess>.<aktion>`.\n\nExamples: `gpke.lieferbeginn.anmelden`, `wim.geraetewechsel.beauftragen`",
+            "example": "gpke.lieferbeginn.anmelden"
+          },
+          "marktrolle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Marktrolle of the ERP system issuing this command.\n\n**Required only for multi-role commands** such as\n`wim.geraetewechsel.beauftragen` (permitted for both `NB` and `MSB`).\nFor single-role commands (e.g. `gpke.lieferbeginn.anmelden` → always `LF`)\nthis field is optional — the role is inferred from the command name.\n\nExamples: `\"NB\"`, `\"LF\"`, `\"LFG\"`, `\"GNB\"`, `\"MSB\"`, `\"BKV\"`, `\"ÜNB\"`",
+            "example": "LF"
+          },
+          "payload": {
+            "type": "object",
+            "description": "Command-specific payload.\n\nEach command defines its own required fields.  For most GPKE/GeLi\ncommands the minimal payload is a `malo_id` string (the 11-digit\nMarktlokations-ID) plus the process-specific date.  The engine\nresolves all partner MP-IDs (NB, MSB) and MeLo data from the MaLo cache.\n\nExample for `gpke.lieferbeginn.anmelden`\n(`mako_markt::commands::GpkeLieferbeginnAnmelden`, every field Muss on\nthe 55001):\n```json\n{\n  \"malo_id\":            \"51238696012\",\n  \"lieferbeginn_datum\": \"2026-10-01\",\n  \"transaktionsgrund\":  \"E03\",\n  \"bilanzkreis\":        \"11XBK-LF-------9\",\n  \"haushaltskunde\":     true,\n  \"enfg_grundlage\":     \"ZG1\",\n  \"kunde\": { \"nachname\": \"Mustermann\", \"anschrift\": { \"strasse\": \"Hauptstraße\",\n             \"hausnummer\": \"1\", \"postleitzahl\": \"50667\", \"ort\": \"Köln\", \"landescode\": \"DE\" } }\n}\n```\n\nNot a BO4E document: this is a **command** envelope, and each command\nnames the scalar fields it reads out of it (see the module docs). Even\nthe invoicing commands are flat — `makod` renders the INVOIC envelope\nwith an empty detail section and never holds an invoice's positions.\n\n**Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or\n`message_ref` — these are engine-owned and will be ignored or rejected."
+          }
+        },
+        "additionalProperties": false
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "instance_id",
+          "version"
+        ],
+        "properties": {
+          "instance_id": {
+            "type": "string",
+            "description": "`$HOSTNAME-$PID` of the responding `makod` instance.",
+            "example": "mako-prod-01-12345"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when `status == \"degraded\"`. Stable category string — never\ncontains internal paths or stack traces.",
+            "example": "store_unavailable"
+          },
+          "status": {
+            "type": "string",
+            "description": "`\"ok\"` when the probe passes; `\"degraded\"` when it does not.",
+            "example": "ok"
+          },
+          "version": {
+            "type": "string",
+            "description": "Daemon version (`CARGO_PKG_VERSION`).",
+            "example": "0.19.0"
+          }
+        }
+      },
+      "Impact": {
+        "type": "object",
+        "description": "The impact report of one candidate Formatversion.",
+        "required": [
+          "fv",
+          "candidates",
+          "window",
+          "revalidated",
+          "refusals",
+          "pid_changes",
+          "not_revalidated",
+          "message_types_not_covered",
+          "not_read"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateInfo"
+            },
+            "description": "Every message type the candidate covers."
+          },
+          "fv": {
+            "type": "string",
+            "description": "The candidate's directory name, `fv<yyyymmdd>[_gas]`."
+          },
+          "message_types_not_covered": {
+            "type": "object",
+            "description": "Interchanges of a message type no candidate covers, per type.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "not_read": {
+            "type": "object",
+            "description": "Files not read, per reason (`compressed`, `unnamed`, `unparseable`,\n`no_binding_profile`).",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "not_revalidated": {
+            "type": "object",
+            "description": "Messages not re-validated because the candidate does not change their\nPrüfidentifikator, per PID (`ohne` for none).",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "pid_changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PidChange"
+            },
+            "description": "Messages whose Prüfidentifikator the candidate removes or adds."
+          },
+          "refusals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImpactRow"
+            },
+            "description": "Each new refusal, one row per rule."
+          },
+          "revalidated": {
+            "type": "integer",
+            "description": "Messages re-validated under both profiles.",
+            "minimum": 0
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window",
+            "description": "The days read."
+          }
+        }
+      },
+      "ImpactRow": {
+        "type": "object",
+        "description": "One new refusal of one message.",
+        "required": [
+          "message_type",
+          "richtung",
+          "counterparty",
+          "date",
+          "file",
+          "message_ref",
+          "message",
+          "rule_status",
+          "bedingungen"
+        ],
+        "properties": {
+          "bedingungen": {
+            "type": "object",
+            "description": "Every Bedingung the place cites, with the candidate AHB's text.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "builder": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For an outbound message: what in mako builds it, since mako itself must\nchange before the Stichtag."
+          },
+          "counterparty": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string",
+            "description": "`YYYY-MM-DD`, from the file name."
+          },
+          "file": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "description": "The validator's sentence."
+          },
+          "message_ref": {
+            "type": "string"
+          },
+          "message_type": {
+            "type": "string"
+          },
+          "pid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "richtung": {
+            "type": "string",
+            "description": "`eingang` or `ausgang`."
+          },
+          "rule_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rule (`AHB-55001-00047-STS-MISSING`, `MIG-…`)."
+          },
+          "rule_status": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The candidate AHB's status and operands for the place."
+          },
+          "segment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The segment tag the refusal sits on."
+          },
+          "segment_position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "One-based position of the segment in its message, `UNH` = 1.",
+            "minimum": 0
+          }
+        }
+      },
+      "ImportResponse": {
+        "type": "object",
+        "required": [
+          "upserted",
+          "skipped",
+          "glns"
+        ],
+        "properties": {
+          "glns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "MP-IDs that were upserted."
+          },
+          "skipped": {
+            "type": "integer",
+            "description": "Number of PARTIN messages that had no extractable MP-ID.",
+            "example": 0,
+            "minimum": 0
+          },
+          "upserted": {
+            "type": "integer",
+            "description": "Number of PARTIN records successfully upserted.",
+            "example": 3,
+            "minimum": 0
+          }
+        }
+      },
+      "IngestResponse": {
+        "type": "object",
+        "required": [
+          "accepted",
+          "rejected",
+          "messages"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "description": "Number of messages that were parsed and routed (or had a known PID).",
+            "example": 2,
+            "minimum": 0
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageResult"
+            }
+          },
+          "rejected": {
+            "type": "integer",
+            "description": "Number of messages that could not be parsed at all.",
+            "example": 0,
+            "minimum": 0
+          }
+        }
+      },
+      "ListResponse": {
+        "type": "object",
+        "required": [
+          "partners",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partners": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "MessageResult": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable error, present when `status` is `\"parse_error\"` or\n`\"dispatch_failed\"`."
+          },
+          "malo_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Marktlokations-ID extracted from the message (LOC+Z16), if present.\n\nUse this to correlate the ingest response with the corresponding\ncommand API call (`gpke.lieferbeginn.bestaetigen` etc.).",
+            "example": "51238696012"
+          },
+          "message_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "EDIFACT message type, e.g. `\"UTILMD\"`, `\"MSCONS\"`, `\"APERAK\"`.\n`null` when the message type could not be determined (parse error).",
+            "example": "UTILMD"
+          },
+          "pid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The Prüfidentifikator extracted from the BGM segment, if present.\n`null` for message types that carry no PID (e.g. CONTRL).",
+            "example": 55001,
+            "minimum": 0
+          },
+          "process_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "UUID of the process that was spawned or resumed.\n\nMatches the `subject` of the `de.mako.process.initiated` CloudEvent\nsent to the ERP webhook. Present only when `status == \"routed\"` and\nPhase 2 dispatch succeeded.",
+            "example": "3181967a-02d1-4d0e-9105-0cc46f3b25c9"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MessageStatus",
+            "description": "Routing outcome for this message."
+          },
+          "workflow": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Workflow name from the `PidRouter`, if the PID is registered.\n`null` when `pid` is `null` or when the PID is not registered.",
+            "example": "gpke-lieferbeginn"
+          }
+        }
+      },
+      "MessageStatus": {
+        "type": "string",
+        "enum": [
+          "routed",
+          "unknown_pid",
+          "no_pid",
+          "missing_party",
+          "missing_pid",
+          "parse_error",
+          "dispatch_failed"
+        ]
+      },
+      "PartnerResponse": {
+        "allOf": [
+          {
+            "type": "object"
+          },
+          {
+            "type": "object",
+            "required": [
+              "updated_at"
+            ],
+            "properties": {
+              "updated_at": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "PidChange": {
+        "type": "object",
+        "description": "A message whose Prüfidentifikator one of the two releases lacks.",
+        "required": [
+          "pid",
+          "change",
+          "richtung",
+          "counterparty",
+          "date",
+          "file"
+        ],
+        "properties": {
+          "change": {
+            "type": "string",
+            "description": "`removed` or `added`."
+          },
+          "counterparty": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "richtung": {
+            "type": "string"
+          }
+        }
+      },
+      "Probe": {
+        "type": "object",
+        "description": "The answer of a rehearsal.",
+        "required": [
+          "command",
+          "marktrolle",
+          "urteil",
+          "nachrichten"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The command rehearsed."
+          },
+          "grund": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The refusal in the door's own words — the sentence the real command\nwould be answered with."
+          },
+          "marktrolle": {
+            "type": "string",
+            "description": "The Marktrolle it was rehearsed as."
+          },
+          "nachrichten": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProbeNachricht"
+            },
+            "description": "The messages the door built; empty when it refused before building one."
+          },
+          "stufe": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Stufe",
+                "description": "Where the refusal came from; absent when the message passes."
+              }
+            ]
+          },
+          "urteil": {
+            "$ref": "#/components/schemas/Urteil",
+            "description": "The pre-send check's verdict."
+          }
+        }
+      },
+      "ProbeBefund": {
+        "type": "object",
+        "description": "One finding of the pre-send check.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "element": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Zero-based index into the segment's `elemente`, where the finding\nnames a data element.",
+            "minimum": 0
+          },
+          "komponente": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Zero-based component within that data element.",
+            "minimum": 0
+          },
+          "regel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile rule it rests on (`AHB-…`, `MIG-…`), where it names one."
+          },
+          "text": {
+            "type": "string",
+            "description": "The check's own wording."
+          }
+        }
+      },
+      "ProbeNachricht": {
+        "type": "object",
+        "description": "One message the door built.",
+        "required": [
+          "nachrichtentyp",
+          "empfaenger",
+          "wire",
+          "segmente",
+          "befunde"
+        ],
+        "properties": {
+          "ahb_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The AHB version of that profile."
+          },
+          "befunde": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProbeBefund"
+            },
+            "description": "Findings the check placed on no single segment."
+          },
+          "empfaenger": {
+            "type": "string",
+            "description": "The MP-ID it is addressed to."
+          },
+          "formatversion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The format version whose profile named the segments (`FV2025-10-01`)."
+          },
+          "nachrichtentyp": {
+            "type": "string",
+            "description": "`UTILMD`, …."
+          },
+          "pruefidentifikator": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The Prüfidentifikator the message carries.",
+            "minimum": 0
+          },
+          "segmente": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProbeSegment"
+            },
+            "description": "The message, `UNH` … `UNT`, segment by segment."
+          },
+          "wire": {
+            "type": "string",
+            "description": "The interchange as rendered, `UNA` … `UNZ`."
+          }
+        }
+      },
+      "ProbeRequest": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/probe/{command}`.",
+        "required": [
+          "payload"
+        ],
+        "properties": {
+          "marktrolle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Marktrolle to rehearse as — required only where the command is\npermitted for more than one, as on `POST /api/v1/commands`.",
+            "example": "LF"
+          },
+          "payload": {
+            "type": "object",
+            "description": "The command's payload, exactly as `POST /api/v1/commands` takes it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProbeSegment": {
+        "type": "object",
+        "description": "One segment of the rendered message.",
+        "required": [
+          "position",
+          "tag",
+          "text",
+          "elemente",
+          "befunde"
+        ],
+        "properties": {
+          "befunde": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProbeBefund"
+            },
+            "description": "The findings that sit on this segment."
+          },
+          "elemente": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Each data element as written, components joined by `:`."
+          },
+          "gruppe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The segment groups enclosing the place, outermost first (`SG4/SG8`)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The MIG's name for the place; absent when the segment fits no place."
+          },
+          "nr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The MIG's running number of the place the segment sits at."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "One-based position in the message, `UNH` = 1.",
+            "minimum": 0
+          },
+          "tag": {
+            "type": "string",
+            "description": "The segment tag."
+          },
+          "text": {
+            "type": "string",
+            "description": "The segment as it goes on the wire, terminator included."
+          }
+        }
+      },
+      "SourceDoc": {
+        "type": "object",
+        "description": "One consultation PDF.",
+        "required": [
+          "file",
+          "sha256"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "StatsResponse": {
+        "type": "object",
+        "required": [
+          "tenants"
+        ],
+        "properties": {
+          "tenants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenantStats"
+            }
+          }
+        }
+      },
+      "Stufe": {
+        "type": "string",
+        "description": "Where a refusal came from.",
+        "enum": [
+          "tuer",
+          "pruefung"
+        ]
+      },
+      "TenantStats": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "malo_count"
+        ],
+        "properties": {
+          "last_upsert": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "2026-10-01T08:00:00Z"
+          },
+          "malo_count": {
+            "type": "integer",
+            "format": "int64",
+            "example": 1234,
+            "minimum": 0
+          },
+          "tenant_id": {
+            "type": "string",
+            "example": "4012345000009"
+          }
+        }
+      },
+      "UpsertRequest": {
+        "type": "object",
+        "description": "Request body for `PUT /admin/malo/{malo_id}`.\n\nThe server scopes all operations to its configured operator MP-ID;\nthe request body must not include a `tenant_id` — the tenant is\nalways the operator that holds the bearer token.",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "type": "object",
+            "description": "Full positive MaLo identification result from the UTILMD query process."
+          },
+          "source": {
+            "type": "string",
+            "description": "Source tag for audit trail (e.g. `\"erp-sync\"`, `\"manual\"`, `\"partin\"`).",
+            "example": "erp-sync"
+          },
+          "valid_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional ISO 8601 effective-from date (informational; not enforced).",
+            "example": "2026-10-01"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpsertResponse": {
+        "type": "object",
+        "required": [
+          "malo_id",
+          "updated_at"
+        ],
+        "properties": {
+          "malo_id": {
+            "type": "string",
+            "example": "10001234558"
+          },
+          "updated_at": {
+            "type": "string",
+            "example": "2026-10-01T08:00:00Z"
+          }
+        }
+      },
+      "Urteil": {
+        "type": "string",
+        "description": "What the pre-send check says about a rehearsed command.",
+        "enum": [
+          "besteht",
+          "abgelehnt"
+        ]
+      },
+      "Window": {
+        "type": "object",
+        "description": "The first and last day read.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "`YYYY-MM-DD`."
+          },
+          "to": {
+            "type": "string",
+            "description": "`YYYY-MM-DD`, today."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer_token": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Named API key provisioned with `--auth-key NAME=TOKEN` (env: MAKOD_AUTH_KEYS). Pass as `Authorization: Bearer <token>`."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "commands",
+      "description": "ERP command gateway — submit MaKo process commands"
+    },
+    {
+      "name": "edifact",
+      "description": "Raw EDIFACT interchange ingestion"
+    },
+    {
+      "name": "admin",
+      "description": "MaLo cache and partner directory administration, the policy report"
+    },
+    {
+      "name": "invoic",
+      "description": "The BO4E Rechnung an inbound INVOIC carried"
+    },
+    {
+      "name": "format-candidates",
+      "description": "Which of the operator's own messages a candidate Formatversion would refuse"
+    },
+    {
+      "name": "health",
+      "description": "Liveness and readiness probes"
+    }
+  ]
+}

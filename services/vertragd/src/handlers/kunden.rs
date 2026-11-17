@@ -23,6 +23,18 @@ use crate::pg;
 ///
 /// Idempotent on `erp_kunde_id`. When `oidc_sub` is supplied the primary portal
 /// identity is created in the same transaction.
+#[utoipa::path(
+    post,
+    path = "/api/v1/kunden",
+    tag = "kunden",
+    request_body(content = serde_json::Value, description = "`CreateKundeInput`"),
+    responses(
+        (status = 201, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn create_kunde(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -40,6 +52,18 @@ pub async fn create_kunde(
 }
 
 /// `GET /api/v1/kunden/{id}` — customer profile, active MaLos and portal users.
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/{id}",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn get_kunde(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -61,6 +85,20 @@ pub async fn get_kunde(
 }
 
 /// `PUT /api/v1/kunden/{id}` — partial update; absent fields keep their value.
+#[utoipa::path(
+    put,
+    path = "/api/v1/kunden/{id}",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`UpdateKundeInput`"),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn update_kunde(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -79,13 +117,26 @@ pub async fn update_kunde(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct KundenListQuery {
     pub kundentyp: Option<String>,
     pub limit: Option<i64>,
 }
 
 /// `GET /api/v1/kunden` — operator list view.
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden",
+    tag = "kunden",
+    params(KundenListQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn list_kunden(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -116,6 +167,18 @@ pub async fn list_kunden(
 /// a foreign customer's profile, contracts and market locations, so resolving
 /// one is an operator read. The two are different Cedar actions, chosen here by
 /// comparing the path against the verified token — never by trusting the path.
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/by-sub/{sub}",
+    tag = "kunden",
+    params(("sub" = String, Path, description = "The OIDC subject")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn get_kunde_by_sub(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -175,7 +238,8 @@ async fn scoped_malos(
     Ok(out)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct AuthenticateQuery {
     pub malo_id: String,
 }
@@ -192,6 +256,18 @@ pub struct AuthenticateQuery {
 /// returns the **same 403**. A distinct 404 for "no such customer" would let a
 /// holder of any valid token probe which subjects and MaLo IDs exist
 /// (DSGVO Art. 32). Only a genuine server fault returns 500.
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/authenticate",
+    tag = "kunden",
+    params(AuthenticateQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn authenticate(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -247,6 +323,20 @@ pub async fn authenticate(
 // ── Portal identities ─────────────────────────────────────────────────────────
 
 /// `POST /api/v1/kunden/{id}/identitaeten` — add or update a portal user.
+#[utoipa::path(
+    post,
+    path = "/api/v1/kunden/{id}/identitaeten",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`UpsertIdentitaetInput`"),
+    responses(
+        (status = 201, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn upsert_identitaet(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -291,6 +381,18 @@ pub async fn upsert_identitaet(
 }
 
 /// `GET /api/v1/kunden/{id}/identitaeten` — active portal users.
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/{id}/identitaeten",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn list_identitaeten(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -306,6 +408,18 @@ pub async fn list_identitaeten(
 }
 
 /// `DELETE /api/v1/kunden/{id}/identitaeten/{sub}` — revoke portal access.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/kunden/{id}/identitaeten/{sub}",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id"), ("sub" = String, Path, description = "The OIDC subject")),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn delete_identitaet(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -341,6 +455,20 @@ pub async fn delete_identitaet(
 /// the request, is stored, and a BO4E enum decoding to its `Unknown` catch-all
 /// serialises back as the literal `"UNKNOWN"`, replacing what the caller sent.
 /// A key BO4E does not define is refused ([`Bo4e::ensure_no_undefined_fields`](mako_markt::bo4e::Bo4e::ensure_no_undefined_fields)).
+#[utoipa::path(
+    put,
+    path = "/api/v1/kunden/{id}/person",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`Bo4e<Person>`"),
+    responses(
+        (status = 204, description = "Done"),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_person(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -362,6 +490,18 @@ pub async fn put_person(
 }
 
 /// `GET /api/v1/kunden/{id}/person`
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/{id}/person",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn get_person(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -393,6 +533,20 @@ pub async fn get_person(
 /// rather than stored under `_additional` beside an absent IBAN.
 ///
 /// [`Bic`]: rubo4e::identifiers::Bic
+#[utoipa::path(
+    put,
+    path = "/api/v1/kunden/{id}/zahlungsinformation",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`Bo4e<Zahlungsinformation>`"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn put_zahlungsinformation(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -430,6 +584,18 @@ pub async fn put_zahlungsinformation(
 }
 
 /// `GET /api/v1/kunden/{id}/zahlungsinformation`
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/{id}/zahlungsinformation",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn get_zahlungsinformation(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -451,6 +617,18 @@ pub async fn get_zahlungsinformation(
 /// The complete record `vertragd` holds about one data subject: Kunde, Person,
 /// Zahlungsinformation, portal identities, contracts and components — with the
 /// Art. 20 subset and the Art. 15 Abs. 1 lit. h statement `[policy.dsr]` decides.
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/{id}/export",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn gdpr_export(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -501,6 +679,20 @@ pub struct AnonymizeRequest {
 /// perform them (Art. 6 Abs. 1 lit. b DSGVO), so Art. 17 Abs. 1 lit. a does not
 /// apply yet. The response names the contracts, so the answer to the data
 /// subject writes itself.
+#[utoipa::path(
+    post,
+    path = "/api/v1/kunden/{id}/anonymize",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    request_body(content = serde_json::Value, description = "`AnonymizeRequest` (optional)"),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+    )
+)]
 pub async fn anonymize(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -561,6 +753,18 @@ pub async fn anonymize(
 // ── Portfolio ─────────────────────────────────────────────────────────────────
 
 /// `GET /api/v1/kunden/{id}/portfolio` — one row per active MaLo/Sparte.
+#[utoipa::path(
+    get,
+    path = "/api/v1/kunden/{id}/portfolio",
+    tag = "kunden",
+    params(("id" = uuid::Uuid, Path, description = "The resource's id")),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, body = ApiError),
+    )
+)]
 pub async fn portfolio(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

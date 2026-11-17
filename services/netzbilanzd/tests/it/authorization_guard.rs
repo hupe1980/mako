@@ -65,17 +65,31 @@ fn identifiers_after(text: &str, needle: &str) -> Vec<String> {
 
 /// Every handler the domain router mounts, as `(module, function)`.
 ///
-/// Read out of the routing calls themselves rather than every `module::name`
-/// mention, so the background workers `daemon.rs` also names are not mistaken for
-/// routes.
+/// Read out of the `routes!(…)` calls of `daemon::api` and `daemon::mabis_api`
+/// rather than every `module::name` mention, so the background workers
+/// `daemon.rs` also names are not mistaken for routes.
 fn routed_handlers() -> Vec<(&'static str, String)> {
     let main = src("daemon.rs");
+    let start = main.find("pub fn api(").expect("daemon.rs defines `api`");
+    let end = main[start..]
+        .find("pub fn openapi_document(")
+        .expect("daemon.rs defines `openapi_document` after the routes")
+        + start;
+    // The arguments of every `routes!(…)` call, and nothing else of the text.
+    let mut routes = String::new();
+    let mut rest = &main[start..end];
+    while let Some(i) = rest.find("routes!(") {
+        rest = &rest[i + "routes!(".len()..];
+        let close = rest.find(')').expect("a closed `routes!(`");
+        routes.push_str(&rest[..close]);
+        routes.push(' ');
+        rest = &rest[close..];
+    }
+    let routes = routes.as_str();
     let mut routed = Vec::new();
     for (module, _) in HANDLER_MODULES {
-        for verb in ["get(", "post(", "put(", "patch(", "delete("] {
-            for name in identifiers_after(&main, &format!("{verb}{module}::")) {
-                routed.push((module, name));
-            }
+        for name in identifiers_after(routes, &format!("{module}::")) {
+            routed.push((module, name));
         }
     }
     routed
@@ -194,11 +208,15 @@ fn the_policy_grants_no_action_the_code_never_checks() {
     // (`mako_service::mcp_auth::McpAuth::authenticate`), one crate over;
     // `read-policy` and `read-config` are checked by
     // `mako_service::einrichtung::router`.
+    // The webhook actions are checked by the shared subscription routes.
     let enforced_elsewhere: BTreeSet<String> = [
-        "use-mcp".to_owned(),
-        "read-policy".to_owned(),
-        "read-config".to_owned(),
+        "use-mcp",
+        "read-policy",
+        "read-config",
+        mako_service::subscriptions::MANAGE,
+        mako_service::subscriptions::READ_EVENTS,
     ]
+    .map(str::to_owned)
     .into();
     let dead: Vec<_> = permitted
         .difference(&used)
@@ -244,6 +262,47 @@ fn an_auditor_reads_the_export_and_dispatches_nothing() {
             cedar.check(&auditor, action, "9900357000004").is_err(),
             "`{action}` moves money and must not be reachable without a market role"
         );
+    }
+}
+
+/// A webhook endpoint exports every matching invoice event: the operator's
+/// act, refused to every market role and to a role-less token.
+#[test]
+fn only_the_operator_manages_webhooks() {
+    let cedar = mako_service::cedar::CedarEnforcer::from_policy_str(POLICY)
+        .expect("netzbilanzd.cedar parses");
+    for roles in [
+        vec![],
+        vec!["NB"],
+        vec!["MSB"],
+        vec!["UENB"],
+        vec!["NB", "MSB", "UENB"],
+    ] {
+        let caller = mako_service::cedar::CedarPrincipal {
+            sub: "staff".to_owned(),
+            tenant: "9900357000004".to_owned(),
+            roles: roles.iter().map(|r| (*r).to_owned()).collect(),
+        };
+        for action in [
+            mako_service::subscriptions::MANAGE,
+            mako_service::subscriptions::READ_EVENTS,
+        ] {
+            assert!(
+                cedar.check(&caller, action, "9900357000004").is_err(),
+                "{roles:?} reaches `{action}` — a webhook endpoint is the operator's decision"
+            );
+        }
+    }
+    let admin = mako_service::cedar::CedarPrincipal {
+        sub: "admin".to_owned(),
+        tenant: "9900357000004".to_owned(),
+        roles: vec!["ADMIN".to_owned()],
+    };
+    for action in [
+        mako_service::subscriptions::MANAGE,
+        mako_service::subscriptions::READ_EVENTS,
+    ] {
+        assert!(cedar.check(&admin, action, "9900357000004").is_ok());
     }
 }
 
@@ -365,7 +424,7 @@ fn startup_refuses_an_open_mcp_surface() {
 
 /// A delivery target without a signing secret is refused.
 ///
-/// `OutboxWorker` signs only when it has one, so this posture ships every
+/// The `default` webhook endpoint is signed only with one, so this posture ships every
 /// `de.netzbilanz.*` CloudEvent to the ERP unsigned — and nothing at runtime
 /// says so.
 #[test]

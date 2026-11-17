@@ -949,3 +949,112 @@ async fn an_approval_stores_the_fingerprint_of_what_it_sent() {
         "approved as proposed: the sent body is the proposal's"
     );
 }
+
+/// A decision resent under the same `Idempotency-Key` — the Desk retrying
+/// after a lost answer — is answered with the first answer and dispatches
+/// once; the same key on another body is `422 idempotency_key_reuse`, never a
+/// second decision. Without the key, the resend meets the Pending claim and
+/// is `409 already_decided`, which tells the Desk its own decision failed.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_resent_decision_dispatches_once() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (pool, pg) = pg_pool().await;
+    let port = pg.get_host_port_ipv4(5432).await.expect("port");
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    let sent = Arc::new(AtomicUsize::new(0));
+    let counter = sent.clone();
+    let makod = stand_in(
+        axum::Router::new()
+            .route(
+                "/api/v1/probe/{command}",
+                axum::routing::post(|| async {
+                    axum::Json(serde_json::json!({ "urteil": "besteht", "nachrichten": [] }))
+                }),
+            )
+            .route(
+                "/api/v1/commands",
+                axum::routing::post(move || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    async {
+                        (
+                            axum::http::StatusCode::ACCEPTED,
+                            axum::Json(serde_json::json!({
+                                "process_id": Uuid::new_v4(),
+                                "command": "gpke.lieferbeginn.bestaetigen",
+                            })),
+                        )
+                    }
+                }),
+            ),
+    )
+    .await;
+    let marktd =
+        stand_in(axum::Router::new().fallback(|| async { axum::http::StatusCode::OK })).await;
+    let mut cfg: toml::Value =
+        toml::from_str(include_str!("../../../../deploy/demo/processd.toml")).expect("parses");
+    cfg["database"]["url"] = toml::Value::String(url);
+    if let Some(db) = cfg["database"].as_table_mut() {
+        db.remove("migration_url");
+    }
+    cfg["makod"]["url"] = toml::Value::String(makod);
+    cfg["marktd"]["url"] = toml::Value::String(marktd);
+    let app = mako_service::build_for_test_on::<processd::Processd>(
+        cfg.try_into().expect("a processd configuration"),
+        pool.clone(),
+    )
+    .await
+    .expect("the router builds");
+    let base = stand_in(app).await;
+
+    use processd::pg::approval::ApprovalQueueEntry;
+    let entry = ApprovalQueueEntry::pending(
+        Uuid::new_v4(),
+        55_001,
+        Some("51238696012".to_owned()),
+        "held for a person".to_owned(),
+        time::OffsetDateTime::now_utc() + time::Duration::hours(2),
+        "9900357000004".to_owned(),
+        "test-regel",
+    )
+    .with_commands(
+        "gpke.lieferbeginn.bestaetigen",
+        "gpke.lieferbeginn.ablehnen",
+        Some("NB"),
+    )
+    .with_ebd("E_0623")
+    .with_answer_payload(serde_json::json!({ "antwort_code": "A51", "antwort_tree": "E_0623" }));
+    processd::pg::PgApprovalQueue::new(pool.clone())
+        .enqueue(&entry)
+        .await
+        .expect("enqueue");
+
+    let approve = |body: &'static str| {
+        reqwest::Client::new()
+            .post(format!("{base}/api/v1/queue/{}/approve", entry.id))
+            .header("content-type", "application/json")
+            .header("Idempotency-Key", "desk-decision-1")
+            .body(body)
+            .send()
+    };
+    for attempt in 0..2 {
+        let resp = approve("{}").await.expect("answered");
+        assert_eq!(
+            resp.status().as_u16(),
+            204,
+            "attempt {attempt}: {}",
+            resp.text().await.unwrap_or_default()
+        );
+    }
+    assert_eq!(sent.load(Ordering::SeqCst), 1, "the decision went out once");
+
+    let resp = approve(r#"{"bemerkung":"anders"}"#)
+        .await
+        .expect("answered");
+    assert_eq!(resp.status().as_u16(), 422);
+    let body: serde_json::Value = resp.json().await.expect("a problem body");
+    assert_eq!(body["code"], "idempotency_key_reuse", "{body}");
+    assert_eq!(sent.load(Ordering::SeqCst), 1, "nothing more was sent");
+}

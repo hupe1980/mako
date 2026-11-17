@@ -186,3 +186,28 @@ fn lf_cannot_file_typ2_values() {
             .is_err()
     );
 }
+
+/// A webhook endpoint receives every event edmd emits, so registering one and
+/// reading the outbox feed are the operator's: no market role reaches them,
+/// and no tenant reaches another's.
+#[test]
+fn only_an_admin_manages_webhooks_and_reads_the_event_feed() {
+    let e = enforcer();
+    for action in ["manage-subscription", "read-events"] {
+        assert!(
+            e.check(&principal(&["ADMIN"]), action, TENANT).is_ok(),
+            "ADMIN may {action}"
+        );
+        for role in ["LF", "NB", "MSB", "ESA"] {
+            assert!(
+                e.check(&principal(&[role]), action, TENANT).is_err(),
+                "{role} must not {action}"
+            );
+        }
+        assert!(
+            e.check(&principal(&["ADMIN"]), action, "9900002000002")
+                .is_err(),
+            "{action} across tenants must be denied"
+        );
+    }
+}

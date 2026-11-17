@@ -136,6 +136,19 @@ pub async fn list_lokationsbuendelstrukturen(
 
 /// `PUT /api/v1/malos/{malo_id}/lokationsbuendel-angaben` — store one dated
 /// row.
+#[utoipa::path(
+    put,
+    path = "/api/v1/malos/{id}/lokationsbuendel-angaben",
+    tag = "lokationsbuendel",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    request_body(content = serde_json::Value, description = "`PutAngabenBody`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_lokationsbuendel_angaben(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

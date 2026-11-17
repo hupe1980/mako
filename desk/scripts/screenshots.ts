@@ -960,6 +960,13 @@ try {
     await page.goto(`${base}gegenpartei/9800357000005/NB`);
     await page.getByRole("list", { name: "Kennzahlen" }).waitFor();
     await shot(page, "gegenpartei", theme);
+
+    // A service's webhook endpoints: the configured one read-only, the
+    // portal's deliveries with status code and latency, each replayable.
+    await page.goto(`${base}zustellungen`);
+    await page.getByRole("button", { name: /Kundenportal/ }).click();
+    await page.getByRole("list", { name: "Zustellungen" }).waitFor();
+    await shot(page, "zustellungen", theme);
     // Back to Heute, where the Lieferant's scenes go on.
     await page.goto(`${base}heute`);
     await page.getByRole("list", { name: "Arbeitsvorrat" }).getByText("Rechnungsdispute").waitFor();

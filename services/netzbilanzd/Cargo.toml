@@ -50,9 +50,14 @@ thiserror       = { workspace = true }
 secrecy         = { version = "0.10" }
 rubo4e          = { workspace = true }
 rmcp            = { workspace = true }
+# Every `/api/v1` route is mounted through `OpenApiRouter`, so it cannot exist
+# without its entry in the served document.
+utoipa          = { workspace = true }
+utoipa-axum     = { workspace = true }
 tokio-util      = { workspace = true }
 
 [dev-dependencies]
+tower = { workspace = true }
 mako-service = { workspace = true, features = ["testing"] }
 # makod's INVOIC builder: the tests hold netzbilanzd's Rechnung to the message
 # makod sends for it.

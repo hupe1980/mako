@@ -1,0 +1,76 @@
+{
+  "case": "freigabe-unklar",
+  "source": "scripted",
+  "agentplane": "0.61",
+  "manifest_digest": "a8bbaf42e77d6f4f026df66bd002bd0be8ed146f66d18c6620779e8a6f9d63a8",
+  "turns": [
+    {
+      "offered": [
+        "accountingd__get_parked_booking",
+        "accountingd__list_ledger",
+        "agentd__find_source",
+        "agentd__quote_source",
+        "invoicd__get_check_result",
+        "invoicd__get_receipt",
+        "makod__get_process",
+        "makod__get_process_history",
+        "processd__get_queue_entry",
+        "processd__list_open_processes",
+        "vertragd__get_kunde"
+      ],
+      "call": {
+        "id": "c1",
+        "name": "processd__get_queue_entry",
+        "arguments": {
+          "id": "f-55001"
+        }
+      }
+    },
+    {
+      "offered": [
+        "accountingd__get_parked_booking",
+        "accountingd__list_ledger",
+        "agentd__find_source",
+        "agentd__quote_source",
+        "invoicd__get_check_result",
+        "invoicd__get_receipt",
+        "makod__get_process",
+        "makod__get_process_history",
+        "processd__get_queue_entry",
+        "processd__list_open_processes",
+        "vertragd__get_kunde"
+      ],
+      "call": {
+        "id": "c2",
+        "name": "makod__get_process_history",
+        "arguments": {
+          "process_id": "123e4567-e89b-12d3-a456-426614174000"
+        }
+      }
+    },
+    {
+      "offered": [
+        "accountingd__get_parked_booking",
+        "accountingd__list_ledger",
+        "agentd__find_source",
+        "agentd__quote_source",
+        "invoicd__get_check_result",
+        "invoicd__get_receipt",
+        "makod__get_process",
+        "makod__get_process_history",
+        "processd__get_queue_entry",
+        "processd__list_open_processes",
+        "vertragd__get_kunde"
+      ],
+      "answer": {
+        "saetze": [
+          {
+            "text": "Der Eintrag nennt keine Codes, mit denen entschieden werden kann.",
+            "quelle": null
+          }
+        ],
+        "vorschlag": null
+      }
+    }
+  ]
+}

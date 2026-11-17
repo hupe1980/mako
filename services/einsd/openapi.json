@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "einsd — EEG/KWKG feed-in settlement",
-    "description": "The documented reads of `einsd`: plants, Förderende, MaStR status and settlement receipts. Each is also an MCP tool answering the same type.",
+    "description": "The `/api/v1` surface of `einsd`: the plant register, monthly and corrective settlement, the §§ 52–54 EEG 2023 records, market data, the EnFG Belastungsausgleich and the operators. The typed reads are also MCP tools answering the same type.",
     "contact": {
       "name": "hupe1980"
     },
@@ -10,9 +10,183 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.37.0"
+    "version": "0.38.0"
   },
   "paths": {
+    "/api/v1/anlagen": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`GET /api/v1/anlagen`  — List plants with optional filters.",
+        "operationId": "get_anlagen",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "query",
+            "description": "Only plants on this Marktlokation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "erzeugungsart",
+            "in": "query",
+            "description": "Only plants of this Erzeugungsart",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "settlement_model",
+            "in": "query",
+            "description": "Only plants settled under this model",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only plants in this status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many plants",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AnlageRow"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen`  — Register or replace a plant.",
+        "operationId": "post_anlage",
+        "requestBody": {
+          "description": "`AnlageUpsertRequest`: the plant to register or replace",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Registered"
+          },
+          "403": {
+            "description": "Cedar `write-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform`",
+        "description": "The three facts `processd` needs about a Marktlokation and the UTILMD cannot\ncarry — it picks the `E_0622` Vorlauffrist and answers `E_0623` Prüfschritt\n540 from them:\n\n- `veraeusserungsform` — the `SG10 CCI+Z22` DE 7037 code.\n- `ausfallverguetung` — `Z90` is shared by the uneingeschränkte\n  Einspeisevergütung (§ 21 Abs. 1 Satz 1 Nr. 1) and the Ausfallvergütung\n  (Nr. 3), whose Fristen differ by a month versus fünf Werktage. Only the\n  register separates them.\n- `direktvermarktungspflichtig` — `E_0623` Prüfschritt 540, over every aktive\n  Anlage. `null` where the answer rests on an EEG version mako's regulatory\n  corpus does not carry, which is not the same as `false`.\n\n`404` means the Marktlokation is not in this NB's EEG-/KWKG-Register — which\nis not the same as „Nicht-EEG-Marktlokation\", so `processd` escalates rather\nthan assuming.",
+        "operationId": "get_veraeusserungsform_by_malo",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Veräußerungsform, the Ausfallvergütung flag and the Direktvermarktungspflicht",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The Marktlokation is not in this register, or its settlement model is no Veräußerungsform (`NO_VERAEUSSERUNGSFORM`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/anlagen/foerderung-auslaufend": {
       "get": {
         "tags": [
@@ -43,10 +217,24 @@
             }
           },
           "400": {
-            "description": "A negative horizon"
+            "description": "A negative horizon",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Cedar `read-anlage` refused"
+            "description": "Cedar `read-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -69,7 +257,14 @@
             }
           },
           "403": {
-            "description": "Cedar `read-anlage` refused"
+            "description": "Cedar `read-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -114,10 +309,24 @@
             }
           },
           "400": {
-            "description": "A month outside 1–12"
+            "description": "A month outside 1–12",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Cedar `read-settlement` refused"
+            "description": "Cedar `read-settlement` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -151,10 +360,1000 @@
             }
           },
           "403": {
-            "description": "Cedar `read-anlage` refused"
+            "description": "Cedar `read-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           },
           "404": {
-            "description": "`anlage_not_found`"
+            "description": "`anlage_not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`PUT /api/v1/anlagen/{tr_id}`  — Update an existing plant.",
+        "operationId": "put_anlage",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`AnlageUpsertRequest`: the plant's new state; the path's `tr_id` wins over the body's",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Updated"
+          },
+          "403": {
+            "description": "Cedar `write-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`DELETE /api/v1/anlagen/{tr_id}`  — Decommission (set status = 'abgemeldet').",
+        "operationId": "delete_anlage",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Decommissioned (status `abgemeldet`)"
+          },
+          "403": {
+            "description": "Cedar `write-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No active plant under that TR-ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/aw-reduktionen": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`GET /api/v1/anlagen/{tr_id}/aw-reduktionen?on=YYYY-MM-DD`",
+        "description": "What is cutting this plant's anzulegender Wert on a given day, with the\nstatutory amount for each. A settlement changes silently when one of these\nrows exists, so this is the path that answers \"why is this plant paid less\"\nwithout settling again.\n\n**Cedar action**: `read-anlage`",
+        "operationId": "get_aw_reduktionen",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "on",
+            "in": "query",
+            "description": "The date to evaluate; today when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The §§ 53b–54 reductions in force on the day",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "An `on` that does not parse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis": {
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis`",
+        "description": "Record that a Regionalnachweis (§79a EEG) was issued for this plant's\nelectricity. §53b then cuts the anzulegender Wert by the statutory\n0,1 ct/kWh for the recorded period — but only where the AW is *gesetzlich\nbestimmt*, so a tender-awarded plant is unaffected even with a Nachweis on\nfile.\n\n**Cedar action**: `manage-lifecycle`",
+        "operationId": "post_regionalnachweis",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionalnachweisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "A period that does not parse or runs backwards",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt": {
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt`",
+        "description": "Record §54 defects for a solar first-segment auction plant. At least one\ndefect must be set — a row recording none deducts nothing and is a\ndata-entry error, which the schema rejects.\n\n**Cedar action**: `manage-lifecycle`",
+        "operationId": "post_sect54_defekt",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Sect54DefektRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "No defect set, or a period that does not parse or runs backwards",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht": {
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht`",
+        "description": "§54 Abs. 3 Satz 2/3 — the missing Nachweis has been supplied, so the\ndeduction lapses from `effective_until` onwards. The row is closed rather\nthan deleted: that the plant was short for the earlier periods is exactly\nwhat the §147 AO audit trail has to keep.\n\n**Cedar action**: `manage-lifecycle`",
+        "operationId": "post_sect54_nachweis_erbracht",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The § 54 record",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Sect54NachweisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Closed",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "A date that does not parse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung": {
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung`",
+        "description": "Record a granted per-kWh Stromsteuerbefreiung for grid-transited electricity\n(§53c EEG 2023). The schema rejects an amount above the §3 StromStG full rate.\nA retried POST answers `200` with the row on file; a row starting later\ncloses the one in force (`geschlossen`); a second figure on the same day or\none overlapping a later row is refused (`422`).\n\n**Cedar action**: `manage-lifecycle`",
+        "operationId": "post_stromsteuerbefreiung",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StromsteuerbefreiungRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "An existing record answered",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "A period that does not parse or runs backwards",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/jahresabrechnung/{year}": {
+      "post": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/jahresabrechnung/{year}`",
+        "description": "Build the annual reconciliation over the year's monthly settlements.\n\nThe statement is derived from the stored receipts, not recomputed, so it\nalways agrees with what was actually settled. An incomplete year yields\n`status = \"vorlaeufig\"` and names the months still missing rather than\npresenting a partial sum as if it were the year.",
+        "operationId": "post_jahresabrechnung",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The annual reconciliation over the stored receipts",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `run-settlement` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No plant under that TR-ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/mastr-registrierung": {
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/mastr-registrierung`",
+        "description": "Confirm MaStR registration for a plant:\n- `mastr_registriert` → `true`\n- the §52 Abs. 1 Nr. 11 violation clock (`mastr_violation_start`) is cleared\n\nThe plant status is untouched. `eeg_anlagen.status` has no pre-activation\nvalue — a plant is `aktiv` from registration — so there is no transition to\nmake here.\n\n## Legal basis\n\n§52 Abs. 1 Nr. 11 EEG 2023: plant operators must register in MaStR.\n- EEG 2023 plants: until confirmed, €10/kW/month Pflichtzahlung accrues.\n- EEG ≤2021 plants: until confirmed, Vergütung = 0 (old §52/§47 via §100).\n\n## CloudEvent emitted\n\n`de.eeg.anlage.mastr-registriert` — signals ERP to release pending Vergütung.",
+        "operationId": "post_mastr_registrierung",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MastrRegistrierungRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Registration confirmed"
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No plant under that TR-ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A `mastr_datum` that does not parse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/pflichtverstoesse": {
+      "get": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`GET /api/v1/anlagen/{tr_id}/pflichtverstoesse`",
+        "description": "Every §52 Abs. 1 breach recorded against the plant, newest first — open and\ncured alike, because §52 Abs. 3 Satz 1 Nr. 1's reduction „wirkt zurück bis\nzum Beginn\" and a settled month may still have to be corrected.",
+        "operationId": "get_pflichtverstoesse",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every § 52 Abs. 1 breach recorded against the plant, newest first",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-anlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/pflichtverstoesse`",
+        "description": "Record a §52 Abs. 1 breach. This is the **only** way nine of the thirteen\nNummern ever reach a settlement: §10b Abs. 5 leaves the Nachweis that a\nDirektvermarkter can curtail the plant to the two parties, §9 Abs. 5's\nSpeicheranforderung is a site visit, and Doppelvermarktung is a finding —\nnone of it is derivable from a plant row.\n\nFor the four einsd *does* derive (Nr. 1, 5, 9, 11) a record does not create\nthe breach; it refines it with the start date, the Abs. 3 Satz 1 Nr. 1 cure\nand the Abs. 3 Satz 2 defect. Closing a record therefore never silences a\nbreach the plant record still shows.\n\n`409` when one of that Nummer is already open — cure it first.",
+        "operationId": "post_pflichtverstoss",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PflichtverstossAnlegenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "A `typ` that is no § 52 Abs. 1 Nummer, or a date that does not parse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A breach of that Nummer is already open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben": {
+      "put": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`PUT /api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben`",
+        "description": "Close the open breach of that Nummer. §52 Abs. 3 Satz 1 Nr. 1 then drops the\nrate to 2 €/kW **back to the beginning** for Nr. 1/3/4/11 — so months already\nsettled at 10 € are overcharged until they are corrected, which is what\n`POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction` is for.\n\n`404` when no breach of that Nummer is open: a cure without a breach is a\ndata error, not something to record.",
+        "operationId": "put_pflichtverstoss_behoben",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "typ",
+            "in": "path",
+            "description": "The § 52 Abs. 1 Nummer as its stored token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PflichtverstossBehobenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Closed",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "A `typ` that is no § 52 Abs. 1 Nummer, or a date that does not parse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No open breach of that Nummer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/repowering": {
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/repowering`",
+        "description": "Record a **Vollrepowering** — replacing the generator unit — for an existing\nplant.\n\nThe Förderdauer restarts because the replacement is a fresh Inbetriebnahme\n(§3 Nr. 30 EEG 2023: the first commissioning of the *generator* after its\nrenewal), so §25 Abs. 1 runs again from `repowering_datum`. **§22 governs the\nwettbewerbliche Ermittlung der Marktprämie and has nothing to do with this**;\nciting it here was simply wrong.\n\n- `inbetriebnahme` becomes `repowering_datum`; the original date is kept in\n  `ursprungs_inbetriebnahme`.\n- The Vergütungssatz is re-looked-up for `repowering_datum` unless supplied.\n- The §51 regime is re-derived from the new date, so a plant repowered after\n  25.02.2025 falls under the Solarspitzengesetz rules.\n- The 180-day Förderende alert is re-armed: the new expiry is a new fact.\n- The plant stays `aktiv`.\n\nThis is only correct for a full replacement. Partial repowering (rotor or\nnacelle only) leaves the original commissioning date governing — do not use\nthis endpoint for it.\n\nIdempotent: re-posting with the same date is safe.",
+        "operationId": "post_repowering",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepoweringRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The plant's new Inbetriebnahme, Förderende and Vergütungssatz",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "A date that does not parse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No plant under that TR-ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/settle/{year}/{month}": {
+      "post": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}`",
+        "description": "Trigger monthly EEG settlement for one plant.  Idempotent — re-running\noverwrites the previous result for the same (tr_id, year, month).",
+        "operationId": "post_settle",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettleTriggerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settlement result",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `run-settlement` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No plant under that TR-ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -218,10 +1417,115 @@
             }
           },
           "400": {
-            "description": "A month outside 1–12, or an unknown parameter"
+            "description": "A month outside 1–12, or an unknown parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Cedar `read-settlement` refused"
+            "description": "Cedar `read-settlement` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction": {
+      "post": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`",
+        "description": "**§ 147 AO / GoBD — Correction Settlement.**\n\nCreates a correction receipt that supersedes the original settlement for the\ngiven billing period. The original receipt is preserved for audit trail.\n\nUse cases:\n- Corrected meter reading arrives (§ 147 AO / GoBD).\n- Tariff error discovered.\n- MaStR registration retroactively confirmed (retroactive §52 sanction removal).\n- Capacity correction.\n\nThe correction stores `SettlementType::Correction { original_id, reason }` for\ntraceability per § 147 AO / GoBD.",
+        "operationId": "post_correction_settle",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionSettleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The correction receipt",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `correct-settlement` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No plant under that TR-ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -275,13 +1579,1114 @@
             }
           },
           "400": {
-            "description": "A month outside 1–12"
+            "description": "A month outside 1–12",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Cedar `read-settlement` refused"
+            "description": "Cedar `read-settlement` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           },
           "404": {
-            "description": "`settlement_not_found`"
+            "description": "`settlement_not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/switch-veraeusserungsform": {
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform`",
+        "description": "**§ 21b EEG 2023 — Zuordnung zu einer Veräußerungsform, Wechsel.**\n\nMoves the plant between the Veräußerungsformen § 21b Abs. 1 Satz 1 lists.\n`eeg_billing::direktverm::validate_wechsel` is the decision; this handler\nonly maps the stored `settlement_model` onto it and renders the refusal.\n\nRules enforced:\n- § 21b Abs. 1 Satz 2 — the change takes effect only „zum ersten Kalendertag\n  eines Monats\".\n- § 21c Abs. 1 Satz 1 — the Mitteilung is due *before the preceding calendar\n  month begins*, so the earliest reachable effective date is the 1st of the\n  month after next. (Satz 2's fünftletzter Werktag for a move into or out of\n  the Ausfallvergütung is a Werktag rule and is not applied here.)\n- § 21 Abs. 1 Satz 1 Nr. 1 — a plant over 100 kW may not take the\n  Einspeisevergütung mit gesetzlich bestimmtem Wert. It may still take the\n  Ausfallvergütung (Nr. 3), which is why that target is not refused.\n- § 21b Abs. 1 Satz 4 — the Ausfallvergütung is closed to a plant that was\n  assigned to the unentgeltliche Abnahme within the last 24 months. einsd\n  records no such assignment, so this arm never fires today.\n\nOn success: updates `settlement_model`, `direktverm_mp_id`, `direktverm_aw_ct`,\nand `last_veraeusserungsform_switch` on the plant record.",
+        "operationId": "post_switch_veraeusserungsform",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VeraeusserungsformWechselRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Switched",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "A date that does not parse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No plant under that TR-ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "§§ 21–21c EEG 2023 refuse the switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/wind-reevaluation": {
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/wind-reevaluation`",
+        "description": "Record a §36h Abs. 2 EEG 2023 Standortgüte re-evaluation for a wind plant. The\nanzulegender Wert re-adjusts from the start of the 6th/11th/16th operating year\nbased on the measured Standortertrag; `build_settle_input` then applies the\nre-evaluated Korrekturfaktor to every settlement from that year on. The\nresponse flags whether the reviewed five-year period must be reconciled\n(§36h Abs. 2 Satz 2: recomputed Gütefaktor deviates > 2 pp) — run that as a\n`§147 AO` correction settlement (interest EURIBOR-12M + 1 pp).",
+        "operationId": "post_wind_reevaluation",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the plant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WindReevaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded, with whether the reviewed period must be reconciled",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No plant under that TR-ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`wirksam_ab_jahr` other than 6, 11 or 16",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/anlagen/{tr_id}/zusammenlegen": {
+      "post": {
+        "tags": [
+          "anlagen"
+        ],
+        "summary": "`POST /api/v1/anlagen/{tr_id}/zusammenlegen`",
+        "description": "**§24 EEG 2023 — Zusammenlegung (plant merger).**\n\nMerges `{tr_id}` (child) into `parent_tr_id`, but **only where §24 Abs. 1\nactually deems them one plant** — all four conditions of Satz 1, and none of\nthe Sätze 2–5 carve-outs. A merge the statute does not support moves the\nsurvivor into a tariff band and past a tender threshold it never qualified\nfor, for the rest of its Förderdauer, and no later correction detects it.\nA refused merge answers `422` naming the rule that decided.\n\nOn a permitted merge:\n- The child plant is deregistered (`status = abgemeldet`).\n- `parent_tr_id` is set on the child for audit trail.\n- The parent plant assumes the combined capacity (`combined_leistung_kwp`).\n- The parent's `foerderendedatum` is **NOT** reset (only Repowering resets it).\n- Future settlements continue only on the parent plant.\n\nThis is distinct from Repowering: Zusammenlegung is an administrative merger,\nnot a hardware replacement, so there is no new commissioning date and no new\nFörderdauer.",
+        "operationId": "post_zusammenlegen",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "description": "TechnischeRessource ID of the child plant, merged into `parent_tr_id`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZusammenlegungRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Merged",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Child and parent are the same plant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `manage-lifecycle` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No plant under that TR-ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "§ 24 Abs. 1 EEG 2023 does not deem the two one plant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/einspeiser": {
+      "get": {
+        "tags": [
+          "einspeiser"
+        ],
+        "summary": "`GET /api/v1/einspeiser` — list the tenant's operators.",
+        "operationId": "list_einspeiser",
+        "responses": {
+          "200": {
+            "description": "Every operator, listed under `einspeiser`",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-einspeiser` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/einspeiser/{einspeiser_id}": {
+      "get": {
+        "tags": [
+          "einspeiser"
+        ],
+        "summary": "`GET /api/v1/einspeiser/{einspeiser_id}` — one operator.",
+        "operationId": "get_einspeiser",
+        "parameters": [
+          {
+            "name": "einspeiser_id",
+            "in": "path",
+            "description": "The operator's identity",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The operator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Einspeiser"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-einspeiser` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such operator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "einspeiser"
+        ],
+        "summary": "`PUT /api/v1/einspeiser/{einspeiser_id}` — register or update an operator.",
+        "description": "The § 19 UStG election lives here and nowhere else, so one call switches the\nVAT on every future Gutschrift issued to this operator's plants at once.",
+        "operationId": "put_einspeiser",
+        "parameters": [
+          {
+            "name": "einspeiser_id",
+            "in": "path",
+            "description": "The operator's identity",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertEinspeiser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored"
+          },
+          "400": {
+            "description": "A refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `write-einspeiser` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/enfg/ledger/{year}/{month}": {
+      "get": {
+        "tags": [
+          "enfg"
+        ],
+        "summary": "`GET /api/v1/enfg/ledger/{year}/{month}` — the booked EnFG ledger rows.",
+        "operationId": "get_enfg_ledger",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The booked ledger rows",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-enfg` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A month outside 1–12",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "enfg"
+        ],
+        "summary": "`POST /api/v1/enfg/ledger/{year}/{month}` — book the month's EnFG ledger\nfrom the payments `accountingd` reports as made.",
+        "operationId": "post_enfg_ledger",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The booked ledger rows",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `build-enfg-ledger` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A month outside 1–12, or a refusal (`enfg_refused`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "accountingd or marktd failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "accountingd_url or marktd_url is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/enfg/mitteilung/{year}/{month}": {
+      "get": {
+        "tags": [
+          "enfg"
+        ],
+        "summary": "`GET /api/v1/enfg/mitteilung/{year}/{month}` — the § 50 Nr. 1 EnFG\nMitteilung with the § 72 Abs. 1, 2 EEG 2023 items; every item mako does\nnot hold is named in `nicht_gehalten` and carries no figure.",
+        "operationId": "get_enfg_mitteilung",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The § 50 Nr. 1 EnFG Mitteilung",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-enfg` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A month outside 1–12, or a refusal (`enfg_refused`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "marktd_url is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/epex-monthly/{year}/{month}": {
+      "get": {
+        "tags": [
+          "marktdaten"
+        ],
+        "summary": "`GET /api/v1/epex-monthly/{year}/{month}`",
+        "operationId": "get_epex_price",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The EPEX monthly average",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-marktdaten` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "None recorded for the month",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "marktdaten"
+        ],
+        "summary": "`PUT /api/v1/epex-monthly/{year}/{month}`",
+        "operationId": "put_epex_price",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EpexPriceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored"
+          },
+          "403": {
+            "description": "Cedar `write-marktdaten` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/epex-spot": {
+      "put": {
+        "tags": [
+          "marktdaten"
+        ],
+        "summary": "`PUT /api/v1/epex-spot` — bulk-load EPEX day-ahead spot prices (§51 input).",
+        "description": "Body: `{ \"source\": \"epex-day-ahead\", \"prices\": [ {delivery_start, resolution_min, price_ct_kwh}, … ] }`.\neinsd overlays a plant's ¼h feed-in against these to derive the §51\nNegativpreisregel reduction.",
+        "operationId": "put_epex_spot",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpotPriceLoadBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The number of intervals stored",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `write-marktdaten` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A `delivery_start` that is not RFC 3339, or a refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/marktwert/{year}/nachbewertung": {
+      "get": {
+        "tags": [
+          "marktdaten"
+        ],
+        "summary": "`GET /api/v1/marktwert/{year}/nachbewertung`",
+        "description": "Every month of `year` settled on a **provisional** Jahresmarktwert, so the\noperator can recompute them once the ÜNB publish the binding figure. The\nrecomputation is per plant:\n`POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`. It\nwrites the correction *beside* the original receipt, which stays live and\nunchanged — a § 147 AO Buchungsbeleg is amended, not overwritten.",
+        "operationId": "get_marktwert_nachbewertung",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every month of the year settled on a provisional Jahresmarktwert",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-marktdaten` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/marktwert/{year}/{art}/{erzeugungsart}": {
+      "get": {
+        "tags": [
+          "marktdaten"
+        ],
+        "summary": "`GET /api/v1/marktwert/{year}/{art}/{erzeugungsart}` (`?billing_month=`)",
+        "operationId": "get_marktwert",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "art",
+            "in": "path",
+            "description": "`monat` (Anlage 1 Nr. 3) or `jahr` (Nr. 4)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "erzeugungsart",
+            "in": "path",
+            "description": "`SOLAR`, `WIND_ONSHORE`, `WIND_OFFSHORE`, a Nr. 3.2 technology, or `DEFAULT`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "billing_month",
+            "in": "query",
+            "description": "The month, for a Monatsmarktwert. Omitted for a Jahresmarktwert.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Marktwert",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `art`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-marktdaten` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "None recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "marktdaten"
+        ],
+        "summary": "`PUT /api/v1/marktwert/{year}/{art}/{erzeugungsart}`",
+        "description": "Import or update the energieträgerspezifische Marktwert the ÜNB publish at\nnetztransparenz.de. `art` is `monat` or `jahr` — Anlage 1 Nr. 3 and Nr. 4 are\n**two different series**, and which one a plant settles on follows its\nInbetriebnahme/Zuschlag date (Nr. 2), never the operator's choice.\n\n`erzeugungsart` is `SOLAR`, `WIND_ONSHORE` or `WIND_OFFSHORE` for the\nAnlage 1 Nr. 3.3 / 4.3 values, a Nr. 3.2 technology (`BIOMASSE`, …), or\n`DEFAULT` for the spot mean, which only Nr. 3.2 Energieträger read. A solar\nBauform is refused (`crate::pg::marktwert_schluessel_pruefen`).\n\nA **Monatsmarktwert** needs `billing_month` and is final when published. A\n**Jahresmarktwert** takes no month and may be `vorlaeufig` — the ÜNB publish\na running estimate during the year and the binding figure after it. Every\nmonth settled on a provisional figure is listed by\n`GET /api/v1/marktwert/{year}/nachbewertung`.",
+        "operationId": "put_marktwert",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "art",
+            "in": "path",
+            "description": "`monat` (Anlage 1 Nr. 3) or `jahr` (Nr. 4)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "erzeugungsart",
+            "in": "path",
+            "description": "`SOLAR`, `WIND_ONSHORE`, `WIND_OFFSHORE`, a Nr. 3.2 technology, or `DEFAULT`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarktwertBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored"
+          },
+          "400": {
+            "description": "An unknown `art`, or a month that does not fit the series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `write-marktdaten` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settle/{year}/{month}": {
+      "post": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "`POST /api/v1/settle/{year}/{month}`",
+        "description": "**Batch EEG/KWKG settlement — settle all unsettled active plants for a month.**\n\nIdempotent: plants already settled for this period are skipped.\nAuto-fetches Einspeisemenge from `edmd` for each plant's MaLo when\n`edmd_url` is configured.\n\nReturns a summary with per-plant results and aggregate totals.",
+        "operationId": "post_batch_settle",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Abrechnungsjahr",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Abrechnungsmonat, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchSettleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per-plant results and totals",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `run-settlement` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/verguetungssatz-lookup": {
+      "post": {
+        "tags": [
+          "marktdaten"
+        ],
+        "summary": "`POST /api/v1/verguetungssatz-lookup`",
+        "description": "Returns the applicable EEG feed-in tariff rate for a plant.\nUsed during Anlage registration to auto-populate `verguetungssatz_ct`\nwithout requiring the operator to manually look up BNetzA tables.",
+        "operationId": "post_verguetungssatz_lookup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerguetungssatzLookupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The applicable rate",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-marktdaten` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No seeded rate matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -954,6 +3359,38 @@
           }
         }
       },
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
       "AuslaufendeAnlagen": {
         "type": "object",
         "description": "`list_expiring`'s answer: active plants whose Förderung ends within\n`horizon_days`, the earliest Förderende first.",
@@ -978,6 +3415,398 @@
             }
           }
         }
+      },
+      "BatchSettleRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/settle/{year}/{month}`.",
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Dry-run mode — calculates but does not persist or emit CloudEvents."
+          },
+          "epex_avg_ct_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "EPEX monthly average ct/kWh.  When absent, uses stored `epex_monthly_prices`."
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Maximum plants to settle in one request (default 500, max 2000)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CorrectionSettleRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "einspeisemenge_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "Corrected Einspeisemenge kWh."
+          },
+          "epex_avg_ct_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "Corrected EPEX average ct/kWh (for Direktvermarktung / Post-EEG)."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for the correction: an `eeg_billing::scheme::CorrectionReason`\ntoken in SCREAMING_SNAKE_CASE.",
+            "example": "METER_DATA_CORRECTED"
+          },
+          "reason_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free-text explanation for audit trail."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Einspeiser": {
+        "type": "object",
+        "description": "A plant operator.",
+        "required": [
+          "einspeiser_id",
+          "name",
+          "ust_status"
+        ],
+        "properties": {
+          "bank_bic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bank_iban": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "einspeiser_id": {
+            "type": "string",
+            "description": "Operator-assigned identity — a customer number, a MaStR Marktakteur-ID,\nor a UUID the ERP mints. `einsd` does not invent identities for parties\nit did not register."
+          },
+          "mastr_akteur_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MaStR Marktakteursnummer, where the operator has one."
+          },
+          "name": {
+            "type": "string"
+          },
+          "ust_status": {
+            "type": "string",
+            "description": "`KLEINUNTERNEHMER` (§ 19 UStG, 0 %) or `REGELBESTEUERUNG`\n(§ 12 Abs. 1 UStG, 19 %)."
+          },
+          "zahlungsempfaenger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "EpexPriceBody": {
+        "type": "object",
+        "required": [
+          "avg_ct_kwh"
+        ],
+        "properties": {
+          "avg_ct_kwh": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "MarktwertBody": {
+        "type": "object",
+        "required": [
+          "avg_ct_kwh"
+        ],
+        "properties": {
+          "avg_ct_kwh": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "billing_month": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Required for a Monatsmarktwert (Anlage 1 Nr. 3); refused for a\nJahresmarktwert (Nr. 4), which is one figure per year."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vorlaeufig": {
+            "type": "boolean",
+            "description": "An ÜNB running estimate rather than the published binding figure. Only a\nJahresmarktwert can be one."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MastrRegistrierungRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/mastr-registrierung`.",
+        "required": [
+          "mastr_nummer"
+        ],
+        "properties": {
+          "mastr_datum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Date of MaStR registration (ISO 8601). Defaults to today if omitted."
+          },
+          "mastr_nummer": {
+            "type": "string",
+            "description": "MaStR Registrierungsnummer (format: `SEE000000000000`, `EEE000000000000`, etc.).\n\nIssued by BNetzA at marktstammdatenregister.de."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PflichtverstossAnlegenRequest": {
+        "type": "object",
+        "description": "Body of `POST /api/v1/anlagen/{tr_id}/pflichtverstoesse`.",
+        "required": [
+          "typ",
+          "beginn"
+        ],
+        "properties": {
+          "beginn": {
+            "type": "string",
+            "description": "First day the breach subsisted, ISO 8601. §52 Abs. 2 counts calendar\nmonths from here."
+          },
+          "notiz": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What was found, and by whom."
+          },
+          "technischer_defekt": {
+            "type": "boolean",
+            "description": "§52 Abs. 3 Satz 2 — the breach was caused by a technical defect, so the\ndefect month and the following one are waived (Nr. 1/3/4/8, breaches\nafter 31.12.2023 only). The operator carries the Darlegungs- und\nBeweislast, which is why this is stated rather than inferred."
+          },
+          "typ": {
+            "type": "string",
+            "description": "The §52 Abs. 1 Nummer, as `eeg_billing::SanktionsTyp` names it —\n`FERNSTEUERBARKEIT_FEHLEND`, `SECT10B_VORGABEN_VERLETZT`, … The full\nvocabulary is `SanktionsTyp::ALL`, and `GET` on this route returns it in\nthe error body of an unknown value."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PflichtverstossBehobenRequest": {
+        "type": "object",
+        "description": "Body of `PUT /api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben`.",
+        "required": [
+          "behoben_am"
+        ],
+        "properties": {
+          "behoben_am": {
+            "type": "string",
+            "description": "Day the obligation was met, ISO 8601. Must not precede `beginn`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RegionalnachweisRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis`.",
+        "required": [
+          "nachweis_ref",
+          "effective_from"
+        ],
+        "properties": {
+          "effective_from": {
+            "type": "string",
+            "description": "First day the Nachweis covers (ISO 8601)."
+          },
+          "effective_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last day it covers; open-ended when absent."
+          },
+          "nachweis_ref": {
+            "type": "string",
+            "description": "Register reference of the issued Regionalnachweis (§79a EEG)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RepoweringRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/repowering`.",
+        "required": [
+          "repowering_datum"
+        ],
+        "properties": {
+          "leistung_kwp_neu": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "New installed capacity in kWp (may differ from original)."
+          },
+          "repowering_datum": {
+            "type": "string",
+            "description": "ISO 8601 date when the new components were commissioned.\nThe Förderendedatum is reset to `repowering_datum + 20 years`."
+          },
+          "verguetungssatz_ct_neu": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "New Vergütungssatz at the repowering date (ct/kWh).\nWhen absent, auto-lookup via `eeg_verguetungssaetze` table."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Sect54DefektRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt`.",
+        "required": [
+          "effective_from"
+        ],
+        "properties": {
+          "agri_nutzungsnachweis_fehlt": {
+            "type": "boolean",
+            "description": "Abs. 3 — Agri-PV Nutzungsnachweis not supplied."
+          },
+          "bnetza_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_from": {
+            "type": "string"
+          },
+          "effective_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "flurstueck_abweichung": {
+            "type": "boolean",
+            "description": "Abs. 2 — location does not match the Flurstücke named in the bid."
+          },
+          "landesverordnung_nicht_erfuellt": {
+            "type": "boolean",
+            "description": "Abs. 4 — Landesverordnung under §37c Abs. 2 not met; AW → 0."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "zahlungsberechtigung_nach_18_monaten": {
+            "type": "boolean",
+            "description": "Abs. 1 — Zahlungsberechtigung applied for after the 18th Kalendermonat."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Sect54NachweisRequest": {
+        "type": "object",
+        "description": "Request body for closing a §54 defect period.",
+        "required": [
+          "effective_until"
+        ],
+        "properties": {
+          "effective_until": {
+            "type": "string",
+            "description": "Last day the defect applied — §54 Abs. 3 Satz 2/3."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SettleTriggerRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}`.",
+        "properties": {
+          "einspeisemanagement_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "§13a EnWG (Redispatch 2.0) — kWh curtailed by the NB this billing month.\n\nThe NB must compensate the operator at the AW rate for these kWh\n(§19 Abs. 2 EEG 2023: §51 Negativpreisregel does NOT apply to EInsMan kWh).\nPass the total curtailed kWh from MSCONS IFTSTA messages in this period."
+          },
+          "einspeisemenge_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "Einspeisemenge kWh for the billing month.\nWhen absent, `einsd` will return `status = \"no_data\"`."
+          },
+          "epex_avg_ct_kwh": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "Override EPEX monthly average ct/kWh (only for DIREKTVERMARKTUNG /\nPOST_EEG_SPOT).  When absent, the value stored in `epex_monthly_prices`\nis used automatically."
+          },
+          "kwh_during_negative_epex": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "§51 EEG 2023 — kWh fed in during negative-spot-price intervals.\n\nThe anzulegender Wert for these kWh is reduced to null (Negativpreisregel),\nversion- and threshold-aware in the engine (EEG 2017 ≥6 h / EEG 2021 ≥4 h /\nEEG 2023 any interval; kW-exemptions applied). Pass the feed-in quantity\nthat fell in negative-price intervals for the billing month; omit (or the\n§51 exemption applies) to leave the settlement unreduced. Consistent with\n`negative_price_quarter_hours` (§51a), which extends the Förderzeitraum for\nthe same intervals."
+          },
+          "negative_price_quarter_hours": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "§51a EEG 2023 — quarter-hours during which the EPEX price was negative\nAND the plant's §51 threshold was met.\n\nUsed to compute the §51a Verlängerungsanspruch. Non-solar plants extend by\nwhole calendar days (96 QH/day, rounded up once over the total); solar\nplants convert at factor 0,5 into Volllastviertelstunden and draw them\ndown against the §51a Abs. 2 monthly table (73 in December, 508 in June).\nPass the raw qualifying quarter-hour count for the billing month.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "SettlementReceipt": {
         "type": "object",
@@ -1072,6 +3901,83 @@
           }
         }
       },
+      "SpotPriceEntry": {
+        "type": "object",
+        "description": "One EPEX spot interval in the bulk-load request body.",
+        "required": [
+          "delivery_start",
+          "price_ct_kwh"
+        ],
+        "properties": {
+          "delivery_start": {
+            "type": "string",
+            "description": "Interval start, RFC 3339 (UTC)."
+          },
+          "price_ct_kwh": {
+            "type": "string",
+            "format": "decimal",
+            "description": "Price ct/kWh (may be negative)."
+          },
+          "resolution_min": {
+            "type": "integer",
+            "format": "int32",
+            "description": "15 or 60. Defaults to 15."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SpotPriceLoadBody": {
+        "type": "object",
+        "description": "Bulk spot-price load request body.",
+        "required": [
+          "prices"
+        ],
+        "properties": {
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpotPriceEntry"
+            }
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "StromsteuerbefreiungRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung`.",
+        "required": [
+          "befreiung_ct_kwh",
+          "rechtsgrundlage",
+          "effective_from"
+        ],
+        "properties": {
+          "befreiung_ct_kwh": {
+            "type": "string",
+            "format": "decimal",
+            "description": "The exemption granted, in ct/kWh. Capped at the §3 StromStG full rate of\n2,05 ct/kWh — an exemption cannot exceed the tax it exempts from."
+          },
+          "effective_from": {
+            "type": "string"
+          },
+          "effective_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rechtsgrundlage": {
+            "type": "string",
+            "description": "Which StromStG provision it rests on, e.g. `\"§9 Abs. 1 Nr. 1 StromStG\"`."
+          }
+        },
+        "additionalProperties": false
+      },
       "UnabgerechneteAnlagen": {
         "type": "object",
         "description": "`list_unsettled_plants`' answer: active plants with no receipt for the month.",
@@ -1101,17 +4007,192 @@
             "minimum": 0
           }
         }
+      },
+      "UpsertEinspeiser": {
+        "type": "object",
+        "description": "Fields accepted when creating or replacing an operator.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "bank_bic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bank_iban": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mastr_akteur_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "ust_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Omitted keeps the stored value on an update and defaults to\n`REGELBESTEUERUNG` on a create — the § 19 election is a declaration, and\nsilence is not one."
+          },
+          "zahlungsempfaenger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "VeraeusserungsformWechselRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform`.",
+        "required": [
+          "new_model",
+          "effective_date"
+        ],
+        "properties": {
+          "direktverm_aw_ct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "For Direktvermarktung switches: the agreed Anzulegender Wert ct/kWh."
+          },
+          "direktvermarkter_mp_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For Direktvermarktung switches: the Direktvermarkter's MP-ID."
+          },
+          "effective_date": {
+            "type": "string",
+            "description": "Effective date for the switch (must be the 1st of a calendar month)."
+          },
+          "new_model": {
+            "type": "string",
+            "description": "The Veräußerungsform to switch to: `\"VERGUETUNG\"` (Einspeisevergütung,\n§21 Abs. 1) or `\"DIREKTVERMARKTUNG\"` (gleitende Marktprämie, §20)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "VerguetungssatzLookupRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/verguetungssatz-lookup`.",
+        "required": [
+          "erzeugungsart",
+          "leistung_kwp",
+          "inbetriebnahme"
+        ],
+        "properties": {
+          "erzeugungsart": {
+            "type": "string"
+          },
+          "inbetriebnahme": {
+            "type": "string",
+            "description": "ISO 8601 Inbetriebnahmedatum."
+          },
+          "leistung_kwp": {
+            "type": "string",
+            "format": "decimal"
+          },
+          "verguetungsform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"UEBERSCHUSS\"` (default), `\"VOLLEINSPEISUNG\"` (§48 Abs. 2a) or\n`\"KWK_ZUSCHLAG\"`. The two solar forms differ by several ct/kWh, so a\nlookup that omits it is answered on the Überschuss column."
+          }
+        },
+        "additionalProperties": false
+      },
+      "WindReevaluationRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/wind-reevaluation`.",
+        "required": [
+          "wirksam_ab_jahr",
+          "guetefaktor"
+        ],
+        "properties": {
+          "guetefaktor": {
+            "type": "string",
+            "format": "decimal",
+            "description": "Gütefaktor recomputed from the measured 5-year Standortertrag."
+          },
+          "korrekturfaktor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "Korrekturfaktor certified by the Gutachten (§36h Abs. 3 Nr. 2).\n\nThe Netzbetreiber settles on the certified value, so it is accepted\nrather than derived. Omit it to interpolate the Anlage 2 Nr. 7 table\nfrom `guetefaktor`."
+          },
+          "wirksam_ab_jahr": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Year after commissioning from which the adjusted AW takes effect: 6, 11 or 16."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ZusammenlegungRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/anlagen/{tr_id}/zusammenlegen`.",
+        "required": [
+          "parent_tr_id"
+        ],
+        "properties": {
+          "combined_leistung_kwp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "decimal",
+            "description": "Combined installed capacity in kWp after merger.\nWhen absent, the parent's capacity is unchanged."
+          },
+          "parent_tr_id": {
+            "type": "string",
+            "description": "TR-ID of the parent (surviving) plant."
+          },
+          "unmittelbare_raeumliche_naehe": {
+            "type": "boolean",
+            "description": "§24 Abs. 1 Satz 1 Nr. 1, second limb — the two plants are in\n*unmittelbarer räumlicher Nähe* although they do not share a\n`standort_id`.\n\nA human judgement about the pair, so it is asserted per request rather\nthan derived. It only matters when the two sites differ; sharing a\n`standort_id` already satisfies Nr. 1."
+          }
+        },
+        "additionalProperties": false
       }
     }
   },
   "tags": [
     {
       "name": "anlagen",
-      "description": "EEG/KWKG plants"
+      "description": "EEG/KWKG plants and their lifecycle"
     },
     {
       "name": "settlements",
-      "description": "Monthly settlement receipts"
+      "description": "Monthly, corrective, batch and annual settlement"
+    },
+    {
+      "name": "marktdaten",
+      "description": "EPEX prices, Marktwerte and the Vergütungssatz lookup"
+    },
+    {
+      "name": "enfg",
+      "description": "EnFG Belastungsausgleich ledger and Mitteilung"
+    },
+    {
+      "name": "einspeiser",
+      "description": "Plant operators (Anlagenbetreiber)"
     }
   ]
 }

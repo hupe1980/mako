@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "edmd — Energiedatenmanagement",
-    "description": "Meter data of the Marktlokationen: the version-resolved series, its quality, corrections and per-day coverage. Describes the routes edmd mounts through its documented router.",
+    "description": "Meter data of the Marktlokationen: ingest, the version-resolved series, its quality, corrections and coverage, reading orders, the archive, and webhook subscriptions on the events edmd emits. Describes every /api/v1 route edmd serves.",
     "contact": {
       "name": "hupe1980"
     },
@@ -10,9 +10,619 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.37.0"
+    "version": "0.38.0"
   },
   "paths": {
+    "/api/v1/archive/olap/{malo_id}": {
+      "get": {
+        "tags": [
+          "archive"
+        ],
+        "summary": "`GET /api/v1/archive/olap/{malo_id}?from=RFC3339&to=RFC3339`",
+        "description": "DataFusion OLAP query over archived `meter_reads` for one MaLo.\n\nReturns the aggregated MMM result: total kWh, read count, and period bounds.\nRequires Iceberg/S3 archival to be enabled and configured.\n\nThis is the primary endpoint for MMM aggregation over archived data.\nFor recent data (< 12 months) use `/api/v1/billing-period/{malo_id}`.",
+        "operationId": "get_archive_olap",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "RFC 3339 start (inclusive).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "RFC 3339 end (inclusive).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/archive/portfolio": {
+      "get": {
+        "tags": [
+          "archive"
+        ],
+        "summary": "`GET /api/v1/archive/portfolio?from=RFC3339&to=RFC3339&limit=N`",
+        "description": "Portfolio-level Bezug aggregation across both tiers, evaluated in one\nversion-resolved plan by meterstore, then projected onto the canonical\nregister set. Returns total kWh and read count per MaLo, ordered by\nconsumption descending, capped at `limit` measuring points.\n\n# Why this is two steps rather than one `GROUP BY malo_id`\n\nA bare `SUM(\"value\") … GROUP BY \"malo_id\"` is the register defect at portfolio\nscale: a prosumer's Einspeisung added to its Bezug, a dual-tariff meter's\n`1.8.0` counted *again* as `1.8.1 + 1.8.2`, kvarh and kW registers in a kWh\nfigure, `FAULTY` intervals included — in a result this endpoint calls\nportfolio-wide MMM, which is money.\n\nThe projection cannot be pushed into the scan: it needs to parse OBIS codes,\nand meterstore registers calendar UDFs but no OBIS ones. So the scan groups\nper `(malo_id, obis_code)` — a handful of rows per measuring point — and the\nregister decision is made in Rust by the *same* `energy_intervals_from` every\nother aggregate uses, over one synthetic interval per register spanning that\nregister's own coverage. The total-vs-tariff overlap rule then does the right\nthing: a tariff register whose coverage lies inside a total register's is\ndropped, and one that reports where no total does is kept.\n\n`limit` bounds **measuring points**. The scan itself is bounded separately,\nand `truncated` says when that bound was reached — a capped list that looks\ncomplete is how a partial portfolio gets mistaken for the whole one.",
+        "operationId": "get_archive_portfolio",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/archive/status": {
+      "get": {
+        "tags": [
+          "archive"
+        ],
+        "summary": "`GET /api/v1/archive/status`",
+        "description": "Returns archive statistics and the 20 most recent batches.",
+        "operationId": "get_archive_status",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/archive/timeseries/{malo_id}": {
+      "get": {
+        "tags": [
+          "archive"
+        ],
+        "summary": "`GET /api/v1/archive/timeseries/{malo_id}?from=RFC3339&to=RFC3339&limit=N`",
+        "description": "Raw time-series export from the Iceberg cold tier.\nReturns up to `limit` archived reads in chronological order.",
+        "operationId": "get_archive_timeseries",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "RFC 3339 start (inclusive).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "RFC 3339 end (inclusive).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing-period/{malo_id}": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "get_billing_period",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "ISO 8601 date `YYYY-MM-DD` — start of billing period (inclusive).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "ISO 8601 date `YYYY-MM-DD` — end of billing period (inclusive).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "`strom` · `gas` · `wasser` · `waerme` — decides whether the period runs\non calendar days or on the Gastag. Absent, the Sparte the MaLo's\nreadings are stored under; with none stored, `422`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/billing-periods": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "list_billing_periods",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Period start date inclusive (YYYY-MM-DD). Defaults to the start of the\nprevious month — the window MaBiS actually asks about.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Period end date inclusive (YYYY-MM-DD). Defaults to today.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "description": "Optional tenant filter. It must equal the authorised tenant; it exists so\na caller can assert which tenant it believes it is talking to.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max MaLos to return (default 1000, hard cap 5000). The collection is a\ndiscovery surface, so it is always bounded.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/compliance/jahresablesung/{year}": {
+      "get": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`GET /api/v1/compliance/jahresablesung/{year}`",
+        "description": "§ 40b Abs. 1 EnWG compliance report for a campaign year.\n\nThe obligation is to read each SLP Marktlokation annually. This reports\nwhether that happened, broken down by what actually became of each order —\nwhich is the distinction that matters, because only `AUSGEFUEHRT` discharges\nthe obligation. `STORNIERT` withdraws it; `FEHLGESCHLAGEN` leaves it\noutstanding with a documented Ablesehindernis; anything still `OFFEN` or\n`BEAUFTRAGT` past its deadline is simply late.\n\n**Cedar action**: `read-reading-order`",
+        "operationId": "jahresablesung_compliance",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Calendar year",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/confirmations": {
+      "get": {
+        "tags": [
+          "quality"
+        ],
+        "summary": "`GET /api/v1/confirmations?status=&limit=`",
+        "description": "Open/overdue obligations to replace estimated or substituted intervals\nwith plausibilised real values (§ 60 Abs. 1 MsbG). Resolution happens\nautomatically on ingest of a MEASURED/CORRECTED value for the same slot.",
+        "operationId": "list_confirmations",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter: OFFEN | BESTAETIGT | UEBERFAELLIG. Default: all open kinds.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/corrections/{malo_id}": {
       "get": {
         "tags": [
@@ -73,6 +683,84 @@
           },
           "400": {
             "description": "invalid_instant"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "messwerte"
+        ],
+        "summary": "`POST /api/v1/corrections/{malo_id}`",
+        "description": "Submit one or more retroactive corrections to stored meter intervals.\n\n## § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) compliance\n\nEvery correction creates an immutable `meter_read_corrections` row that\npreserves the original value, corrected value, reason, and operator identity,\nso an auditor can reconstruct the billing basis at any point in time. Billed\ndata is a Buchungsbeleg (§ 147 Abs. 3 AO / GoBD: 8 years); § 60 Abs. 6 MsbG\nseparately caps *personal* Messwert storage (delete or anonymize at latest\nthree years after the end of the collection year) — the correction trail\nitself carries no personal data beyond the MaLo reference.\n\n## Request body\n\n```json\n{\n  \"corrections\": [\n    {\n      \"malo_id\": \"51238696012\",\n      \"dtm_from\": \"2026-06-01T00:00:00Z\",\n      \"dtm_to\": \"2026-06-01T00:15:00Z\",\n      \"original_kwh\": \"2.500\",\n      \"original_quality\": \"MEASURED\",\n      \"corrected_kwh\": \"2.420\",\n      \"corrected_quality\": \"CORRECTED\",\n      \"reason\": \"Ablese-Korrekturbericht MSB 2026-07-01: Zählerfehlstand Q2/2026\",\n      \"source\": \"OPERATOR\",\n      \"corrected_by\": \"dispatcher@netzbetreiber.de\"\n    }\n  ]\n}\n```\n\n## Response\n\n```json\n{\n  \"corrected_count\": 1,\n  \"correction_ids\": [\"<uuid of the correction record>\"]\n}\n```",
+        "operationId": "post_corrections",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `CorrectionRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -142,6 +830,1757 @@
         }
       }
     },
+    "/api/v1/deliveries/{malo_id}": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "get_deliveries",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/energy/{malo_id}": {
+      "get": {
+        "tags": [
+          "lastgang"
+        ],
+        "summary": "`GET /api/v1/energy/{malo_id}?direction=BEZUG|EINSPEISUNG&from=&to=`",
+        "description": "**The canonical projected series** — one entry per interval, in one\ndirection, already through `domain::register`: non-billable qualities\ndropped (§ 40a Abs. 2 EnWG), non-kWh registers dropped, the other direction\ndropped, and no total register added to the tariff intervals it covers.\n\n`GET /api/v1/lastgang` is the BO4E **export** and returns one object per\nregister — the right shape for an export and the wrong input to a figure,\nbecause folding it back into one series *is* the register projection. Serving\nthe projection made is what keeps `netzbilanzd`, `billingd` and `einsd` from\neach deriving their own.\n\n`?as_of=` reads through meterstore's transaction-time axis, exactly as\n`GET /api/v1/lastgang` does.\n\n```json\n{ \"malo_id\": \"…\", \"direction\": \"EINSPEISUNG\", \"resolution_min\": 15,\n  \"coverage_pct\": 98.5, \"billable_pct\": 100.0, \"interval_count\": 2976,\n  \"intervals\": [ { \"start\": \"2026-07-01T12:00:00Z\", \"end\": \"2026-07-01T12:15:00Z\",\n                   \"kwh\": \"3.2\", \"quality\": \"MEASURED\" } ] }\n```\n\n`billable_pct` is the share of the direction's series — **by duration, before\nthe projection filtered it** — that is billable at all. Without it a caller\ncannot tell a complete month from one where a third of the intervals arrived\n`FAULTY` and were dropped, which is exactly the § 40a Abs. 2 EnWG gate `einsd`\napplies before auto-deriving the § 51 EEG reduction. `None` means the point\nreports no register in that direction — a different fact from 0 %.",
+        "operationId": "get_energy_series",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "RFC 3339 start (inclusive). Defaults to the last 31 days.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "RFC 3339 end (inclusive). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "`BEZUG` (default) or `EINSPEISUNG`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "Bitemporal point-in-time query (RFC 3339) — see [`get_lastgang`].\n\nA MaBiS correction under the KBKA has to say what changed since the\nversion the BIKO settled, which needs the state as it stood when that\nversion was filed and not only the current one.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/esa/typ2/{malo_id}": {
+      "get": {
+        "tags": [
+          "esa"
+        ],
+        "summary": "`GET /api/v1/esa/typ2/{malo_id}` — read ESA \"Werte nach Typ 2\" for a MaLo.",
+        "description": "Reads the separate `esa_typ2_reads` store exclusively. These values are\nnon-authoritative (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 Kap. 4) and have no\nbearing on billing — this endpoint exists so the ESA can retrieve what it was\ndelivered, kept structurally apart from every billing/aggregation endpoint.",
+        "operationId": "get_esa_typ2",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "RFC 3339 start (inclusive). Defaults to Unix epoch.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "RFC 3339 end (inclusive). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "Bitemporal point-in-time query (RFC 3339).\n\nWhen set, the query returns the meter reads **as they were stored at this timestamp**,\nnot the current (potentially corrected) values. Enables § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) point-in-time\nbilling reconstruction: \"what did we know at invoice date 2026-07-01T00:00:00Z?\".\n\nImplementation: queries `meter_read_corrections` to find the state before any\ncorrections applied after `as_of`. When `None`, returns current (latest) values.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "esa"
+        ],
+        "summary": "`POST /api/v1/esa/typ2/{malo_id}` — receive \"Werte nach Typ 2 **aus SMGW**\"\n(Codeliste der Konfigurationen 1.4 Kapitel **4.6.2**).",
+        "description": "# Why a second door\n\nKapitel 4.6 has two delivery paths and they share nothing but the values.\n**4.6.1** arrives as MSCONS 13027 over AS4 and lands through the `makod`\ningest; **4.6.2** arrives as XML **straight from the iMS over SM-PKI**,\nnever touching the market-communication transport at all, so there is no\ningest to carry it. Two of the seven Pflichtprodukte BNetzA *Mitteilung\nNr. 3* obliges every MSB to serve — `9991 00000 312 1` and\n`9991 00000 313 9` — are 4.6.2 products.\n\n# What this endpoint is not\n\nIt does **not** terminate SM-PKI. The TLS session against the SMGW's WAN\ninterface, the BSI TR-03109-4 certificate chain and the Zieladresse the\nWerteanfrage named are a deployment concern — a gateway holding those\ncertificates, which is what `FTX+Z17` points at. This is where that gateway\nfiles what it decoded, and it is deliberately separate from the submetering\npush (`POST /api/v1/meter-reads/iot/{malo_id}`), which writes the\n**authoritative** store. A Typ-2 value must never reach one.",
+        "operationId": "post_esa_typ2",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `SmgwTyp2Push`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The service's events within the retention window, in commit order — the\nfeed an integrator polls instead of, or beside, an endpoint. Each item is\nthe CloudEvent as delivered.",
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Value"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/forecast/{malo_id}": {
+      "get": {
+        "tags": [
+          "forecast"
+        ],
+        "summary": "`GET /api/v1/forecast/{malo_id}?from=&to=`",
+        "description": "Projects a year's consumption from the meter reads in the given window,\nwith a prior-year seasonal correction when the year before carries the\nshifted window and enough of its own year to form a seasonal factor.\n\n## What this is, legally\n\nIt is a **Verbrauchsschätzung** in the sense of **§ 40a Abs. 2 EnWG**: where\nno reading has been transmitted, the supplier may bill on an estimate made\n*\"unter angemessener Berücksichtigung der tatsächlichen Verhältnisse\"*, based\non the previous period's consumption or on comparable customers — which is\nexactly a prior-year-corrected projection over the point's own history. The\nsame figure sizes an Abschlag under **§ 13 Abs. 1 StromGVV**, which measures\nit *\"anteilig entsprechend dem Verbrauch im vorangegangenen\nAbrechnungszeitraum\"*.\n\nIt is **not** § 60 MsbG. **Abs. 1** is the Messstellenbetreiber's duty to\ndeliver aufbereitete Messwerte to the berechtigten Stellen — the anchor for\n`server::substitute`. **Abs. 2** is a *Soll* about *where* that Aufbereitung\nruns for an intelligentes Messsystem (im Smart-Meter-Gateway, once the BSI\nrates it possible and the BNetzA has made the § 75 Satz 1 Nr. 4 Festlegung).\nNeither says anything about forecasting, and neither reaches a bill.\n\nUses:\n- Setting Abschlag (advance payment) amounts\n- Anticipating the Mehr-/Mindermengensaldo at year-end\n- Feeding a Jahresverbrauchsprognose into SLP-Bilanzierung",
+        "operationId": "get_annual_forecast",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gas-quality/{malo_id}": {
+      "get": {
+        "tags": [
+          "quality"
+        ],
+        "summary": "`GET /api/v1/gas-quality/{malo_id}`",
+        "description": "Returns Gasbeschaffenheitsdaten (Brennwert + Zustandszahl) received via PID 13007.\nUsed for Gas m³ → kWh_Hs conversion per §25 Nr. 4 MessEV / DVGW G 685.",
+        "operationId": "get_gas_quality",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gdpr/erasure/{malo_id}": {
+      "delete": {
+        "tags": [
+          "gdpr"
+        ],
+        "operationId": "post_gdpr_erasure",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `GdprErasureRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gdpr/erasures": {
+      "get": {
+        "tags": [
+          "gdpr"
+        ],
+        "operationId": "get_gdpr_erasures",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/imbalance/{malo_id}/{year}/{month}": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "get_imbalance",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Calendar year",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Month, 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "`strom` · `gas` — the saldo aggregates over the commodity's balancing\nday, and for Gas that is the 06:00 Gastag. Absent, the Sparte the MaLo's\nreadings are stored under; with none stored, `422`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bilanziert_kwh",
+            "in": "query",
+            "description": "The **bilanzierte** (profile-allocated) quantity for the period, in kWh.\n\nRequired. edmd measures; it does not balance. The bilanzierte Menge is\nwhat the Bilanzkreis was charged from the load profile — a commercial\nfigure held by the supplier or read from the MaBiS/allocation side — and\nno amount of metering data yields it. Without it there is no comparison\nto make, so the endpoint refuses rather than returning the measured total\ntwice and calling the difference zero.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/lastgang/{malo_id}": {
+      "get": {
+        "tags": [
+          "lastgang"
+        ],
+        "operationId": "get_lastgang",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "RFC 3339 start (inclusive). Defaults to Unix epoch.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "RFC 3339 end (inclusive). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "Bitemporal point-in-time query (RFC 3339).\n\nWhen set, the query returns the meter reads **as they were stored at this timestamp**,\nnot the current (potentially corrected) values. Enables § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) point-in-time\nbilling reconstruction: \"what did we know at invoice date 2026-07-01T00:00:00Z?\".\n\nImplementation: queries `meter_read_corrections` to find the state before any\ncorrections applied after `as_of`. When `None`, returns current (latest) values.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/lastgang/{malo_id}/resampled": {
+      "get": {
+        "tags": [
+          "lastgang"
+        ],
+        "summary": "`GET /api/v1/lastgang/{malo_id}/resampled`",
+        "description": "Returns the metered time series down-sampled to a coarser time resolution.\nUseful for dashboards, billing previews, and Mehr-/Mindermengensaldo summaries.\n\n| Resolution | Use case |\n|---|---|\n| `HOUR` | Hourly dashboard chart (default) |\n| `DAY` | Daily totals for SLP billing |\n| `MONTH` | Monthly totals for MMM / GPKE Teil 1 Kap. 8.4 |\n| `YEAR` | Annual settlement |\n\nThe sum is `metering::series::resample::resample`'s: **a bucket missing any\nsource slot is left out**, so it surfaces as an absent bucket rather than a\nshort total — substitute first, then resample. Each bucket carries:\n- `total_kwh` — summed energy\n- `peak_kw` — the highest average demand of one source interval in the\n  bucket, on a grid of an hour or finer\n- `quality` — the worst quality of the bucket's slots",
+        "operationId": "get_lastgang_resampled",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolution",
+            "in": "query",
+            "description": "Target resolution: `HOUR`, `DAY`, `MONTH`, `YEAR`. Default: `HOUR`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meter-reads/gas/{malo_id}": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "`POST /api/v1/meter-reads/gas/{malo_id}`",
+        "description": "iMSys / SMGW direct push for **Gas RLM** customers.\nAccepts m³ readings and converts to kWh_Hs using Brennwert × Zustandszahl.",
+        "operationId": "post_direct_reads_gas",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `DirectPushRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meter-reads/iot/{malo_id}": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "`POST /api/v1/meter-reads/iot/{malo_id}`",
+        "description": "Ingest metering data that does not pass through MSCONS: LoRaWAN uplinks,\nM-Bus/wM-Bus concentrators, and REST-capable heat meters.\n\nHeat and water submetering points have no Smart-Meter-Gateway and are\ngoverned by **HeizkostenV**: §5 Abs. 3 requires remote readability by\n31 December 2026, §6a a monthly consumption message, and §12 Abs. 1 grants a\n3 % Kürzungsrecht on two independent grounds — a missing fernablesbare device\n(Satz 2) and information supplied \"nicht oder nicht vollständig\" (Satz 3).\n\n## Payload\n\nValues arrive already decoded. wM-Bus/OMS payload specifications are vendor-\ngated and the device keys sit at the network server, so decoding belongs\nthere. `raw_payload` is retained verbatim so a value can be re-derived if a\ncodec changes.\n\n## Calibration\n\nAn expired Eichfrist is recorded as a warning, not a rejection.\n\n§37 Abs. 1 Satz 1 Nr. 1 MessEG bars *use of the Messgerät* once the Eichfrist\nhas run; §33 Abs. 1 MessEG then bars the resulting values, since a device used\ncontrary to §37 was not \"bestimmungsgemäß verwendet\". BGH VIII ZR 112/10 holds\nthat in civil billing such a reading loses only its *Vermutung der\nRichtigkeit*. Public-law Gebührenabrechnung is stricter (BayVGH 20 B 21.2421),\nwhich is a billing-side decision.\n\n§37 Abs. 2 also ends a Eichfrist early on defect or tampering, so an expiry\ndate alone is not the whole eichrechtliche validity test.",
+        "operationId": "post_iot_reads",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `IotPushRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meter-reads/rlm/{malo_id}": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "`POST /api/v1/meter-reads/rlm/{malo_id}`",
+        "description": "iMSys / SMGW direct push for **Strom RLM** and **iMSys** customers.\n\n## Why direct push?\n\n- MSCONS round-trip via `makod` adds 15–60 min latency.\n- §41a EnWG dynamic tariffs need sub-hourly resolution for real-time billing.\n- High-frequency RLM meters (up to 96 intervals/day) saturate the EDIFACT pipeline.\n\n## Idempotency\n\nSubmit the same `session_id` twice to get the stored result back without re-processing.\n\n## Quality scoring\n\nGap detection, consecutive-zero analysis, and 3-sigma outlier detection run at\ningest time.  If `has_warnings = true`, `edmd` emits `de.messwert.reading.quality.warning`\nto the ERP webhook so `agentd` can investigate.",
+        "operationId": "post_direct_reads_rlm",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `DirectPushRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meter-reads/{malo_id}/bulk": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "`POST /api/v1/meter-reads/{malo_id}/bulk`",
+        "description": "Batch ingestion endpoint. Accepts up to 50 000 intervals per request.\n\nThe whole batch is validated, register by register, and then written in one statement, so\n`stored_count` reflects rows that actually committed and a failure leaves\nnothing behind for the caller to reconcile.\n\nReturns a summary of stored intervals and any validation issues.",
+        "operationId": "post_bulk_reads",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `BulkReadRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meter-reads/{malo_id}/substitute": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "`POST /api/v1/meter-reads/{malo_id}/substitute`",
+        "description": "Generate and store § 60 Abs. 1 MsbG substitute values for a gap interval.\n\nThis endpoint:\n1. Validates the requested gap window.\n2. Reads the register the gap belongs to, with reference data either side.\n3. Validates it over the gap window and fills every slot an error finding\n   covers with `metering::vee::substitute::substitute`.\n4. Stores the generated intervals as `AUTO_SUBSTITUTE` source.\n5. Records each substitution in `substitute_value_log` for § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit.\n6. Returns the generated intervals with their methods, codes and references,\n   and every span that was refused.\n\n**Cedar action**: `write-meter-reads`",
+        "operationId": "post_substitute_values",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `SubstituteRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/netzverlust": {
+      "get": {
+        "tags": [
+          "forecast"
+        ],
+        "summary": "`GET /api/v1/netzverlust?from=&to=`",
+        "description": "Indicative grid-loss balance over the tenant's metered portfolio:\ninfeed (OBIS `x:2.*` — generation feed-in and imports) minus offtake\n(OBIS `x:1.*`). §22 Abs. 1 EnWG obliges the Netzbetreiber to procure\nVerlustenergie; this figure is the metering-side indicator for that\nquantity. Accuracy is bounded by metering coverage — unmetered infeed\nor offtake shows up as phantom loss/gain, which is why the response\nlabels itself indicative rather than settlement-grade.",
+        "operationId": "get_netzverlust",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/quality-assessments/{malo_id}": {
+      "get": {
+        "tags": [
+          "quality"
+        ],
+        "summary": "`GET /api/v1/quality-assessments/{malo_id}`",
+        "description": "Returns the quality assessment history for a MaLo.\nEach batch ingest produces one quality assessment row per § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail.",
+        "operationId": "list_quality_assessments",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/quality-score/{malo_id}": {
+      "post": {
+        "tags": [
+          "quality"
+        ],
+        "summary": "`POST /api/v1/quality-score/{malo_id}[?from=&to=]`",
+        "description": "Retroactively re-scores **all** `meter_reads` for `malo_id` in the given\ndate window with the same validation every ingest door runs.\n\nThis is useful when:\n- MSCONS-ingested historical data was stored without quality scoring\n- The validation rules changed\n- A billing dispute requires re-verification of read quality\n\nThe handler re-runs `compute_quality()` over the window's version-resolved\nreads, records the verdict in `quality_assessments` (source `BATCH_RESCORE`),\nand emits `de.messwert.reading.quality.warning` for any newly-found warnings.\nmeterstore owns the readings and carries no per-interval `quality_warnings`\ncolumn, so the audit trail is the `quality_assessments` row, not a read update.\n\n## Response\n\n```json\n{\n  \"malo_id\": \"DE0001234567890723456789012345678\",\n  \"rows_rescored\": 96,\n  \"warnings_found\": 2,\n  \"grades\": { \"A\": 0, \"B\": 1, \"C\": 1, \"F\": 0 }\n}\n```",
+        "operationId": "post_quality_rescore",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "ISO-8601 start date (inclusive). Defaults to 30 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "ISO-8601 end date (exclusive). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/quality/{malo_id}": {
       "get": {
         "tags": [
@@ -198,6 +2637,1484 @@
         }
       }
     },
+    "/api/v1/query/sql": {
+      "post": {
+        "tags": [
+          "archive"
+        ],
+        "operationId": "post_sql_query",
+        "requestBody": {
+          "description": "A `SqlQueryRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reading-orders": {
+      "get": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`GET /api/v1/reading-orders?malo_id=&status=&anlass=&limit=`",
+        "operationId": "list_reading_orders",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "anlass",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`POST /api/v1/reading-orders` — schedule a meter reading.",
+        "operationId": "create_reading_order",
+        "requestBody": {
+          "description": "A `CreateReadingOrderRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reading-orders/campaign": {
+      "post": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`POST /api/v1/reading-orders/campaign`",
+        "description": "**Jahresablesung campaign scheduler (§ 40b Abs. 1 EnWG).**\n\nCreates bulk `JAHRESABLESUNG` reading orders for all SLP MaLos in the NB's\ngrid area that have not yet been scheduled for reading this campaign year.\n\n## Pipeline\n\n1. Query `marktd GET /api/v1/malos?bilanzierungsmethode=SLP&size=500` (paginated)\n   to enumerate SLP MaLos in the NB's grid area.\n2. For each MaLo: check `ablese_auftraege` — skip those already having an\n   OFFEN/BEAUFTRAGT/AUSGEFUEHRT `JAHRESABLESUNG` for this year.\n3. Insert `ablese_auftraege` rows with:\n   - `anlass = JAHRESABLESUNG`\n   - `auftraggeber_rolle = NB`\n   - `geplant_am = December 31 of campaign_year`\n   - `ausfuehrt_bis = January 31 of campaign_year+1`\n4. Return campaign summary.\n\n## § 40b Abs. 1 EnWG\n\nNB is obligated to ensure annual SLP meter reading.  Unread SLP meters →\nestimated settlement → potential Mehr-/Mindermengendisputes with the LF.\nThis endpoint enables a single-click annual reading campaign without ERP\nintegration.\n\n## Idempotency\n\nRe-running for the same NB + year is safe — already-scheduled MaLos are\ncounted in `skipped` and not double-scheduled.",
+        "operationId": "jahresablesung_campaign",
+        "requestBody": {
+          "description": "A `JahresablesungCampaignRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reading-orders/{id}": {
+      "get": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`GET /api/v1/reading-orders/{id}`",
+        "operationId": "get_reading_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Reading order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reading-orders/{id}/cancel": {
+      "put": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`PUT /api/v1/reading-orders/{id}/cancel`",
+        "operationId": "cancel_reading_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Reading order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done, no body"
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reading-orders/{id}/complete": {
+      "put": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`PUT /api/v1/reading-orders/{id}/complete`",
+        "description": "Records the reading and **files the Zählerstand into the reading store**.\n\nThe second half is the point. A register value written onto the order row\nand nowhere else is unreachable from billing: it cannot answer § 40 Abs. 2\nNr. 6 EnWG (the invoice's opening and closing Zählerstand), and it cannot be\ndifferenced against the previous year's reading — which for an **SLP**\ndelivery point, with no interval metering at all, is the entire billing path\n(`metering::series::reading::consumption_between`).\n\nThe order row keeps its copy: it is the record of what this Auftrag returned,\nwhich is a different fact from what the register held at an instant.",
+        "operationId": "complete_reading_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Reading order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `CompleteReadingOrderRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Done, no body"
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reading-orders/{id}/fail": {
+      "put": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`PUT /api/v1/reading-orders/{id}/fail`",
+        "description": "Records that a dispatched reading could not be taken, with the\nAblesehindernis that prevented it.\n\nDistinct from `/cancel`: a cancelled order is no longer owed, whereas a\nfailed one still is. A failed JAHRESABLESUNG past its deadline remains a\n§ 40b Abs. 1 EnWG gap, so it keeps appearing in `list_overdue_reading_orders`\nuntil it is re-dispatched or the quantity is estimated under §40a EnWG.",
+        "operationId": "fail_reading_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Reading order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `FailReadingOrderRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sharing/participants/{malo_id}/allocation": {
+      "get": {
+        "tags": [
+          "sharing"
+        ],
+        "summary": "`GET /api/v1/sharing/participants/{malo_id}/allocation?from=RFC3339&to=RFC3339`",
+        "description": "One participant's allocation, found by the Marktlokation its consumption is\nfiled under: the community is the `COMMUNITY_SHARE` rule whose tenant\nMesslokation that MaLo sources, and the figure is the participant's sum of\ncapped interval shares from [`community_allocation`] — the quantity a\n§ 42c invoice credits.\n\n`404` when no community names the MaLo, and `422` when two do: one invoice\ncredits one community's allocation, and picking either would credit the\nwrong one.",
+        "operationId": "get_participant_allocation",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "RFC 3339 start (inclusive). Defaults to Unix epoch.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "RFC 3339 end (inclusive). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "Bitemporal point-in-time query (RFC 3339).\n\nWhen set, the query returns the meter reads **as they were stored at this timestamp**,\nnot the current (potentially corrected) values. Enables § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) point-in-time\nbilling reconstruction: \"what did we know at invoice date 2026-07-01T00:00:00Z?\".\n\nImplementation: queries `meter_read_corrections` to find the state before any\ncorrections applied after `as_of`. When `None`, returns current (latest) values.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sharing/readiness": {
+      "get": {
+        "tags": [
+          "sharing"
+        ],
+        "summary": "`GET /api/v1/sharing/readiness`",
+        "description": "Fleet report: which delivery points are **actually** producing the\nquarter-hour series that §42c Abs. 1 EnWG requires.\n\nThis is the delivery half of the §42c readiness question. `marktd`'s\n`GET /api/v1/melos/{id}/sharing-eligibility` answers the capability half from\ndevice master data. Read together they separate the two states an operator\nmust act on differently:\n\n- **capable but not delivering** — the meter supports Zählerstandsgangmessung\n  but none is configured; order the configuration, not a meter.\n- **not capable** — needs an iMSys rollout or an RLM conversion.\n\nThe verdict is `metering::allocation::sharing::assess_delivery` over one\nBerlin calendar month: the dominant energy register as a series on its\nobserved grid, billable quarter-hours against the quarter-hours the month\nholds (2 972, 2 976 or 2 980 across DST). A register that is not one series\nis insufficient, with the defect as its reason.",
+        "operationId": "get_sharing_readiness",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "description": "The Berlin calendar month to assess, `YYYY-MM`. Defaults to the last\ncomplete month.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "malo_ids",
+            "in": "query",
+            "description": "Comma-separated MaLo-IDs to assess. Defaults to every MaLo with readings\nin the month.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_coverage_pct",
+            "in": "query",
+            "description": "Coverage threshold in percent. Defaults to\n[`metering::allocation::sharing::DEFAULT_COVERAGE_THRESHOLD_PCT`].",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sharing/{community_id}/allocation": {
+      "get": {
+        "tags": [
+          "sharing"
+        ],
+        "summary": "`GET /api/v1/sharing/{community_id}/allocation?from=RFC3339&to=RFC3339`",
+        "description": "The quarter-hour allocation for one § 42b / § 42c community: what the\nshared plant produced in each interval, how much of it each participant\nwas allocated, and what fed the public grid.\n\n**`community_id` is the plant's MeLo.** A `COMMUNITY_SHARE` rule is written\nper participant and names the plant, so the community is the set of rules\nsharing a plant.\n\n§ 42c EnWG defines **no** new MaKo process (BNetzA Mitteilung Nr. 73 vom\n07.07.2026, Az. BK6-06-009, endorsing the Dienstleistungsmodell), so this\ncomputes the attribution on demand from stored reads and stored rules rather\nthan implementing a mandated exchange.",
+        "operationId": "get_sharing_allocation",
+        "parameters": [
+          {
+            "name": "community_id",
+            "in": "path",
+            "description": "Energy-sharing community id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "RFC 3339 start (inclusive). Defaults to Unix epoch.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "RFC 3339 end (inclusive). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "Bitemporal point-in-time query (RFC 3339).\n\nWhen set, the query returns the meter reads **as they were stored at this timestamp**,\nnot the current (potentially corrected) values. Enables § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) point-in-time\nbilling reconstruction: \"what did we know at invoice date 2026-07-01T00:00:00Z?\".\n\nImplementation: queries `meter_read_corrections` to find the state before any\ncorrections applied after `as_of`. When `None`, returns current (latest) values.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/smgw": {
+      "get": {
+        "tags": [
+          "smgw"
+        ],
+        "summary": "`GET /api/v1/smgw`",
+        "description": "List all SMGW sessions for the tenant with their current compliance status.\nReturns sessions with the most recently updated first.",
+        "operationId": "list_smgw_sessions",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by gateway status.  Defaults to all statuses.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "with_issues_only",
+            "in": "query",
+            "description": "When `true`, return only sessions with open compliance issues.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max sessions to return (default 500, hard cap 5000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/smgw/compliance": {
+      "get": {
+        "tags": [
+          "smgw"
+        ],
+        "summary": "`GET /api/v1/smgw/compliance`",
+        "description": "Run an on-demand compliance scan across all SMGW sessions.\n\nThis is equivalent to triggering the background worker's sweep logic\nsynchronously.  The response is a `ComplianceReport` with all detected issues.\n\n**Does not write to `cls_compliance_issues`** and **does not emit CloudEvents** —\nit is a read-only audit endpoint for dashboards and the `smgw-diagnostics-agent`.\nUse `POST /api/v1/smgw/compliance/scan` for a side-effecting full sweep.",
+        "operationId": "get_smgw_compliance",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/smgw/compliance/scan": {
+      "post": {
+        "tags": [
+          "smgw"
+        ],
+        "summary": "`POST /api/v1/smgw/compliance/scan`",
+        "description": "Trigger an immediate, side-effecting compliance sweep:\n- Runs `run_cls_compliance_sweep()` synchronously\n- Reconciles all found issues against `cls_compliance_issues`\n- Emits `de.messwert.cls.compliance-issue` CloudEvents for each issue\n\nUse this endpoint for manual compliance audits or integration tests.\nThe daily background worker calls the same logic automatically.",
+        "operationId": "post_smgw_compliance_scan",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/smgw/{malo_id}": {
+      "get": {
+        "tags": [
+          "smgw"
+        ],
+        "summary": "`GET /api/v1/smgw/{malo_id}`",
+        "description": "Returns the stored `SmgwSession` for a MaLo, plus its **open** compliance\nissues from `cls_compliance_issues` — what is wrong now, oldest first.",
+        "operationId": "get_smgw_session",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "smgw"
+        ],
+        "summary": "`PUT /api/v1/smgw/{malo_id}`",
+        "description": "Register or update a `SmgwSession` for a MaLo.\n\nThe body is a [`SmgwSession`], read through `mako_service::Json`: a key the\nsession does not declare — at any depth — is a `422` naming it, so a\nmisspelt field is refused rather than read as absent. The session is stored\nas JSONB in its own serialisation. The caller is the MSB's\nGWA (Gateway-Administrator) system after a BSI TR-03109-4 Admin session;\nedmd subscribes to no `de.markt.*` event, so a Gerätekonfiguration changed\nin marktd reaches this table only through such a call.\n\nTriggers a synchronous compliance check.  Detected issues are logged to\n`cls_compliance_issues` immediately and CloudEvents emitted.  This makes the first\ncompliance check available within seconds of gateway registration, without waiting\nfor the daily sweep.\n\n## `gateway_status` extraction\n\nThe promoted `gateway_status` column is extracted from `session.status` so the\ncompliance sweep can pre-filter `WHERE gateway_status != 'REPLACED'` efficiently.",
+        "operationId": "put_smgw_session",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `SmgwSession`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Done, no body"
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/summenzeitreihe/{malo_id}": {
+      "get": {
+        "tags": [
+          "lastgang"
+        ],
+        "summary": "`GET /api/v1/summenzeitreihe/{malo_id}?from=&to=`",
+        "description": "Returns monthly aggregated energy data (Summenzeitreihe) for a MaLo.\n\nThis is the canonical data format for:\n- MABIS balance group accounting (PID 13003)\n- Mehr-/Mindermengensaldo (GPKE Teil 1 Kap. 8.4)\n- Annual Jahresabrechnung summaries\n\nEach month bucket includes: `total_kwh`, `peak_kw`, `coverage_pct`, `quality`.",
+        "operationId": "get_summenzeitreihe",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/surveillance/delivery": {
+      "get": {
+        "tags": [
+          "surveillance"
+        ],
+        "summary": "`GET /api/v1/surveillance/delivery`",
+        "description": "The measuring points that are not delivering, from the register — the\nstanding answer, not a fresh scan. Cheap enough for a dashboard to poll.\n\n`?state=SILENT|UNDER_COVERED` narrows it; `?include_resolved=true` adds the\npoints that recovered, so an operator can see a flapping delivery path.",
+        "operationId": "get_delivery_surveillance",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`SILENT` or `UNDER_COVERED`. Defaults to both.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_resolved",
+            "in": "query",
+            "description": "Include points that have recovered. Default: open only.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows (default 500, hard cap 5000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/surveillance/delivery/scan": {
+      "post": {
+        "tags": [
+          "surveillance"
+        ],
+        "summary": "`POST /api/v1/surveillance/delivery/scan`",
+        "description": "Run a sweep now: reconcile the register and emit the transitions. The daily\nworker calls the same function.",
+        "operationId": "post_delivery_surveillance_scan",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/timeseries/{malo_id}": {
       "get": {
         "tags": [
@@ -250,6 +4167,1154 @@
           },
           "422": {
             "description": "zeitraum_zu_lang"
+          }
+        }
+      }
+    },
+    "/api/v1/virtual": {
+      "get": {
+        "tags": [
+          "virtual"
+        ],
+        "summary": "`GET /api/v1/virtual` — list all virtual meter configurations for this tenant.",
+        "operationId": "list_virtual_meters",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "virtual"
+        ],
+        "summary": "`POST /api/v1/virtual` — create a virtual meter configuration.",
+        "operationId": "create_virtual_meter",
+        "requestBody": {
+          "description": "A `CreateVirtualMeterRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/virtual/{virtual_malo_id}": {
+      "get": {
+        "tags": [
+          "virtual"
+        ],
+        "summary": "`GET /api/v1/virtual/{virtual_malo_id}` — get one virtual meter config.",
+        "operationId": "get_virtual_meter",
+        "parameters": [
+          {
+            "name": "virtual_malo_id",
+            "in": "path",
+            "description": "The virtual Marktlokation's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "virtual"
+        ],
+        "summary": "`DELETE /api/v1/virtual/{virtual_malo_id}` — remove a virtual meter configuration.",
+        "operationId": "delete_virtual_meter",
+        "parameters": [
+          {
+            "name": "virtual_malo_id",
+            "in": "path",
+            "description": "The virtual Marktlokation's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done, no body"
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/virtual/{virtual_malo_id}/lastgang": {
+      "get": {
+        "tags": [
+          "virtual"
+        ],
+        "summary": "`GET /api/v1/virtual/{virtual_malo_id}/lastgang`",
+        "description": "Computes the virtual meter time series from the stored rule: a\nBerechnungsformel is evaluated over its Messlokationen, a community share is\nthe tenant's grid draw after the community allocation. The result is NOT\nstored in `meter_reads` — it is computed on demand.\n\nUse `?from=` / `?to=` (RFC3339 UTC) to bound the query window.",
+        "operationId": "get_virtual_lastgang",
+        "parameters": [
+          {
+            "name": "virtual_malo_id",
+            "in": "path",
+            "description": "The virtual Marktlokation's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/deliveries/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue one delivery again, whatever its state.",
+        "operationId": "replay_delivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The delivery's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`delivery_not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The endpoints, a page ordered by name.",
+        "operationId": "list_endpoints",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; absent for the first.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Endpoint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Register an endpoint; the answer shows its secret once.",
+        "operationId": "create_endpoint",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointCreated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_name_taken`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`endpoint_url_not_allowed`, `endpoint_name_reserved`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "One endpoint, with its version as `ETag`.",
+        "operationId": "get_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Replace an endpoint; `If-Match` names the version read.",
+        "operationId": "update_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete an endpoint; its pending deliveries are cancelled with it.",
+        "operationId": "delete_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/deliveries": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The deliveries of one endpoint, newest first.",
+        "operationId": "list_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Which deliveries; every one when absent.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryFilter"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Delivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue every event of a time window again for one endpoint, including\nevents that never had a delivery to it.",
+        "operationId": "replay_window",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayWindow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention` (with `oldest_replayable`), `replay_window_invalid`, `replay_window_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Rotate the secret: the new one signs from now, the previous one beside it\nfor `overlap_hours`. The answer shows the new secret once.",
+        "operationId": "rotate_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretRotated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`overlap_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/test": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Send `de.mako.webhook.test` to the endpoint now, signed like a delivery.",
+        "operationId": "test_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestDelivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/zaehlerstandsgang/{malo_id}": {
+      "get": {
+        "tags": [
+          "zaehlerstandsgang"
+        ],
+        "summary": "`GET /api/v1/zaehlerstandsgang/{malo_id}?from=&to=`",
+        "description": "The stored register readings — the primary record behind the derived\nLastgang, and the source of the § 40 Abs. 2 Nr. 6 EnWG opening and closing\nZählerstand on an invoice.",
+        "operationId": "get_zaehlerstandsgang",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "zaehlerstandsgang"
+        ],
+        "summary": "`POST /api/v1/zaehlerstandsgang/{malo_id}`",
+        "description": "Ingest a Zählerstandsgang, difference it into a Lastgang, and store both.\n\nReturns `201` for a clean conversion, `202` when the conversion had anything\nto report (a reconstructed wrap, a refused difference, or a V-rule finding on\nthe resulting Lastgang), and `200` for a replayed `session_id`.\n\n**Cedar action**: `write-meter-reads`",
+        "operationId": "post_zaehlerstandsgang",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `ZsgPushRequest`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Batch too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/zeitreihe/{malo_id}": {
+      "get": {
+        "tags": [
+          "lastgang"
+        ],
+        "operationId": "get_zeitreihe",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "RFC 3339 start (inclusive). Defaults to Unix epoch.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "RFC 3339 end (inclusive). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "Bitemporal point-in-time query (RFC 3339).\n\nWhen set, the query returns the meter reads **as they were stored at this timestamp**,\nnot the current (potentially corrected) values. Enables § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) point-in-time\nbilling reconstruction: \"what did we know at invoice date 2026-07-01T00:00:00Z?\".\n\nImplementation: queries `meter_read_corrections` to find the state before any\ncorrections applied after `as_of`. When `None`, returns current (latest) values.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -313,6 +5378,319 @@
             "description": "First day answered."
           }
         }
+      },
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "Delivery": {
+        "type": "object",
+        "description": "One event to one endpoint.",
+        "required": [
+          "id",
+          "endpoint_id",
+          "event_id",
+          "event_type",
+          "status",
+          "attempts",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts made."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the delivery was created."
+          },
+          "endpoint_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint delivered to."
+          },
+          "event_id": {
+            "type": "string",
+            "description": "The CloudEvent `id`, sent as `webhook-id`."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "The CloudEvent `type`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The delivery's id — what a single replay names."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last attempt's failure."
+          },
+          "last_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status of the last attempt; absent when it got no answer."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long the last answered attempt took, in milliseconds."
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next attempt is due, while pending."
+          },
+          "ordering_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The aggregate the event is about; deliveries of one key arrive in order."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus",
+            "description": "`pending`, `delivered` or `dead_lettered`."
+          }
+        }
+      },
+      "DeliveryFilter": {
+        "type": "string",
+        "description": "Which deliveries the log lists.",
+        "enum": [
+          "all",
+          "pending",
+          "delivered",
+          "failed"
+        ]
+      },
+      "DeliveryStatus": {
+        "type": "string",
+        "description": "A delivery's state.",
+        "enum": [
+          "pending",
+          "delivered",
+          "dead_lettered"
+        ]
+      },
+      "Endpoint": {
+        "type": "object",
+        "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "event_types",
+          "extensions",
+          "owner",
+          "active",
+          "version",
+          "created_at"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the endpoint was registered."
+          },
+          "deactivated_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the endpoint was deactivated (`gone`)."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is the config URL."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Owner",
+            "description": "`config` or `api`."
+          },
+          "partner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+          },
+          "previous_secret_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when the previous secret still signs, after a rotation."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where deliveries are POSTed."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The version `If-Match` names."
+          }
+        }
+      },
+      "EndpointCreate": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints`.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is reserved for the config URL."
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EndpointCreated": {
+        "type": "object",
+        "description": "A created endpoint and its secret — the only answer that shows it.",
+        "required": [
+          "endpoint",
+          "secret"
+        ],
+        "properties": {
+          "endpoint": {
+            "$ref": "#/components/schemas/Endpoint",
+            "description": "The endpoint."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The `whsec_` signing secret; shown once."
+          }
+        }
+      },
+      "EndpointUpdate": {
+        "type": "object",
+        "description": "The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.",
+        "required": [
+          "url",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
       },
       "Korrektur": {
         "type": "object",
@@ -522,6 +5900,280 @@
           "F"
         ]
       },
+      "Owner": {
+        "type": "string",
+        "description": "Who owns an endpoint.",
+        "enum": [
+          "config",
+          "api"
+        ]
+      },
+      "Page_Delivery": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One event to one endpoint.",
+              "required": [
+                "id",
+                "endpoint_id",
+                "event_id",
+                "event_type",
+                "status",
+                "attempts",
+                "created_at"
+              ],
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Attempts made."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the delivery was created."
+                },
+                "endpoint_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint delivered to."
+                },
+                "event_id": {
+                  "type": "string",
+                  "description": "The CloudEvent `id`, sent as `webhook-id`."
+                },
+                "event_type": {
+                  "type": "string",
+                  "description": "The CloudEvent `type`."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The delivery's id — what a single replay names."
+                },
+                "last_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The last attempt's failure."
+                },
+                "last_status": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "The HTTP status of the last attempt; absent when it got no answer."
+                },
+                "latency_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "How long the last answered attempt took, in milliseconds."
+                },
+                "next_attempt_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When the next attempt is due, while pending."
+                },
+                "ordering_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The aggregate the event is about; deliveries of one key arrive in order."
+                },
+                "status": {
+                  "$ref": "#/components/schemas/DeliveryStatus",
+                  "description": "`pending`, `delivered` or `dead_lettered`."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Endpoint": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+              "required": [
+                "id",
+                "name",
+                "url",
+                "event_types",
+                "extensions",
+                "owner",
+                "active",
+                "version",
+                "created_at"
+              ],
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the endpoint was registered."
+                },
+                "deactivated_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Why the endpoint was deactivated (`gone`)."
+                },
+                "event_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "`mako_events::matches` patterns; empty matches every type."
+                },
+                "extensions": {
+                  "type": "object",
+                  "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint's id."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Unique per service; `default` is the config URL."
+                },
+                "owner": {
+                  "$ref": "#/components/schemas/Owner",
+                  "description": "`config` or `api`."
+                },
+                "partner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "previous_secret_expires_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "Until when the previous secret still signs, after a rotation."
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Where deliveries are POSTed."
+                },
+                "version": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "The version `If-Match` names."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Value": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {},
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
       "Qualitaetsbefund": {
         "type": "object",
         "description": "The quality verdict over a window, recomputed from the version-resolved\nseries by the scorer the ingest and rescore paths run.",
@@ -611,6 +6263,76 @@
           }
         }
       },
+      "ReplayWindow": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the window, inclusive (RFC 3339)."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the window, exclusive (RFC 3339)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Replayed": {
+        "type": "object",
+        "description": "How many deliveries a replay queued.",
+        "required": [
+          "queued"
+        ],
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deliveries queued again or for the first time."
+          }
+        }
+      },
+      "RotateSecret": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.",
+        "required": [
+          "overlap_hours"
+        ],
+        "properties": {
+          "overlap_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long the previous secret keeps signing, at most 168 hours.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "SecretRotated": {
+        "type": "object",
+        "description": "A rotated secret — the only answer that shows it.",
+        "required": [
+          "secret",
+          "previous_expires_at"
+        ],
+        "properties": {
+          "previous_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until when the previous secret also signs."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The new `whsec_` signing secret; shown once."
+          }
+        }
+      },
       "Tag": {
         "type": "object",
         "description": "One day of the ribbon.",
@@ -638,13 +6360,129 @@
           "korrigiert",
           "fehlt"
         ]
+      },
+      "TestDelivery": {
+        "type": "object",
+        "description": "What a test delivery came to.",
+        "required": [
+          "delivered"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "boolean",
+            "description": "Whether the endpoint answered 2xx."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was not delivered."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long it took, when it answered."
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status, when it answered.",
+            "minimum": 0
+          }
+        }
+      },
+      "TotalEstimate": {
+        "type": "object",
+        "description": "A count bounded at [`COUNT_CAP`]: a list over a million rows reports\n`{count: 10000, capped: true}` rather than counting them.",
+        "required": [
+          "count",
+          "capped"
+        ],
+        "properties": {
+          "capped": {
+            "type": "boolean",
+            "description": "`true` when there are more rows than `count`."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The rows counted, at most 10 000."
+          }
+        }
       }
     }
   },
   "tags": [
     {
       "name": "messwerte",
-      "description": "Meter data reads"
+      "description": "Meter data reads and corrections"
+    },
+    {
+      "name": "lastgang",
+      "description": "Lastgang, Zeitreihe, energy and Summenzeitreihe reads"
+    },
+    {
+      "name": "zaehlerstandsgang",
+      "description": "Zählerstandsgang push and read"
+    },
+    {
+      "name": "billing",
+      "description": "Deliveries, imbalance and billing periods"
+    },
+    {
+      "name": "ingest",
+      "description": "Direct, bulk, IoT and substitute-value ingest"
+    },
+    {
+      "name": "quality",
+      "description": "Quality scoring, assessments, gas quality and confirmations"
+    },
+    {
+      "name": "esa",
+      "description": "ESA Werte nach Typ 2"
+    },
+    {
+      "name": "reading-orders",
+      "description": "Ablesesteuerung and the Jahresablesung"
+    },
+    {
+      "name": "virtual",
+      "description": "Virtual meters"
+    },
+    {
+      "name": "forecast",
+      "description": "Annual forecast and Netzverlust"
+    },
+    {
+      "name": "surveillance",
+      "description": "Delivery surveillance"
+    },
+    {
+      "name": "archive",
+      "description": "Cold-tier archive and analytical SQL"
+    },
+    {
+      "name": "sharing",
+      "description": "Energy sharing allocation"
+    },
+    {
+      "name": "gdpr",
+      "description": "Art. 17 DSGVO erasure"
+    },
+    {
+      "name": "smgw",
+      "description": "§14a SMGW session registry"
+    },
+    {
+      "name": "webhooks",
+      "description": "Webhook endpoints and deliveries on edmd's event outbox"
     }
   ]
 }

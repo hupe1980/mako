@@ -1,0 +1,21 @@
+{
+  "status": "completed",
+  "findings": [
+    "/vorschlag/aktion=aufrechterhalten;/vorschlag/antwortcode=null;/vorschlag/befund=TariffDeviation"
+  ],
+  "escalated": false,
+  "tool_calls": [
+    {
+      "tool": "invoicd/get_receipt",
+      "arguments": {
+        "id": "9b2f6a40-5d0e-4c55-8a3e-0c7d2f1e9a11"
+      }
+    },
+    {
+      "tool": "invoicd/get_check_result",
+      "arguments": {
+        "id": "9b2f6a40-5d0e-4c55-8a3e-0c7d2f1e9a11"
+      }
+    }
+  ]
+}

@@ -1,0 +1,3180 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "processd — process decisions",
+    "description": "Answers the published Entscheidungsbäume for NB, LF and MSB, queues what it cannot decide for an operator, starts and ends supply on the LF's behalf, and keeps the process read model. Every refusal answers with `ApiError`; branch on `code`.",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.38.0"
+  },
+  "paths": {
+    "/api/v1/audit/gleichbehandlung": {
+      "get": {
+        "tags": [
+          "obs"
+        ],
+        "summary": "`GET /api/v1/audit/gleichbehandlung?year=YYYY[&format=csv|json]`",
+        "description": "Per-PID evidence for the **Gleichbehandlungsbericht** a vertically\nintegrated undertaking's Gleichbehandlungsbeauftragte files with the\nBundesnetzagentur by **31 March** for the preceding calendar year\n(§ 7a Abs. 5 EnWG), and publishes in non-personalised form.\nLieferantenwechsel is one of the areas those reports examine.\n\nIt compares how the operator's network arm treated Lieferanten inside its\nown undertaking against third-party Lieferanten, over the processes the\nnetwork arm actually answers (`handler::is_nb_answered_lieferanten_process`).\nThe underlying duties are § 6a EnWG (informatorische Entflechtung) and\n§ 20 Abs. 1 Satz 1 EnWG (diskriminierungsfreier Netzzugang).\n\n**`gap_pp` is `affiliate − third_party`, in percentage points.** A positive\ngap means the affiliate fared better, which is the concern. This convention\nis `ParityComparison`'s and is shared with the `de.obs.stp.parity.alert`\nCloudEvent and the MCP tool: three surfaces read one sign, because a sign\ncomputed per surface is a sign that can disagree about which side was\nfavoured.\n\n**No threshold is asserted.** The Bundesnetzagentur publishes no numeric\nparity limit for this figure; what counts as a gap worth explaining is the\noperator's judgement, and the escalation threshold lives in\n`[obs] parity_threshold_pp`. A gap over a group smaller than\n`PARITY_MIN_SAMPLE` is reported as `null`, not as a large number.",
+        "operationId": "get_gleichbehandlung_report",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "description": "The calendar year; the current Berlin year when absent",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`json` (default) or `csv`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The § 7a Abs. 5 EnWG Gleichbehandlung report, per PID affiliate against third party",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-kpi` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/counterparties": {
+      "get": {
+        "tags": [
+          "counterparties"
+        ],
+        "summary": "`GET /api/v1/counterparties?von=&bis=` — every counterparty and role with\nprocesses it owes in the period, the most late and unanswered first.",
+        "operationId": "get_counterparties",
+        "parameters": [
+          {
+            "name": "von",
+            "in": "query",
+            "description": "Start of the period, `YYYY-MM-DD`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bis",
+            "in": "query",
+            "description": "End of the period, `YYYY-MM-DD`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every counterparty and role with processes it owes in the period",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-counterparty` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_period`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/counterparties/{mp_id}/{rolle}": {
+      "get": {
+        "tags": [
+          "counterparties"
+        ],
+        "summary": "`GET /api/v1/counterparties/{mp_id}/{rolle}?von=&bis=[&format=csv]` — one\ncounterparty's record; `format=csv` or `Accept: text/csv` answers the\nexport of every process behind the figures.",
+        "operationId": "get_counterparty_record",
+        "parameters": [
+          {
+            "name": "mp_id",
+            "in": "path",
+            "description": "The counterparty's MP-ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rolle",
+            "in": "path",
+            "description": "The Marktrolle it answered in",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "von",
+            "in": "query",
+            "description": "Start of the period, `YYYY-MM-DD`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bis",
+            "in": "query",
+            "description": "End of the period, `YYYY-MM-DD`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`csv` answers the export of every process behind the figures",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The counterparty's record, or its CSV export",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-counterparty` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_counterparty`, `invalid_period`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/decisions": {
+      "get": {
+        "tags": [
+          "decisions"
+        ],
+        "operationId": "list_decisions",
+        "responses": {
+          "200": {
+            "description": "The latest NB Anmeldung decisions",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-decisions` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/end-supply": {
+      "post": {
+        "tags": [
+          "supply"
+        ],
+        "summary": "`POST /api/v1/end-supply` — ERP initiates a GPKE Lieferende (Strom).",
+        "description": "Forwards to makod `gpke.lieferende.anmelden` (PID 55004 Abmeldung). The notice\nperiod that governs *when* a Lieferende is valid is enforced upstream\nin `vertragd` (§ 20 Abs. 1 StromGVV/GasGVV in der Grundversorgung, sonst\nvertraglich); this endpoint validates only that the\nmandatory fields are present.",
+        "operationId": "end_supply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndSupplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "makod opened the Abmeldung (55004)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `initiate-supply` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "makod refused the command in the process's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the missing field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/end-supply-gas": {
+      "post": {
+        "tags": [
+          "supply"
+        ],
+        "summary": "`POST /api/v1/end-supply-gas` — ERP initiates a GeLi Gas Lieferende (44004).",
+        "description": "Forwards to makod `geli.lieferende.anmelden`, which is licensed to the\n**Gas** supplier (`LFG`) and reads the Marktlokation, the `YYYYMMDD`\n`process_date` and the Transaktionsgrund.",
+        "operationId": "end_supply_gas",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndSupplyGasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "makod opened the Lieferende (44004)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `initiate-supply` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "makod refused the command in the process's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the missing field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/eog": {
+      "get": {
+        "tags": [
+          "nb"
+        ],
+        "summary": "`GET /api/v1/eog?status=…` — EoG gap-closure case log (§36/§38 EnWG).",
+        "operationId": "list_eog_cases",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Narrow to one case status, e.g. `expiring` or `expired`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The EoG case log (§§ 36, 38 EnWG)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-eog` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "This build carries no NB role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The service's events within the retention window, in commit order — the\nfeed an integrator polls instead of, or beside, an endpoint. Each item is\nthe CloudEvent as delivered.",
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Value"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/klaerfaelle": {
+      "get": {
+        "tags": [
+          "klaerfaelle"
+        ],
+        "summary": "`GET /api/v1/klaerfaelle` — the open Klärfälle, the earliest due date\nfirst (`crate::klaerfall`).",
+        "operationId": "list_klaerfaelle",
+        "responses": {
+          "200": {
+            "description": "The open Klärfälle of the caller's Marktrollen, the earliest due first",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-case` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/klaerfaelle/{id}": {
+      "get": {
+        "tags": [
+          "klaerfaelle"
+        ],
+        "summary": "`GET /api/v1/klaerfaelle/{id}` — one case with its history.",
+        "operationId": "get_klaerfall",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Klärfall id (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The case with its history",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-case` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such case the caller may read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/klaerfaelle/{id}/assign": {
+      "post": {
+        "tags": [
+          "klaerfaelle"
+        ],
+        "summary": "`POST /api/v1/klaerfaelle/{id}/assign` — take the case, or release it;\njournaled against the authenticated principal.",
+        "operationId": "assign_klaerfall",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Klärfall id (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignKlaerfallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The case",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `assign-case` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such case the caller may read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`case_closed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/klaerfaelle/{id}/dispatch": {
+      "post": {
+        "tags": [
+          "klaerfaelle"
+        ],
+        "summary": "`POST /api/v1/klaerfaelle/{id}/dispatch` — „korrigieren & senden\".",
+        "description": "Sends the case's correcting command ([`crate::klaerfall::korrektur`])\nthrough the Freigabe decision path: a pending Freigabe is decided by the\napprove/reject route itself; an answer the counterparty refused is\nre-sent from the decided Freigabe with the same checks —\n`decision_body`, the code against the tree, the body shown, and makod's\npre-send check, whose refusal comes back in place. Another command than\nthe proposal needs a `begruendung`; a command outside the Freigabe's\napprove/reject pair is refused. The caller needs `dispatch-case` and the\ncommand's own authority — `decide-queue` in the Marktrolle the Freigabe\nowes the answer as. The proposal, the command sent and the reason are\njournaled against the authenticated principal.",
+        "operationId": "dispatch_klaerfall",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Klärfall id (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The case after the correcting command went out",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `dispatch-case` or `decide-queue` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such case the caller may read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`case_closed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided (`no_correction`, makod's pre-send check)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/klaerfaelle/{id}/resolve": {
+      "post": {
+        "tags": [
+          "klaerfaelle"
+        ],
+        "summary": "`POST /api/v1/klaerfaelle/{id}/resolve` — close the case without a\nmarket message; the reason is required and journaled.",
+        "operationId": "resolve_klaerfall",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Klärfall id (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveKlaerfallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The closed case",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `resolve-case` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such case the caller may read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`case_closed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`begruendung_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/neuanlage": {
+      "get": {
+        "tags": [
+          "nb"
+        ],
+        "summary": "`GET /api/v1/neuanlage` — the `E_0608` case log.",
+        "description": "`?status=offen` is what an operator watches: those are the Neuanlagen\nwhose Marktlokation the NB has not identified yet, each with the\n`letzter_pruefungstag` its refusal only becomes admissible after.",
+        "operationId": "list_neuanlage_cases",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Narrow to one case status, e.g. `offen`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The `E_0608` Neuanlage case log",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-neuanlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "This build carries no NB role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/neuanlage/{id}/identifikation": {
+      "put": {
+        "tags": [
+          "nb"
+        ],
+        "summary": "`PUT /api/v1/neuanlage/{id}/identifikation` — record the Marktlokation.",
+        "description": "A Neuanlage carries address and device data, not a MaLo-ID: the NB\nmatches it against its own NIS/GIS, the same source that provisions\n`malo_grid`. This is where that answer arrives, from an operator or an\nERP integration. The next Prüflauf pass then walks `E_0608` with it.",
+        "operationId": "set_neuanlage_identifikation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Neuanlage case id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NeuanlageIdentifikationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded; the next Prüflauf walks `E_0608` with it"
+          },
+          "403": {
+            "description": "Cedar `identify-neuanlage` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No open case with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`MISSING_MALO_ID`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "This build carries no NB role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/obs/rebuild": {
+      "post": {
+        "tags": [
+          "obs"
+        ],
+        "summary": "`POST /api/v1/obs/rebuild` — replay `marktd`'s event feed into the\nprocess read model through the projection function the webhook calls.",
+        "description": "Runs inline and answers with what it read; the projection is idempotent,\nso a rebuild interrupted by a dropped connection is finished by sending\nit again.",
+        "operationId": "rebuild_projection",
+        "responses": {
+          "200": {
+            "description": "What the rebuild read, and the oldest event marktd's retention still held",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `rebuild-projection` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "marktd's event feed did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue": {
+      "get": {
+        "tags": [
+          "queue"
+        ],
+        "operationId": "list_queue",
+        "responses": {
+          "200": {
+            "description": "The approval-queue entries",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-queue` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/{id}/approve": {
+      "post": {
+        "tags": [
+          "queue"
+        ],
+        "summary": "Approve an approval-queue entry: claim it, then dispatch its command.",
+        "description": "A held Accept is dispatched with the answer frozen when it was queued;\nan escalated entry needs the operator's answer in the body\n(`OperatorAnswer`: `antwort_code`, `antwort_tree`, `antwort_codeliste`,\n`bemerkung`) and is refused with `422` without the fields its command\nneeds.\n\n`expires_at` carries the *business* answer Frist of the queued process,\nread from `mako_fristen::antwort`, less an hour of headroom. Operators\nmust act before it.",
+        "operationId": "approve_queue_entry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The approval-queue entry id (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Claimed and dispatched"
+          },
+          "403": {
+            "description": "Cedar `decide-queue` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`already_decided`, naming who decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/{id}/reject": {
+      "post": {
+        "tags": [
+          "queue"
+        ],
+        "summary": "Reject an approval-queue entry: claim it, then dispatch its refusal.",
+        "description": "The refusal's Antwortcode is the operator's, stated in the body like an\nescalated approval; what the refusal is addressed by (the `tx_id` of a\nSteuerungsauftrag, the MaLo of the row) comes from the entry.",
+        "operationId": "reject_queue_entry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The approval-queue entry id (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Claimed and its refusal dispatched"
+          },
+          "403": {
+            "description": "Cedar `decide-queue` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`already_decided`, naming who decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sperr-orders": {
+      "get": {
+        "tags": [
+          "sperr"
+        ],
+        "summary": "`GET /api/v1/sperr-orders`",
+        "operationId": "list_orders",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "`pending`, `executed`, `failed` or `cancelled`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "malo_id",
+            "in": "query",
+            "description": "One Marktlokation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1–1000; 100 when absent",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "due",
+            "in": "query",
+            "description": "Only orders whose requested execution date has arrived",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The orders",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-sperr-order` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sperr"
+        ],
+        "summary": "`POST /api/v1/sperr-orders`",
+        "operationId": "create_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The order's id",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `create-sperr-order` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An order for this process already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The order fails its validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sperr-orders/stats": {
+      "get": {
+        "tags": [
+          "sperr"
+        ],
+        "summary": "`GET /api/v1/sperr-orders/stats`",
+        "operationId": "get_stats",
+        "responses": {
+          "200": {
+            "description": "Counts per status and the orders past their Frist",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-sperr-order` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sperr-orders/{id}": {
+      "get": {
+        "tags": [
+          "sperr"
+        ],
+        "summary": "`GET /api/v1/sperr-orders/{id}`",
+        "operationId": "get_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The order",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `read-sperr-order` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sperr-orders/{id}/cancel": {
+      "put": {
+        "tags": [
+          "sperr"
+        ],
+        "summary": "`PUT /api/v1/sperr-orders/{id}/cancel`",
+        "description": "Withdraw a pending order. No IFTSTA is dispatched — nothing happened.",
+        "operationId": "cancel_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Withdrawn"
+          },
+          "403": {
+            "description": "Cedar `cancel-sperr-order` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No pending order with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sperr-orders/{id}/execute": {
+      "put": {
+        "tags": [
+          "sperr"
+        ],
+        "summary": "`PUT /api/v1/sperr-orders/{id}/execute`",
+        "description": "The field team carried the order out. Records the outcome and dispatches\nIFTSTA 21039 (`STS Z14 erfolgreich`).",
+        "operationId": "execute_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Recorded; its IFTSTA 21039 is queued",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "204": {
+            "description": "Recorded; an operator-created order owes no IFTSTA"
+          },
+          "403": {
+            "description": "Cedar `execute-sperr-order` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`executed_at` is not RFC 3339 or lies in the future",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sperr-orders/{id}/fail": {
+      "put": {
+        "tags": [
+          "sperr"
+        ],
+        "summary": "`PUT /api/v1/sperr-orders/{id}/fail`",
+        "description": "A Sperrversuch that did not succeed.\n\nThe **first** one is recorded and the order stays in the queue: GPKE Teil 2\nKap. 3.5.1.2 Nr. 5 gives the NB two Sperrversuche within one Sperrauftrag, and\nanswering `Z13 gescheitert` after one visit ends a process that still owes a\nsecond. The second attempt — or `endgueltig: true` for a legal or factual\nimpossibility — closes the order and dispatches IFTSTA 21039 so the Lieferant\nlearns *why* instead of waiting out their window.",
+        "operationId": "fail_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Recorded; its IFTSTA 21039 is queued, or the order stays open for a second Sperrversuch",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "204": {
+            "description": "Recorded; an operator-created order owes no IFTSTA"
+          },
+          "403": {
+            "description": "Cedar `execute-sperr-order` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An empty `reason`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/start-supply": {
+      "post": {
+        "tags": [
+          "supply"
+        ],
+        "summary": "`POST /api/v1/start-supply` — ERP initiates a GPKE Lieferbeginn (Strom SLP).",
+        "description": "Validates the LFW24 Mindestvorlauffrist and dispatches\n`gpke.lieferbeginn.anmelden` to `makod`.\n\n## Request body (JSON)\n\n| Field               | Type   | Required | Notes |\n|---------------------|--------|----------|-------|\n| `malo_id`           | string | ✓        | 11-digit Strom Marktlokations-ID |\n| `lieferbeginn_datum` | string | ✓        | ISO-8601 date (YYYY-MM-DD) |\n| `transaktionsgrund` | string | ✓        | `SG4 STS+7` DE 9013, `E01` Ein-/Auszug (Umzug) or `E03` Wechsel — the column makes it Muss (UTILMD AHB Strom 2.2 Kap. 8.2, S. 73). The Strom date rule is identical for both (LFW24) |\n| `bilanzkreis`       | string | —        | `SG8 SEQ+Z79`; without it the single `standard` entry of `[[lf.bilanzkreise]]` |\n| `haushaltskunde`    | bool   | ✓        | `SG8 SEQ+Z01 SG10 CCI+++Z15`/`Z18` (S. 83) |\n| `enfg_grundlage`    | string | ✓        | `SG8 SEQ+Z75 CCI+Z61` — `ZF9`, `ZG0`, `ZG1` (S. 85) |\n| `enfg_grund`        | string | with `ZF9` | `SG10 CAV` — `ZU5` … `ZV3` |\n| `kunde`             | object | ✓        | `SG12 NAD+Z09`/`Z04` — name and Korrespondenzanschrift (S. 86) |\n\nA missing Kunde fact is `ANMELDEDATEN_UNVOLLSTAENDIG`, one the column\ncannot carry `ANMELDEDATEN_UNGUELTIG`.\n\n## LFW24 Vorlauffrist (BK6-22-024, consolidated in BK6-24-174 GPKE Teil 2)\n\nSD \"Lieferbeginn\" Prozessschritt 1: \"Unverzüglich nach Vorliegen des\nAnmeldegrundes, jedoch **spätester ÜT ist der Tag vor dem letzten WT vor\ndem Zuordnungsbeginn**.\" The Frist is day-granular (ÜT = calendar day of\nthe AS4 receipt) — there is **no time-of-day cutoff**.\n\n- Earliest Lieferbeginn for a submission today: the calendar day **after\n  the next Werktag** after today (Berlin date).\n- Retroactive dates (`lieferbeginn_datum` < today Berlin) are always rejected.",
+        "operationId": "start_supply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "makod opened the Anmeldung (55001)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `initiate-supply` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "makod refused the command in the process's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided (`MISSING_MALO_ID`, `ANMELDEDATEN_UNVOLLSTAENDIG`, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/start-supply-gas": {
+      "post": {
+        "tags": [
+          "supply"
+        ],
+        "summary": "`POST /api/v1/start-supply-gas` — ERP initiates a GeLi Gas Lieferbeginn (Gas 44001).",
+        "description": "Dispatches `geli.lieferbeginn.anmelden` to `makod` with the body\n[`mako_markt::commands::GeliLieferbeginnAnmelden`].\n\n## Request body (JSON) — [`StartSupplyGasRequest`]\n\n| Field | Required | Segment (UTILMD AHB Gas 1.2 Kap. 5.6) |\n|---|---|---|\n| `malo_id` | ✓ | `SG5 LOC+172` under `IMD++Z36+Z12` |\n| `process_date` | ✓ | `SG4 DTM+92`, `YYYYMMDD` |\n| `transaktionsgrund` | ✓ | `SG4 STS+7` — a code the column admits, else `TRANSAKTIONSGRUND_UNZULAESSIG` |\n| `bilanzkreis` | config | `SG10 CCI+Z19`; else the single `standard` `[[lf.bilanzkreise]]` entry |\n| `abrechnungsintervall_monate` | ✓ | `SG6 DTM+Z20` |\n| `haushaltskunde` | ✓ | `SG10 CCI+++Z15`/`Z18` |\n| `netznutzungsvertrag`, `netznutzung_zahler` | ✓ | `CCI+++Z88` `CAV+Z74`/`CAV+Z73` |\n| `gemeinderabatt_prozent` | ✓ | `SG8 SEQ+Z12 QTY+Z16` |\n| `kunde` | ✓ | `SG12 NAD+Z09`, `NAD+Z04` |\n| `ablesekarte` | ✓ | `SG12 NAD+Z05` |\n\nEvery missing fact is named in one `422` `ANMELDEDATEN_UNVOLLSTAENDIG`\n(`fehlend`), every malformed one in `ANMELDEDATEN_UNGUELTIG`\n(`maengel`). There is no Gas equivalent of API-Webdienste Strom — the\nERP must supply the Gas-MaLo-ID upfront.\n\n## Mindestvorlauffrist\n\n**10 Werktage** for a Lieferantenwechsel (`E03`, AWH GeLi Gas 2.0 Kap.\n2.5.2 SD „Lieferbeginn\" Nr. 1), enforced here. For an Einzug the NB\ncorrects the date instead of rejecting, so those pass with a\n`vorlauffrist_hinweis`.",
+        "operationId": "start_supply_gas",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "makod opened the Anmeldung (44001)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `initiate-supply` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "makod refused the command in the process's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the rule that decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/deliveries/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue one delivery again, whatever its state.",
+        "operationId": "replay_delivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The delivery's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`delivery_not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The endpoints, a page ordered by name.",
+        "operationId": "list_endpoints",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; absent for the first.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Endpoint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Register an endpoint; the answer shows its secret once.",
+        "operationId": "create_endpoint",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointCreated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_name_taken`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`endpoint_url_not_allowed`, `endpoint_name_reserved`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "One endpoint, with its version as `ETag`.",
+        "operationId": "get_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Replace an endpoint; `If-Match` names the version read.",
+        "operationId": "update_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete an endpoint; its pending deliveries are cancelled with it.",
+        "operationId": "delete_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/deliveries": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The deliveries of one endpoint, newest first.",
+        "operationId": "list_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Which deliveries; every one when absent.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryFilter"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Delivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue every event of a time window again for one endpoint, including\nevents that never had a delivery to it.",
+        "operationId": "replay_window",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayWindow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention` (with `oldest_replayable`), `replay_window_invalid`, `replay_window_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Rotate the secret: the new one signs from now, the previous one beside it\nfor `overlap_hours`. The answer shows the new secret once.",
+        "operationId": "rotate_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretRotated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`overlap_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/test": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Send `de.mako.webhook.test` to the endpoint now, signed like a delivery.",
+        "operationId": "test_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestDelivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssignKlaerfallRequest": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/klaerfaelle/{id}/assign`.",
+        "properties": {
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who takes the case; absent or null releases it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Delivery": {
+        "type": "object",
+        "description": "One event to one endpoint.",
+        "required": [
+          "id",
+          "endpoint_id",
+          "event_id",
+          "event_type",
+          "status",
+          "attempts",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts made."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the delivery was created."
+          },
+          "endpoint_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint delivered to."
+          },
+          "event_id": {
+            "type": "string",
+            "description": "The CloudEvent `id`, sent as `webhook-id`."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "The CloudEvent `type`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The delivery's id — what a single replay names."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last attempt's failure."
+          },
+          "last_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status of the last attempt; absent when it got no answer."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long the last answered attempt took, in milliseconds."
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next attempt is due, while pending."
+          },
+          "ordering_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The aggregate the event is about; deliveries of one key arrive in order."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus",
+            "description": "`pending`, `delivered` or `dead_lettered`."
+          }
+        }
+      },
+      "DeliveryFilter": {
+        "type": "string",
+        "description": "Which deliveries the log lists.",
+        "enum": [
+          "all",
+          "pending",
+          "delivered",
+          "failed"
+        ]
+      },
+      "DeliveryStatus": {
+        "type": "string",
+        "description": "A delivery's state.",
+        "enum": [
+          "pending",
+          "delivered",
+          "dead_lettered"
+        ]
+      },
+      "EndSupplyGasRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/end-supply-gas` — GeLi Gas Lieferende (44004).\n\nThe fields `makod`'s `geli.lieferende.anmelden` reads\n(`mako_markt::commands::GeliLieferendeAnmelden`): the Marktlokation, the\n`YYYYMMDD` `process_date` and the Transaktionsgrund the 44004 column makes\nMuss (`SG4 STS+7`, UTILMD AHB Gas 1.2 Kap. 5.5).",
+        "required": [
+          "malo_id",
+          "process_date",
+          "transaktionsgrund"
+        ],
+        "properties": {
+          "malo_id": {
+            "type": "string",
+            "description": "Gas-MaLo-ID — `SG5 LOC+172`."
+          },
+          "process_date": {
+            "type": "string",
+            "description": "Lieferende, `YYYYMMDD` (gesetzliche deutsche Zeit)."
+          },
+          "transaktionsgrund": {
+            "type": "string",
+            "description": "`SG4 STS+7` DE 9013 — makod holds it against the column's codes."
+          }
+        }
+      },
+      "EndSupplyRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/end-supply` — GPKE Lieferende (Strom, 55004).",
+        "required": [
+          "malo_id",
+          "lieferende_datum",
+          "transaktionsgrund"
+        ],
+        "properties": {
+          "lieferende_datum": {
+            "type": "string",
+            "description": "Lieferende, ISO-8601 date (`YYYY-MM-DD`)."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Strom Marktlokations-ID."
+          },
+          "transaktionsgrund": {
+            "type": "string",
+            "description": "`SG4 STS+7` DE 9013 — Muss on the Abmeldung 55004 (UTILMD AHB Strom\n2.2 Kap. 5.4); makod holds it against the column's codes. The\nLokationsart Ergänzung is the MaLo's own, which makod reads."
+          }
+        }
+      },
+      "Endpoint": {
+        "type": "object",
+        "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "event_types",
+          "extensions",
+          "owner",
+          "active",
+          "version",
+          "created_at"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the endpoint was registered."
+          },
+          "deactivated_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the endpoint was deactivated (`gone`)."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is the config URL."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Owner",
+            "description": "`config` or `api`."
+          },
+          "partner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+          },
+          "previous_secret_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when the previous secret still signs, after a rotation."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where deliveries are POSTed."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The version `If-Match` names."
+          }
+        }
+      },
+      "EndpointCreate": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints`.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is reserved for the config URL."
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EndpointCreated": {
+        "type": "object",
+        "description": "A created endpoint and its secret — the only answer that shows it.",
+        "required": [
+          "endpoint",
+          "secret"
+        ],
+        "properties": {
+          "endpoint": {
+            "$ref": "#/components/schemas/Endpoint",
+            "description": "The endpoint."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The `whsec_` signing secret; shown once."
+          }
+        }
+      },
+      "EndpointUpdate": {
+        "type": "object",
+        "description": "The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.",
+        "required": [
+          "url",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExecuteRequest": {
+        "type": "object",
+        "properties": {
+          "executed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`DTM+293 Fertigstellungsdatum` (RFC 3339). Defaults to now."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`SG25 FTX+ACB` — the field reference the LF sees."
+          },
+          "pruefschritt_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`SG15 STS DE9013` — the EBD Prüfschritt code for the \"erfolgreich\"\ncluster. The AHB makes it a **Muss**, so an IFTSTA built without one is\ninvalid; it is optional here only because an operator-created order has\nno market correspondent to send an IFTSTA to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "FailRequest": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "endgueltig": {
+            "type": "boolean",
+            "description": "`true` when no further Sperrversuch will be made — a court injunction, a\nglaubhaft gemachter Verhinderungsgrund (Kap. 3.5.1.2 Nr. 5), or simply the\nfield team calling it off.\n\nDefaults to `false`: GPKE Teil 2 Kap. 3.5.1.2 Nr. 5 gives the NB **two**\nSperrversuche within one Sperrauftrag, so an ordinary \"nobody home\"\nreport records the attempt and leaves the order in the queue. The second\nfailure closes it regardless of this flag."
+          },
+          "pruefschritt_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`SG15 STS DE9013` — the EBD Prüfschritt code from the \"gescheitert\"\ncluster (`A04`/`A05`/`A06` under EBD E_0472 for a Sperrung)."
+          },
+          "reason": {
+            "type": "string",
+            "description": "`SG25 FTX+ACB` — why it could not be carried out."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NeuanlageIdentifikationRequest": {
+        "type": "object",
+        "description": "`PUT /api/v1/neuanlage/{id}/identifikation`.",
+        "required": [
+          "malo_id"
+        ],
+        "properties": {
+          "malo_id": {
+            "type": "string",
+            "description": "The Marktlokation the NB identified for this Neuanlage."
+          }
+        }
+      },
+      "Owner": {
+        "type": "string",
+        "description": "Who owns an endpoint.",
+        "enum": [
+          "config",
+          "api"
+        ]
+      },
+      "Page_Delivery": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One event to one endpoint.",
+              "required": [
+                "id",
+                "endpoint_id",
+                "event_id",
+                "event_type",
+                "status",
+                "attempts",
+                "created_at"
+              ],
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Attempts made."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the delivery was created."
+                },
+                "endpoint_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint delivered to."
+                },
+                "event_id": {
+                  "type": "string",
+                  "description": "The CloudEvent `id`, sent as `webhook-id`."
+                },
+                "event_type": {
+                  "type": "string",
+                  "description": "The CloudEvent `type`."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The delivery's id — what a single replay names."
+                },
+                "last_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The last attempt's failure."
+                },
+                "last_status": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "The HTTP status of the last attempt; absent when it got no answer."
+                },
+                "latency_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "How long the last answered attempt took, in milliseconds."
+                },
+                "next_attempt_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When the next attempt is due, while pending."
+                },
+                "ordering_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The aggregate the event is about; deliveries of one key arrive in order."
+                },
+                "status": {
+                  "$ref": "#/components/schemas/DeliveryStatus",
+                  "description": "`pending`, `delivered` or `dead_lettered`."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Endpoint": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+              "required": [
+                "id",
+                "name",
+                "url",
+                "event_types",
+                "extensions",
+                "owner",
+                "active",
+                "version",
+                "created_at"
+              ],
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the endpoint was registered."
+                },
+                "deactivated_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Why the endpoint was deactivated (`gone`)."
+                },
+                "event_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "`mako_events::matches` patterns; empty matches every type."
+                },
+                "extensions": {
+                  "type": "object",
+                  "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint's id."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Unique per service; `default` is the config URL."
+                },
+                "owner": {
+                  "$ref": "#/components/schemas/Owner",
+                  "description": "`config` or `api`."
+                },
+                "partner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "previous_secret_expires_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "Until when the previous secret still signs, after a rotation."
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Where deliveries are POSTed."
+                },
+                "version": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "The version `If-Match` names."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Value": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {},
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "ReplayWindow": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the window, inclusive (RFC 3339)."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the window, exclusive (RFC 3339)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Replayed": {
+        "type": "object",
+        "description": "How many deliveries a replay queued.",
+        "required": [
+          "queued"
+        ],
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deliveries queued again or for the first time."
+          }
+        }
+      },
+      "ResolveKlaerfallRequest": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/klaerfaelle/{id}/resolve`.",
+        "required": [
+          "begruendung"
+        ],
+        "properties": {
+          "begruendung": {
+            "type": "string",
+            "description": "Why the case closes without a market message."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RotateSecret": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.",
+        "required": [
+          "overlap_hours"
+        ],
+        "properties": {
+          "overlap_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long the previous secret keeps signing, at most 168 hours.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "SecretRotated": {
+        "type": "object",
+        "description": "A rotated secret — the only answer that shows it.",
+        "required": [
+          "secret",
+          "previous_expires_at"
+        ],
+        "properties": {
+          "previous_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until when the previous secret also signs."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The new `whsec_` signing secret; shown once."
+          }
+        }
+      },
+      "TestDelivery": {
+        "type": "object",
+        "description": "What a test delivery came to.",
+        "required": [
+          "delivered"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "boolean",
+            "description": "Whether the endpoint answered 2xx."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was not delivered."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long it took, when it answered."
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status, when it answered.",
+            "minimum": 0
+          }
+        }
+      },
+      "TotalEstimate": {
+        "type": "object",
+        "description": "A count bounded at [`COUNT_CAP`]: a list over a million rows reports\n`{count: 10000, capped: true}` rather than counting them.",
+        "required": [
+          "count",
+          "capped"
+        ],
+        "properties": {
+          "capped": {
+            "type": "boolean",
+            "description": "`true` when there are more rows than `count`."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The rows counted, at most 10 000."
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "decisions",
+      "description": "The NB Anmeldung decision log"
+    },
+    {
+      "name": "queue",
+      "description": "The approval queue: Freigaben an operator decides"
+    },
+    {
+      "name": "klaerfaelle",
+      "description": "Klärfälle: take, resolve, correct and send"
+    },
+    {
+      "name": "supply",
+      "description": "Lieferbeginn and Lieferende the LF's ERP initiates"
+    },
+    {
+      "name": "nb",
+      "description": "NB case logs: Ersatz-/Grundversorgung and Neuanlage"
+    },
+    {
+      "name": "obs",
+      "description": "The process read model"
+    },
+    {
+      "name": "counterparties",
+      "description": "How a Marktpartner answered the processes this operator started"
+    },
+    {
+      "name": "sperr",
+      "description": "Sperr- und Entsperraufträge (ORDERS 17115/17117, IFTSTA 21039)"
+    },
+    {
+      "name": "webhooks",
+      "description": "Webhook endpoints, deliveries, replay and the event feed"
+    }
+  ]
+}

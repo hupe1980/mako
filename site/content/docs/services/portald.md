@@ -110,6 +110,13 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 | `PUT` | `/kontakt` | `vertragd` — DSGVO Art. 16. `geschaeftspartner` crosses [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) here, so a mistyped enum is a `422` naming the field |
 | `PUT` | `/sepa` | `accountingd` |
 
+`GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of every route
+above, committed as `services/portald/openapi.json`. Each operation carries the
+`portal_customer` security scheme — `Authorization: Bearer` with the customer's
+own token, verified by `vertragd` as [Authorization](#authorization) describes.
+`GET /nachrechnen/{token}` is not in the document: it is a public HTML page whose
+token is its credential, not part of the JSON API.
+
 `/health/live`, `/health/ready` and `/metrics` come from the service runner.
 
 ### Failures

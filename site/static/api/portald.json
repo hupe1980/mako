@@ -1,0 +1,1796 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "portald — Customer Portal",
+    "description": "REST API a customer portal calls for one customer's Marktlokation: consumption, invoices and documents, account, supply status, contract and the § 41 EnWG self-service writes.",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.38.0"
+  },
+  "paths": {
+    "/api/v1/portal/{malo_id}/balance": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/balance` — open-items balance.",
+        "operationId": "get_balance",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "accountingd's open-items balance",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The upstream holds nothing for this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/dashboard": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/dashboard`",
+        "description": "Supply status, account balance, latest invoice, current billing period and\nadvance-payment schedule in one call, fetched concurrently.\n\nA field is `null` when its upstream is not configured or has no data — one\nunreachable backend degrades a tile rather than the whole screen.",
+        "operationId": "get_dashboard",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Supply status, balance, latest invoice, billing period and advance-payment schedule; a field is null when its upstream has no answer",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/dokumente": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/dokumente`",
+        "description": "The customer's document inbox: what was actually issued to them — invoices,\nMahnungen, price-change notices — as `outputd` recorded it.\n\n**Not the same list as `/invoices`.** That one is billing *records* —\nwhat was calculated, drafts included. This is what the customer received.\n\nScoped by the authorised MaLo; `outputd` refuses an unscoped document query\noutright, so the scope is enforced on both sides of the hop.",
+        "operationId": "get_dokumente",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`INVOICE`, `MAHNUNG` or `PREISANPASSUNG`. Anything else is ignored.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, clamped to 1..=200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "outputd's documents issued to the customer",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The upstream holds nothing for this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/dokumente/{document_id}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/dokumente/{document_id}`",
+        "description": "The document itself — the bytes that were issued, not a re-render.\n\nThe document is read back and its `malo_id` compared to the authorised one\nbefore anything is streamed, as the invoice download does: a UUID is\nobscurity, not authorization.\n\nFetching it also marks the portal delivery **read** — the evidence a\n§ 41f EnWG dispute asks about.",
+        "operationId": "get_dokument",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "description": "outputd document id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The issued document's bytes, with the media type outputd recorded",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document, or it belongs to another Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/eeg": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/eeg` — EEG/KWKG plants and settlements.",
+        "operationId": "get_eeg_status",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "einsd's EEG/KWKG plants and settlements",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The upstream holds nothing for this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/invoices": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/invoices?limit=&outcome=`",
+        "description": "Proxies `billingd GET /api/v1/billing?malo_id=…`. The page size is clamped\nhere: an unbounded `limit` reaches `billingd` as a full-table read on a\ncustomer-facing route.",
+        "operationId": "get_invoices",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, clamped to 1..=100; 24 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "description": "billingd outcome filter, passed through.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "billingd's billing records for the Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The upstream holds nothing for this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/invoices/{record_id}/download": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/invoices/{record_id}/download`",
+        "description": "Stream a billing document as XRechnung 3.0 CII XML (EN 16931).\n\nThe record is read back and its `malo_id` compared to the authorised one\nbefore anything is rendered. Authorising only the path's `malo_id` would let\nany authenticated customer download any invoice in the tenant by id — the id\nis a UUID, but that is obscurity, not authorization.",
+        "operationId": "get_portal_invoice_download",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "record_id",
+            "in": "path",
+            "description": "billingd record id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invoice as XRechnung 3.0 CII XML",
+            "content": {
+              "application/xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such record, or it belongs to another Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/kontakt": {
+      "get": {
+        "tags": [
+          "contract"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/kontakt`",
+        "description": "The contact details the operator holds — DSGVO Art. 15, and the read half\nof the rectification flow: [`put_portal_kontakt`] **replaces** the stored\n`Geschaeftspartner`, so a client that has not read it first cannot change\none field without dropping the rest; without this read every correction\nis a full re-entry, and a partial one silent data loss.\n\nProjected, not proxied whole: `vertragd`'s customer record also carries\noperator notes, the ERP key and the tenant, and none of those are the\ncustomer's to see.",
+        "operationId": "get_portal_kontakt",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Geschaeftspartner, SEPA consent and Kundentyp held for the customer",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "vertragd holds no customer record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "contract"
+        ],
+        "summary": "`PUT /api/v1/portal/{malo_id}/kontakt`",
+        "description": "Update contact details (GDPR Art. 16 right to rectification). Proxies to\n`PUT /api/v1/kunden/{kunden_id}` on `vertragd` — the customer id comes from\nthe authorization result, never from the request body.",
+        "operationId": "put_portal_kontakt",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortalKontaktRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Updated"
+          },
+          "400": {
+            "description": "Nothing to update",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The BO4E gate refused the Geschaeftspartner, or vertragd refused; its status (any 4xx) and body are relayed unchanged",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/kontoauszug": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/kontoauszug?from=&to=` — account statement\n(§ 666 BGB).",
+        "description": "Both bounds are passed only when both are present — `accountingd` reads them\nas a pair and answers a period statement, opening at the balance the period\nstarted from. Without them the customer gets the whole account.",
+        "operationId": "get_kontoauszug",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive start, ISO 8601 (`YYYY-MM-DD`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Inclusive end, ISO 8601 (`YYYY-MM-DD`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "accountingd's account statement",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The upstream holds nothing for this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/kuendigen": {
+      "post": {
+        "tags": [
+          "contract"
+        ],
+        "summary": "`POST /api/v1/portal/{malo_id}/kuendigen`",
+        "description": "Customer-initiated termination. Format-checked here, decided by `vertragd`\n— see [`get_portal_kuendigungsfrist`] for why the period is not duplicated.",
+        "operationId": "post_portal_kuendigen",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortalKuendigungRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "vertragd registered the Kündigung",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "`lieferende` is not YYYY-MM-DD",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No contract carries this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "vertragd refused; its status (any 4xx) and body are relayed unchanged",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/kuendigungsfrist": {
+      "get": {
+        "tags": [
+          "contract"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/kuendigungsfrist`",
+        "description": "The earliest date this contract can end, per termination reason, with the\nrule that produced it. A portal offering self-service termination has to\nshow the customer the date *before* they pick one, and the statutes behind\nit (§ 20 Abs. 1 StromGVV/GasGVV, § 41b Abs. 5 EnWG, § 41 Abs. 5 Satz 4 EnWG,\n§ 309 Nr. 9 lit. c BGB) live in `vertragd`, not in a second implementation.",
+        "operationId": "get_portal_kuendigungsfrist",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The earliest end date per termination reason, with the rule that produced it",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No contract carries this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/lastgang": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/lastgang?from=&to=`",
+        "description": "Proxies `edmd GET /api/v1/lastgang/{malo_id}`. Both bounds are passed only\nwhen both are present — `edmd` reads them as a pair.",
+        "operationId": "get_lastgang",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive start, ISO 8601 (`YYYY-MM-DD`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Inclusive end, ISO 8601 (`YYYY-MM-DD`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "edmd's Lastgang for the Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The upstream holds nothing for this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/sepa": {
+      "put": {
+        "tags": [
+          "sepa"
+        ],
+        "summary": "`PUT /api/v1/portal/{malo_id}/sepa`",
+        "description": "Register a SEPA direct-debit mandate for the customer's account.\n\nTwo things the caller does not supply:\n\n- **`sequence_type`** — the scheme requires a `FRST` collection before any\n  `RCUR`, and the sequence is `accountingd`'s to track across the mandate's\n  life rather than a portal input.\n- **`mandatsref`** — derived here with a random suffix, so a customer\n  correcting a mistyped IBAN the same day gets a new mandate rather than\n  reusing the reference of the one being replaced.",
+        "operationId": "put_portal_sepa",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortalSepaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "accountingd registered the mandate",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "accountingd refused; its status (any 4xx) and body are relayed unchanged",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/tarifwechsel": {
+      "post": {
+        "tags": [
+          "contract"
+        ],
+        "summary": "`POST /api/v1/portal/{malo_id}/tarifwechsel`",
+        "description": "Customer-initiated tariff switch.\n\n**The notice period is not checked here.** § 41 EnWG states none for a\ntariff switch, and the facts that decide the real one — Vertragsart,\nrunning Preisgarantie, billing cycle — live in `vertragd`. A second, simpler\nrule here could only disagree with the one that decides. Only the date\n*format* is this service's business; `vertragd` answers 422 with the rule it\napplied, relayed unchanged.",
+        "operationId": "post_portal_tarifwechsel",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortalTarifwechselRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "vertragd registered the switch",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "`wirksamkeit` is not YYYY-MM-DD",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No contract carries this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "vertragd refused; its status (any 4xx) and body are relayed unchanged",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/versorgung": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/versorgung` — supply status.",
+        "operationId": "get_versorgung",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "marktd's supply status",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The upstream holds nothing for this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/vertrag": {
+      "get": {
+        "tags": [
+          "contract"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/vertrag`",
+        "description": "The active supply contract: product and tariff, delivery dates, notice\nperiods, and the Vertragskomponenten with their OBIS codes. A portal calls\nthis before offering Tarifwechsel or Kündigung.",
+        "operationId": "get_portal_vertrag",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "vertragd's active supply contract",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No contract carries this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portal/{malo_id}/vorauszahlung": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "`GET /api/v1/portal/{malo_id}/vorauszahlung` — Abschlag schedule (§ 40 Abs. 1 EnWG).",
+        "operationId": "get_portal_vorauszahlung",
+        "parameters": [
+          {
+            "name": "malo_id",
+            "in": "path",
+            "description": "11-digit Marktlokations-ID the caller must own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "accountingd's Abschlag schedule",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, an unverifiable one, or no customer behind it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The customer does not own this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The upstream holds nothing for this Marktlokation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream service failed; its body is only logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vertragd cannot answer the ownership check, or the upstream is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "PortalKontaktRequest": {
+        "type": "object",
+        "description": "Request body for `PUT /api/v1/portal/{malo_id}/kontakt`.",
+        "properties": {
+          "geschaeftspartner": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The BO4E `Geschaeftspartner` (name, address, contact methods).\n\n**Replaces** the stored document — `vertragd` writes the column whole,\nnot field by field, so a request carrying only a new telephone number\nleaves the customer with only a telephone number. Read\n`GET .../kontakt` first and send it back changed.\n\nCrosses [the BO4E gate](mako_markt::bo4e::decode) here, at the edge the\ncustomer reaches, rather than one hop later inside `vertragd`: a portal\nuser who mistypes an enum gets the field named back, not a 502."
+          },
+          "sepa_erlaubt": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Updated SEPA consent flag."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PortalKuendigungRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/portal/{malo_id}/kuendigen`.",
+        "required": [
+          "lieferende"
+        ],
+        "properties": {
+          "bemerkung": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free-text note kept with the contract."
+          },
+          "grund": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why. Decides the notice period: `ORDENTLICH` (default),\n`PREISANPASSUNG` (§ 41 Abs. 5 Satz 4 EnWG), `UMZUG` (§ 41b Abs. 5 EnWG)\nor `LIEFERANTENWECHSEL`."
+          },
+          "lieferende": {
+            "type": "string",
+            "description": "Last day of supply (`YYYY-MM-DD`).\n\n`GET /api/v1/portal/{malo_id}/kuendigungsfrist` answers which dates are\nreachable before this is sent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PortalSepaRequest": {
+        "type": "object",
+        "description": "Request body for `PUT /api/v1/portal/{malo_id}/sepa`.",
+        "required": [
+          "iban"
+        ],
+        "properties": {
+          "bic": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BIC/SWIFT — optional within the SEPA zone."
+          },
+          "debtor_address": {
+            "description": "The debtor's own postal address (`Dbtr/PstlAdr`), forwarded verbatim to\n`accountingd`, which validates it.\n\nOptional: EPC153-22 v2.2 (30 September 2026) permits a collection\nwithout a structured address and sets no end date for that. Shape: `{ \"town\", \"country\",\n\"street\", \"building_number\", \"post_code\", \"country_subdivision\" }`."
+          },
+          "iban": {
+            "type": "string",
+            "description": "IBAN in any whitespace-separated form — `accountingd` validates mod-97."
+          },
+          "kontoinhaber": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Account holder. Defaults to the customer name held by `accountingd`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PortalTarifwechselRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/portal/{malo_id}/tarifwechsel`.",
+        "required": [
+          "new_product_code",
+          "wirksamkeit"
+        ],
+        "properties": {
+          "grund": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional customer reason, kept in the contract audit trail."
+          },
+          "new_product_code": {
+            "type": "string",
+            "description": "New product code in `productd`."
+          },
+          "wirksamkeit": {
+            "type": "string",
+            "description": "When the new tariff takes effect (`YYYY-MM-DD`).\n\nWhether that date is reachable is `vertragd`'s decision: it depends on\nthe Vertragsart, the running Preisgarantie and the billing cycle."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "portal_customer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The customer's access token from the portal's identity provider, as `Authorization: Bearer <token>`. portald verifies nothing itself: it forwards the token to vertragd, which verifies it and answers whether its subject owns the `malo_id` in the path. A repeated `Authorization` header is refused."
+      }
+    }
+  },
+  "security": [
+    {
+      "portal_customer": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "read",
+      "description": "Consumption, invoices, account and supply status"
+    },
+    {
+      "name": "documents",
+      "description": "The documents issued to the customer"
+    },
+    {
+      "name": "contract",
+      "description": "The supply contract, contact details and the self-service writes"
+    },
+    {
+      "name": "sepa",
+      "description": "SEPA direct-debit mandate"
+    }
+  ]
+}

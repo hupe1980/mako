@@ -10,6 +10,7 @@
 // MaKo::AdminPartnerRecord — partner admin resource (tenant, mp_id?)
 // MaKo::MetricsEndpoint    — Prometheus /metrics endpoint (tenant)
 // MaKo::EinrichtungEndpoint — configuration findings + policy report (tenant)
+// MaKo::FormatImpactEndpoint — a candidate Formatversion's impact report (tenant)
 //
 // Action groups (use in Cedar policies as `action in MaKo::Action::"AdminMalo"`)
 // ────────────
@@ -57,6 +58,10 @@ namespace MaKo {
   };
 
   entity EinrichtungEndpoint = {
+    tenant: String,
+  };
+
+  entity FormatImpactEndpoint = {
     tenant: String,
   };
 
@@ -207,6 +212,15 @@ namespace MaKo {
   action AdminEinrichtung appliesTo {
     principal: [Principal],
     resource:  [EinrichtungEndpoint],
+    context: {
+      tenant: String,
+    }
+  };
+
+  // A candidate Formatversion's impact on the operator's own archive — read-only.
+  action ReadFormatImpact appliesTo {
+    principal: [Principal],
+    resource:  [FormatImpactEndpoint],
     context: {
       tenant: String,
     }

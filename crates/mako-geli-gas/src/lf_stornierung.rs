@@ -351,6 +351,8 @@ impl Workflow for GeliGasLfStornierungWorkflow {
     type Command = LfStornierungCommand;
 
     const DEADLINE_LABELS: &'static [&'static str] = &[GNB_RESPONSE_WINDOW_LABEL];
+    /// The GNB's answer to the Stornierung is owed by its Antwortfrist.
+    const FRIST_LABELS: &'static [&'static str] = &[GNB_RESPONSE_WINDOW_LABEL];
 
     /// Deadline compensation for the GNB's Stornierung answer window.
     ///

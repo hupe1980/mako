@@ -57,13 +57,18 @@ pub struct NetzbilanzConfig {
     /// leaving a section out of the TOML.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
-    /// Optional ERP webhook URL — receives CloudEvents
-    /// `de.netzbilanz.invoic.drafted` and `de.netzbilanz.invoic.dispatched`.
+    /// Optional ERP webhook URL — the subscription endpoint `default`, which
+    /// receives every CloudEvent netzbilanzd emits (`de.netzbilanz.invoic.drafted`,
+    /// `de.netzbilanz.invoic.dispatched`, the stale-draft and Kostenblatt alerts).
     pub erp_webhook_url: Option<String>,
     /// HMAC-SHA256 secret for signing the outbound ERP webhook CloudEvents
     /// (Standard Webhooks). Use `env:VAR_NAME`. Leave unset only
     /// in dev — a receiver verifying the signature rejects unsigned events.
     pub erp_webhook_secret: Option<String>,
+    /// `[subscriptions]` — webhook endpoints registered through the API:
+    /// retention of the event feed, and the loopback admission of `just dev`.
+    #[serde(default)]
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
     /// HMAC-SHA256 secret for verifying INBOUND REMADV CloudEvents on
     /// `POST /webhooks/remadv`. When unset the endpoint accepts unsigned bodies
     /// (dev mode); set it in production so a forged REMADV cannot mark a
@@ -159,8 +164,8 @@ impl NetzbilanzConfig {
         }
         if self.erp_webhook_url.is_some() && self.erp_webhook_secret.is_none() {
             fehlt.push(
-                "erp_webhook_secret — erp_webhook_url is set, and `OutboxWorker` signs \
-                 only when it has a secret: de.netzbilanz.invoic.drafted/.dispatched and \
+                "erp_webhook_secret — erp_webhook_url is set, and its `default` webhook \
+                 endpoint is signed only with a secret: de.netzbilanz.invoic.drafted/.dispatched and \
                  the stale-draft and Kostenblatt alerts all reach the ERP unsigned, and \
                  the receiver cannot tell one from a forgery"
                     .to_owned(),

@@ -13,10 +13,8 @@ pub mod bilanzierung;
 pub mod bundesland;
 pub mod correlation;
 pub mod device;
-pub mod dlq;
 pub mod einwilligung;
 pub mod event_ingest;
-pub mod event_log;
 pub mod grundversorger;
 pub mod lokationsbuendel;
 pub mod lokationszuordnung;
@@ -35,7 +33,6 @@ pub mod partner;
 pub mod preisblatt;
 pub mod pricat;
 pub mod referenzreihen;
-pub mod subscription;
 pub mod tranche;
 pub mod utilmd_stammdaten;
 pub mod versorgung;
@@ -63,7 +60,7 @@ pub use mako_service::oidc::Claims;
 pub fn mdm_error(e: MdmError) -> ApiError {
     let code = e.error_code();
     match e {
-        e @ (MdmError::Internal(_) | MdmError::WebhookDelivery { .. }) => ApiError::internal(e),
+        e @ MdmError::Internal(_) => ApiError::internal(e),
         e @ MdmError::MakodSync(_) => ApiError::upstream("makod", e),
         e @ (MdmError::InvalidMaloId { .. }
         | MdmError::InvalidMeloId { .. }

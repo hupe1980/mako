@@ -95,6 +95,19 @@ fn default_source_manual() -> String {
 /// Upsert the Gas MMM Abrechnungspreise for a billing month. Published monthly
 /// by Trading Hub Europe (THE). The `netzbilanzd` billing run auto-fetches these
 /// instead of requiring manual ERP input.
+#[utoipa::path(
+    put,
+    path = "/api/v1/mmma-preise/gas/{year}/{month}",
+    tag = "mmma-preise",
+    params(("year" = i32, Path, description = "Calendar year"), ("month" = u32, Path, description = "Calendar month, 1–12")),
+    request_body(content = serde_json::Value, description = "`MmmaGasUpsertRequest`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_mmma_gas(
     Extension(repo): Extension<MmmaGasRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -129,6 +142,18 @@ pub async fn put_mmma_gas(
 }
 
 /// `GET /api/v1/mmma-preise/gas/{year}/{month}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/mmma-preise/gas/{year}/{month}",
+    tag = "mmma-preise",
+    params(("year" = i32, Path, description = "Calendar year"), ("month" = u32, Path, description = "Calendar month, 1–12")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_mmma_gas(
     Extension(repo): Extension<MmmaGasRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -165,7 +190,8 @@ pub async fn get_mmma_gas(
 }
 
 /// Query parameters for the list endpoint.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListQuery {
     #[serde(default = "default_limit")]
     pub limit: i64,
@@ -176,6 +202,17 @@ fn default_limit() -> i64 {
 }
 
 /// `GET /api/v1/mmma-preise/gas` — list all Gas MMM price records (newest first).
+#[utoipa::path(
+    get,
+    path = "/api/v1/mmma-preise/gas",
+    tag = "mmma-preise",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_mmma_gas(
     Extension(repo): Extension<MmmaGasRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -238,6 +275,19 @@ pub struct MmmStromUpsertRequest {
 /// 31.12.2025, § 20 Abs. 3 EnWG via BK6-24-174 from 01.01.2026 — and the BDEW
 /// publishes one series for the whole market, so the month is the entire key:
 /// there is no per-Netzbetreiber variant to select.
+#[utoipa::path(
+    put,
+    path = "/api/v1/mmm-preise/strom/{year}/{month}",
+    tag = "mmma-preise",
+    params(("year" = i32, Path, description = "Calendar year"), ("month" = u32, Path, description = "Calendar month, 1–12")),
+    request_body(content = serde_json::Value, description = "`MmmStromUpsertRequest`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_mmm_strom(
     Extension(repo): Extension<MmmStromRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -266,6 +316,18 @@ pub async fn put_mmm_strom(
 }
 
 /// `GET /api/v1/mmm-preise/strom/{year}/{month}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/mmm-preise/strom/{year}/{month}",
+    tag = "mmma-preise",
+    params(("year" = i32, Path, description = "Calendar year"), ("month" = u32, Path, description = "Calendar month, 1–12")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_mmm_strom(
     Extension(repo): Extension<MmmStromRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -303,7 +365,8 @@ pub async fn get_mmm_strom(
 pub type MmmaImportCfgExt = Arc<crate::config::MmmaImportConfig>;
 
 /// Optional query: override year/month for the import.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ImportTriggerQuery {
     pub year: Option<i32>,
     pub month: Option<u8>,
@@ -337,6 +400,18 @@ fn import_month(q: &ImportTriggerQuery, today: Date) -> Result<Date, String> {
 ///   ]
 /// }
 /// ```
+#[utoipa::path(
+    post,
+    path = "/api/v1/mmma-preise/import-trigger",
+    tag = "mmma-preise",
+    params(ImportTriggerQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn post_import_trigger(
     Extension(import_cfg): Extension<MmmaImportCfgExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

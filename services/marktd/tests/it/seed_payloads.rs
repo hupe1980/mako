@@ -25,7 +25,6 @@ use marktd::handlers::{
     preisblatt::{
         PreisblattKaUpsertRequest, PreisblattMessungUpsertRequest, PreisblattUpsertRequest,
     },
-    subscription::SubscriptionUpsertRequest,
     versorgung::VersorgungsStatusUpsertRequest,
 };
 
@@ -108,12 +107,12 @@ fn the_seeded_master_data_payloads_deserialise() {
         "PUT /api/v1/melos/{id}/msb",
         fixture("marktd-melo-msb.json"),
     );
-    let _: SubscriptionUpsertRequest = accepts(
-        "PUT /api/v1/subscriptions/{id}",
+    let _: mako_service::subscriptions::EndpointCreate = accepts(
+        "POST /api/v1/webhooks/endpoints",
         serde_json::json!({
-            "webhook_url": "http://127.0.0.1:9199/",
-            "event_types": ["de.mako.process.initiated", "de.mako.process.completed"],
-            "active": true
+            "name": "listen-0a1b2c3d",
+            "url": "http://127.0.0.1:9199/",
+            "event_types": []
         }),
     );
 }

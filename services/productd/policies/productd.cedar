@@ -70,10 +70,16 @@
 //                               can order against
 //   "read-endkunden-angebot"  — GET  /api/v1/endkunden-angebote/{id}
 //
+// Webhook subscriptions (shared `mako_service::subscriptions` routes):
+//   "manage-subscription" — /api/v1/webhooks/endpoints[/{id}[/…]] and
+//                           /api/v1/webhooks/deliveries/{id}/replay — register,
+//                           change, test and replay an endpoint
+//   "read-events"         — GET  /api/v1/events — the outbox as a feed
+//
 // MCP:
 //   "use-mcp"             — the whole `/mcp` surface, gated once by the shared
 //                           `McpAuth` middleware rather than per tool. Its
-//                           thirteen tools are reads, but three of them
+//                           tools are reads, but three of them
 //                           (`list_angebote`, `get_angebot`,
 //                           `get_angebot_summary`) read named prospects and the
 //                           bespoke prices quoted to them, so it is held to the
@@ -184,6 +190,25 @@ permit(
 ) when {
     context.principal_tenant == context.resource_tenant &&
     context.principal_roles.containsAny(["LF", "ADMIN"])
+};
+
+// ── Webhook subscriptions ────────────────────────────────────────────────────
+// An endpoint receives every event productd emits that matches its filter —
+// the price changes and the accepted Angebote with the prospect's name — so
+// registering one is an outbound data-export decision, and its test delivery
+// reports the target's HTTP status, which makes it a network probe. Both are
+// the operator's, not a market role's. productd marks no caller as a
+// Vertriebspartner, so a partner credential reaches neither.
+permit(
+    principal,
+    action in [
+        Action::"manage-subscription",
+        Action::"read-events"
+    ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("ADMIN")
 };
 
 // ── MCP ──────────────────────────────────────────────────────────────────────

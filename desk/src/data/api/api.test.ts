@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { typen } from "../../../scripts/api-typen.ts";
 import { ServiceUnavailable } from "../mcp";
 import { api, RestAbgelehnt, rest } from "./client";
-import { type Dokument, zusammenfuehren } from "./dokument";
+import { type Dokument, fehlendeSchemas, zusammenfuehren } from "./dokument";
 
 // The REST door: the services' documents merged as the gateway routes them,
 // typed in openapi-fetch's shape, and a failure split as the MCP door splits
@@ -60,6 +60,29 @@ describe("the merged API document", () => {
     expect(ts).toContain('"application/json": MarktdMaloResponse');
     expect(ts).toContain("seit: Instant");
     expect(ts).toContain('import type { Instant } from "../../format/brands";');
+  });
+});
+
+describe("a document's own references", () => {
+  it("names a schema a document points at but does not define", () => {
+    expect(fehlendeSchemas(marktd)).toEqual([]);
+    const kaputt = {
+      ...marktd,
+      paths: {
+        "/x": {
+          get: {
+            responses: {
+              "200": {
+                content: {
+                  "application/json": { schema: { $ref: "#/components/schemas/DeliveryFilter" } },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as Dokument;
+    expect(fehlendeSchemas(kaputt)).toEqual(["DeliveryFilter"]);
   });
 });
 

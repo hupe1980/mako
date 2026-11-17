@@ -103,6 +103,19 @@ pub struct NbEnergiemixResponse {
 /// §42 EnWG: NB must disclose the renewable energy share in their grid area
 /// to Lieferanten annually.  LFs incorporate this into their §42 Abs. 5
 /// Reststrommix statement on customer bills.
+#[utoipa::path(
+    put,
+    path = "/api/v1/energiemix/{nb_mp_id}",
+    tag = "nb-energiemix",
+    params(("nb_mp_id" = String, Path, description = "13-digit MP-ID of the Netzbetreiber")),
+    request_body(content = serde_json::Value, description = "`PutNbEnergiemixRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_nb_energiemix(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -187,6 +200,18 @@ pub async fn put_nb_energiemix(
 /// - `productd` to attach NB Reststrommix to STROM products for §42 EnWG disclosure
 /// - `portald` to display the local grid-area energy mix to customers
 /// - `agentd` for grid sustainability analytics
+#[utoipa::path(
+    get,
+    path = "/api/v1/energiemix/{nb_mp_id}",
+    tag = "nb-energiemix",
+    params(("nb_mp_id" = String, Path, description = "13-digit MP-ID of the Netzbetreiber"), NbEnergiemixQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_nb_energiemix(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -237,6 +262,18 @@ pub async fn get_nb_energiemix(
 ///
 /// Return all available years of grid-area Energiemix for a NB.
 /// Used for audit and multi-year trend analysis.
+#[utoipa::path(
+    get,
+    path = "/api/v1/energiemix/{nb_mp_id}/history",
+    tag = "nb-energiemix",
+    params(("nb_mp_id" = String, Path, description = "13-digit MP-ID of the Netzbetreiber")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_nb_energiemix_history(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

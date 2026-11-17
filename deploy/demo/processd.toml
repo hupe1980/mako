@@ -33,13 +33,9 @@ api_key = "dev-processd-key"
 url     = "http://marktd:8180"
 api_key = "dev-marktd-key"
 
+# marktd delivers the process and supply events processd reads to its
+# endpoint in deploy/demo/marktd.toml.
 [webhook]
-
-# processd registers itself with marktd at startup and receives
-# de.mako.process.initiated from its fan-out.
-[subscription]
-webhook_url   = "http://processd:8580/webhook"
-subscriber_id = "processd-demo"
 
 # Answer every Anmeldung whose mako-pruefung checks all pass, without a person.
 [nb]

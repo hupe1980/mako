@@ -2,7 +2,7 @@
 // `vertragd` is a deployment's word, „Kundenverwaltung" the operator's — in a
 // caption, an error or a source chip.
 
-import type { Service } from "../data/mcp";
+import type { NurRest, Service } from "../data/mcp";
 import { katalog } from "../i18n";
 
 type Dienstname = keyof ReturnType<typeof katalog>["dienstNamen"];
@@ -27,25 +27,20 @@ const GELESEN = [
   "accountingd",
   "einsd",
   "agentd",
-] as const satisfies readonly (Service | "agentd")[];
+  "productd",
+] as const satisfies readonly (Service | NurRest | "agentd")[];
 
 /** The services the Desk reads, as an operator calls them. */
-export const DIENST: Record<Service | "agentd", string> = benannt(GELESEN);
+export const DIENST: Record<Service | NurRest | "agentd", string> = benannt(GELESEN);
 
 /** Every service an assistant skill may read, as an operator knows it. */
-const ALLE: Record<string, string> = benannt([
-  ...GELESEN,
-  "productd",
-  "portald",
-  "sperrd",
-  "outputd",
-]);
+const ALLE: Record<string, string> = benannt([...GELESEN, "portald", "sperrd", "outputd"]);
 
 /** The fallback for a service the Desk does not know. */
 const dienst = () => katalog().dienstNamen.unbekannt;
 
 /** The title of a notice for a service that did not answer. */
-export function nichtErreichbar(service: Service | "agentd"): string {
+export function nichtErreichbar(service: Service | NurRest | "agentd"): string {
   return katalog().dienst.nichtErreichbar(DIENST[service]);
 }
 

@@ -279,7 +279,7 @@ pub async fn put_preisblatt(
             "valid_from": valid_from.to_string(),
         }),
     );
-    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+    if let Err(e) = crate::outbox::enqueue(&mut tx, &evt).await {
         tracing::error!(error = %e, "put_preisblatt: pricat.published enqueue failed");
         return failure(e);
     }
@@ -723,7 +723,8 @@ pub async fn put_preisblatt_messung(
 pub type PreisblattKaRepoExt = Arc<PgPreisblattKaRepository>;
 
 /// Query parameters for `GET /api/v1/preisblaetter-ka/{nb_mp_id}`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct PreisblattKaQuery {
     pub date: Option<String>,
     /// Filter by Kundengruppe: `"Tarifkunden"` | `"Sondervertragskunden"` | omit for both.
@@ -748,6 +749,18 @@ pub struct PreisblattKaResponse {
 ///
 /// Returns the `PreisblattKonzessionsabgabe` for the NB valid on `date`.
 /// Used by `netzbilanzd` for KA positions in INVOIC 31001/31002 (KAV §2).
+#[utoipa::path(
+    get,
+    path = "/api/v1/preisblaetter-ka/{nb_mp_id}",
+    tag = "preisblatt",
+    params(("nb_mp_id" = String, Path, description = "13-digit MP-ID of the Netzbetreiber"), PreisblattKaQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_preisblatt_ka(
     Extension(repo): Extension<PreisblattKaRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -812,6 +825,19 @@ fn default_sparte() -> String {
 ///
 /// Upsert a `PreisblattKonzessionsabgabe` for the given NB.
 /// Always sets `source = "api"`. Returns `204 No Content` on success.
+#[utoipa::path(
+    put,
+    path = "/api/v1/preisblaetter-ka/{nb_mp_id}",
+    tag = "preisblatt",
+    params(("nb_mp_id" = String, Path, description = "13-digit MP-ID of the Netzbetreiber")),
+    request_body = PreisblattKaUpsertRequest,
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_preisblatt_ka(
     Extension(repo): Extension<PreisblattKaRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -870,6 +896,18 @@ pub struct PreisblattDlUpsertRequest {
     pub data: Bo4e<PreisblattDienstleistung>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/preisblaetter-dienstleistung/{msb_mp_id}",
+    tag = "preisblatt",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber"), PreisblattQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_preisblatt_dienstleistung(
     Extension(repo): Extension<PreisblattDlRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -901,6 +939,19 @@ pub async fn get_preisblatt_dienstleistung(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/v1/preisblaetter-dienstleistung/{msb_mp_id}",
+    tag = "preisblatt",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber")),
+    request_body = PreisblattDlUpsertRequest,
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_preisblatt_dienstleistung(
     Extension(repo): Extension<PreisblattDlRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -956,6 +1007,18 @@ pub struct PreisblattHwUpsertRequest {
     pub data: Bo4e<PreisblattHardware>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/preisblaetter-hardware/{msb_mp_id}",
+    tag = "preisblatt",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber"), PreisblattQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_preisblatt_hardware(
     Extension(repo): Extension<PreisblattHwRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -984,6 +1047,19 @@ pub async fn get_preisblatt_hardware(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/v1/preisblaetter-hardware/{msb_mp_id}",
+    tag = "preisblatt",
+    params(("msb_mp_id" = String, Path, description = "13-digit MP-ID of the Messstellenbetreiber")),
+    request_body = PreisblattHwUpsertRequest,
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_preisblatt_hardware(
     Extension(repo): Extension<PreisblattHwRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

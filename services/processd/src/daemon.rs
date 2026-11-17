@@ -52,16 +52,21 @@ impl Daemon for Processd {
             .run(pool)
             .await
             .context("run processd migrations")?;
-        // Transactional outbox for the de.sperr.* notices.
+        // Transactional outbox for the de.sperr.* notices, and the webhook
+        // endpoints and deliveries it fans out to.
         mako_service::outbox::ensure_schema(pool)
             .await
             .context("ensure outbox schema")?;
+        mako_service::subscriptions::ensure_schema(pool)
+            .await
+            .context("ensure webhook subscription schema")?;
         Ok(())
     }
 
     fn validate(cfg: &Self::Config) -> Vec<mako_service::Befund> {
         let mut out = cfg.lf.validate();
         out.extend(identitaet(&cfg.identity.own_mp_id));
+        out.extend(cfg.subscriptions.befunde());
         if let Err(e) = cfg.check_auth_posture() {
             // The refusal names every unconfigured door; the path is the first.
             let pfad = if cfg.oidc.is_none() {
@@ -194,9 +199,6 @@ impl Daemon for Processd {
                 eog_warn_days_before_expiry: cfg.eog.warn_days_before_expiry,
                 eog_notify_webhook_url: cfg.eog.notify_webhook_url.clone(),
                 eog_notify_webhook_secret,
-                self_register_webhook_url: cfg.subscription.webhook_url.clone(),
-                subscriber_id: cfg.subscription.subscriber_id.clone(),
-                subscriber_event_types: cfg.subscription.event_types.clone(),
                 verbundene_lieferanten: cfg.identity.verbundene_lieferanten.clone(),
                 obs_outbound_url,
                 obs_outbound_secret,
@@ -211,6 +213,7 @@ impl Daemon for Processd {
                 oidc,
                 cedar,
                 mcp: cfg.mcp.clone(),
+                subscriptions: cfg.subscriptions.clone(),
             },
             ctx,
         )

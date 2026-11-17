@@ -140,6 +140,19 @@ fn default_size() -> u32 {
 }
 
 /// PUT /api/v1/tranchen/{id} — insert or update a Tranche (NB role).
+#[utoipa::path(
+    put,
+    path = "/api/v1/tranchen/{id}",
+    tag = "tranche",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    request_body = TrancheUpsertRequest,
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_tranche(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
@@ -189,6 +202,18 @@ pub async fn put_tranche(
 }
 
 /// GET /api/v1/tranchen/{id}
+#[utoipa::path(
+    get,
+    path = "/api/v1/tranchen/{id}",
+    tag = "tranche",
+    params(("id" = String, Path, description = "Identifier of the resource")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_tranche(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
@@ -223,6 +248,17 @@ pub async fn get_tranche(
 }
 
 /// GET /api/v1/tranchen — list Tranchen (`?malo_id=` filters by parent MaLo).
+#[utoipa::path(
+    get,
+    path = "/api/v1/tranchen",
+    tag = "tranche",
+    params(TrancheListQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_tranchen(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,

@@ -5,7 +5,7 @@ use super::*;
 // ── Stornorechnung / Korrekturrechnung ────────────────────────────────────────
 
 /// Request body for `POST /api/v1/billing/{id}/correction`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CorrectionRequest {
     /// Human-readable reason for the correction (e.g. "Zählerstandskorrektur").
@@ -83,6 +83,21 @@ fn ensure_correctable(is_correction: bool, outcome: &str) -> BillingResult<()> {
 /// documents stay in `billing_records` for the statutory **8 years**
 /// (§ 147 Abs. 3 AO for a Buchungsbeleg, reduced from ten by the BEG IV with
 /// effect from 01.01.2025).
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/{id}/correction",
+    tag = "billing",
+    params(
+        ("id" = uuid::Uuid, Path, description = "The billing record"),
+    ),
+    request_body(content = CorrectionRequest, description = "Why the invoice is reversed"),
+    responses(
+        (status = 201, description = "The Stornorechnung; the period is free to bill again", body = serde_json::Value),
+        (status = 403, description = "Cedar `correct-billing` refused", body = crate::openapi::Problem),
+        (status = 404, description = "No such billing record in this tenant (`RECORD_NOT_FOUND`)", body = crate::openapi::Problem),
+        (status = 409, description = "A correction, an already cancelled record, or one never issued", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_correction(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,

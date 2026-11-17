@@ -9,7 +9,6 @@
 
 import { useSyncExternalStore } from "react";
 import { de, type Katalog } from "./de";
-import { en } from "./en";
 
 export type { Katalog } from "./de";
 
@@ -21,7 +20,16 @@ export const SPRACHEN: { id: Sprache; name: string }[] = [
   { id: "en", name: "English" },
 ];
 
-const KATALOGE: Record<Sprache, Katalog> = { de, en };
+// German is the Desk's first language and ships with the first paint;
+// English loads when it is chosen (`ladeSprache`), so the first paint of
+// the German Desk does not carry a second catalogue.
+const KATALOGE: Partial<Record<Sprache, Katalog>> = { de };
+
+/** Load `s`'s catalogue if it is not yet; resolves once `katalog()` can answer in it. */
+export async function ladeSprache(s: Sprache): Promise<void> {
+  if (KATALOGE[s]) return;
+  if (s === "en") KATALOGE.en = (await import("./en")).en;
+}
 
 const STORE = "mako-desk.sprache";
 
@@ -34,7 +42,7 @@ function remembered(): Sprache {
   return "de";
 }
 
-let aktuell: Sprache = remembered();
+let aktuell: Sprache = "de";
 let ersatz: Katalog | null = null;
 /** Moves on every change, so `useT` renders again for a catalogue swap too. */
 let stand = 0;
@@ -52,11 +60,15 @@ export function sprache(): Sprache {
 
 /** The catalogue in force — for code that names things outside a component. */
 export function katalog(): Katalog {
-  return ersatz ?? KATALOGE[aktuell];
+  return ersatz ?? KATALOGE[aktuell] ?? de;
 }
 
-/** Choose the Sprache: every component reading `useT()` renders again in it. */
+/** Choose the Sprache: every component reading `useT()` renders again in it, once its catalogue is loaded. */
 export function setSprache(s: Sprache) {
+  if (!KATALOGE[s]) {
+    void ladeSprache(s).then(() => setSprache(s));
+    return;
+  }
   aktuell = s;
   anwenden(s);
   try {
@@ -69,9 +81,15 @@ export function setSprache(s: Sprache) {
   for (const h of hoerer) h();
 }
 
-/** Applied before the first render, so `<html lang>` is right from the start. */
-export function applyRememberedSprache() {
-  aktuell = remembered();
+/**
+ * Applied before the first render, so `<html lang>` and the catalogue are
+ * right from the start: an English Desk waits for its catalogue, a German one
+ * does not wait at all.
+ */
+export async function applyRememberedSprache(): Promise<void> {
+  const s = remembered();
+  await ladeSprache(s);
+  aktuell = s;
   anwenden(aktuell);
 }
 

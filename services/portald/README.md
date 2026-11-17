@@ -37,9 +37,16 @@ Every path is prefixed `/api/v1/portal/{malo_id}`.
 | `GET /versorgung` | marktd |
 | `GET /vertrag` · `/kuendigungsfrist`, `POST /tarifwechsel` · `/kuendigen`, `GET\|PUT /kontakt` | vertragd |
 
+`GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of every route above,
+committed as [`openapi.json`](openapi.json). Each operation requires the
+`portal_customer` bearer scheme: the customer's own token, which portald forwards
+to `vertragd` to verify and to check ownership of `{malo_id}`.
+
 `GET /nachrechnen/{token}` (no prefix, no sign-in) is the public Rechnung-nachrechnen
 page: billingd's masked view of one invoice as HTML, 30 requests per minute per
-peer, addressed per `nachrechnen_anrede` (`sie` | `du`).
+peer, addressed per `nachrechnen_anrede` (`sie` | `du`). It is a plain route
+outside the API document: public, its token the only credential, and HTML for a
+person rather than JSON for a client.
 
 Notice periods and tariff rules live in `vertragd`; `portald` relays its `422`,
 which names the rule applied.

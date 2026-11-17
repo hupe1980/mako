@@ -3203,23 +3203,7 @@ pub async fn run_settlement(
     }
     let output = output;
 
-    let status = match output.status {
-        SettlementStatus::Calculated => "calculated",
-        SettlementStatus::NoData => "no_data",
-        SettlementStatus::PriceMissing => "price_missing",
-        SettlementStatus::FoerderungBeendet => "foerderung_beendet",
-        // § 8 Abs. 4 KWKG — this year's Vollbenutzungsstunden are used up and
-        // the plant resumes in January. Storing it as `foerderung_beendet` would
-        // retire a plant that is still owed most of its Förderung.
-        SettlementStatus::JahreskontingentErschoepft => "jahreskontingent_erschoepft",
-        SettlementStatus::Sanctioned => "sanctioned",
-        SettlementStatus::KeinAnspruch => "kein_anspruch",
-        // §§ 53b–54 apply and no EEG Fassung is tabled for the period: nothing
-        // settled, and the sweep retries it once the Fassung is tabled.
-        SettlementStatus::FassungNichtTabelliert => "fassung_nicht_tabelliert",
-        // Forward-compatible: any future status variant stores as "unknown" and does not block
-        _ => "unknown",
-    };
+    let status = receipt_status(output.status);
     // `[policy] beihilfe_politik = "halten"`: a computed payment no approval
     // covers is stored, not paid. `gehalten` is outside `SETTLED_STATUSES`, so
     // the sweep re-settles the period, and pays it once an approval covers it.
@@ -3525,6 +3509,46 @@ async fn record_sect52_monat(
     .await
     .context("record the month's § 52 claim")?;
     Ok(Some(m))
+}
+
+/// Every `settlement_receipts.status` einsd writes — the column's `CHECK`
+/// lists exactly these (`schema_code_guard`). None of them says a Gutschrift
+/// was paid: the payout is accountingd's (`eeg_payout_orders`).
+pub const RECEIPT_STATUSES: [&str; 10] = [
+    "calculated",
+    "no_data",
+    "price_missing",
+    "foerderung_beendet",
+    "jahreskontingent_erschoepft",
+    "sanctioned",
+    "kein_anspruch",
+    "fassung_nicht_tabelliert",
+    // `[policy] beihilfe_politik = "halten"`: computed, not paid.
+    "gehalten",
+    "unknown",
+];
+
+/// The stored status of a settlement outcome.
+#[must_use]
+pub fn receipt_status(status: eeg_billing::SettlementStatus) -> &'static str {
+    match status {
+        eeg_billing::SettlementStatus::Calculated => "calculated",
+        eeg_billing::SettlementStatus::NoData => "no_data",
+        eeg_billing::SettlementStatus::PriceMissing => "price_missing",
+        eeg_billing::SettlementStatus::FoerderungBeendet => "foerderung_beendet",
+        // § 8 Abs. 4 KWKG — this year's Vollbenutzungsstunden are used up and
+        // the plant resumes in January. Storing it as `foerderung_beendet` would
+        // retire a plant that is still owed most of its Förderung.
+        eeg_billing::SettlementStatus::JahreskontingentErschoepft => "jahreskontingent_erschoepft",
+        eeg_billing::SettlementStatus::Sanctioned => "sanctioned",
+        eeg_billing::SettlementStatus::KeinAnspruch => "kein_anspruch",
+        // §§ 53b–54 apply and no EEG Fassung is tabled for the period: nothing
+        // settled, and the sweep retries it once the Fassung is tabled.
+        eeg_billing::SettlementStatus::FassungNichtTabelliert => "fassung_nicht_tabelliert",
+        // A variant the library adds later stores as `unknown` and does not
+        // block the run.
+        _ => "unknown",
+    }
 }
 
 /// Statuses of a receipt that represent a settlement actually having happened

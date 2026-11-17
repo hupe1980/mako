@@ -1043,6 +1043,21 @@ pub fn spawn_smgw_cert_expiry_worker(
 ///
 /// The promoted `gateway_status` column is extracted from `session.status` so the
 /// compliance sweep can pre-filter `WHERE gateway_status != 'REPLACED'` efficiently.
+#[utoipa::path(
+    put,
+    path = "/api/v1/smgw/{malo_id}",
+    tag = "smgw",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `SmgwSession`"),
+    responses(
+        (status = 204, description = "Done, no body"),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub async fn put_smgw_session(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1196,6 +1211,18 @@ pub async fn put_smgw_session(
 ///
 /// Returns the stored `SmgwSession` for a MaLo, plus its **open** compliance
 /// issues from `cls_compliance_issues` — what is wrong now, oldest first.
+#[utoipa::path(
+    get,
+    path = "/api/v1/smgw/{malo_id}",
+    tag = "smgw",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub async fn get_smgw_session(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1283,7 +1310,8 @@ pub async fn get_smgw_session(
 }
 
 /// Query parameters for `GET /api/v1/smgw`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListSmgwQuery {
     /// Filter by gateway status.  Defaults to all statuses.
     pub status: Option<String>,
@@ -1297,6 +1325,18 @@ pub struct ListSmgwQuery {
 ///
 /// List all SMGW sessions for the tenant with their current compliance status.
 /// Returns sessions with the most recently updated first.
+#[utoipa::path(
+    get,
+    path = "/api/v1/smgw",
+    tag = "smgw",
+    params(ListSmgwQuery),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub async fn list_smgw_sessions(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1386,6 +1426,17 @@ pub async fn list_smgw_sessions(
 /// **Does not write to `cls_compliance_issues`** and **does not emit CloudEvents** —
 /// it is a read-only audit endpoint for dashboards and the `smgw-diagnostics-agent`.
 /// Use `POST /api/v1/smgw/compliance/scan` for a side-effecting full sweep.
+#[utoipa::path(
+    get,
+    path = "/api/v1/smgw/compliance",
+    tag = "smgw",
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub async fn get_smgw_compliance(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1461,6 +1512,16 @@ pub async fn get_smgw_compliance(
 ///
 /// Use this endpoint for manual compliance audits or integration tests.
 /// The daily background worker calls the same logic automatically.
+#[utoipa::path(
+    post,
+    path = "/api/v1/smgw/compliance/scan",
+    tag = "smgw",
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+    )
+)]
 pub async fn post_smgw_compliance_scan(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

@@ -45,6 +45,7 @@
 //! | [`config`] | `portald.toml` shape |
 //! | [`handlers`] | Route handlers |
 //! | [`nachrechnen`] | The public, token-addressed Rechnung-nachrechnen page |
+//! | [`openapi`] | Every `/api/v1` route and the OpenAPI document describing them |
 //! | [`server`] | Router assembly + [`mako_service::Daemon`] impl |
 
 pub mod auth;
@@ -52,4 +53,5 @@ pub mod clients;
 pub mod config;
 pub mod handlers;
 pub mod nachrechnen;
+pub mod openapi;
 pub mod server;

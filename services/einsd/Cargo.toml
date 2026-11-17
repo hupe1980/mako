@@ -61,7 +61,6 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 time = { workspace = true }
 tokio = { version = "1", features = ["full"] }
-tower = { version = "0.5", features = ["util"] }
-
+tower = { workspace = true }
 [lints]
 workspace = true

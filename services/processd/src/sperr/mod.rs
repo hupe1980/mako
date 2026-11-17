@@ -38,8 +38,6 @@
 
 use std::sync::Arc;
 
-use axum::{Extension, Router, routing::get};
-
 pub mod events;
 pub mod handlers;
 pub mod ingest;
@@ -79,30 +77,3 @@ pub struct Tenant(pub String);
 /// view states the earliest Sperrtermin under the reading in force.
 #[derive(Clone, Copy, Debug)]
 pub struct Lesart(pub mako_service::policy::Policy<crate::config::MsbVorlaufLesart>);
-
-/// The Sperrauftrag routes, carrying the tenant they work under and the
-/// Sperrtermin reading. The caller adds the pool, OIDC
-/// and Cedar layers it shares with every other processd route.
-pub fn router(tenant: String, lesart: Lesart) -> Router {
-    Router::new()
-        .route("/api/v1/sperr-orders/stats", get(handlers::get_stats))
-        .route(
-            "/api/v1/sperr-orders",
-            get(handlers::list_orders).post(handlers::create_order),
-        )
-        .route("/api/v1/sperr-orders/{id}", get(handlers::get_order))
-        .route(
-            "/api/v1/sperr-orders/{id}/execute",
-            axum::routing::put(handlers::execute_order),
-        )
-        .route(
-            "/api/v1/sperr-orders/{id}/fail",
-            axum::routing::put(handlers::fail_order),
-        )
-        .route(
-            "/api/v1/sperr-orders/{id}/cancel",
-            axum::routing::put(handlers::cancel_order),
-        )
-        .layer(Extension(Tenant(tenant)))
-        .layer(Extension(lesart))
-}

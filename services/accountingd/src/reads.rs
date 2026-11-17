@@ -624,8 +624,148 @@ pub async fn payment_match(
     })
 }
 
+// ── EEG payout orders ────────────────────────────────────────────────────────
+
+/// One EEG payout order the Netzbetreiber ran (§ 19 Abs. 1 EEG 2023).
+#[derive(Debug, Clone, Serialize, JsonSchema, ToSchema)]
+pub struct EegAuszahlung {
+    /// The order.
+    pub payout_id: String,
+    /// The plant's Marktlokation.
+    pub malo_id: String,
+    /// The plant (Technische Ressource) whose receipt chain the order pays.
+    pub tr_id: String,
+    /// Billing year of the receipt chain.
+    pub billing_year: i16,
+    /// Billing month (1–12) of the receipt chain.
+    pub billing_month: i16,
+    /// The amount paid out, in cents.
+    pub amount_ct: i64,
+    /// `amount_ct` as a decimal EUR string.
+    #[schemars(extend("format" = "decimal"))]
+    #[schema(format = "decimal")]
+    pub amount_eur: String,
+    /// The plant operator the order pays.
+    pub creditor_name: String,
+    /// `SCT_INST` or `SCT_CORE`.
+    pub payment_type: String,
+    /// The ISO 20022 `EndToEndId` the pain.002 answers on.
+    pub end_to_end_ref: String,
+    /// The bank's pain.002 status (`PDNG`, `ACCP`, `ACSC`, `RJCT`, `CANC`, …);
+    /// absent for an order not yet submitted.
+    pub pain002_status: Option<String>,
+    /// The EPC reason code of a rejection.
+    pub pain002_reason: Option<String>,
+    /// When the pain.001 was submitted.
+    #[schemars(extend("format" = "date-time"))]
+    #[schema(format = DateTime)]
+    pub submitted_at: Option<String>,
+    /// When the bank confirmed the credit.
+    #[schemars(extend("format" = "date-time"))]
+    #[schema(format = DateTime)]
+    pub settled_at: Option<String>,
+    /// When the order was made.
+    #[schemars(extend("format" = "date-time"))]
+    #[schema(format = DateTime)]
+    pub created_at: String,
+}
+
+/// The EEG payout orders (`list_eeg_payouts`, `GET /api/v1/eeg/payouts`).
+#[derive(Debug, Clone, Serialize, JsonSchema, ToSchema)]
+pub struct EegAuszahlungen {
+    /// The orders, newest first.
+    pub payouts: Vec<EegAuszahlung>,
+    /// How many orders `payouts` holds.
+    pub count: usize,
+    /// The page is full: more may match than were listed.
+    pub saturated: bool,
+}
+
+/// `list_eeg_payouts`' parameters — the query of `GET /api/v1/eeg/payouts`.
+#[derive(Debug, Default, Deserialize, JsonSchema, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct EegPayoutQuery {
+    /// Restrict to one plant's MaLo.
+    pub malo_id: Option<String>,
+    /// Restrict to one plant (Technische Ressource).
+    pub tr_id: Option<String>,
+    /// Billing year of the receipt chain paid.
+    pub year: Option<i16>,
+    /// Billing month (1–12) of the receipt chain paid.
+    pub month: Option<i16>,
+    /// pain.002 status (`PDNG`, `ACCP`, `ACSC`, `RJCT`, `CANC`, …), or `NULL`
+    /// for orders not yet submitted.
+    pub status: Option<String>,
+    /// `SCT_INST` or `SCT_CORE`.
+    pub payment_type: Option<String>,
+    /// Maximum rows (default 100, at most 1000).
+    pub limit: Option<i64>,
+}
+
+/// The EEG payout orders `q` selects, newest first.
+///
+/// # Errors
+///
+/// `500` on a database failure.
+pub async fn eeg_payouts(
+    pool: &PgPool,
+    tenant: &str,
+    q: &EegPayoutQuery,
+) -> Result<EegAuszahlungen, ApiError> {
+    use sqlx::Row as _;
+    let limit = q.limit.unwrap_or(100).clamp(1, 1000);
+    let filter = crate::pg::EegPayoutFilter {
+        malo_id: q.malo_id.as_deref(),
+        tr_id: q.tr_id.as_deref(),
+        year: q.year,
+        month: q.month,
+        payment_type: q.payment_type.as_deref(),
+        status: q
+            .status
+            .as_deref()
+            .map(|s| (s != "NULL" && s != "NOTSUBMITTED").then_some(s)),
+    };
+    let rows = crate::pg::list_eeg_payouts(pool, tenant, &filter, limit)
+        .await
+        .map_err(ApiError::internal)?;
+    let payouts = rows
+        .iter()
+        .map(|r| -> Result<EegAuszahlung, sqlx::Error> {
+            let amount_ct: i64 = r.try_get("amount_ct")?;
+            Ok(EegAuszahlung {
+                payout_id: r.try_get::<uuid::Uuid, _>("payout_id")?.to_string(),
+                malo_id: r.try_get("malo_id")?,
+                tr_id: r.try_get("tr_id")?,
+                billing_year: r.try_get("billing_year")?,
+                billing_month: r.try_get("billing_month")?,
+                amount_eur: format_ct_as_eur(amount_ct),
+                amount_ct,
+                creditor_name: r.try_get("creditor_name")?,
+                payment_type: r.try_get("payment_type")?,
+                end_to_end_ref: r.try_get("end_to_end_ref")?,
+                pain002_status: r.try_get("pain002_status")?,
+                pain002_reason: r.try_get("pain002_reason")?,
+                submitted_at: r
+                    .try_get::<Option<time::OffsetDateTime>, _>("submitted_at")?
+                    .map(rfc3339),
+                settled_at: r
+                    .try_get::<Option<time::OffsetDateTime>, _>("settled_at")?
+                    .map(rfc3339),
+                created_at: rfc3339(r.try_get("created_at")?),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ApiError::internal(anyhow::Error::from(e)))?;
+    Ok(EegAuszahlungen {
+        count: payouts.len(),
+        saturated: i64::try_from(payouts.len()).unwrap_or(i64::MAX) >= limit,
+        payouts,
+    })
+}
+
 /// An instant as RFC 3339.
-fn rfc3339(t: time::OffsetDateTime) -> String {
+pub(crate) fn rfc3339(t: time::OffsetDateTime) -> String {
     t.format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default()
 }

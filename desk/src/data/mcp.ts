@@ -52,10 +52,13 @@ export class ToolRefusal extends Error {
 }
 
 /** The service could not be reached or failed before answering. */
+/** A service the Desk reads over REST alone, with no MCP client of its own. */
+export type NurRest = "productd";
+
 export class ServiceUnavailable extends Error {
   override name = "ServiceUnavailable";
-  readonly service: Service;
-  constructor(service: Service, cause: unknown) {
+  readonly service: Service | NurRest;
+  constructor(service: Service | NurRest, cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.service = service;
   }

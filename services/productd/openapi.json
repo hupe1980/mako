@@ -1,0 +1,3128 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "productd — Product and Tariff Catalog",
+    "description": "The retail products and tariffs a Lieferant sells, the market price series they are billed against, B2B Angebote, the frozen Endkunden-Angebot, the § 41c EnWG comparison feed, and webhook subscriptions on productd's events.",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.38.0"
+  },
+  "paths": {
+    "/api/v1/angebote": {
+      "get": {
+        "tags": [
+          "angebote"
+        ],
+        "summary": "`GET /api/v1/angebote`",
+        "operationId": "list_angebote_handler",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "ANGELEGT, VERSANDT, ANGENOMMEN, ABGELEHNT or ABGELAUFEN",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows, at most 200",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Angebote",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "angebote"
+        ],
+        "summary": "`POST /api/v1/angebote`",
+        "description": "Create a formal B2B Angebot (quotation) for a C&I or RLM customer.\n\n## Price calculation\n\nFor each position, `productd` fetches the product's `Tarifpreisblatt` and\nestimates `jahreskosten_netto_eur` from:\n- `GRUNDPREIS` position: `ct/day × 365 / 100`\n- `ARBEITSPREIS_EINTARIF` position: `ct/kWh × jahresverbrauch_kwh / 100`\n- `ARBEITSPREIS_HT` / `ARBEITSPREIS_NT`: each band against its own volume\n- Optional `rabatt_pct` from the Angebot variant\n\nEvery rate comes from the Preisstaffel that covers the position's own\nquantity. `jahreskosten_brutto_eur` is the sum of the positions' gross\nfigures, each at its own Umsatzsteuersatz.\n\nA position that cannot be priced — unresolvable product code, a quantity\noutside every Preisstaffel, a Zweitarif product with no HT/NT split, a Gas\nposition with no CO₂ certificate price — refuses the whole quotation with\n422 and the reason per position. An Angebot is a binding offer, so a\nposition is never quietly dropped from the total.\n\n## Varianten (scenarios)\n\nMultiple `varianten` (e.g., 12M vs 24M, with/without rebate) can be included\nin a single Angebot.  On acceptance, the customer picks one via\n`gewaehlte_variante` (index into the `varianten` array).\n\n## Acceptance lifecycle\n\n`POST /api/v1/angebote/{id}/annehmen` transitions to ANGENOMMEN and emits\n`de.tarif.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the\n`Rahmenvertrag` + `Versorgungsverträge` from the accepted Angebot data.",
+        "operationId": "post_angebot",
+        "requestBody": {
+          "description": "`CreateAngebotRequest`: the quotation to price",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created and priced",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The quotation is refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/angebote/expire": {
+      "post": {
+        "tags": [
+          "angebote"
+        ],
+        "summary": "`POST /api/v1/angebote/expire`  (internal maintenance endpoint)",
+        "description": "Mark all Angebote past `gueltig_bis` as ABGELAUFEN.\nCalled by the background task; also available for manual triggers.",
+        "operationId": "post_expire_angebote",
+        "responses": {
+          "200": {
+            "description": "How many were marked ABGELAUFEN",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/angebote/{id}": {
+      "get": {
+        "tags": [
+          "angebote"
+        ],
+        "summary": "`GET /api/v1/angebote/{id}`",
+        "operationId": "get_angebot_handler",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Angebot",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Angebot",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Angebot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "angebote"
+        ],
+        "summary": "`PUT /api/v1/angebote/{id}` — update an Angebot before it is sent.",
+        "description": "Only Angebote in `ANGELEGT` status can be updated.  Once sent (`VERSANDT`),\nthe quotation is immutable — create a new Angebot to supersede it.\n\nRe-calculates `jahreskosten_netto_eur` / `jahreskosten_brutto_eur` when\n`positionen` are updated so the totals stay in sync.",
+        "operationId": "put_angebot",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Angebot",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`UpdateAngebotRequest`: the changed fields, before VERSANDT",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated and re-priced",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Angebot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Angebot has been sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The change is refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/angebote/{id}/ablehnen": {
+      "post": {
+        "tags": [
+          "angebote"
+        ],
+        "summary": "`POST /api/v1/angebote/{id}/ablehnen`",
+        "description": "Mark an Angebot as ABGELEHNT (declined by customer).",
+        "operationId": "post_angebot_ablehnen",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Angebot",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ABGELEHNT",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Angebot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/angebote/{id}/annehmen": {
+      "post": {
+        "tags": [
+          "angebote"
+        ],
+        "summary": "`POST /api/v1/angebote/{id}/annehmen`",
+        "description": "Digitally accept an Angebot.\n\nValidates that the Angebot is still within its `gueltig_bis` window, then\ntransitions to `ANGENOMMEN` and, in the same transaction, enqueues\n`de.tarif.angebot.angenommen` for the configured ERP webhook (`vertragd`).\nThe outbox worker delivers it with retry; `vertragd` answers with the\nRahmenvertrag it created, and the worker links it onto the Angebot in the\ntransaction that marks the delivery done. So the answer here never carries\nthe Rahmenvertrag: it exists once the delivery has gone through, and the\nAngebot names it from then on.",
+        "operationId": "post_angebot_annehmen",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Angebot",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`AnnehmenRequest`: the chosen variant",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "ANGENOMMEN, the contract request is queued",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Angebot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already decided or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not priced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/angebote/{id}/comparison": {
+      "get": {
+        "tags": [
+          "angebote"
+        ],
+        "summary": "`GET /api/v1/angebote/{id}/comparison`",
+        "description": "Side-by-side cost comparison for all scenarios (base + variants) in an Angebot.\n\nReturns a `ComparisonResponse` with one `ScenarioCostBreakdown` per scenario:\n- **Basis** — the base quotation (laufzeit from `angebote.laufzeit_monate`, no discount)\n- **Variante 0..N** — each `AngebotVariante` with its `rabatt_pct` and/or\n  alternative products applied\n\nEach scenario includes per-position detail:\n\n| Field | Formula |\n|---|---|\n| `supply_netto_eur` | Grundpreis × 365/100 + Arbeitspreis × kWh/100 × (1−rabatt/100) + Leistungspreis × kW × 12/100 |\n| `nne_netto_eur` | NNE Grundpreis + NNE Arbeitspreis × kWh/100 + NNE Leistungspreis × kW |\n| `ka_eur` | KA ct/kWh × kWh/100 |\n| `levies_eur` | Stromsteuer (§ 3 StromStG) or Energiesteuer (§ 2 Abs. 3 EnergieStG) + BEHG × kWh/100 |\n| `total_netto_eur` | Supply + NNE + KA + Levies |\n| `total_brutto_eur` | `total_netto_eur × (1 + mwst_satz)` |\n\nEvery Arbeitspreis is taken from the Preisstaffel that covers the position's\nown quantity, and HT and NT are priced against their own volumes.\n\nA scenario that cannot be priced in full — an unresolvable product code, a\nquantity outside every Preisstaffel — is refused with 422 and the reason per\nposition, never rendered as the sum of the positions that did resolve.\n\nThe `ersparnis_vs_basis_eur` field shows the annual saving vs. the base scenario —\nnegative values mean the variant is more expensive (useful for index-linked\nprice formulas).\n\n## When is this useful?\n\nC&I/RLM customers request formal Angebote with multiple scenario comparisons\n(12M fixed vs. 24M fixed, with/without demand-side flexibility rebate). This\nendpoint renders the comparison table that a sales engineer sends to the customer,\nor that the B2B portal renders for self-service CPQ.\n\n## BO4E output\n\nScenarios are priced live from the current product data and the stored\npositions. The response also carries the priced quotation as a BO4E\n[`Angebot`](rubo4e::current::Angebot) under `bo4e`, and persists it to\n`angebote.bo4e` — this endpoint is where pricing happens, so it is where the\ninterchange document is produced.",
+        "operationId": "get_angebot_comparison",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Angebot",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The variants side by side",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Angebot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/angebote/{id}/versenden": {
+      "post": {
+        "tags": [
+          "angebote"
+        ],
+        "summary": "`POST /api/v1/angebote/{id}/versenden`",
+        "description": "Mark an Angebot as VERSANDT (sent to customer).",
+        "operationId": "post_angebot_versenden",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Angebot",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "VERSANDT",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Angebot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not in ANGELEGT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/comparison-feed": {
+      "get": {
+        "tags": [
+          "comparison-feed"
+        ],
+        "summary": "`GET /api/v1/comparison-feed`",
+        "description": "Returns a machine-readable tariff listing suitable for comparison portals\n(Verivox, Check24, Eon portal) and the BNetzA Markttransparenzstelle.\n\n## Query parameters\n\n| Parameter | Type | Default | Description |\n|---|---|---|---|\n| `lf_mp_id` | string | `cfg.tenant` | LF operator ID |\n| `sparte` | string | — | Filter: `STROM` \\| `GAS` \\| `WAERME` |\n| `kundentyp` | string | — | Filter: `Haushalt` \\| `Gewerbe` \\| `Waermepumpe` \\| `Ladesaeule` |\n| `verbrauch_kwh` | decimal | `3500` | Annual consumption for `jahreskosten` estimation |\n| `oekolabel` | string | — | Filter to products with this label (e.g. `OK_POWER`) |\n| `include_dynamic` | bool | `true` | Include §41a EPEX-linked dynamic tariffs |\n| `only_dynamic` | bool | `false` | Return only dynamic tariffs |\n| `limit` | integer | `100` | Page size (1–500) |\n| `cursor` | string | — | Pagination cursor from previous response `meta.next_cursor` |\n\n## Caching\n\nResponses include an ETag and `Cache-Control: public, max-age=300`.\nClients **should** send `If-None-Match` on subsequent polls — the server\nreturns 304 Not Modified when no products have changed.\n\n## Supply-cost estimate\n\n`jahreskosten_supply_netto_eur` = Grundpreis (EUR/a) + Arbeitspreis (EUR/a).\n**NNE, KA, Stromsteuer, and MwSt are excluded** — these vary by DSO/PLZ and\nmust be added by the integrator after fetching from the respective APIs.\n`jahreskosten_supply_brutto_eur` applies the product's own Umsatzsteuersatz\n(`mwst_satz`) to the netto estimate.\n\n## Pagination\n\nThe feed is ordered `(updated_at DESC, product_code ASC)`.  When\n`meta.next_cursor` is non-null, pass it as `?cursor=<value>` to retrieve the\nnext page.  The cursor is stable: new or updated products appear on page 1\nwithout affecting subsequent pages.",
+        "operationId": "get_comparison_feed",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "MP-ID of the Lieferant",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "STROM or GAS",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kundentyp",
+            "in": "query",
+            "description": "Kundentyp",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "verbrauch_kwh",
+            "in": "query",
+            "description": "Annual consumption for the yearly cost, decimal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "oekolabel",
+            "in": "query",
+            "description": "Only products with this Ökolabel",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_dynamic",
+            "in": "query",
+            "description": "Include § 41a dynamic tariffs",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "only_dynamic",
+            "in": "query",
+            "description": "Only § 41a dynamic tariffs",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The next_cursor of the previous page",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The published tariffs (§ 41c Abs. 5 EnWG, no credential)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/comparison-feed/bo4e": {
+      "get": {
+        "tags": [
+          "comparison-feed"
+        ],
+        "summary": "`GET /api/v1/comparison-feed/bo4e`",
+        "description": "Returns the same feed as `GET /api/v1/comparison-feed` but wraps every tariff\nin a full BO4E `Tarifinfo` Business Object, for comparison portals reading the\n§ 41c Abs. 5 EnWG feed.\n\nUnlike the standard feed which returns a mako-specific JSON structure alongside\nthe BO4E `Tarifpreisblatt`, this endpoint returns a schema-validated BO4E array\nthat can be imported directly without custom ETL.\n\n## Query parameters\n\nIdentical to `GET /api/v1/comparison-feed`.\n\n## Response\n\n```json\n{\n  \"meta\": { \"generated_at\": \"...\", \"total_returned\": 12, ... },\n  \"tarife\": [\n    {\n      \"_typ\": \"TARIFINFO\",\n      \"_version\": \"202607.1.0\",\n      \"_id\": \"STROM_OEKO_2026\",\n      \"bezeichnung\": \"Ökostrom Plus\",\n      \"sparte\": \"STROM\",\n      \"kundentypen\": [\"Privat\"],\n      \"registeranzahl\": \"Eintarif\",\n      \"tariftyp\": \"SONDERTARIF\",\n      \"tarifmerkmale\": [\"FESTPREIS\"],\n      \"energiemix\": { ... },\n      \"zeitlicheGueltigkeit\": { \"startdatum\": \"2026-01-01T00:00:00Z\" },\n      \"vertragskonditionen\": { ... }\n    }\n  ]\n}\n```",
+        "operationId": "get_comparison_feed_bo4e",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "MP-ID of the Lieferant",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "STROM or GAS",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kundentyp",
+            "in": "query",
+            "description": "Kundentyp",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "verbrauch_kwh",
+            "in": "query",
+            "description": "Annual consumption, decimal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "oekolabel",
+            "in": "query",
+            "description": "Only products with this Ökolabel",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_dynamic",
+            "in": "query",
+            "description": "Include § 41a dynamic tariffs",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "only_dynamic",
+            "in": "query",
+            "description": "Only § 41a dynamic tariffs",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The next_cursor of the previous page",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The feed as a BO4E Tarifinfo array (§ 41c Abs. 5 EnWG, no credential)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/endkunden-angebote/{id}": {
+      "get": {
+        "tags": [
+          "endkunden-angebote"
+        ],
+        "summary": "`GET /api/v1/endkunden-angebote/{id}` — the frozen offer, as stored, read\nback out of the bytes its `content_sha256` is computed over. An expired\noffer stays readable: an order placed against it is proven by it.",
+        "operationId": "get_endkunden_angebot",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Endkunden-Angebot",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The frozen offer",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such offer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/epex-prices/{date}": {
+      "put": {
+        "tags": [
+          "marktpreise"
+        ],
+        "summary": "`PUT /api/v1/epex-prices/{date}`",
+        "description": "Import a delivery day's EPEX day-ahead prices. Body:\n`{ \"prices\": [ct_kwh_mtu0, …], \"mtu_minutes\": 15, \"source\": \"...\" }`.\n`prices` length must match the local day's MTU count (96/92/100 at 15-min,\n24/23/25 at 60-min). `mtu_minutes` defaults to 15.",
+        "operationId": "put_epex_prices",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "path",
+            "description": "The delivery day, YYYY-MM-DD",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`EpexImportRequest`: the day-ahead quarter-hourly prices",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Imported",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Not a date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The curve is refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/epex-prices/{date}/quarter-hourly": {
+      "get": {
+        "tags": [
+          "marktpreise"
+        ],
+        "summary": "`GET /api/v1/epex-prices/{date}/quarter-hourly`",
+        "description": "Returns the delivery day's spot prices as 15-minute market time units, each\nwith its UTC `mtu_start` instant and `price_ct_kwh` (legacy hourly rows are\nexpanded to quarter-hours). Used by `billingd` for §41a dynamic billing.",
+        "operationId": "get_epex_prices_quarter_hourly",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "path",
+            "description": "The delivery day, YYYY-MM-DD",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The quarter-hourly prices",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Not a date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No prices for the day",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/epex-prices/{year}/{month}/average": {
+      "get": {
+        "tags": [
+          "marktpreise"
+        ],
+        "summary": "`GET /api/v1/epex-prices/{year}/{month}/average`",
+        "description": "Returns the monthly average ct/kWh for EPEX Spot.\nUsed by `einsd` for Direktvermarktung Marktprämie calculation.",
+        "operationId": "get_epex_monthly_average",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Year",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "Month 1–12",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The monthly average",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No prices for the month",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The service's events within the retention window, in commit order — the\nfeed an integrator polls instead of, or beside, an endpoint. Each item is\nthe CloudEvent as delivered.",
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Value"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nehs-prices/latest": {
+      "get": {
+        "tags": [
+          "marktpreise"
+        ],
+        "summary": "`GET /api/v1/nehs-prices/latest?date=YYYY-MM-DD`",
+        "description": "Most recent nEHS price at or before `date` (defaults to today). Used by\n`billingd` to derive the Gas CO₂ component (CO2KostAufG §3 pass-through).",
+        "operationId": "get_nehs_price_latest",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "description": "The day, YYYY-MM-DD, today in Berlin when absent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The latest price on or before the day",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Not a date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No price recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nehs-prices/{date}": {
+      "put": {
+        "tags": [
+          "marktpreise"
+        ],
+        "summary": "`PUT /api/v1/nehs-prices/{date}`",
+        "description": "Import one dated nEHS certificate price (EUR/t CO₂) — an EEX auction\nclearing price (weekly from 01.07.2026), the Verkaufsphase price (68 EUR/t)\nor a manual entry. Body: `{ \"eur_per_t\": \"63.50\", \"source\": \"auktion\" }`.",
+        "operationId": "put_nehs_price",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "path",
+            "description": "The price day, YYYY-MM-DD",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`NehsImportRequest`: the BEHG certificate price",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Imported",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Not a date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The price is refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/{lf_mp_id}": {
+      "get": {
+        "tags": [
+          "products"
+        ],
+        "summary": "`GET /api/v1/products/{lf_mp_id}`",
+        "operationId": "list_products_handler",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "description": "Product category (`STROM`, `GAS`, …)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "Sparte",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kundentyp",
+            "in": "query",
+            "description": "Kundentyp",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_drafts",
+            "in": "query",
+            "description": "Include DRAFT products",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_expired",
+            "in": "query",
+            "description": "Include withdrawn and expired products",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows, at most 200",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The products in force",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/{lf_mp_id}/endkunden-angebote": {
+      "post": {
+        "tags": [
+          "endkunden-angebote"
+        ],
+        "summary": "`POST /api/v1/products/{lf_mp_id}/endkunden-angebote` — price and freeze a\nbinding B2C offer ([`crate::endkunden_angebot`]).",
+        "description": "`201` with the stored offer and its `content_sha256`; `422` with a stable\n`code` for every refusal — `eingabe_fehlt` names each missing Preisblatt,\nposition or series year at once.",
+        "operationId": "post_endkunden_angebot",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`EndkundenAngebotAnfrage`: the product, the MaLo and the consumption to price",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The frozen offer and its hash",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The offer cannot be priced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "marktd is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/{lf_mp_id}/resolve": {
+      "post": {
+        "tags": [
+          "products"
+        ],
+        "summary": "`POST /api/v1/products/{lf_mp_id}/resolve` — product versions by code+date.",
+        "description": "A billing period split by a Tarifwechsel needs one product version per leg,\neach valid on that leg's own dates. Asking one request per leg is an N+1 on\nevery invoice; asking here is one round trip.\n\nA code with no version valid on its date comes back as `null` in place, so\nthe caller can tell *which* of its legs is unpriceable rather than getting a\nshorter list than it asked for.",
+        "operationId": "post_resolve_products",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`ResolveProductsRequest`: the product codes and the day each is resolved for",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One definition per request",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A code is refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/{lf_mp_id}/{product_code}": {
+      "get": {
+        "tags": [
+          "products"
+        ],
+        "summary": "`GET /api/v1/products/{lf_mp_id}/{product_code}`",
+        "operationId": "get_product",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_code",
+            "in": "path",
+            "description": "The product code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version in force today",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "products"
+        ],
+        "summary": "`PUT /api/v1/products/{lf_mp_id}/{product_code}`",
+        "operationId": "put_product",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_code",
+            "in": "path",
+            "description": "The product code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`ProductUpsertRequest`: the product version, its BO4E Tarifpreisblatt in `data`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored version",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The Tarifpreisblatt or the Abrechnung is refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "products"
+        ],
+        "summary": "`DELETE /api/v1/products/{lf_mp_id}/{product_code}`",
+        "description": "Soft-delete a product by setting `valid_to = today`.\nThe product remains in the database for historical billing lookups but is\nexcluded from the comparison feed and `list_products` (unless\n`?include_expired=true` is passed).",
+        "operationId": "delete_product",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_code",
+            "in": "path",
+            "description": "The product code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Withdrawn (soft-deleted, its history stays)"
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/{lf_mp_id}/{product_code}/energiemix": {
+      "get": {
+        "tags": [
+          "products"
+        ],
+        "summary": "`GET /api/v1/products/{lf_mp_id}/{product_code}/energiemix`",
+        "description": "Retrieve the §42 EnWG `Energiemix` and `Oekolabel` for a product.\n\nReturns:\n```json\n{\n  \"lf_mp_id\": \"...\",\n  \"product_code\": \"...\",\n  \"energiemix\": { \"anteil\": [...], \"co2Emission\": 42.0, ... },\n  \"oekolabel\": [\"OK_POWER\"],\n  \"updated_at\": \"2026-07-12T00:00:00Z\"\n}\n```\n\nReturns 404 if the product has no Energiemix set.",
+        "operationId": "get_energiemix",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_code",
+            "in": "path",
+            "description": "The product code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Energiemix and Ökolabel",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No Energiemix recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "products"
+        ],
+        "summary": "`PUT /api/v1/products/{lf_mp_id}/{product_code}/energiemix`",
+        "description": "Store or replace the §42 EnWG `Energiemix` and `Oekolabel` for a product.\n\nBody: `{ \"energiemix\": <Energiemix COM JSON>, \"oekolabel\": [\"OK_POWER\", …] }`\n\nValidation:\n- `energiemix` is deserialized as `rubo4e::current::Energiemix`; invalid\n  enum values (e.g. unknown `erzeugungsart`) are rejected with 422.\n- Re-serialized to canonical BO4E camelCase before storage.\n- Does NOT re-archive or change product pricing — only touches the\n  `energiemix` / `oekolabel` columns.",
+        "operationId": "put_energiemix",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_code",
+            "in": "path",
+            "description": "The product code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`EnergimixUpsertRequest`: the § 42 EnWG Energiemix and Ökolabel",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The Energiemix is refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "products"
+        ],
+        "summary": "`DELETE /api/v1/products/{lf_mp_id}/{product_code}/energiemix`",
+        "description": "Remove the `Energiemix` and `Oekolabel` from a product (deleted outright, no archive).\nUse when a product transitions from green-certified back to standard.",
+        "operationId": "delete_energiemix_handler",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_code",
+            "in": "path",
+            "description": "The product code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No Energiemix recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/{lf_mp_id}/{product_code}/history": {
+      "get": {
+        "tags": [
+          "products"
+        ],
+        "summary": "`GET /api/v1/products/{lf_mp_id}/{product_code}/history`",
+        "operationId": "get_product_history",
+        "parameters": [
+          {
+            "name": "lf_mp_id",
+            "in": "path",
+            "description": "MP-ID of the Lieferant whose catalogue this is",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_code",
+            "in": "path",
+            "description": "The product code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every version, newest first",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/deliveries/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue one delivery again, whatever its state.",
+        "operationId": "replay_delivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The delivery's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`delivery_not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The endpoints, a page ordered by name.",
+        "operationId": "list_endpoints",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; absent for the first.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Endpoint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Register an endpoint; the answer shows its secret once.",
+        "operationId": "create_endpoint",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointCreated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_name_taken`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`endpoint_url_not_allowed`, `endpoint_name_reserved`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "One endpoint, with its version as `ETag`.",
+        "operationId": "get_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Replace an endpoint; `If-Match` names the version read.",
+        "operationId": "update_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Endpoint"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete an endpoint; its pending deliveries are cancelled with it.",
+        "operationId": "delete_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`endpoint_version_mismatch`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/deliveries": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "The deliveries of one endpoint, newest first.",
+        "operationId": "list_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Which deliveries; every one when absent.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryFilter"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page, 1–200; 50 when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Delivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/replay": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue every event of a time window again for one endpoint, including\nevents that never had a delivery to it.",
+        "operationId": "replay_window",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayWindow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replayed"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`outside_retention` (with `oldest_replayable`), `replay_window_invalid`, `replay_window_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Rotate the secret: the new one signs from now, the previous one beside it\nfor `overlap_hours`. The answer shows the new secret once.",
+        "operationId": "rotate_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretRotated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`endpoint_config_owned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`overlap_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/endpoints/{id}/test": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Send `de.mako.webhook.test` to the endpoint now, signed like a delivery.",
+        "operationId": "test_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestDelivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`json_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "Delivery": {
+        "type": "object",
+        "description": "One event to one endpoint.",
+        "required": [
+          "id",
+          "endpoint_id",
+          "event_id",
+          "event_type",
+          "status",
+          "attempts",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts made."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the delivery was created."
+          },
+          "endpoint_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint delivered to."
+          },
+          "event_id": {
+            "type": "string",
+            "description": "The CloudEvent `id`, sent as `webhook-id`."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "The CloudEvent `type`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The delivery's id — what a single replay names."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last attempt's failure."
+          },
+          "last_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status of the last attempt; absent when it got no answer."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long the last answered attempt took, in milliseconds."
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next attempt is due, while pending."
+          },
+          "ordering_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The aggregate the event is about; deliveries of one key arrive in order."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus",
+            "description": "`pending`, `delivered` or `dead_lettered`."
+          }
+        }
+      },
+      "DeliveryFilter": {
+        "type": "string",
+        "description": "Which deliveries the log lists.",
+        "enum": [
+          "all",
+          "pending",
+          "delivered",
+          "failed"
+        ]
+      },
+      "DeliveryStatus": {
+        "type": "string",
+        "description": "A delivery's state.",
+        "enum": [
+          "pending",
+          "delivered",
+          "dead_lettered"
+        ]
+      },
+      "Endpoint": {
+        "type": "object",
+        "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "event_types",
+          "extensions",
+          "owner",
+          "active",
+          "version",
+          "created_at"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the endpoint was registered."
+          },
+          "deactivated_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the endpoint was deactivated (`gone`)."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The endpoint's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is the config URL."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Owner",
+            "description": "`config` or `api`."
+          },
+          "partner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+          },
+          "previous_secret_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when the previous secret still signs, after a rotation."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where deliveries are POSTed."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The version `If-Match` names."
+          }
+        }
+      },
+      "EndpointCreate": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints`.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per service; `default` is reserved for the config URL."
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EndpointCreated": {
+        "type": "object",
+        "description": "A created endpoint and its secret — the only answer that shows it.",
+        "required": [
+          "endpoint",
+          "secret"
+        ],
+        "properties": {
+          "endpoint": {
+            "$ref": "#/components/schemas/Endpoint",
+            "description": "The endpoint."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The `whsec_` signing secret; shown once."
+          }
+        }
+      },
+      "EndpointUpdate": {
+        "type": "object",
+        "description": "The body of `PUT /api/v1/webhooks/endpoints/{id}` — the whole endpoint.",
+        "required": [
+          "url",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether deliveries are made."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`mako_events::matches` patterns; empty matches every type."
+          },
+          "extensions": {
+            "type": "object",
+            "description": "CloudEvent extensions an event must carry with these values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Owner": {
+        "type": "string",
+        "description": "Who owns an endpoint.",
+        "enum": [
+          "config",
+          "api"
+        ]
+      },
+      "Page_Delivery": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One event to one endpoint.",
+              "required": [
+                "id",
+                "endpoint_id",
+                "event_id",
+                "event_type",
+                "status",
+                "attempts",
+                "created_at"
+              ],
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Attempts made."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the delivery was created."
+                },
+                "endpoint_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint delivered to."
+                },
+                "event_id": {
+                  "type": "string",
+                  "description": "The CloudEvent `id`, sent as `webhook-id`."
+                },
+                "event_type": {
+                  "type": "string",
+                  "description": "The CloudEvent `type`."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The delivery's id — what a single replay names."
+                },
+                "last_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The last attempt's failure."
+                },
+                "last_status": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "The HTTP status of the last attempt; absent when it got no answer."
+                },
+                "latency_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "How long the last answered attempt took, in milliseconds."
+                },
+                "next_attempt_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When the next attempt is due, while pending."
+                },
+                "ordering_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The aggregate the event is about; deliveries of one key arrive in order."
+                },
+                "status": {
+                  "$ref": "#/components/schemas/DeliveryStatus",
+                  "description": "`pending`, `delivered` or `dead_lettered`."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Endpoint": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A webhook endpoint, as listed. Its secrets are never part of it.",
+              "required": [
+                "id",
+                "name",
+                "url",
+                "event_types",
+                "extensions",
+                "owner",
+                "active",
+                "version",
+                "created_at"
+              ],
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "Whether deliveries are made. A `410 Gone` deactivates an endpoint."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the endpoint was registered."
+                },
+                "deactivated_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Why the endpoint was deactivated (`gone`)."
+                },
+                "event_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "`mako_events::matches` patterns; empty matches every type."
+                },
+                "extensions": {
+                  "type": "object",
+                  "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The endpoint's id."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Unique per service; `default` is the config URL."
+                },
+                "owner": {
+                  "$ref": "#/components/schemas/Owner",
+                  "description": "`config` or `api`."
+                },
+                "partner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "previous_secret_expires_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "Until when the previous secret still signs, after a rotation."
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Where deliveries are POSTed."
+                },
+                "version": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "The version `If-Match` names."
+                }
+              }
+            },
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "Page_Value": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {},
+            "description": "The rows of this page, in the list's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cursor of the next page; absent on the last."
+          },
+          "total_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TotalEstimate",
+                "description": "How many rows the whole list holds, where the list counts them."
+              }
+            ]
+          }
+        }
+      },
+      "ReplayWindow": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/replay`.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the window, inclusive (RFC 3339)."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the window, exclusive (RFC 3339)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Replayed": {
+        "type": "object",
+        "description": "How many deliveries a replay queued.",
+        "required": [
+          "queued"
+        ],
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deliveries queued again or for the first time."
+          }
+        }
+      },
+      "RotateSecret": {
+        "type": "object",
+        "description": "The body of `POST /api/v1/webhooks/endpoints/{id}/rotate-secret`.",
+        "required": [
+          "overlap_hours"
+        ],
+        "properties": {
+          "overlap_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long the previous secret keeps signing, at most 168 hours.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "SecretRotated": {
+        "type": "object",
+        "description": "A rotated secret — the only answer that shows it.",
+        "required": [
+          "secret",
+          "previous_expires_at"
+        ],
+        "properties": {
+          "previous_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until when the previous secret also signs."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The new `whsec_` signing secret; shown once."
+          }
+        }
+      },
+      "TestDelivery": {
+        "type": "object",
+        "description": "What a test delivery came to.",
+        "required": [
+          "delivered"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "boolean",
+            "description": "Whether the endpoint answered 2xx."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was not delivered."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long it took, when it answered."
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status, when it answered.",
+            "minimum": 0
+          }
+        }
+      },
+      "TotalEstimate": {
+        "type": "object",
+        "description": "A count bounded at [`COUNT_CAP`]: a list over a million rows reports\n`{count: 10000, capped: true}` rather than counting them.",
+        "required": [
+          "count",
+          "capped"
+        ],
+        "properties": {
+          "capped": {
+            "type": "boolean",
+            "description": "`true` when there are more rows than `count`."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The rows counted, at most 10 000."
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "products",
+      "description": "Products, their Tarifpreisblatt and Energiemix"
+    },
+    {
+      "name": "marktpreise",
+      "description": "EPEX day-ahead and nEHS certificate prices"
+    },
+    {
+      "name": "angebote",
+      "description": "B2B quotations"
+    },
+    {
+      "name": "endkunden-angebote",
+      "description": "Frozen B2C offers"
+    },
+    {
+      "name": "comparison-feed",
+      "description": "§ 41c Abs. 5 EnWG feed, served without a credential"
+    },
+    {
+      "name": "webhooks",
+      "description": "Webhook endpoints, deliveries and the event feed"
+    }
+  ]
+}

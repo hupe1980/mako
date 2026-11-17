@@ -105,6 +105,9 @@ function Seitenleiste({ onShortcuts }: { onShortcuts: () => void }) {
           <NavItem to="/assistent" icon="sparkle">
             {t.shell.assistent}
           </NavItem>
+          <NavItem to="/zustellungen" icon="download">
+            {t.zustellungen.titel}
+          </NavItem>
           <NavItem to="/einrichtung" icon="tune">
             {t.einrichtung.nav}
           </NavItem>
@@ -163,7 +166,7 @@ export function Shell() {
     >
       <HoldProvider>
         <div className="grid h-full md:grid-cols-[var(--pane-sidebar)_1fr]">
-          <aside className="hidden flex-col gap-1 border-r border-separator bg-sidebar px-3 pt-4 pb-3 md:flex">
+          <aside className="hidden flex-col gap-1 overflow-y-auto border-r border-separator bg-sidebar px-3 pt-4 pb-3 md:flex">
             <Seitenleiste onShortcuts={() => setSheet(true)} />
           </aside>
           {/* At a phone's width the sidebar is a sheet: the same views, opened

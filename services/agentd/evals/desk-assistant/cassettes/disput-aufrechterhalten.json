@@ -1,0 +1,84 @@
+{
+  "case": "disput-aufrechterhalten",
+  "source": "scripted",
+  "agentplane": "0.61",
+  "manifest_digest": "a8bbaf42e77d6f4f026df66bd002bd0be8ed146f66d18c6620779e8a6f9d63a8",
+  "turns": [
+    {
+      "offered": [
+        "accountingd__get_parked_booking",
+        "accountingd__list_ledger",
+        "agentd__find_source",
+        "agentd__quote_source",
+        "invoicd__get_check_result",
+        "invoicd__get_receipt",
+        "makod__get_process",
+        "makod__get_process_history",
+        "processd__get_queue_entry",
+        "processd__list_open_processes",
+        "vertragd__get_kunde"
+      ],
+      "call": {
+        "id": "c1",
+        "name": "invoicd__get_receipt",
+        "arguments": {
+          "id": "9b2f6a40-5d0e-4c55-8a3e-0c7d2f1e9a11"
+        }
+      }
+    },
+    {
+      "offered": [
+        "accountingd__get_parked_booking",
+        "accountingd__list_ledger",
+        "agentd__find_source",
+        "agentd__quote_source",
+        "invoicd__get_check_result",
+        "invoicd__get_receipt",
+        "makod__get_process",
+        "makod__get_process_history",
+        "processd__get_queue_entry",
+        "processd__list_open_processes",
+        "vertragd__get_kunde"
+      ],
+      "call": {
+        "id": "c2",
+        "name": "invoicd__get_check_result",
+        "arguments": {
+          "id": "9b2f6a40-5d0e-4c55-8a3e-0c7d2f1e9a11"
+        }
+      }
+    },
+    {
+      "offered": [
+        "accountingd__get_parked_booking",
+        "accountingd__list_ledger",
+        "agentd__find_source",
+        "agentd__quote_source",
+        "invoicd__get_check_result",
+        "invoicd__get_receipt",
+        "makod__get_process",
+        "makod__get_process_history",
+        "processd__get_queue_entry",
+        "processd__list_open_processes",
+        "vertragd__get_kunde"
+      ],
+      "answer": {
+        "saetze": [
+          {
+            "text": "Der Arbeitspreis der Position 1 weicht vom Preisblatt ab.",
+            "quelle": "invoicd/get_check_result"
+          }
+        ],
+        "vorschlag": {
+          "aktion": "aufrechterhalten",
+          "antwortcode": null,
+          "befund": "TariffDeviation",
+          "buchungsdatum": null,
+          "grund": null,
+          "begruendung": "Der Befund TariffDeviation trägt die Ablehnung.",
+          "quelle": "invoicd/get_check_result"
+        }
+      }
+    }
+  ]
+}

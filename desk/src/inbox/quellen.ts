@@ -15,22 +15,23 @@ import { nichtErreichbar } from "../app/dienste";
 import { disclosed } from "../app/disclosure";
 import { ROLLEN, type Rolle, useRolle } from "../app/rollen";
 import { type Answer, type Hinweis, hinweise, type VorschlagArt, vorschlaege } from "../data/agent";
+import { lesen } from "../data/api/lesen";
 import { abgelehntWeil, buchungsart } from "../data/buchung";
 import { call, ServiceUnavailable } from "../data/mcp";
 import { offeneSchritte } from "../data/rechnung";
-import type { Decimal, Instant } from "../format/brands";
+import type { BusinessDate, Decimal, Instant } from "../format/brands";
 import { formatCount } from "../format/count";
-import { formatBusinessDate, formatInstant } from "../format/date";
+import { formatBusinessDate, formatInstant, vormonat } from "../format/date";
 import { formatCent, formatEuro } from "../format/money";
 import { katalog } from "../i18n";
-import { ANMELDUNG_PIDS } from "../views/Lage";
+import { ANMELDUNG_PIDS } from "./anmeldung";
 import type { Eintrag, QuelleId, Stand } from "./model";
 
 /** What each Rolle's Heute reads; every Rolle also reads the agent's Hinweise. */
 export const QUELLEN: Record<Rolle, QuelleId[]> = {
   // A 31009 MSB-Rechnung reaches NB, LF and ESA alike (PID-Übersicht 4.0),
   // so each holds its received invoices at an open Prüfschritt.
-  netz: ["freigaben", "klaerfaelle", "gehalten", "korrekturbedarf"],
+  netz: ["freigaben", "klaerfaelle", "gehalten", "korrekturbedarf", "anlagen"],
   lieferant: [
     "anmeldungen",
     "freigaben",
@@ -42,6 +43,8 @@ export const QUELLEN: Record<Rolle, QuelleId[]> = {
     "nicht_uebermittelt",
     "abrechnungen",
     "mahnungen",
+    "zahlungen",
+    "guthaben",
   ],
   messstelle: ["freigaben", "klaerfaelle", "ableseauftraege"],
   energieservice: ["freigaben", "klaerfaelle", "gehalten"],
@@ -140,7 +143,7 @@ function useKlaerfaelle(aktiv: boolean): Stand {
     seit: k.opened_at,
     bezug: k.process_id ? [k.process_id] : [],
     anker: k.process_id ? { process: k.process_id } : null,
-    ziel: k.process_id ? { to: "/prozess", search: { key: k.process_id } } : null,
+    ziel: { to: "/klaerfall/$id", params: { id: k.id } },
   }));
   return stand("klaerfaelle", wort().klaerfaelle, q, eintraege, q.data?.saturated ?? false);
 }
@@ -485,6 +488,153 @@ function useMahnungen(aktiv: boolean): Stand {
   return stand("mahnungen", wort().mahnungen, q, eintraege, q.data?.saturated ?? false);
 }
 
+/** Payments no account took, as accountingd lists them; each opens the Zahlungen view. */
+function useZahlungen(aktiv: boolean): Stand {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "rest", "accountingd", "unmatched"],
+    queryFn: () =>
+      lesen("accountingd", "/svc/accountingd/api/v1/payments/unmatched", {
+        query: { limit: SEITE },
+      }),
+    enabled: aktiv,
+    refetchInterval: 60_000,
+  });
+  const eintraege: Eintrag[] = (q.data?.payments ?? []).map((z) => ({
+    id: `zahlung:${z.payment_id}`,
+    quelle: "zahlungen",
+    titel: z.reference,
+    kennung: false,
+    detail: [
+      formatEuro(z.amount_eur as Decimal),
+      formatBusinessDate(z.value_date as BusinessDate),
+      z.iban_masked,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    grund: wort().zahlungOhneKonto,
+    frist: null,
+    seit: z.received_at as Instant,
+    bezug: [],
+    anker: null,
+    ziel: { to: "/zahlungen" },
+  }));
+  return stand(
+    "zahlungen",
+    katalog().zahlungen.zeileZahlungen,
+    q,
+    eintraege,
+    q.data?.saturated ?? false,
+  );
+}
+
+/** Guthaben past their due date, as accountingd lists them. */
+function useGuthaben(aktiv: boolean): Stand {
+  const { rolle } = useRolle();
+  const q = useQuery({
+    queryKey: [rolle, "rest", "accountingd", "credit-payouts"],
+    queryFn: () =>
+      lesen("accountingd", "/svc/accountingd/api/v1/credit-payouts", {
+        query: { overdue: true, limit: SEITE },
+      }),
+    enabled: aktiv,
+    refetchInterval: 60_000,
+  });
+  const eintraege: Eintrag[] = (q.data?.payouts ?? []).map((g) => ({
+    id: `guthaben:${g.payout_id}`,
+    quelle: "guthaben",
+    titel: g.malo_id,
+    kennung: true,
+    detail: [
+      formatEuro(g.amount_eur as Decimal),
+      wort().faelligAm(formatBusinessDate(g.due_on as BusinessDate)),
+    ].join(" · "),
+    grund: wort().guthabenFaellig(g.rechnungsnummer),
+    frist: null,
+    bezug: [g.malo_id],
+    anker: null,
+    ziel: { to: "/zahlungen" },
+  }));
+  return stand(
+    "guthaben",
+    katalog().zahlungen.zeileGuthaben,
+    q,
+    eintraege,
+    q.data?.saturated ?? false,
+  );
+}
+
+/**
+ * EEG plants that need a person: no MaStR entry (the payment is reduced),
+ * support ending soon, and not settled for last month — einsd's three lists,
+ * one source, each plant opening its Anlage page.
+ */
+function useAnlagen(aktiv: boolean): Stand {
+  const { rolle } = useRolle();
+  const [jahr, monat] = vormonat();
+  const ohne = useQuery({
+    queryKey: [rolle, "rest", "einsd", "ohne-mastr"],
+    queryFn: () => lesen("einsd", "/svc/einsd/api/v1/anlagen/ohne-mastr", {}),
+    enabled: aktiv,
+    refetchInterval: 300_000,
+  });
+  const ende = useQuery({
+    queryKey: [rolle, "rest", "einsd", "foerderung-auslaufend"],
+    queryFn: () => lesen("einsd", "/svc/einsd/api/v1/anlagen/foerderung-auslaufend", { query: {} }),
+    enabled: aktiv,
+    refetchInterval: 300_000,
+  });
+  const offen = useQuery({
+    queryKey: [rolle, "rest", "einsd", "unabgerechnet", jahr, monat],
+    queryFn: () =>
+      lesen("einsd", "/svc/einsd/api/v1/anlagen/unabgerechnet/{year}/{month}", {
+        path: { year: jahr, month: monat },
+      }),
+    enabled: aktiv,
+    refetchInterval: 300_000,
+  });
+  const k = katalog().anlage;
+  const zeile = (tr: string, malo: string, grund: string, art: string): Eintrag => ({
+    id: `anlage:${art}:${tr}`,
+    quelle: "anlagen",
+    titel: tr,
+    kennung: true,
+    detail: `MaLo ${malo}`,
+    grund,
+    frist: null,
+    bezug: [malo],
+    anker: null,
+    ziel: { to: "/anlage/$trId", params: { trId: tr } },
+  });
+  const eintraege: Eintrag[] = [
+    ...(ohne.data?.plants ?? []).map((p) => zeile(p.tr_id, p.malo_id, k.ohneMastrGrund, "mastr")),
+    ...(ende.data?.plants ?? []).map((p) =>
+      zeile(
+        p.tr_id,
+        p.malo_id,
+        k.foerderendeGrund(p.foerderendedatum ? formatBusinessDate(p.foerderendedatum) : ""),
+        "ende",
+      ),
+    ),
+    ...(offen.data?.plants ?? []).map((p) =>
+      zeile(
+        p.tr_id,
+        p.malo_id,
+        k.unabgerechnetGrund(`${`${monat}`.padStart(2, "0")}/${jahr}`),
+        "offen",
+      ),
+    ),
+  ];
+  const fehler = ohne.error ?? ende.error ?? offen.error;
+  return stand(
+    "anlagen",
+    k.unabgerechnet,
+    { isPending: ohne.isPending || ende.isPending || offen.isPending, error: fehler },
+    eintraege,
+    false,
+  );
+}
+
 /** The agent's open Hinweise, for every Rolle; agentd absent is no failure of Heute. */
 export function useHinweise(): { hinweise: Hinweis[]; fehler: string | null } {
   const { rolle } = useRolle();
@@ -605,6 +755,9 @@ export function useQuellen(rolle: Rolle, nur?: readonly QuelleId[]): Stand[] {
     useGeparkt(liest.has("geparkt")),
     useAbrechnungen(liest.has("abrechnungen")),
     useMahnungen(liest.has("mahnungen")),
+    useZahlungen(liest.has("zahlungen")),
+    useGuthaben(liest.has("guthaben")),
+    useAnlagen(liest.has("anlagen")),
   ];
   return [...liest].flatMap((id) => alle.filter((s) => s.quelle === id));
 }

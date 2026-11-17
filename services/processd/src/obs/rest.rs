@@ -23,21 +23,18 @@ use crate::obs::{domain::ObsQuery, repository::ProcessProjectionRepository};
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-/// The read-model routes. `POST /webhook` is processd's one inbound door and
-/// is mounted by `crate::server`, which hands each event to
-/// [`crate::obs::project::project`].
+/// The read-model routes outside `/api/v1`; the `/api/v1` ones —
+/// `get_gleichbehandlung_report` and the counterparty Akte — mount with their
+/// document entries in [`crate::openapi::api`]. `POST /webhook` is processd's
+/// one inbound door and is mounted by `crate::server`, which hands each event
+/// to [`crate::obs::project::project`].
 pub fn router(state: ObsState) -> Router {
     Router::new()
         .route("/obs/processes", get(get_processes))
         .route("/obs/processes/{process_id}", get(get_process))
         .route("/obs/kpis", get(get_kpis))
         .route("/obs/overdue", get(get_overdue))
-        .route(
-            "/api/v1/audit/gleichbehandlung",
-            get(get_gleichbehandlung_report),
-        )
         .route("/obs/metrics", get(metrics))
-        .merge(crate::obs::counterparty::routes())
         .with_state(state)
 }
 
@@ -317,7 +314,7 @@ const GLEICHBEHANDLUNG_CSV_HEADER: &str = concat!(
 
 /// Query parameters for `GET /api/v1/audit/gleichbehandlung`.
 #[derive(Debug, Deserialize)]
-struct GleichbehandlungQuery {
+pub(crate) struct GleichbehandlungQuery {
     /// Calendar year to report (default: current year).
     year: Option<i32>,
     /// Output format: `json` (default) or `csv`.
@@ -350,7 +347,20 @@ struct GleichbehandlungQuery {
 /// operator's judgement, and the escalation threshold lives in
 /// `[obs] parity_threshold_pp`. A gap over a group smaller than
 /// `PARITY_MIN_SAMPLE` is reported as `null`, not as a large number.
-async fn get_gleichbehandlung_report(
+#[utoipa::path(
+    get,
+    path = "/api/v1/audit/gleichbehandlung",
+    tag = "obs",
+    params(
+        ("year" = Option<i32>, Query, description = "The calendar year; the current Berlin year when absent"),
+        ("format" = Option<String>, Query, description = "`json` (default) or `csv`"),
+    ),
+    responses(
+        (status = 200, description = "The § 7a Abs. 5 EnWG Gleichbehandlung report, per PID affiliate against third party", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-kpi` refused", body = ApiError),
+    ),
+)]
+pub(crate) async fn get_gleichbehandlung_report(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<ObsState>,
@@ -432,6 +442,12 @@ async fn get_gleichbehandlung_report(
             .into_response());
     }
 
+    // Klärfälle beside the parity, read in-process from the case table and
+    // keyed on the year each case opened.
+    let klaerfaelle = crate::klaerfall::paritaet(state.repo.pool(), &state.tenant, year)
+        .await
+        .map_err(ApiError::internal)?;
+
     let by_pid_json: Vec<serde_json::Value> = comparisons
         .iter()
         .map(|(pid, c)| {
@@ -469,6 +485,13 @@ async fn get_gleichbehandlung_report(
                       this figure; the operator's escalation threshold is [obs] \
                       parity_threshold_pp and is an internal policy, not a regulatory one.",
         "by_pid": by_pid_json,
+        "klaerfaelle": klaerfaelle,
+        "klaerfaelle_basis": "Klärfälle opened in the year (Europe/Berlin) per class of the \
+                              initiating Lieferant: opened, resolved (closed with or without a \
+                              market message) and the median time to resolve in seconds. \
+                              `unattributed` is a case on no process or on a process no \
+                              Lieferant initiates; the three sum to the cases opened. \
+                              Supporting evidence — § 7a Abs. 5 EnWG does not name Klärfälle.",
     }))
     .into_response())
 }

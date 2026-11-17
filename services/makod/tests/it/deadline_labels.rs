@@ -996,3 +996,118 @@ fn split_top_level(args: &str) -> Vec<&str> {
     parts.push(&args[start..]);
     parts
 }
+
+/// The workflows whose labels are not yet classified as Frist or schedule.
+///
+/// A ratchet: it only shrinks. Each entry still registers and decides its
+/// labels, but a lapse of one announces nothing, so processd opens no
+/// `frist_missed` Klärfall for it. Classifying a workflow means listing each of
+/// its labels in `Workflow::FRIST_LABELS` or `Workflow::SCHEDULE_LABELS` and
+/// removing it here.
+const UNCLASSIFIED: &[&str] = &[
+    "emob-abmeldung",
+    "emob-anmeldung",
+    "emob-zuordnungsende",
+    "esa-wertebestellung",
+    "gabi-gas-allocation",
+    "gabi-gas-invoic",
+    "gabi-gas-nomination",
+    "geli-gas-datenabruf",
+    "geli-gas-geschaeftsdatenanfrage",
+    "geli-gas-sperrprozesse-invoic",
+    "geli-gas-sperrung-lf",
+    "geli-gas-sperrung-nb",
+    "geli-gas-stammdatenaenderung",
+    "geli-gas-stornierung",
+    "gpke-abrechnung",
+    "gpke-abrechnungsdaten",
+    "gpke-anfrage-bestellung",
+    "gpke-ankuendigung-zuordnung-lf",
+    "gpke-beendigung-zuordnung",
+    "gpke-datenabruf",
+    "gpke-datenabruf-msb",
+    "gpke-eog",
+    "gpke-geschaeftsdatenanfrage",
+    "gpke-konfiguration-aenderung",
+    "gpke-kuendigung",
+    "gpke-nb-lieferende",
+    "gpke-neuanlage",
+    "gpke-sperrung",
+    "gpke-sperrung-lf",
+    "gpke-sperrung-msb",
+    "gpke-stammdatenaenderung",
+    "gpke-stornierung",
+    "mabis-billing",
+    "redispatch-aktivierung",
+    "redispatch-kaskade",
+    "redispatch-kostenblatt",
+    "redispatch-netzengpass",
+    "redispatch-planungsdaten",
+    "redispatch-stammdaten",
+    "redispatch-statusanfrage",
+    "redispatch-verfuegbarkeit",
+    "wim-device-change",
+    "wim-ersteinbau",
+    "wim-geraeteubernahme",
+    "wim-insrpt",
+    "wim-invoic",
+    "wim-preisanfrage",
+    "wim-rechnungsabwicklung",
+    "wim-steuerungsauftrag",
+    "wim-technik-aenderung",
+    "wim-weiterverpflichtung",
+    "wim-wertebestellung",
+];
+
+/// Rule — every label a workflow owns is a business Frist, whose lapse the
+/// engine announces with the `AntwortfristAbgelaufen` notice, or a schedule,
+/// whose firing is the process going on. A label in neither is refused (bar
+/// the ratchet above), as is one in both or one the workflow does not own.
+#[test]
+fn every_owned_label_is_a_frist_or_a_schedule() {
+    let drivers = makod::orchestrator::deadline_dispatch::production_drivers();
+    let mut unclassified = Vec::new();
+    let mut stray = Vec::new();
+    let mut stale: Vec<&str> = UNCLASSIFIED
+        .iter()
+        .copied()
+        .filter(|name| !drivers.contains_key(name))
+        .collect();
+    let mut names: Vec<&&str> = drivers.keys().collect();
+    names.sort();
+    for name in names {
+        let d = &drivers[*name];
+        let (owned, frist, schedule) = (d.deadline_labels(), d.frist_labels(), d.schedule_labels());
+        for label in frist.iter().chain(schedule) {
+            if !owned.contains(label) {
+                stray.push(format!("{name}: {label} is classified but not owned"));
+            }
+        }
+        for label in frist {
+            if schedule.contains(label) {
+                stray.push(format!("{name}: {label} is both a Frist and a schedule"));
+            }
+        }
+        let open: Vec<&str> = owned
+            .iter()
+            .copied()
+            .filter(|l| !frist.contains(l) && !schedule.contains(l))
+            .collect();
+        match (UNCLASSIFIED.contains(name), open.is_empty()) {
+            (true, true) => stale.push(name),
+            (false, false) => unclassified.push(format!("{name}: {open:?}")),
+            _ => {}
+        }
+    }
+    assert!(stray.is_empty(), "{stray:#?}");
+    assert!(
+        unclassified.is_empty(),
+        "these labels are neither a Frist nor a schedule — list each in the \
+         workflow's FRIST_LABELS (its lapse announces itself) or SCHEDULE_LABELS:\n  {}",
+        unclassified.join("\n  ")
+    );
+    assert!(
+        stale.is_empty(),
+        "classified (or gone) — remove from UNCLASSIFIED: {stale:?}"
+    );
+}

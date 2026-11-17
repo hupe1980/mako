@@ -296,7 +296,7 @@ pub async fn bp_consolidated_balance(
     Ok(total.unwrap_or(0))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateAccountRequest {
     pub iban: Option<String>,
@@ -313,7 +313,7 @@ pub struct UpdateAccountRequest {
 /// vertragd contract records it. `null` is „not recorded" and clears a status
 /// an earlier contract on the MaLo set; the field is required, so an empty body
 /// cannot be read as either.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetVerbraucherRequest {
     #[serde(deserialize_with = "present")]
@@ -1733,7 +1733,7 @@ impl SepaMandateRow {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateMandateRequest {
     pub malo_id: String,
@@ -3113,7 +3113,9 @@ pub async fn mark_abwendung_angeboten(
 /// reason — none of them optional. A halt that cannot be lifted makes an account
 /// permanently undunnable, and § 41f Abs. 2 in particular describes a
 /// circumstance that is *auf Verlangen glaubhaft zu machen*, so reviewable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum LockGrund {
     /// § 41g Abs. 1 S. 10 — an Abwendungsvereinbarung accepted in Textform
@@ -3178,6 +3180,7 @@ pub struct DunningLockRow {
 #[derive(Debug, Clone, Default)]
 pub struct EegPayoutFilter<'a> {
     pub malo_id: Option<&'a str>,
+    pub tr_id: Option<&'a str>,
     pub year: Option<i16>,
     pub month: Option<i16>,
     pub payment_type: Option<&'a str>,
@@ -3213,6 +3216,9 @@ pub async fn list_eeg_payouts(
     qb.push_bind(tenant);
     if let Some(malo) = filter.malo_id {
         qb.push(" AND malo_id = ").push_bind(malo);
+    }
+    if let Some(tr) = filter.tr_id {
+        qb.push(" AND tr_id = ").push_bind(tr);
     }
     if let Some(y) = filter.year {
         qb.push(" AND billing_year = ").push_bind(y);
@@ -3466,7 +3472,9 @@ pub async fn list_locks_due_review(
 // ── Forderungseinwände (§ 41f Abs. 3 S. 3–5) ──────────────────────────────────
 
 /// An amount that must stay out of the § 41f Abs. 3 Verzug calculation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EinwandArt {
     /// S. 3 — form- und fristgerecht, schlüssig bestritten, and not titled.
@@ -4986,7 +4994,7 @@ pub struct PaymentPlanInstallmentRow {
     pub created_at: OffsetDateTime,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreatePaymentPlanRequest {
     pub malo_id: String,

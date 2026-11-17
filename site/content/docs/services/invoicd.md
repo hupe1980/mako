@@ -34,14 +34,16 @@ graph TB
     invoicd -->|"price sheets + MMM reference prices"| marktd
     invoicd -->|"persist receipt BEFORE dispatch<br/>(§ 147 AO / GoBD)"| pg
     invoicd -->|"accept / reject, per the answering PID"| makod
-    invoicd -->|"de.invoic.receipt.settled/disputed<br/>durable at-least-once<br/>(event_outbox)"| erp["ERP webhook"]
+    invoicd -->|"de.invoic.receipt.settled/disputed<br/>durable at-least-once<br/>(event_outbox → webhook endpoints)"| erp["ERP webhook"]
 ```
 
 ---
 
 ## Routes and authorization
 
-`/webhook` is HMAC-authenticated (`marktd`, with timestamp replay protection).
+`/webhook` is HMAC-authenticated (`marktd`, with timestamp replay protection);
+marktd delivers to it through the endpoint its own configuration names for
+invoicd, so invoicd registers nothing at startup.
 Every `/api/v1/*` route needs a JWT and a Cedar action (paths under `/api/v1`):
 
 | Routes | Action | Granted to |
@@ -53,6 +55,7 @@ Every `/api/v1/*` route needs a JWT and a Cedar action (paths under `/api/v1`):
 | `POST /receipts/{id}/feststellungen`, `POST /leistungsnachweise` | `record-feststellung` | **ESA, LF or NB role** — the recipients of a 31009 |
 | `POST /mcp` | `use-mcp` | any caller in the tenant (OIDC or `[mcp]` key) |
 | `GET /api/v1/policy`, `GET /admin/einrichtung` | `read-policy`, `read-config` | any caller in the tenant |
+| `/api/v1/webhooks/**`, `GET /api/v1/events` | `manage-subscription`, `read-events` | **ADMIN** — see [Webhooks](#webhooks) |
 
 `/webhook` answers `204` once an event is finished with — answered,
 deliberately unanswered or dead-lettered — and `503` when the reference data
@@ -62,7 +65,9 @@ is sent; an event that cannot become a receipt goes to `invoic_dlq` with its
 reason.
 
 The runner adds `/health/live`, `/health/ready` and `/metrics`; invoicd's own
-gauges are at `GET /invoicd/metrics`. `tests/it/cedar_actions.rs` holds the
+gauges are at `GET /invoicd/metrics`. `GET /api/v1/openapi.json` serves the
+OpenAPI document of every `/api/v1` route; `services/invoicd/openapi.json` is
+its committed copy. `tests/it/cedar_actions.rs` holds the
 actions in code and policy to each other in both directions.
 
 ### `POST /api/v1/receipts/{id}/dispatch-answer`
@@ -369,14 +374,22 @@ never overdue.
 ### Delivery guarantee — durable at-least-once
 
 The `de.invoic.receipt.*` event is enqueued in `event_outbox` in the
-transaction that stamps the answer's `dispatched_at`, and the
-`mako_service::outbox` worker delivers it to `[erp] webhook_url` under the
-shared policy (8 attempts, 30 s × 4ⁿ capped at 2 h, then dead-lettered; a 4xx
-dead-letters at once). If that transaction fails, invoicd answers `500` and
-makod redelivers the invoice. `[erp] hmac_secret` signs each POST (Standard
-Webhooks). The market answer never waits on the ERP. Dead letters count in
-`invoicd_erp_dead_lettered_total`. Without `[erp] webhook_url` nothing delivers
-and the service warns at startup.
+transaction that stamps the answer's `dispatched_at`; the
+`de.invoic.payment.overdue` event in the transaction that stamps
+`overdue_notified_at`. If that transaction fails, invoicd answers `500` and
+makod redelivers the invoice. The market answer never waits on the ERP.
+
+### Webhooks
+
+`[erp] webhook_url` is the webhook endpoint `default`, signed with
+`[erp] hmac_secret` (Standard Webhooks); further endpoints are registered
+under `/api/v1/webhooks/endpoints` (Cedar `manage-subscription`, ADMIN), and
+`GET /api/v1/events` (`read-events`) reads the emitted events as a feed. The
+routes, signatures, ordering, replay and retention
+(`[subscriptions] retention_days`) are the shared module's:
+[Webhook subscriptions](@/docs/architecture/erp-integration.md#webhook-subscriptions).
+The MCP tools `list_webhook_endpoints` and `list_webhook_deliveries` read the
+same. Without `[erp] webhook_url` the service warns at startup.
 
 ---
 
@@ -485,12 +498,6 @@ api_key = "env:INVOICD_MARKTD_API_KEY"   # required
 [webhook]
 inbound_secret = "env:INVOICD_INBOUND_SECRET"  # required unless allow_insecure_no_auth
 
-[subscription]
-# Registers with marktd at startup, retrying until marktd accepts. The event type and PID filter are
-# fixed: de.mako.process.initiated for the PIDs in the routing table.
-webhook_url   = "http://invoicd:8280/webhook"  # public URL marktd POSTs to
-subscriber_id = "invoicd"                        # default
-
 [check]
 # Relative tolerances for invoic-checker plausibility pipeline.
 arithmetic_tolerance       = 0.01   # 1 % — qty × price = line net
@@ -502,11 +509,15 @@ auto_dispute_threshold_eur = "0.00"    # EUR as a string; "0.00" → Warn always
                                     # Festlegung publishes one; unset = none, 0 is refused
 
 [erp]
-# Required for ERP accounts-payable automation.
+# The webhook endpoint `default` — required for ERP accounts-payable automation.
 webhook_url = "https://erp.example.com/webhooks/invoicd"
-# Optional: sign outbound requests with HMAC-SHA256.
+# Optional: sign outbound requests (Standard Webhooks).
 # The ERP verifies via webhook-signature: v1,<base64>.
 hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
+
+[subscriptions]
+retention_days = 30        # how long emitted events stay replayable
+# allow_loopback = true    # `just dev` only: admit http and loopback endpoints
 
 # Required unless allow_insecure_no_auth = true.
 [oidc]
@@ -572,6 +583,5 @@ Tenant-scoped gauges:
 | `invoicd_receipts_total` | — |
 | `invoicd_disputes_total` | rising against a single counterparty |
 | `invoicd_overdue_remadv_total` | `> 0` — an unanswered invoice past its Zahlungsziel |
-| `invoicd_erp_dead_lettered_total` | `> 0` — the ERP is not hearing about settled invoices |
 | `invoicd_dlq_open_total` | `> 0` — an unprocessed Buchungsbeleg |
 | `invoicd_receipts_by_pid_outcome{pid, outcome}` | — |

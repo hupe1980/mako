@@ -78,6 +78,40 @@ pub struct MdmdMcpState {
     pub auth: mako_service::mcp_auth::McpAuth,
     /// The operator policy and posture the runner built at boot.
     pub policy: mako_service::policy::PolicyReport,
+    /// The webhook endpoints and deliveries the two webhook tools read.
+    pub subscriptions: mako_service::subscriptions::Subscriptions,
+}
+
+/// A page of the webhook endpoints.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookEndpointsParams {
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+/// A page of one endpoint's deliveries.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookDeliveriesParams {
+    /// The endpoint's id.
+    pub endpoint_id: String,
+    /// `all` (default), `pending`, `delivered` or `failed`.
+    pub status: Option<String>,
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+/// An `ApiError` from the subscription reads as the MCP error of its status.
+fn api_to_mcp(e: &mako_service::ApiError) -> McpError {
+    let text = e.to_string();
+    if e.status().is_client_error() {
+        McpError::invalid_params(text, None)
+    } else {
+        McpError::internal_error(text, None)
+    }
 }
 
 // ── Tool parameters ───────────────────────────────────────────────────────────
@@ -314,6 +348,69 @@ impl MdmdMcpHandler {
         ContentBlock::json(serde_json::to_value(&self.state.policy).unwrap_or_default())
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// The agent twin of `GET /api/v1/webhooks/endpoints`.
+    #[tool(
+        description = "List the webhook endpoints marktd delivers its events to, a page ordered by name: url, event-type patterns, extension filters (marktsparte, marktrole), owner (`config` for the in-cluster receivers of [[subscriptions.endpoints]] — makod, processd, edmd, invoicd; `api` for one registered through REST), whether it is active and the last delivery status. Secrets are never listed. Page on `next_cursor`.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
+    )]
+    async fn list_webhook_endpoints(
+        &self,
+        Parameters(p): Parameters<ListWebhookEndpointsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        let endpoints = self
+            .state
+            .subscriptions
+            .list_endpoints(None, &page)
+            .await
+            .map_err(|e| api_to_mcp(&e))?;
+        serde_json::to_value(endpoints)
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    /// The agent twin of `GET /api/v1/webhooks/endpoints/{id}/deliveries`.
+    #[tool(
+        description = "List one webhook endpoint's deliveries, newest first: the CloudEvent id and type, attempts, the last HTTP status, latency and error, and whether it was delivered or dead-lettered. `status` narrows to `pending`, `delivered` or `failed` — `failed` is where a receiver that stopped taking marktd's events shows. Page on `next_cursor`.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Delivery>>()
+    )]
+    async fn list_webhook_deliveries(
+        &self,
+        Parameters(p): Parameters<ListWebhookDeliveriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use mako_service::subscriptions::DeliveryFilter;
+        let status = match p.status.as_deref().unwrap_or("all") {
+            "all" => DeliveryFilter::All,
+            "pending" => DeliveryFilter::Pending,
+            "delivered" => DeliveryFilter::Delivered,
+            "failed" => DeliveryFilter::Failed,
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("status {other:?} is none of all, pending, delivered, failed"),
+                    None,
+                ));
+            }
+        };
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        let deliveries = self
+            .state
+            .subscriptions
+            .list_deliveries(None, &p.endpoint_id, status, &page)
+            .await
+            .map_err(|e| api_to_mcp(&e))?;
+        serde_json::to_value(deliveries)
+            .map(CallToolResult::structured)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
     /// Read a Marktlokation (MaLo) record by its 11-digit ID.
@@ -1509,6 +1606,9 @@ fn tool_action(body: &[u8]) -> Option<&'static str> {
     match v.get("params")?.get("name")?.as_str()? {
         "get_versorgung_at" | "get_versorgungsstatus_history" => Some("read-versorgungsstatus"),
         "get_lokationsbuendel" => Some("read-utilmd-stammdaten"),
+        "list_webhook_endpoints" | "list_webhook_deliveries" => {
+            Some(mako_service::subscriptions::MANAGE)
+        }
         _ => None,
     }
 }
@@ -1553,7 +1653,10 @@ pub fn router(state: Arc<MdmdMcpState>, _shutdown: CancellationToken) -> Router 
 
     Router::new()
         .route_service("/mcp", mcp_service)
-        .layer(middleware::from_fn_with_state(
+        // `route_layer`: the auth runs on `/mcp` alone. A `layer` would also
+        // wrap the fallback this router brings into the merge, so every
+        // unrouted path of the service would answer 401 instead of 404.
+        .route_layer(middleware::from_fn_with_state(
             state.clone(),
             mcp_auth_middleware,
         ))
@@ -1597,8 +1700,8 @@ mod contract_tests {
 
     /// `get_versorgung_at` answers the type `GET /api/v1/versorgung/{malo_id}`
     /// documents, and a sample of it satisfies the declared schema.
-    #[test]
-    fn get_versorgung_at_is_typed_and_shared_with_rest() {
+    #[tokio::test]
+    async fn get_versorgung_at_is_typed_and_shared_with_rest() {
         use mako_service::mcp::conformance::{assert_rest_twin, assert_structured_output};
         let sample = crate::reads::VersorgungsStatusResponse {
             malo_id: "51238696012".into(),
@@ -1630,8 +1733,8 @@ mod contract_tests {
         );
     }
 
-    #[test]
-    fn get_versorgungsstatus_history_is_typed_and_shared_with_rest() {
+    #[tokio::test]
+    async fn get_versorgungsstatus_history_is_typed_and_shared_with_rest() {
         use mako_service::mcp::conformance::{assert_rest_twin, assert_structured_output};
         let sample = crate::reads::VersorgungsStatusHistorie {
             items: vec![crate::reads::VersorgungsStatusHistoryResponse {
@@ -1664,8 +1767,8 @@ mod contract_tests {
         );
     }
 
-    #[test]
-    fn get_lokationsbuendel_is_typed_and_shared_with_rest() {
+    #[tokio::test]
+    async fn get_lokationsbuendel_is_typed_and_shared_with_rest() {
         use crate::reads::{
             Angaben, Granularitaet, Kante, Lokationsbuendel, Nna, Obis, Objekt, Objekttyp,
             Register, Verfahren, Zaehler,
@@ -1764,8 +1867,31 @@ mod contract_tests {
             tool_action(&call("get_lokationsbuendel")),
             Some("read-utilmd-stammdaten")
         );
+        for tool in ["list_webhook_endpoints", "list_webhook_deliveries"] {
+            assert_eq!(tool_action(&call(tool)), Some("manage-subscription"));
+        }
         assert_eq!(tool_action(&call("get_malo")), None);
         assert_eq!(tool_action(br#"{"method":"tools/list"}"#), None);
+    }
+
+    /// `list_webhook_endpoints` and `list_webhook_deliveries` answer with the
+    /// shape their REST twins document.
+    #[tokio::test]
+    async fn the_webhook_tools_are_twins_of_the_rest_reads() {
+        let tools = tools();
+        let doc = crate::openapi::document();
+        mako_service::mcp::conformance::assert_rest_twin(
+            &tools,
+            "list_webhook_endpoints",
+            &doc,
+            "/api/v1/webhooks/endpoints",
+        );
+        mako_service::mcp::conformance::assert_rest_twin(
+            &tools,
+            "list_webhook_deliveries",
+            &doc,
+            "/api/v1/webhooks/endpoints/{id}/deliveries",
+        );
     }
 
     /// A partner is named by its display name, else by its Geschäftspartner's

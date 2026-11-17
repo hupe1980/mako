@@ -263,10 +263,10 @@ pub async fn put_malo(
     };
 
     // Emit de.markt.malo.updated. Every consumer of the record — makod's
-    // MaLo-Ident cache among them — subscribes to the durable fan-out and
-    // reads the record back, so a consumer that is down when the record
-    // changes still receives it: the fan-out retries and dead-letters
-    // (`/admin/fanout/dlq`), and this handler calls nobody.
+    // MaLo-Ident cache among them — receives the durable fan-out and reads
+    // the record back, so a consumer that is down when the record changes
+    // still receives it: the fan-out retries and dead-letters (replayable
+    // from the endpoint's delivery log), and this handler calls nobody.
     let evt = MarktEvent::new(
         &state.tenant,
         mako_events::markt::MALO_UPDATED,
@@ -278,7 +278,7 @@ pub async fn put_malo(
         marktsparte: Some(sparte_str.clone()),
         ..Default::default()
     });
-    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+    if let Err(e) = crate::outbox::enqueue(&mut tx, &evt).await {
         tracing::error!(error = %e, "malo: durable enqueue failed");
         return ApiError::internal(e).into_response();
     }

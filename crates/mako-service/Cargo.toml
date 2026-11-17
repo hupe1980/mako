@@ -77,7 +77,7 @@ tokio      = { version = "1", features = ["rt", "net", "signal", "macros"] }
 tokio-util = { workspace = true }
 reqwest    = { workspace = true }
 subtle     = "2"
-secrecy    = "0.10"
+secrecy    = { version = "0.10", features = ["serde"] }
 # Shared PostgreSQL pool builder (`DatabaseConfig::connect`). Every daemon speaks
 # to Postgres through sqlx; centralising the pool tuning here keeps it consistent.
 sqlx       = { workspace = true }
@@ -95,6 +95,13 @@ time       = { workspace = true }
 # The readiness report's JSON Schema: makod's `einrichtung_checkliste` tool
 # declares it, so the Desk's generated types hold the wire to it.
 schemars   = { workspace = true }
+# `openapi`: `ApiError` as a schema component, the served and committed
+# document; `subscriptions` mounts its routes through `OpenApiRouter`.
+utoipa      = { workspace = true }
+utoipa-axum = { workspace = true }
+# `subscriptions`: the endpoint filter is `mako_events::matches`, and the test
+# delivery is `de.mako.webhook.test`. A zero-dependency leaf.
+mako-events = { workspace = true }
 
 # Optional OTel deps — only compiled when feature=otel is enabled
 opentelemetry             = { workspace = true, optional = true }
@@ -129,19 +136,11 @@ jsonschema                = { workspace = true, optional = true }
 [dev-dependencies]
 # Test-only: names the BO4E type the metrics test sends through the gate.
 rubo4e        = { workspace = true }
-# Test-only: the CloudEvents envelope builder takes any `&str` `type`, and the
-# tests pass catalogue constants to show what a real caller sends. Nothing in
-# the crate's own code reaches for the catalogue, so it is not a dependency
-# this crate's consumers inherit.
-mako-events   = { workspace = true }
-tower         = { version = "0.5", features = ["util"] }
+tower         = { workspace = true }
 tokio         = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net"] }
 # Real-PostgreSQL integration tests for the transactional outbox.
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true }
-# Test-only: `conformance::assert_rest_twin` is exercised on a documented route.
-utoipa        = { workspace = true }
-utoipa-axum   = { workspace = true }
 
 [lints]
 workspace = true

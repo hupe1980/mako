@@ -6,6 +6,7 @@ mod authorization;
 mod demo_config;
 mod einvoice_render;
 mod mcp_round_trips;
+mod openapi_coverage;
 mod print_config;
 mod records_integration;
 mod router_builds;

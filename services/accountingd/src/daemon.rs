@@ -30,7 +30,7 @@ use crate::{config, handlers, mcp_server};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,
-    routing::{get, post, put},
+    routing::{get, post},
 };
 use mako_service::{Daemon, ServiceContext, oidc::OidcConfig};
 use std::sync::Arc;
@@ -250,12 +250,12 @@ impl Daemon for Accountingd {
             );
         }
 
-        // The documented routes (`openapi::api_router`): the reads MCP shares,
-        // each in `GET /api/v1/openapi.json`.
+        // Every `/api/v1` route (`openapi::api_router`), each in the document
+        // `GET /api/v1/openapi.json` serves.
         let (documented, doc) = crate::openapi::api_router();
         let app = Router::new()
             .merge(documented)
-            .merge(crate::openapi::document_route(doc))
+            .merge(mako_service::openapi::serve(doc))
             // ── Readiness and operator posture: GET /admin/einrichtung (Cedar
             // `read-config`) and GET /api/v1/policy (Cedar `read-policy`) ──────
             .merge(mako_service::einrichtung::router(Arc::clone(
@@ -263,279 +263,11 @@ impl Daemon for Accountingd {
             )))
             // ── CloudEvent ingest ──────────────────────────────────────────────────
             .route("/webhook", post(handlers::ingest_webhook))
-            // ── Account endpoints ──────────────────────────────────────────────────
-            .route(
-                "/api/v1/accounts/{malo_id}",
-                get(handlers::get_account).put(handlers::put_account),
-            )
-            .route(
-                "/api/v1/accounts/{malo_id}/verbraucher",
-                put(handlers::put_account_verbraucher),
-            )
-            .route(
-                "/api/v1/accounts/{malo_id}/kontoauszug",
-                get(handlers::get_kontoauszug),
-            )
-            .route(
-                "/api/v1/accounts/{malo_id}/abschlag",
-                put(handlers::put_abschlag),
-            )
-            // The advances a settling invoice may deduct (§ 14 Abs. 5 Satz 2
-            // UStG), with the rate each was raised at. billingd's §40b sweep
-            // reads it; without it an automated Jahresrechnung cannot itemise
-            // the Abschläge § 40 Abs. 1 EnWG requires it to show.
-            .route(
-                "/api/v1/accounts/{malo_id}/abschlaege",
-                get(handlers::get_abschlaege),
-            )
-            .route(
-                "/api/v1/accounts/{malo_id}/buchen",
-                post(handlers::post_buchen),
-            )
-            // Vorauszahlung — BO4E typed advance-payment schedule (L12 — §40 Abs. 1 EnWG)
-            .route(
-                "/api/v1/accounts/{malo_id}/vorauszahlung",
-                get(handlers::get_vorauszahlung).put(handlers::put_vorauszahlung),
-            )
-            // Zahlungsinformation typed BO4E REST (IBAN + BIC + SEPA, rubo4e::current::Zahlungsinformation)
-            .route(
-                "/api/v1/accounts/{malo_id}/zahlungsinformation",
-                get(handlers::get_zahlungsinformation).put(handlers::put_zahlungsinformation),
-            )
-            // ── Payment import ─────────────────────────────────────────────────────
-            .route("/api/v1/payments/import", post(handlers::import_payments))
-            .route(
-                "/api/v1/payments/import/camt054",
-                post(handlers::import_payments_camt054),
-            )
-            // camt.053 end-of-day statement — same booking rules, plus the
-            // bank's own closing balance for reconciliation.
-            .route(
-                "/api/v1/payments/import/camt053",
-                post(handlers::import_payments_camt053),
-            )
-            // camt.052 intraday report — the door for a bank that reports
-            // intraday as camt.052 rather than camt.054. Only booked entries
-            // post; the provisional ones are reported.
-            .route(
-                "/api/v1/payments/import/camt052",
-                post(handlers::import_payments_camt052),
-            )
-            // ── Offene Posten ──────────────────────────────────────────────────────
-            .route(
-                "/api/v1/accounts/{malo_id}/business-partner",
-                axum::routing::put(handlers::put_account_business_partner),
-            )
-            .route(
-                "/api/v1/business-partners/{kunden_nr}/accounts",
-                get(handlers::get_bp_accounts),
-            )
-            .route(
-                "/api/v1/business-partners/{kunden_nr}/balance",
-                get(handlers::get_bp_balance),
-            )
             // Not `/metrics`: `mako_service::run` mounts that itself, and
             // merging two routers that both claim `GET /metrics` panics while
             // the router is assembled — i.e. at startup. The ledger gauges get
             // their own path, the way `invoicd` and `processd` already do.
             .route("/accountingd/metrics", get(handlers::metrics))
-            // ── Dunning ────────────────────────────────────────────────────────────
-            .route(
-                "/api/v1/dunning/{account_id}/escalate",
-                post(handlers::escalate_dunning),
-            )
-            .route(
-                "/api/v1/dunning/{id}/resolve",
-                post(handlers::resolve_dunning),
-            )
-            // §41g Abs. 1 S. 2 — the offer of an Abwendungsvereinbarung, recorded
-            // separately from its acceptance: a supplier that never offered one
-            // was otherwise indistinguishable from one that offered and was
-            // refused, and only the first breaches the statute.
-            .route(
-                "/api/v1/dunning/{id}/abwendung/angebot",
-                post(handlers::abwendung_angebot),
-            )
-            // ── Mahnsperren — every §§41f/41g halt, with a reason and an end ──
-            // One endpoint replaces `.../abwendung` and `.../unverhaeltnismaessig`,
-            // which set bare timestamps that nothing could lift.
-            .route(
-                "/api/v1/dunning/{id}/locks",
-                get(handlers::get_locks).post(handlers::place_lock),
-            )
-            .route(
-                "/api/v1/dunning/locks/review",
-                get(handlers::get_locks_due_review),
-            )
-            .route(
-                "/api/v1/dunning/locks/{lock_id}",
-                axum::routing::delete(handlers::lift_lock),
-            )
-            // ── Forderungseinwände (§41f Abs. 3 S. 3–5) ──────────────────────
-            // Amounts that stay out of the Verzug calculation. Not halts: they
-            // reduce what the threshold is measured against.
-            .route(
-                "/api/v1/dunning/{id}/einwaende",
-                get(handlers::get_einwaende).post(handlers::place_einwand),
-            )
-            .route(
-                "/api/v1/einwaende/{einwand_id}/erledigen",
-                post(handlers::close_einwand),
-            )
-            // ── SEPA ───────────────────────────────────────────────────────────────
-            .route("/api/v1/sepa/mandates", post(handlers::post_mandate))
-            .route(
-                "/api/v1/sepa/mandates/{mandate_id}",
-                get(handlers::get_mandate).delete(handlers::delete_mandate),
-            )
-            .route("/api/v1/sepa/run", post(handlers::run_sepa))
-            // EPC 36-month dormancy — mandates that are, or are about to become,
-            // uncollectable. Tracked here because no bank tracks it for us.
-            .route(
-                "/api/v1/sepa/mandates/dormant",
-                get(handlers::get_dormant_mandates),
-            )
-            // What a collection run collected, and where each entry stands —
-            // the list a reversal is chosen from.
-            .route(
-                "/api/v1/sepa/collections/{run_id}/entries",
-                get(handlers::get_collection_entries),
-            )
-            // pain.002 Payment Status Report — applies to whatever the bank's
-            // references point at (pain.001 payouts, pain.008 collections),
-            // including the Verification of Payee outcome.
-            .route("/api/v1/sepa/pain002", post(handlers::import_pain002))
-            // pain.007 reversal — the creditor giving a settled collection back.
-            .route("/api/v1/sepa/reversals", post(handlers::post_sepa_reversal))
-            .route("/api/v1/sepa/recalls", post(handlers::post_sepa_recall))
-            .route("/api/v1/sepa/camt029", post(handlers::import_camt029))
-            // ── §25 EEG 2023 — SEPA Credit Transfer payout pipeline ───────────────
-            // GET  /api/v1/eeg/payouts             — list payout orders (?status=PDNG|ACCP|RJCT|CANC)
-            // GET  /api/v1/eeg/payouts/{id}        — single order with pain.001 XML
-            // POST /api/v1/eeg/payouts/run         — pay a billing month's outstanding receipt chains
-            // GET  /api/v1/eeg/rueckforderungen   — chains paid beyond their current receipt
-            // POST /api/v1/eeg/rueckzahlungen     — record an operator's repayment of one
-            // PUT  /api/v1/eeg/payouts/{id}/status — process pain.002 ACCP/RJCT/CANC
-            // EnFG Belastungsausgleich (§ 13 Abs. 1 EnFG): the payments made per
-            // billing month, and the Aufrechnungen that count as made (Satz 2).
-            .route(
-                "/api/v1/eeg/enfg-zahlungen",
-                get(handlers::get_enfg_zahlungen),
-            )
-            .route(
-                "/api/v1/eeg/aufrechnungen",
-                post(handlers::post_eeg_aufrechnung),
-            )
-            .route(
-                "/api/v1/eeg/rueckzahlungen",
-                post(handlers::post_eeg_rueckzahlung),
-            )
-            .route(
-                "/api/v1/eeg/rueckforderungen",
-                get(handlers::get_eeg_rueckforderungen),
-            )
-            .route("/api/v1/eeg/payouts", get(handlers::get_eeg_payouts))
-            .route(
-                "/api/v1/eeg/payouts/run",
-                post(handlers::post_run_eeg_payouts),
-            )
-            .route(
-                "/api/v1/eeg/payouts/{payout_id}",
-                get(handlers::get_eeg_payout),
-            )
-            .route(
-                "/api/v1/eeg/payouts/{payout_id}/status",
-                axum::routing::put(handlers::put_eeg_payout_status),
-            )
-            .route(
-                "/api/v1/jahresabschluss/{malo_id}",
-                post(handlers::post_jahresabschluss),
-            )
-            // ── Balance reconciliation ──────────────────────────────────────
-            // POST /api/v1/accounts/{malo_id}/reconcile?repair=true
-            // Detects and optionally corrects balance_ct cache drift.
-            .route(
-                "/api/v1/accounts/{malo_id}/reconcile",
-                post(handlers::post_reconcile),
-            )
-            // ── Open-item management ─────────────────────────────────────────
-            // GET /api/v1/accounts/{malo_id}/open-items
-            // FIFO-cleared list of unpaid/partially-paid invoice debits.
-            .route(
-                "/api/v1/accounts/{malo_id}/open-items",
-                get(handlers::get_open_items),
-            )
-            // ── GDPR Art. 17 anonymization ──────────────────────────────────
-            // POST /api/v1/accounts/{malo_id}/anonymize
-            // Pseudonymizes PII while preserving ledger records (§238 HGB).
-            .route(
-                "/api/v1/accounts/{malo_id}/anonymize",
-                post(handlers::post_anonymize),
-            ) // ── Aging analysis ─────────────────────────────────────────────────
-            // GET /api/v1/aging — overdue receivables grouped by age bucket (0-30d/31-60d/61-90d/>90d)
-            .route("/api/v1/aging", get(handlers::get_aging))
-            // ── Festschreibung (period seals) + audit proofs — GoBD / § 146 AO ──
-            .route(
-                "/api/v1/periods/{period_id}/seal",
-                post(handlers::post_seal_period),
-            )
-            .route("/api/v1/periods/seals", get(handlers::get_seals))
-            // ── Parked bookings ─────────────────────────────────────────────
-            .route("/api/v1/bookings/{key}/rebook", post(handlers::post_rebook))
-            .route(
-                "/api/v1/bookings/{key}/discard",
-                post(handlers::post_discard),
-            )
-            .route(
-                "/api/v1/entries/{entry_id}/proof",
-                get(handlers::get_entry_proof),
-            )
-            // Proves a customer's closing balance for a sealed period, not just
-            // that a booking exists — the question a Betriebsprüfung asks.
-            .route(
-                "/api/v1/periods/{period_id}/balance-proof",
-                get(handlers::get_period_balance_proof),
-            )
-            // Append-only evidence for an auditor holding an archived head.
-            .route(
-                "/api/v1/entries/consistency-proof",
-                get(handlers::get_consistency_proof),
-            )
-            // ── Summen- und Saldenliste + Zahlungszuordnung (open-item clearing) ──
-            .route("/api/v1/trial-balance", get(handlers::get_trial_balance))
-            .route(
-                "/api/v1/accounts/{malo_id}/clear",
-                post(handlers::post_clear),
-            )
-            .route(
-                "/api/v1/clearings/{position}/reset",
-                post(handlers::post_reset_clearing),
-            )
-            // ── Verzugszinsen §288 BGB ─────────────────────────────────────────
-            // GET  /api/v1/accounts/{malo_id}/interest-charges
-            // POST /api/v1/accounts/{malo_id}/interest-charges
-            .route(
-                "/api/v1/accounts/{malo_id}/interest-charges",
-                get(handlers::get_interest_charges).post(handlers::post_interest_charge),
-            )
-            // POST /api/v1/accounts/{malo_id}/locks — a lock with no case yet
-            .route(
-                "/api/v1/accounts/{malo_id}/locks",
-                post(handlers::place_account_lock),
-            )
-            // ── Payment plans (Zahlungsvereinbarung) ───────────────────────────
-            // GET  /api/v1/accounts/{malo_id}/payment-plans
-            // POST /api/v1/accounts/{malo_id}/payment-plans
-            .route(
-                "/api/v1/accounts/{malo_id}/payment-plans",
-                get(handlers::get_payment_plans).post(handlers::post_payment_plan),
-            )
-            // GET    /api/v1/payment-plans/{id}
-            // DELETE /api/v1/payment-plans/{id}
-            .route(
-                "/api/v1/payment-plans/{plan_id}",
-                get(handlers::get_payment_plan).delete(handlers::delete_payment_plan),
-            )
             .layer(Extension(Arc::clone(&cfg)))
             .layer(Extension(Arc::clone(&cedar)))
             .layer(Extension(pool.clone()))

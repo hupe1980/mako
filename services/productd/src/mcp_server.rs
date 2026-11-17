@@ -1,6 +1,6 @@
 //! MCP server for `productd` — Product & Tariff Catalog (LF role).
 //!
-//! ## Tools (14)
+//! ## Tools (16)
 //!
 //! | Tool | Description |
 //! |---|---|
@@ -18,6 +18,8 @@
 //! | `validate_tariff_config` | Validate Tarifpreisblatt JSONB before PUT (same logic as REST) |
 //! | `explain_invoice_position` | Explain how a preistyp maps to a billing output + formula |
 //! | `get_comparison_feed` | Retrieve the § 41c comparison portal feed (proxies the REST endpoint) |
+//! | `list_webhook_endpoints` | The webhook endpoints, as `GET /api/v1/webhooks/endpoints` answers |
+//! | `list_webhook_deliveries` | One endpoint's deliveries, as `GET /api/v1/webhooks/endpoints/{id}/deliveries` answers |
 //!
 //! ## Prompts (3)
 //!
@@ -54,6 +56,9 @@ pub struct ProductdMcpState {
     pub auth: mako_service::mcp_auth::McpAuth,
     /// The posture report the runner built at boot, served by `get_policy`.
     pub policy: Arc<mako_service::policy::PolicyReport>,
+    /// The webhook subscriptions, read by `list_webhook_endpoints` and
+    /// `list_webhook_deliveries`.
+    pub subscriptions: mako_service::subscriptions::Subscriptions,
 }
 
 // ── Parameter types ───────────────────────────────────────────────────────────
@@ -137,6 +142,29 @@ pub struct ExplainInvoicePositionParams {
     pub preistyp: String,
 }
 
+/// A page of webhook endpoints.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookEndpointsParams {
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page; absent for the first.
+    pub cursor: Option<String>,
+}
+
+/// A page of one endpoint's deliveries.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWebhookDeliveriesParams {
+    /// The endpoint's id (UUID).
+    pub endpoint_id: String,
+    /// `all`, `pending`, `delivered` or `failed`; every delivery when absent.
+    #[schemars(with = "Option<String>")]
+    pub status: Option<mako_service::subscriptions::DeliveryFilter>,
+    /// Rows per page, 1–200; 50 when absent.
+    pub limit: Option<u32>,
+    /// The `next_cursor` of the previous page; absent for the first.
+    pub cursor: Option<String>,
+}
+
 // ── MCP handler ────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -172,6 +200,53 @@ impl ProductdMcpHandler {
         ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    // ── Webhook subscriptions: the agent twins of the REST reads ──────────────
+
+    /// The read behind `GET /api/v1/webhooks/endpoints`.
+    #[tool(
+        description = "The webhook endpoints productd delivers its CloudEvents to, a page ordered by name: each with its URL, event-type filter, owner (`config` for the endpoint the config names, `api` for one registered through the API), whether it is active and the status of its last delivery. Secrets are never listed.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
+    )]
+    async fn list_webhook_endpoints(
+        &self,
+        Parameters(p): Parameters<ListWebhookEndpointsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        mako_service::mcp::answer(self.state.subscriptions.list_endpoints(None, &page).await)
+    }
+
+    /// The read behind `GET /api/v1/webhooks/endpoints/{id}/deliveries`.
+    #[tool(
+        description = "The deliveries of one webhook endpoint, newest first: each event's type, attempts, the HTTP status and latency of the last attempt, and whether it was delivered, is pending or is dead-lettered. Filter by status (all, pending, delivered, failed).",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Delivery>>()
+    )]
+    async fn list_webhook_deliveries(
+        &self,
+        Parameters(p): Parameters<ListWebhookDeliveriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let page = mako_service::page::PageQuery {
+            limit: p.limit,
+            cursor: p.cursor,
+        };
+        mako_service::mcp::answer(
+            self.state
+                .subscriptions
+                .list_deliveries(
+                    None,
+                    &p.endpoint_id,
+                    p.status
+                        .unwrap_or(mako_service::subscriptions::DeliveryFilter::All),
+                    &page,
+                )
+                .await,
+        )
     }
 
     // ── Product catalog ───────────────────────────────────────────────────────

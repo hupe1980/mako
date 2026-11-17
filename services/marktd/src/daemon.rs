@@ -10,82 +10,21 @@
 //! the published service documentation; `/api/v1/openapi.json` serves the
 //! OpenAPI document live.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use crate::state::AppState;
 use anyhow::Context as _;
-use axum::{
-    Extension, Router,
-    routing::{delete, get, patch, post, put},
-};
+use axum::{Extension, Router, routing::post};
 use mako_service::{Daemon, ServiceContext, cedar::CedarEnforcer};
 use sqlx::PgPool;
 use tracing::info;
 
 use crate::{
     config::{self, Config},
-    fanout::{FanoutConfig, spawn as spawn_fanout},
     handlers::{
         Tenant,
-        bilanzierung::{get_bilanzierung_at, get_bilanzierung_history, put_bilanzierung},
-        correlation::{get_correlation, list_correlations},
-        device::{
-            delete_konfigurationsprodukt, get_geraet, get_geraet_konfigurationen,
-            get_konfigurationsprodukte, get_sharing_eligibility, get_steuerbare_ressource,
-            get_tariff_zone, get_technische_ressource, get_zaehlwerke, get_zaehlzeitdefinitionen,
-            list_geraete, list_technische_ressourcen_by_malo, list_zaehler, list_zaehler_register,
-            list_zaehler_saisons, put_geraet, put_geraet_konfigurationen,
-            put_konfigurationsprodukte, put_steuerbare_ressource, put_technische_ressource,
-            put_zaehler, put_zaehler_register, put_zaehler_saison,
-        },
-        dlq::{delete_dlq_entry, list_dlq, retry_dlq_entry},
-        einwilligung::{
-            consent_check, get_einwilligung, get_esa_messprodukt_angebot, get_esa_preise,
-            get_esa_subscription, get_framework, grant_einwilligung, list_einwilligungen,
-            put_esa_messprodukt_katalog, put_esa_preise, put_framework, revoke_einwilligung,
-        },
         event_ingest::{InboundWebhookSecret, ingest_event},
-        event_log::list_event_log,
-        grundversorger::{get_grundversorger, put_grundversorger},
-        lokationsbuendel,
-        lokationszuordnung::{
-            delete_lokationszuordnung, get_malo_buendel, get_malo_lokationen, get_melo_lokationen,
-            put_lokationszuordnung,
-        },
-        mabis_zp::{get_mabis_zp, list_mabis_zp, put_mabis_zp},
-        malo::{get_malo, get_malo_lastprofil, list_malo, put_malo},
-        malo_grid::{get_malo_grid, put_malo_grid},
-        melo::{get_melo, get_melo_standorteigenschaften, put_melo},
-        melo_msb::{get_melo_msb_at, get_melo_msb_history, put_melo_msb},
-        mmma_preise,
-        msb_rahmenvertrag::{check_msb_rv, get_msb_rv, list_msb_rv, upsert_msb_rv},
-        nb_contract::{
-            get_nb_contract, get_nb_contract_by_malo, list_nb_contracts, put_nb_contract,
-        },
-        nb_energiemix::{get_nb_energiemix, get_nb_energiemix_history, put_nb_energiemix},
-        nelo::{get_nelo, list_nelos, put_nelo},
-        netzzugang::{get_antrag, list_antraege, set_antrag_status, upsert_antrag},
-        partner::{
-            get_as4_address, get_partner, get_partner_marktteilnehmer, list_partners, put_partner,
-        },
-        preisblatt::{
-            get_preisblatt, get_preisblatt_dienstleistung, get_preisblatt_hardware,
-            get_preisblatt_ka, get_preisblatt_messung, put_preisblatt,
-            put_preisblatt_dienstleistung, put_preisblatt_hardware, put_preisblatt_ka,
-            put_preisblatt_messung,
-        },
-        pricat::{get_dispatch_log, get_pricat_history, post_pricat_dispatch},
-        referenzreihen,
-        subscription::{
-            delete_subscription, get_subscription, list_subscriptions, put_subscription,
-            test_subscription,
-        },
-        tranche::{get_tranche, list_tranchen, put_tranche},
-        utilmd_stammdaten,
-        versorgung::put_versorgungsstatus,
-        zuordnungsermaechtigung::list_zuordnungsermaechtigungen,
     },
-    openapi::openapi_router,
     pg,
 };
 
@@ -101,11 +40,15 @@ impl Daemon for Marktd {
             .run(pool)
             .await
             .context("run marktd migrations")?;
-        // `event_outbox` carries the commands owed to makod (the ORDERS 17008
-        // Abbestellung of an ended consent); events go through `event_log`.
+        // `event_outbox` carries marktd's events, fanned out by the
+        // subscription module, and the commands owed to makod (the ORDERS
+        // 17008 Abbestellung of an ended consent).
         mako_service::outbox::ensure_schema(pool)
             .await
-            .context("ensure event_outbox schema")
+            .context("ensure event_outbox schema")?;
+        mako_service::subscriptions::ensure_schema(pool)
+            .await
+            .context("ensure webhook subscription schema")
     }
 
     /// Fail closed: without `[oidc]` every request is admitted with dev claims,
@@ -115,17 +58,7 @@ impl Daemon for Marktd {
     /// its own finding.
     fn validate(cfg: &Config) -> Vec<mako_service::Befund> {
         use mako_service::befund::{Befund, Bereich};
-        let mut out = Vec::new();
-        if cfg.webhook.allow_loopback_subscribers {
-            out.push(
-                Befund::warnung(
-                    "webhook.allow_loopback_subscribers",
-                    "a subscription may name a loopback endpoint — the posture of `just dev`, \
-                     where every service listens on this machine; a deployment leaves it off",
-                )
-                .bereich(Bereich::Zugriff),
-            );
-        }
+        let mut out = cfg.subscriptions.befunde();
         if cfg.allow_insecure_no_auth {
             return out;
         }
@@ -156,10 +89,6 @@ impl Daemon for Marktd {
     async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
         let pool = ctx.pool().clone();
         let shutdown = ctx.shutdown.clone();
-        // The shared client: 5 s connect timeout and, critically for a hub that
-        // POSTs to operator-supplied webhook URLs, no redirect following — so a
-        // subscriber endpoint cannot bounce a delivery onto internal
-        // infrastructure (see handlers::subscription::validate_webhook_url).
         let http = ctx.http.clone();
         let tenant = cfg.markt.tenant.clone();
 
@@ -225,25 +154,27 @@ impl Daemon for Marktd {
             .run(shutdown.clone()),
         );
 
-        // No in-memory event channel: producers persist every event to the
-        // `event_log` outbox (marktd::outbox::enqueue) BEFORE any fan-out, and
-        // the durable fan-out worker is the sole consumer of
-        // `event_log`/`event_delivery`. There is no wake-up handle to pass
-        // around either: the `event_log_notify` trigger raises a Postgres
-        // NOTIFY that the worker listens for, so the hint arrives on the
-        // producer's COMMIT and reaches every replica.
-        let sub_repo = pg::PgSubscriptionRepository::new(pool.clone());
         let state = Arc::new(AppState {
             malo_repo: pg::PgMaloRepository::new(pool.clone()),
             melo_repo: pg::PgMeloRepository::new(pool.clone(), tenant.clone()),
-            subscription_repo: sub_repo.clone(),
             correlation_index: pg::PgCorrelationIndex::new(pool.clone()),
             partner_repo: pg::PgPartnerRepository::new(pool.clone()),
             tenant: tenant.clone(),
-            allow_loopback_subscribers: cfg.webhook.allow_loopback_subscribers,
         });
 
-        spawn_workers(&cfg, &pool, sub_repo, &http, &shutdown, &tenant);
+        // Every event is enqueued to `event_outbox` with its business write
+        // (`crate::outbox::enqueue`); the module fans it out to the in-cluster
+        // receivers of `[[subscriptions.endpoints]]` and to every endpoint an
+        // integrator registers. marktd names no ERP URL of its own.
+        let subs = mako_service::subscriptions::Subscriptions::new(
+            pool.clone(),
+            Self::NAME,
+            tenant.clone(),
+            cfg.subscriptions.clone(),
+        );
+        subs.spawn(shutdown.clone());
+
+        spawn_workers(&cfg, &pool, &http, &shutdown, &tenant);
 
         let mcp = crate::mcp_server::router(
             Arc::new(crate::mcp_server::MdmdMcpState {
@@ -256,24 +187,16 @@ impl Daemon for Marktd {
                     &tenant,
                 ),
                 policy: ctx.einrichtung.policy.clone(),
+                subscriptions: subs.clone(),
             }),
             shutdown,
         );
 
-        let (documented, doc) = crate::openapi::documented();
+        let (documented, doc) = crate::openapi::documented(&subs);
         let app = Router::new()
             .merge(documented)
-            .merge(malo_routes())
-            .merge(melo_routes())
-            .merge(device_routes())
-            .merge(partner_routes())
-            .merge(preisblatt_routes())
-            .merge(registry_routes())
-            .merge(esa_routes())
-            .merge(subscription_routes())
-            .merge(admin_routes())
             .route(&cfg.webhook.inbound_path, post(ingest_event))
-            .merge(openapi_router(doc))
+            .merge(mako_service::openapi::serve(doc))
             .with_state(state)
             // Read-only: GET /admin/einrichtung (Cedar `read-config`) and
             // GET /api/v1/policy (Cedar `read-policy`), from the boot report.
@@ -299,368 +222,6 @@ impl Daemon for Marktd {
         info!(%tenant, "marktd router built");
         Ok(app)
     }
-}
-
-// ── Routes ────────────────────────────────────────────────────────────────────
-//
-// Collections are plural throughout (`/malos`, `/melos`, `/zaehler`), and a
-// sub-resource hangs off the collection member, so a caller never has to
-// memorise the pluralisation per endpoint.
-
-type S = Arc<AppState>;
-
-fn malo_routes() -> Router<S> {
-    Router::new()
-        .route("/api/v1/malos", get(list_malo))
-        .route("/api/v1/malos/{id}", get(get_malo).put(put_malo))
-        // SLP profile for the NNE tariff zone and billingd.
-        .route("/api/v1/malos/{id}/lastprofil", get(get_malo_lastprofil))
-        // The Land of the MaLo's address — edmd's Ersatzwert day class.
-        .route(
-            "/api/v1/malos/{id}/bundesland",
-            get(crate::handlers::bundesland::get_malo_bundesland),
-        )
-        // NB grid topology (read by the processd NB module for Anmeldung STP).
-        .route(
-            "/api/v1/malos/{id}/grid",
-            get(get_malo_grid).put(put_malo_grid),
-        )
-        // BO4E Bilanzierung — first-class temporal balancing resource.
-        .route(
-            "/api/v1/malos/{malo_id}/bilanzierung",
-            get(get_bilanzierung_at).put(put_bilanzierung),
-        )
-        .route(
-            "/api/v1/malos/{malo_id}/bilanzierung/history",
-            get(get_bilanzierung_history),
-        )
-        .route(
-            "/api/v1/malos/{malo_id}/technische-ressourcen",
-            get(list_technische_ressourcen_by_malo),
-        )
-        // The UTILMD Stammdaten of a Marktlokation on a Stichtag (makod reads
-        // them for the Anmeldung EoG 55013/44013), and the NB's facts of that
-        // record no BO4E object carries.
-        .route(
-            "/api/v1/malos/{id}/utilmd-stammdaten",
-            get(utilmd_stammdaten::get_utilmd_stammdaten),
-        )
-        .route(
-            "/api/v1/malos/{id}/netznutzungsdaten",
-            put(utilmd_stammdaten::put_netznutzungsdaten),
-        )
-        // The Lokationsbündel of a Marktlokation on a Stichtag (makod reads it
-        // for the Geschäftsdatenanfrage answers 55035/55095/55060), and the
-        // NB's Angaben of it no BO4E object carries.
-        // `GET …/lokationsbuendel` is a shared read, mounted with its document
-        // entry by `openapi::documented`.
-        .route(
-            "/api/v1/malos/{id}/lokationsbuendel-angaben",
-            put(lokationsbuendel::put_lokationsbuendel_angaben),
-        )
-        .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
-        .route("/api/v1/malos/{id}/buendel", get(get_malo_buendel))
-        // VersorgungsStatus per MaLo. The GETs (current, point-in-time and
-        // history) are shared reads mounted by `openapi::documented`.
-        .route("/api/v1/versorgung/{malo_id}", put(put_versorgungsstatus))
-}
-
-fn melo_routes() -> Router<S> {
-    Router::new()
-        .route("/api/v1/melos/{id}", get(get_melo).put(put_melo))
-        .route(
-            "/api/v1/melos/{id}/standorteigenschaften",
-            get(get_melo_standorteigenschaften),
-        )
-        // Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1).
-        .route(
-            "/api/v1/melos/{melo_id}/msb",
-            get(get_melo_msb_at).put(put_melo_msb),
-        )
-        .route(
-            "/api/v1/melos/{melo_id}/msb/history",
-            get(get_melo_msb_history),
-        )
-        .route("/api/v1/melos/{id}/lokationen", get(get_melo_lokationen))
-        .route("/api/v1/melos/{melo_id}/zaehler", get(list_zaehler))
-        .route(
-            "/api/v1/melos/{melo_id}/sharing-eligibility",
-            get(get_sharing_eligibility),
-        )
-}
-
-fn device_routes() -> Router<S> {
-    Router::new()
-        .route("/api/v1/zaehler/{zaehler_id}", put(put_zaehler))
-        .route("/api/v1/zaehler/{zaehler_id}/geraete", get(list_geraete))
-        .route(
-            "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}",
-            get(get_geraet),
-        )
-        .route(
-            "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen",
-            get(get_geraet_konfigurationen).put(put_geraet_konfigurationen),
-        )
-        .route(
-            "/api/v1/zaehler/{zaehler_id}/zaehlwerke",
-            get(get_zaehlwerke),
-        )
-        .route(
-            "/api/v1/zaehler/{zaehler_id}/register",
-            get(list_zaehler_register).put(put_zaehler_register),
-        )
-        .route(
-            "/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen",
-            get(get_zaehlzeitdefinitionen),
-        )
-        .route(
-            "/api/v1/zaehler/{zaehler_id}/tariff-zone",
-            get(get_tariff_zone),
-        )
-        .route(
-            "/api/v1/zaehler-register/{register_id}/saisons",
-            get(list_zaehler_saisons).put(put_zaehler_saison),
-        )
-        .route("/api/v1/geraete/{geraet_id}", put(put_geraet))
-        // SteuerbareRessource + the §14a Konfigurationsprodukte processd reads
-        // before auto-confirming a wim-steuerungsauftrag ORDERS.
-        .route(
-            "/api/v1/steuerbare-ressourcen/{sr_id}",
-            get(get_steuerbare_ressource).put(put_steuerbare_ressource),
-        )
-        .route(
-            "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte",
-            get(get_konfigurationsprodukte).put(put_konfigurationsprodukte),
-        )
-        .route(
-            "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}",
-            delete(delete_konfigurationsprodukt),
-        )
-        .route(
-            "/api/v1/technische-ressourcen/{tr_id}",
-            get(get_technische_ressource).put(put_technische_ressource),
-        )
-        .route("/api/v1/lokationszuordnungen", put(put_lokationszuordnung))
-        .route(
-            "/api/v1/lokationszuordnungen/{von_id}/{nach_id}",
-            delete(delete_lokationszuordnung),
-        )
-}
-
-fn partner_routes() -> Router<S> {
-    Router::new()
-        .route("/api/v1/partners", get(list_partners))
-        .route(
-            "/api/v1/partners/{mp_id}",
-            get(get_partner).put(put_partner),
-        )
-        .route("/api/v1/partners/{mp_id}/as4-address", get(get_as4_address))
-        .route(
-            "/api/v1/partners/{mp_id}/marktteilnehmer",
-            get(get_partner_marktteilnehmer),
-        )
-}
-
-fn preisblatt_routes() -> Router<S> {
-    Router::new()
-        .route(
-            "/api/v1/preisblaetter/{nb_mp_id}",
-            get(get_preisblatt).put(put_preisblatt),
-        )
-        .route(
-            "/api/v1/preisblaetter-messung/{msb_mp_id}",
-            get(get_preisblatt_messung).put(put_preisblatt_messung),
-        )
-        .route(
-            "/api/v1/preisblaetter-ka/{nb_mp_id}",
-            get(get_preisblatt_ka).put(put_preisblatt_ka),
-        )
-        .route(
-            "/api/v1/preisblaetter-dienstleistung/{msb_mp_id}",
-            get(get_preisblatt_dienstleistung).put(put_preisblatt_dienstleistung),
-        )
-        .route(
-            "/api/v1/preisblaetter-hardware/{msb_mp_id}",
-            get(get_preisblatt_hardware).put(put_preisblatt_hardware),
-        )
-        // MMMA Gas (Trading Hub Europe) and MMM Strom (VNB, GPKE Teil 1 Kap. 8.4).
-        .route("/api/v1/mmma-preise/gas", get(mmma_preise::list_mmma_gas))
-        .route(
-            "/api/v1/mmma-preise/gas/{year}/{month}",
-            get(mmma_preise::get_mmma_gas).put(mmma_preise::put_mmma_gas),
-        )
-        .route(
-            "/api/v1/mmm-preise/strom/{year}/{month}",
-            get(mmma_preise::get_mmm_strom).put(mmma_preise::put_mmm_strom),
-        )
-        .route(
-            "/api/v1/mmma-preise/import-trigger",
-            post(mmma_preise::post_import_trigger),
-        )
-        // Referenzreihen: published figures billing reads, bitemporal.
-        .route(
-            "/api/v1/referenzreihen",
-            get(referenzreihen::list_referenzreihen),
-        )
-        .route(
-            "/api/v1/referenzreihen/{reihe}/werte",
-            get(referenzreihen::get_werte),
-        )
-        .route(
-            "/api/v1/referenzreihen/{reihe}/wert",
-            get(referenzreihen::get_wert),
-        )
-        .route(
-            "/api/v1/referenzreihen/{reihe}/import",
-            post(referenzreihen::post_import),
-        )
-        // PRICAT version history + manual (re-)dispatch.
-        .route("/api/v1/pricat/{nb_mp_id}/history", get(get_pricat_history))
-        .route(
-            "/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}",
-            get(get_dispatch_log),
-        )
-        .route(
-            "/api/v1/pricat/{nb_mp_id}/dispatch",
-            post(post_pricat_dispatch),
-        )
-}
-
-fn registry_routes() -> Router<S> {
-    Router::new()
-        .route("/api/v1/nb-contracts", get(list_nb_contracts))
-        .route(
-            "/api/v1/nb-contracts/by-malo/{malo_id}",
-            get(get_nb_contract_by_malo),
-        )
-        .route(
-            "/api/v1/nb-contracts/{id}",
-            get(get_nb_contract).put(put_nb_contract),
-        )
-        // §42 EnWG grid-area Energiemix (LFs disclose the Reststrommix from it).
-        .route(
-            "/api/v1/energiemix/{nb_mp_id}",
-            get(get_nb_energiemix).put(put_nb_energiemix),
-        )
-        .route(
-            "/api/v1/energiemix/{nb_mp_id}/history",
-            get(get_nb_energiemix_history),
-        )
-        // Netz-Element-Lokationen + Tranchen (Redispatch 2.0, GPKE Teil 4).
-        .route("/api/v1/nelos", get(list_nelos))
-        .route("/api/v1/nelos/{id}", get(get_nelo).put(put_nelo))
-        .route("/api/v1/tranchen", get(list_tranchen))
-        .route("/api/v1/tranchen/{id}", get(get_tranche).put(put_tranche))
-        // MaBiS-Zählpunkt per Bilanzierungsgebiet (read by netzbilanzd).
-        .route("/api/v1/mabis-zp", get(list_mabis_zp))
-        .route(
-            "/api/v1/bilanzierungsgebiete/{eic}/mabis-zp",
-            get(get_mabis_zp).put(put_mabis_zp),
-        )
-        // MaBiS Zuordnungsermächtigungen from 55071/55072 (read by processd's
-        // E_0622 Prüfschritt 60). No write route: only the BKV's message sets one.
-        .route(
-            "/api/v1/zuordnungsermaechtigungen/{lf_mp_id}",
-            get(list_zuordnungsermaechtigungen),
-        )
-        // §36 Abs. 2 EnWG Grundversorger Feststellung (read by the processd EoG
-        // gap closure).
-        .route(
-            "/api/v1/grundversorger/{nb_mp_id}",
-            get(get_grundversorger).put(put_grundversorger),
-        )
-        // §20b EnWG Netzzugangsplattform request registry.
-        .route(
-            "/api/v1/netzzugang/antraege",
-            put(upsert_antrag).get(list_antraege),
-        )
-        .route("/api/v1/netzzugang/antraege/{id}", get(get_antrag))
-        .route(
-            "/api/v1/netzzugang/antraege/{id}/status",
-            patch(set_antrag_status),
-        )
-        // MSB-Rahmenvertrag registry, both Sparten (read by processd's
-        // Anmeldung MSB check).
-        .route(
-            "/api/v1/msb-rahmenvertraege",
-            put(upsert_msb_rv).get(list_msb_rv),
-        )
-        .route("/api/v1/msb-rahmenvertraege/check", get(check_msb_rv))
-        .route("/api/v1/msb-rahmenvertraege/{id}", get(get_msb_rv))
-        .route("/api/v1/correlations", get(list_correlations))
-        .route("/api/v1/correlations/{id}", get(get_correlation))
-}
-
-fn esa_routes() -> Router<S> {
-    Router::new()
-        .route(
-            "/api/v1/esa/einwilligungen",
-            post(grant_einwilligung).get(list_einwilligungen),
-        )
-        .route(
-            "/api/v1/esa/einwilligungen/{id}",
-            get(get_einwilligung).delete(revoke_einwilligung),
-        )
-        .route(
-            "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
-            put(put_framework).get(get_framework),
-        )
-        // The accepted QUOTES 15003 Angebot — the ESA price basis, since there
-        // is no published Preisblatt for Kapitel-4.6 Messprodukte (§35 MsbG).
-        // `invoicd` checks INVOIC 31009 positions against it.
-        .route(
-            "/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}",
-            put(put_esa_preise).get(get_esa_preise),
-        )
-        // `E_0252` Prüfschritt 2 / `E_0256` Prüfschritte 4/5: which optional
-        // Kapitel-4.6 products this MSB serves an ESA. Without it every
-        // optional order escalates to an operator.
-        .route(
-            "/api/v1/esa/messprodukte/{msb_mp_id}",
-            put(put_esa_messprodukt_katalog),
-        )
-        .route(
-            "/api/v1/esa/messprodukte/{msb_mp_id}/{messprodukt}",
-            get(get_esa_messprodukt_angebot),
-        )
-        // `edmd`'s Typ-2 surveillance resolves a subscription's Messprodukt
-        // here: the Codeliste publishes a delivery cadence per product, and an
-        // inbound MSCONS 13027 names only the ORDERS Belegnummer.
-        .route(
-            "/api/v1/esa/subscriptions/{bestellung_ref}",
-            get(get_esa_subscription),
-        )
-        // Inbound-message gate: revoked consent / unestablished framework
-        // → allowed:false (the Ablehnung clearing case).
-        .route("/api/v1/esa/consent-check", get(consent_check))
-}
-
-fn subscription_routes() -> Router<S> {
-    Router::new()
-        .route("/api/v1/subscriptions", get(list_subscriptions))
-        .route(
-            "/api/v1/subscriptions/{id}",
-            get(get_subscription)
-                .put(put_subscription)
-                .delete(delete_subscription),
-        )
-        .route("/api/v1/subscriptions/{id}/test", post(test_subscription))
-}
-
-fn admin_routes() -> Router<S> {
-    Router::new()
-        // Dead-letter queue (§ 147 AO / GoBD: a delivery is never dropped).
-        .route("/admin/fanout/dlq", get(list_dlq))
-        .route(
-            "/admin/fanout/dlq/{event_id}/{subscriber_id}",
-            delete(delete_dlq_entry),
-        )
-        .route(
-            "/admin/fanout/dlq/{event_id}/{subscriber_id}/retry",
-            post(retry_dlq_entry),
-        )
-        // Full-envelope CloudEvent replay log.
-        .route("/admin/events", get(list_event_log))
 }
 
 // ── Wiring ────────────────────────────────────────────────────────────────────
@@ -712,28 +273,15 @@ fn repository_layers(app: Router, pool: &PgPool) -> Router {
     )
 }
 
-/// Start the durable fan-out worker, the MMMA/MMM price import worker, the
+/// Start the MMMA/MMM price import worker, the
 /// ESA consent-expiry sweep, and the `processed_events` retention sweep.
 fn spawn_workers(
     cfg: &Arc<Config>,
     pool: &PgPool,
-    sub_repo: pg::PgSubscriptionRepository,
     http: &reqwest::Client,
     shutdown: &tokio_util::sync::CancellationToken,
     tenant: &str,
 ) {
-    spawn_fanout(
-        pool.clone(),
-        sub_repo,
-        http.clone(),
-        FanoutConfig {
-            delivery_timeout: Duration::from_secs(cfg.webhook.delivery_timeout_secs),
-            max_attempts: i16::try_from(cfg.webhook.max_retry_attempts).unwrap_or(i16::MAX),
-            ..Default::default()
-        },
-        shutdown.clone(),
-    );
-
     crate::mmma_worker::spawn_mmma_worker(
         Arc::new(cfg.mmma_import.clone()),
         http.clone(),

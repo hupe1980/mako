@@ -13,7 +13,6 @@
 //! | `GET` | `/api/v1/preisblaetter/{nb_mp_id}?date=…` | `Option<PreisblattNetznutzung>` |
 //! | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}?date=…` | `Option<PreisblattMessung>` |
 //! | `GET` | `/api/v1/energiemix/{nb_mp_id}?year=…` | `Option<NbEnergiemixRecord>` |
-//! | `PUT` | `/api/v1/subscriptions/{id}` | `()` (idempotent registration) |
 //!
 //! # Resilience
 //!
@@ -31,7 +30,6 @@ use std::collections::HashMap;
 
 use rubo4e::current::{PreisblattMessung, PreisblattNetznutzung};
 use secrecy::{ExposeSecret, SecretString};
-use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -66,10 +64,6 @@ pub enum MarktdClientError {
     #[error("marktd response deserialization failed: {0}")]
     Deserialization(String),
 
-    /// marktd refused the credential (401/403): no retry fixes it.
-    #[error("marktd refused the request: {0}")]
-    Forbidden(String),
-
     /// The circuit breaker is open, so no request was made.
     ///
     /// Distinct from [`Self::Http`] because nothing was attempted, and — the
@@ -93,8 +87,6 @@ impl From<reqwest::Error> for MarktdClientError {
     }
 }
 
-// ── Subscription request body ─────────────────────────────────────────────────
-
 /// The answer of `GET /api/v1/malos/{malo_id}/bundesland`.
 ///
 /// A response body from another service: unknown fields are ignored.
@@ -106,27 +98,6 @@ pub struct MaloBundesland {
     pub postleitzahl: String,
     /// The source and its attribution.
     pub quelle: String,
-}
-
-/// Request body for `PUT /api/v1/subscriptions/{subscriber_id}`.
-#[derive(Debug, Serialize)]
-pub struct SubscriptionRequest<'a> {
-    /// Public webhook URL that `marktd` will POST events to.
-    pub webhook_url: &'a str,
-    /// Optional HMAC-SHA256 secret `marktd` signs outbound payloads with.
-    ///
-    /// `None` disables signature verification for this subscription.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub webhook_secret: Option<&'a str>,
-    /// `CloudEvent` type filter (empty = wildcard, receive all events).
-    ///
-    /// There is deliberately no PID filter beside it: `marktd`'s `subscriptions`
-    /// table narrows on `roles`, `event_types` and `sparten` only, so a PID set
-    /// here would read as server-side narrowing without being it. Subscribers
-    /// that care about a PID subset filter on arrival.
-    pub event_types: &'a [&'a str],
-    /// Whether the subscription is active.
-    pub active: bool,
 }
 
 // ── Circuit-breaker inner state ───────────────────────────────────────────────
@@ -1834,92 +1805,6 @@ impl MarktdClient {
         Ok(Some(body))
     }
 
-    /// Register (or replace) the subscription `subscriber_id` with marktd —
-    /// an idempotent upsert, safe on every restart.
-    ///
-    /// # Errors
-    ///
-    /// [`MarktdClientError::Http`] on a transport failure or a non-2xx answer;
-    /// [`MarktdClientError::Forbidden`] on 401/403, which waiting cannot fix.
-    pub async fn put_subscription(
-        &self,
-        subscriber_id: &str,
-        req: &SubscriptionRequest<'_>,
-    ) -> Result<(), MarktdClientError> {
-        let url = format!("{}/api/v1/subscriptions/{}", self.base_url, subscriber_id);
-        let body = serde_json::json!({
-            "webhook_url":    req.webhook_url,
-            "webhook_secret": req.webhook_secret,
-            "roles":          [],
-            "event_types":    req.event_types,
-            "active":         req.active,
-        });
-        let resp = self
-            .client
-            .put(&url)
-            .bearer_auth(self.api_key.expose_secret())
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
-        match resp.status() {
-            s if s.is_success() => Ok(()),
-            s if s == reqwest::StatusCode::UNAUTHORIZED || s == reqwest::StatusCode::FORBIDDEN => {
-                Err(MarktdClientError::Forbidden(format!(
-                    "HTTP {} — check `[marktd] api_key` and that its principal may manage \
-                     subscriptions (marktd Cedar action `manage-subscription`)",
-                    s.as_u16()
-                )))
-            }
-            s => Err(MarktdClientError::Http(format!("HTTP {}", s.as_u16()))),
-        }
-    }
-
-    /// [`Self::put_subscription`] until marktd accepts it or `shutdown`
-    /// resolves: 2 s, doubling to at most 60 s, between attempts.
-    ///
-    /// A subscriber whose registration is lost receives no event at all, and
-    /// marktd may come up after it (Compose, Kubernetes, a marktd restart), so
-    /// one attempt at startup is not enough. A 401/403 ends the loop with an
-    /// error log: the credential is wrong, and retrying it would only repeat
-    /// the refusal. Returns whether the subscription stands.
-    pub async fn subscribe_until_registered(
-        &self,
-        subscriber_id: &str,
-        req: &SubscriptionRequest<'_>,
-        shutdown: impl std::future::Future<Output = ()>,
-    ) -> bool {
-        let mut delay = std::time::Duration::from_secs(2);
-        tokio::pin!(shutdown);
-        loop {
-            match self.put_subscription(subscriber_id, req).await {
-                Ok(()) => {
-                    info!(subscriber_id, "MarktdClient: subscription registered");
-                    return true;
-                }
-                Err(MarktdClientError::Forbidden(why)) => {
-                    tracing::error!(
-                        subscriber_id,
-                        why,
-                        "MarktdClient: marktd refused the subscription; no event will arrive"
-                    );
-                    return false;
-                }
-                Err(e) => warn!(
-                    %e,
-                    subscriber_id,
-                    retry_in_secs = delay.as_secs(),
-                    "MarktdClient: subscription not registered yet; no event arrives until it is"
-                ),
-            }
-            tokio::select! {
-                () = &mut shutdown => return false,
-                () = tokio::time::sleep(delay) => {}
-            }
-            delay = (delay * 2).min(std::time::Duration::from_mins(1));
-        }
-    }
-
     /// Fetch Gas MMM Abrechnungspreise for a billing month from `marktd`.
     ///
     /// Returns `None` if no prices have been imported yet for that month.
@@ -2569,81 +2454,6 @@ mod tests {
             }
         });
         format!("http://{addr}")
-    }
-
-    /// A stand-in marktd answering the statuses in `answers` in turn, one
-    /// connection each, and counting the requests it saw.
-    async fn scripted(
-        answers: Vec<u16>,
-    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let seen = std::sync::Arc::new(AtomicUsize::new(0));
-        let counter = seen.clone();
-        tokio::spawn(async move {
-            for status in answers {
-                let Ok((mut sock, _)) = listener.accept().await else {
-                    return;
-                };
-                let mut request = Vec::new();
-                let mut buf = [0_u8; 4096];
-                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                    match sock.read(&mut buf).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => request.extend_from_slice(&buf[..n]),
-                    }
-                }
-                counter.fetch_add(1, Ordering::SeqCst);
-                let _ = sock
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 {status} X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
-                        )
-                        .as_bytes(),
-                    )
-                    .await;
-                let _ = sock.shutdown().await;
-            }
-        });
-        (format!("http://{addr}"), seen)
-    }
-
-    fn subscription() -> SubscriptionRequest<'static> {
-        SubscriptionRequest {
-            webhook_url: "http://invoicd:8280/webhook",
-            webhook_secret: None,
-            event_types: &["de.mako.process.initiated"],
-            active: true,
-        }
-    }
-
-    /// A marktd that is not ready yet is asked again until it accepts: the
-    /// subscriber would otherwise receive no event at all.
-    #[tokio::test]
-    async fn a_subscription_is_retried_until_marktd_accepts_it() {
-        let (url, seen) = scripted(vec![503, 200]).await;
-        let client = MarktdClient::new(&url, "k".to_owned().into(), reqwest::Client::new());
-        let registered = client
-            .subscribe_until_registered("invoicd", &subscription(), std::future::pending())
-            .await;
-        assert!(registered);
-        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 2);
-    }
-
-    /// A refused credential ends the loop at once: waiting cannot fix it.
-    #[tokio::test]
-    async fn a_refused_credential_is_not_retried() {
-        let (url, seen) = scripted(vec![403, 200]).await;
-        let client = MarktdClient::new(&url, "k".to_owned().into(), reqwest::Client::new());
-        let registered = client
-            .subscribe_until_registered("invoicd", &subscription(), std::future::pending())
-            .await;
-        assert!(!registered);
-        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     /// A Preisblatt is read from `data` of marktd's answer, as marktd's

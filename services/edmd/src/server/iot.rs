@@ -119,6 +119,22 @@ pub(crate) struct IotPushRequest {
 ///
 /// §37 Abs. 2 also ends a Eichfrist early on defect or tampering, so an expiry
 /// date alone is not the whole eichrechtliche validity test.
+#[utoipa::path(
+    post,
+    path = "/api/v1/meter-reads/iot/{malo_id}",
+    tag = "ingest",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `IotPushRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 202, description = "Accepted", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn post_iot_reads(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

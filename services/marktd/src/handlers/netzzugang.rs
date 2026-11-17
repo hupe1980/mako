@@ -49,7 +49,7 @@ async fn emit_and_commit(
         subject,
         data,
     );
-    crate::outbox::enqueue(&mut *tx, &evt).await?;
+    crate::outbox::enqueue(&mut tx, &evt).await?;
     tx.commit().await
 }
 
@@ -118,9 +118,11 @@ pub async fn upsert_antrag(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListQuery {
     #[serde(default)]
+    #[param(value_type = Option<String>)]
     pub status: Option<NetzzugangStatus>,
     #[serde(default)]
     pub netzanschluss_id: Option<String>,

@@ -478,7 +478,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
         Snap: SnapshotAfterRun<W>,
     {
         let ran = self
-            .decide_and_run(&mut move |_: &W::State| Some(command.clone()), opts)
+            .decide_and_run(&mut move |_: &W::State| Some(command.clone()), opts, None)
             .await?;
         Ok(ran.unwrap_or_default())
     }
@@ -523,9 +523,16 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
             akteur: Akteur::System,
             ..opts
         };
+        // A Frist announces its lapse: the notice rides the write the
+        // workflow's lapse makes, and only that one — a closed window decides
+        // nothing and writes nothing.
+        let lapse = W::FRIST_LABELS
+            .contains(&deadline.label())
+            .then(|| lapse_notice(deadline));
         self.decide_and_run(
             &mut |state: &W::State| W::on_deadline(deadline, state),
             opts,
+            lapse.as_ref(),
         )
         .await
     }
@@ -536,6 +543,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
         &self,
         decide: &mut (impl FnMut(&W::State) -> Option<W::Command> + Send),
         opts: RunOptions<'_, Snap>,
+        lapse: Option<&crate::outbox::PendingOutbox>,
     ) -> Result<Option<RunOutcome>, EngineError>
     where
         S: AtomicAppend,
@@ -562,6 +570,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
                     correlations: opts.correlations,
                     received_at: opts.received_at,
                     acknowledgement: opts.acknowledgement,
+                    lapse,
                     akteur: &opts.akteur,
                 },
             )
@@ -884,6 +893,24 @@ impl<W: Workflow, S: EventStore + std::fmt::Debug> std::fmt::Debug for Process<W
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
+
+/// The `AntwortfristAbgelaufen` ERP notice of a lapsed Frist: the label and
+/// the deadline it names. It addresses no Marktpartner — the ERP worker owns
+/// the message type, never a wire transport.
+fn lapse_notice(deadline: &crate::deadline::Deadline) -> crate::outbox::PendingOutbox {
+    crate::outbox::PendingOutbox::new(
+        crate::erp::LAPSE_NOTICE,
+        "",
+        serde_json::json!({
+            "deadline_label": deadline.label(),
+            "deadline_id": deadline.deadline_id(),
+            "due_at": deadline
+                .due_at()
+                .format(&time::format_description::well_known::Rfc3339)
+                .ok(),
+        }),
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -1679,5 +1706,178 @@ mod tests {
                 .await
                 .expect("an owned label registers");
         }
+    }
+
+    // ── Lapse notices and the answer on the outbox ───────────────────────────
+
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    enum LapseEvent {
+        Lapsed,
+        Refused,
+        Completed,
+    }
+
+    impl EventPayload for LapseEvent {
+        fn event_type(&self) -> &'static str {
+            match self {
+                Self::Lapsed => "Lapsed",
+                Self::Refused => "Refused",
+                Self::Completed => "Completed",
+            }
+        }
+
+        fn antwort(&self) -> Option<crate::envelope::Antwortcode> {
+            matches!(self, Self::Refused)
+                .then(|| crate::envelope::Antwortcode::new("A02", Some("E_0622")))
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    enum LapseCommand {
+        Fired,
+        OwnNotice,
+        Answer,
+    }
+    impl CommandPayload for LapseCommand {}
+
+    /// A workflow with one Frist (`antwort`), one schedule (`aktivierung`),
+    /// and a Frist whose lapse builds its own notice (`eigene`).
+    struct LapseWorkflow;
+
+    impl Workflow for LapseWorkflow {
+        type State = CounterState;
+        type Event = LapseEvent;
+        type Command = LapseCommand;
+
+        const DEADLINE_LABELS: &'static [&'static str] = &["antwort", "aktivierung", "eigene"];
+        const FRIST_LABELS: &'static [&'static str] = &["antwort", "eigene"];
+        const SCHEDULE_LABELS: &'static [&'static str] = &["aktivierung"];
+
+        fn apply(state: CounterState, _event: &LapseEvent) -> CounterState {
+            state
+        }
+
+        fn handle(
+            _state: &CounterState,
+            command: LapseCommand,
+        ) -> Result<crate::workflow::WorkflowOutput<LapseEvent>, WorkflowError> {
+            Ok(match command {
+                LapseCommand::Fired => vec![LapseEvent::Lapsed].into(),
+                LapseCommand::OwnNotice => crate::workflow::WorkflowOutput::with_outbox(
+                    vec![LapseEvent::Lapsed],
+                    vec![crate::outbox::PendingOutbox::new(
+                        crate::erp::LAPSE_NOTICE,
+                        "9900000000001",
+                        serde_json::json!({ "own": true }),
+                    )],
+                ),
+                LapseCommand::Answer => crate::workflow::WorkflowOutput::with_outbox(
+                    vec![LapseEvent::Refused, LapseEvent::Completed],
+                    vec![
+                        crate::outbox::PendingOutbox::new(
+                            "ProcessCompleted",
+                            "9900000000001",
+                            serde_json::json!({}),
+                        )
+                        .caused_by(1),
+                    ],
+                ),
+            })
+        }
+
+        fn on_deadline(
+            deadline: &crate::deadline::Deadline,
+            _state: &CounterState,
+        ) -> Option<LapseCommand> {
+            Some(if deadline.label() == "eigene" {
+                LapseCommand::OwnNotice
+            } else {
+                LapseCommand::Fired
+            })
+        }
+    }
+
+    fn lapse_process() -> Process<LapseWorkflow, InMemoryEventStore> {
+        Process::new(
+            InMemoryEventStore::new(),
+            TenantId::new(),
+            WorkflowId::new("lapse", "FV2025-10-01"),
+        )
+    }
+
+    fn fired(
+        p: &Process<LapseWorkflow, InMemoryEventStore>,
+        label: &str,
+    ) -> crate::deadline::Deadline {
+        crate::deadline::Deadline::new(
+            p.stream_id().clone(),
+            p.process_id(),
+            p.tenant_id(),
+            p.workflow_id().clone(),
+            label,
+            time::OffsetDateTime::UNIX_EPOCH,
+        )
+    }
+
+    fn notices(ran: &RunOutcome) -> Vec<serde_json::Value> {
+        ran.outbox
+            .iter()
+            .filter(|o| &*o.message_type == crate::erp::LAPSE_NOTICE)
+            .map(|o| o.payload.clone())
+            .collect()
+    }
+
+    /// A Frist that lapses announces itself in the write of the lapse; a
+    /// schedule firing is the process going on and announces nothing; a
+    /// workflow's own notice supersedes the engine's, so there is one.
+    #[tokio::test]
+    async fn a_lapsed_frist_announces_itself_once() {
+        let p = lapse_process();
+        let ran = p
+            .run_timeout(&fired(&p, "antwort"), RunOptions::system())
+            .await
+            .expect("run")
+            .expect("acted");
+        let n = notices(&ran);
+        assert_eq!(n.len(), 1, "{:?}", ran.outbox);
+        assert_eq!(n[0]["deadline_label"], "antwort");
+
+        let ran = p
+            .run_timeout(&fired(&p, "aktivierung"), RunOptions::system())
+            .await
+            .expect("run")
+            .expect("acted");
+        assert!(notices(&ran).is_empty(), "a schedule is no lapse");
+
+        let ran = p
+            .run_timeout(&fired(&p, "eigene"), RunOptions::system())
+            .await
+            .expect("run")
+            .expect("acted");
+        let n = notices(&ran);
+        assert_eq!(n.len(), 1, "the workflow's own notice, alone");
+        assert_eq!(n[0]["own"], true);
+    }
+
+    /// The outbox message carries the answer its write records — the latest
+    /// envelope up to the causing one that states an Antwortcode — so the ERP
+    /// completion names the code the process ended on.
+    #[tokio::test]
+    async fn the_outbox_carries_the_answer_of_its_write() {
+        let p = lapse_process();
+        let ran = p
+            .run(LapseCommand::Answer, RunOptions::system())
+            .await
+            .expect("run");
+        let antwort = ran.outbox[0].antwort.as_ref().expect("the answer");
+        assert_eq!(
+            (antwort.code.as_str(), antwort.codeliste.as_deref()),
+            ("A02", Some("E_0622"))
+        );
+        let ran = p
+            .run(LapseCommand::Fired, RunOptions::system())
+            .await
+            .expect("run");
+        assert!(ran.outbox.is_empty());
     }
 }

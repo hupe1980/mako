@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 /// A plant operator.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow, utoipa::ToSchema)]
 pub struct Einspeiser {
     /// Operator-assigned identity — a customer number, a MaStR Marktakteur-ID,
     /// or a UUID the ERP mints. `einsd` does not invent identities for parties
@@ -52,7 +52,7 @@ impl Einspeiser {
 }
 
 /// Fields accepted when creating or replacing an operator.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpsertEinspeiser {
     pub name: String,

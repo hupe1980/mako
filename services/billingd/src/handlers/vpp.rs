@@ -133,6 +133,23 @@ async fn record_seen(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/vpp/{vpp_id}",
+    tag = "vpp",
+    params(
+        ("vpp_id" = String, Path, description = "The VPP's Marktlokation"),
+    ),
+    request_body(content = serde_json::Value, description = "`VppBillingRequest`: the dispatches to settle"),
+    responses(
+        (status = 201, description = "The § 41e Gutschrift", body = serde_json::Value),
+        (status = 400, description = "Malformed dispatch", body = crate::openapi::Problem),
+        (status = 403, description = "Cedar `settle-flexibility` refused", body = crate::openapi::Problem),
+        (status = 409, description = "The period already carries an issued document, or the number is in use", body = crate::openapi::Problem),
+        (status = 422, description = "Well-formed, but it cannot be billed as asked — the code names the rule", body = crate::openapi::Problem),
+        (status = 502, description = "An upstream service the calculation reads did not answer", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_vpp_billing(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -443,6 +460,17 @@ pub(crate) fn disposition(sender_mp_id: &str, aggregator_mp_id: &str) -> Disposi
 /// The event carries **no price**, deliberately: what a dispatch is worth is the
 /// § 41e Aggregatorvertrag's `capacity_price_eur_per_kwh` in `vertragd`, and a
 /// counterparty does not get to state what it is owed.
+#[utoipa::path(
+    post,
+    path = "/api/v1/webhooks/vpp-dispatch",
+    tag = "vpp",
+    request_body(content = serde_json::Value, description = "A `de.vpp.dispatch.confirmed` CloudEvent, signed per Standard Webhooks"),
+    responses(
+        (status = 202, description = "Accepted — settled, or recorded as not this aggregator's to settle"),
+        (status = 401, description = "The signature does not verify", body = crate::openapi::Problem),
+        (status = 500, description = "The dispatch ledger could not be read; retry", body = crate::openapi::Problem),
+    )
+)]
 pub async fn post_vpp_webhook(
     Extension(pool): Extension<PgPool>,
     Extension(deps): Extension<Arc<BillingDeps>>,

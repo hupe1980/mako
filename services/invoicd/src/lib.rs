@@ -47,11 +47,15 @@
 //! overridable by an `INVOICD_`-prefixed environment variable (`__` separates
 //! nested sections, e.g. `INVOICD_DATABASE__URL`). See [`config`].
 //!
-//! At startup `invoicd` calls `PUT /api/v1/subscriptions/invoicd` on `marktd`
-//! to register for `de.mako.process.initiated`. No PID filter is sent: every
-//! fan-out arrives and [`routing::disposition_for`] decides whether it is
-//! checked, refused into `invoic_dlq`, or not an INVOIC. The `PUT` is
-//! idempotent and safe on every restart.
+//! `marktd` delivers `de.mako.process.initiated` to `POST /webhook` through
+//! the webhook endpoint its own configuration names for invoicd; invoicd does
+//! not register itself. No PID filter is applied: every fan-out arrives and
+//! [`routing::disposition_for`] decides whether it is checked, refused into
+//! `invoic_dlq`, or not an INVOIC.
+//!
+//! The events invoicd emits reach the ERP — the endpoint `default`,
+//! `[erp] webhook_url` — and every endpoint registered under
+//! `/api/v1/webhooks/endpoints`; `GET /api/v1/events` reads them as a feed.
 
 #![deny(unsafe_code)]
 #![expect(

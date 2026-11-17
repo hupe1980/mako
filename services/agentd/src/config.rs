@@ -84,7 +84,7 @@ pub struct AgentdConfig {
     /// Use `"env:AGENTD_MCP_API_KEY"` to defer to environment; never log this value.
     pub mcp_api_key: SecretString,
 
-    /// Audit CloudEvent webhook (marktd event_log).
+    /// Audit CloudEvent webhook: an inbound path that fans the event out to subscribers (marktd).
     pub audit_webhook_url: Option<String>,
     /// Secret signing every `de.agent.decision.made` delivery.
     ///

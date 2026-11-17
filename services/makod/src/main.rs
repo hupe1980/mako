@@ -52,6 +52,7 @@
 
 mod api;
 mod core;
+mod format_impact;
 mod orchestrator;
 mod startup;
 mod transport;
@@ -712,16 +713,6 @@ struct Cli {
     #[arg(long, value_name = "TOKEN", env = "MAKOD_MARKTD_API_KEY")]
     marktd_api_key: Option<String>,
 
-    /// makod's own fan-out endpoint as marktd reaches it, e.g.
-    /// `http://makod:8080/webhooks/marktd`.
-    ///
-    /// Required with `--marktd-url`: makod subscribes to marktd's durable
-    /// fan-out for `de.markt.malo.updated` at this address, reads each changed
-    /// record back and keeps the MaLo-Ident cache current; `/health/ready`
-    /// waits for the subscription and a backfill of marktd's MaLo list.
-    #[arg(long, value_name = "URL", env = "MAKOD_MARKTD_WEBHOOK_URL")]
-    marktd_webhook_url: Option<String>,
-
     /// Standard Webhooks secret marktd signs its fan-out deliveries to makod
     /// with. Without it deliveries are accepted unsigned (development).
     #[arg(long, value_name = "SECRET", env = "MAKOD_MARKTD_WEBHOOK_SECRET")]
@@ -844,6 +835,10 @@ struct Cli {
     /// checklist asks.
     #[arg(skip)]
     einrichtung: config::EinrichtungConfig,
+
+    /// `[format_impact]` loaded from `makod.toml`.
+    #[arg(skip)]
+    format_impact: Option<format_impact::FormatImpactConfig>,
 
     /// Subcommand to run instead of the daemon.
     #[command(subcommand)]
@@ -1076,7 +1071,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         as4: &cli.as4,
         policy: &cli.policy,
         marktd_url: cli.marktd_url.as_deref(),
-        marktd_webhook_url: cli.marktd_webhook_url.as_deref(),
         http_enabled: cli.http_addr.is_some(),
         webdienste_signing_key: cli.webdienste_signing_key_pem.is_some(),
         webdienste_signing_cert: cli.webdienste_signing_cert_pem.is_some(),
@@ -1333,20 +1327,19 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
 
     // ── MaLo cache ← marktd fan-out ───────────────────────────────────────────
     //
-    // Subscribes to `de.markt.malo.updated`, backfills the cache from marktd's
-    // MaLo list, and holds `/health/ready` at 503 until both are done.
-    let malo_sync = match (&cli.marktd_url, &cli.marktd_webhook_url) {
-        (Some(url), Some(webhook_url)) => Some(Arc::new(malo_sync::MaloSync::new(
+    // marktd delivers `de.markt.malo.updated` to makod's endpoint in its
+    // `[[subscriptions.endpoints]]`; makod backfills the cache from marktd's
+    // MaLo list and holds `/health/ready` at 503 until that is done.
+    let malo_sync = cli.marktd_url.as_ref().map(|url| {
+        Arc::new(malo_sync::MaloSync::new(
             mako_service::http::default_client(),
             url.clone(),
             SecretString::from(cli.marktd_api_key.clone().unwrap_or_default()),
-            webhook_url.clone(),
             cli.marktd_webhook_secret.clone().map(SecretString::from),
             (*malo_cache).clone(),
             Arc::clone(&mp_id_registry),
-        ))),
-        _ => None,
-    };
+        ))
+    });
 
     // ── Phase 2 ingest dispatcher ─────────────────────────────────────────────
     //
@@ -1532,6 +1525,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                     einrichtung: Arc::clone(&einrichtung_bericht),
                     einrichtung_dienste: einrichtung_dienste.clone(),
                     zertifikate: zertifikate.clone(),
+                    format_impact: cli.format_impact.clone(),
                 },
             )
             .await?,
@@ -2060,6 +2054,9 @@ fn apply_config_file(
     // ── [einrichtung] ─────────────────────────────────────────────────────────
     cli.einrichtung = cfg.einrichtung.unwrap_or_default();
 
+    // ── [format_impact] ───────────────────────────────────────────────────────
+    cli.format_impact = cfg.format_impact;
+
     // ── ERP ───────────────────────────────────────────────────────────────────
     if let Some(erp) = cfg.erp {
         if cli.erp_webhook_url.is_none() {
@@ -2094,9 +2091,6 @@ fn apply_config_file(
                 marktd.api_key_file.as_ref(),
             )?
             .map(|s| s.trim().to_owned());
-        }
-        if cli.marktd_webhook_url.is_none() {
-            cli.marktd_webhook_url = marktd.webhook_url;
         }
         if cli.marktd_webhook_secret.is_none() {
             cli.marktd_webhook_secret = either_inline_or_file(

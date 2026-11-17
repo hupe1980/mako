@@ -14,6 +14,7 @@ mod klaerfall;
 mod mcp_round_trips;
 mod mcp_route_contract;
 mod obs;
+mod openapi_coverage;
 mod pid_contract;
 mod published_config;
 mod request_bodies;

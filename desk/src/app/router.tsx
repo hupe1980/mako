@@ -7,6 +7,20 @@ import {
 } from "@tanstack/react-router";
 import { lazy } from "react";
 
+const ZustellungenView = lazy(() =>
+  import("../views/Zustellungen").then((m) => ({ default: m.ZustellungenView })),
+);
+
+const AnlageView = lazy(() => import("../views/Anlage").then((m) => ({ default: m.AnlageView })));
+
+const ZahlungenView = lazy(() =>
+  import("../views/Zahlungen").then((m) => ({ default: m.ZahlungenView })),
+);
+
+const KlaerfallView = lazy(() =>
+  import("../views/Klaerfall").then((m) => ({ default: m.KlaerfallView })),
+);
+
 const LokationView = lazy(() =>
   import("../views/Lokation").then((m) => ({ default: m.LokationView })),
 );
@@ -134,6 +148,33 @@ const einrichtung = createRoute({
   component: EinrichtungView,
 });
 
+const zustellungenRoute = createRoute({
+  getParentRoute: () => root,
+  path: "/zustellungen",
+  // The view checks the service against the ones it serves.
+  validateSearch: (search: Record<string, unknown>): { dienst?: string } =>
+    typeof search.dienst === "string" && search.dienst ? { dienst: search.dienst } : {},
+  component: ZustellungenView,
+});
+
+const anlage = createRoute({
+  getParentRoute: () => root,
+  path: "/anlage/$trId",
+  component: AnlageView,
+});
+
+const zahlungen = createRoute({
+  getParentRoute: () => root,
+  path: "/zahlungen",
+  component: ZahlungenView,
+});
+
+const klaerfall = createRoute({
+  getParentRoute: () => root,
+  path: "/klaerfall/$id",
+  component: KlaerfallView,
+});
+
 const lokation = createRoute({
   getParentRoute: () => root,
   path: "/lokation/$id",
@@ -199,6 +240,10 @@ const routeTree = root.addChildren(
         gegenpartei,
         gegenparteien,
         lokation,
+        klaerfall,
+        zahlungen,
+        anlage,
+        zustellungenRoute,
         heute,
         prozess,
         kunden,
@@ -217,6 +262,10 @@ const routeTree = root.addChildren(
         gegenpartei,
         gegenparteien,
         lokation,
+        klaerfall,
+        zahlungen,
+        anlage,
+        zustellungenRoute,
         heute,
         prozess,
         kunden,

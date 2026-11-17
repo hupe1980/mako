@@ -9,6 +9,37 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.38.0] — 2026-11-17
+
+### Added
+
+- **Webhooks as a product.** `mako_service::subscriptions` gives every service that emits events endpoint management (`whsec_` secret shown once, rotation with an overlap of up to 168 h), a signed test delivery, a delivery log with replay of one delivery or a time window, and an event feed (`GET /api/v1/events`), with the SSRF check on the resolved address and partner scoping. marktd, vertragd, productd, invoicd, netzbilanzd, billingd, edmd and processd mount it; makod's process events reach subscribers through marktd. In-cluster receivers are config endpoints (`[[subscriptions.endpoints]]`).
+- **API first.** Thirteen of fourteen services serve and commit an OpenAPI 3.1 document (`mako_service::openapi::{serve, assert_committed}`); each Desk and agent read is one function behind a documented `GET` and its MCP tool. The site publishes every document ([HTTP APIs](https://hupe1980.github.io/mako/docs/reference/api/)) and an event catalog with a schema per CloudEvent type. `mako_service::page` gives keyset pages.
+- **Klärfälle that correct themselves.** processd proposes the correcting command where a Freigabe sends the answer and dispatches it in one step („korrigieren & senden") through the Freigabe path and makod's pre-send check; cases can be assigned and resolved with a reason and keep their history; every Freigabe opens an `operator_decision` case; a refusing answer opens a case from the Antwortcode the outbox carries.
+- **Money.** accountingd keeps every bank line no account claims and assigns it in one transaction; a Schlussrechnung Guthaben becomes one payout item due by § 40c Abs. 3 EnWG, cancelled by a Storno; EEG payouts are typed for the Anlage page.
+- **Agent evals.** agentd replays labelled cases without network and scores precision, recall, refusal correctness and injection twins (counterparty free text, e-mail, PDF); `cargo xtask check-eval-cases` keeps personal data out of cases. A refused proposal gets one follow-up run with the refusal.
+- **Der nächste Formatwechsel als Diff.** A Konsultationsfassung loads at runtime as a candidate, never binding; makod reports which archived interchanges it would newly refuse (`GET /api/v1/format-candidates/{fv}/impact`).
+- **Desk.** The Klärfall page, „Zahlungen" (unmatched payments with the proposed account, overdue credits), the Anlage page, „Zustellungen" (endpoints, deliveries, replay, test event); the English catalogue loads only when chosen.
+
+### Changed
+
+- **Breaking:** marktd's own fan-out is replaced by the shared module — `/api/v1/subscriptions*`, `/admin/fanout/*`, `/admin/events`, `manage-fanout` and its tables are gone, and no service registers itself with marktd any more; processd's read-model rebuild pages marktd's event feed and reaches back `[subscriptions] retention_days`.
+- **Breaking:** `event_outbox` gains `seq`, `txid`, `ordering_key` and `fanned_out_at`; services with the module run no `OutboxWorker::new` — the configured ERP URL is the `default` endpoint.
+- **Breaking:** typed REST answers: accountingd's EEG payouts (no IBAN, RFC 3339 instants), einsd's settlement status under a `CHECK`; `OutboxMessage` gains `antwort`; processd's `klaerfaelle` holds one open case per key with `korrektur` replacing `befehl`.
+- processd's decisions honour `Idempotency-Key`; Klärfall dispatch needs `dispatch-case` and `decide-queue` in the Marktrolle owing the answer.
+- A lapsed Antwortfrist no longer counts as a completion.
+
+### Fixed
+
+- The webhook verifiers printed in the ERP integration guide derive the key of a `whsec_` secret as Standard Webhooks does; the guard runs them against an issued secret.
+- An unknown path at accountingd or marktd answers 404, not the MCP gate's 401/403.
+- The seed's Offener Posten, held-invoice and EEG checks follow 0.37's typed answers and overlap constraint, so `just dev --ci` verifies again.
+- The outbox and webhook-subscription workers `LISTEN` on a connection of their own instead of pinning one of the service pool's, so a `[database] pool_size` no larger than the number of listening workers no longer leaves every request and drain waiting out the acquire timeout.
+
+### Security
+
+- `cargo deny`: the unmaintained-crate advisories for chrono, chrono-tz (Arrow/DataFusion under meterstore) and humantime (object_store) are recorded with a VEX statement each; no CVE, and mako's own code uses `time`.
+
 ## [0.37.0] — 2026-11-17
 
 ### Added

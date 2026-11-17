@@ -82,6 +82,18 @@ impl From<MabisZpRecord> for MabisZpResponse {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `GET /api/v1/bilanzierungsgebiete/{eic}/mabis-zp`
+#[utoipa::path(
+    get,
+    path = "/api/v1/bilanzierungsgebiete/{eic}/mabis-zp",
+    tag = "mabis-zp",
+    params(("eic" = String, Path, description = "EIC of the Bilanzierungsgebiet")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_mabis_zp(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -103,6 +115,16 @@ pub async fn get_mabis_zp(
 }
 
 /// `GET /api/v1/mabis-zp` — every assignment for the tenant.
+#[utoipa::path(
+    get,
+    path = "/api/v1/mabis-zp",
+    tag = "mabis-zp",
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_mabis_zp(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -127,6 +149,19 @@ pub async fn list_mabis_zp(
 /// `PUT /api/v1/bilanzierungsgebiete/{eic}/mabis-zp` — upsert the assignment.
 ///
 /// Requires the `write-mabis-zp` action in the Cedar policy. Idempotent.
+#[utoipa::path(
+    put,
+    path = "/api/v1/bilanzierungsgebiete/{eic}/mabis-zp",
+    tag = "mabis-zp",
+    params(("eic" = String, Path, description = "EIC of the Bilanzierungsgebiet")),
+    request_body(content = serde_json::Value, description = "`PutMabisZpBody`"),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_mabis_zp(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

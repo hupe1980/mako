@@ -2,16 +2,12 @@
 
 use std::sync::Arc;
 
-use axum::{
-    Extension, Router,
-    routing::{get, post, put},
-};
+use axum::{Extension, Router, routing::get};
 use mako_service::{Daemon, ServiceContext};
 
 use crate::{
     clients::{PortalClients, UpstreamClient},
     config::PortaldConfig,
-    handlers,
 };
 
 /// The `portald` daemon — stateless, so no pool and no migrations.
@@ -103,83 +99,20 @@ impl Daemon for Portald {
 
 /// The portal routes.
 ///
-/// Every one of them but `/nachrechnen/{token}` is customer-scoped and
-/// authorises through [`crate::auth::authorize`]; the infra routes (`/health/*`, `/metrics`) are
-/// the runner's and are not mounted here.
+/// Every `/api/v1` route is customer-scoped, authorises through
+/// [`crate::auth::authorize`] and is mounted by [`crate::openapi::api_router`],
+/// which also yields the document served at `GET /api/v1/openapi.json`.
+///
+/// `GET /nachrechnen/{token}` is mounted here as a plain route, outside that
+/// document: it is a public HTML page for a person reading a printed invoice,
+/// not a JSON API, and the token in its path is its only credential (see
+/// [`crate::nachrechnen`]). The infra routes (`/health/*`, `/metrics`) are the
+/// runner's and are not mounted here.
 pub fn router() -> Router {
-    Router::new()
-        // ── Read model ───────────────────────────────────────────────────
-        .route(
-            "/api/v1/portal/{malo_id}/dashboard",
-            get(handlers::get_dashboard),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/lastgang",
-            get(handlers::get_lastgang),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/invoices",
-            get(handlers::get_invoices),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/dokumente",
-            get(handlers::get_dokumente),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/dokumente/{document_id}",
-            get(handlers::get_dokument),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/invoices/{record_id}/download",
-            get(handlers::get_portal_invoice_download),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/balance",
-            get(handlers::get_balance),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/kontoauszug",
-            get(handlers::get_kontoauszug),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/vorauszahlung",
-            get(handlers::get_portal_vorauszahlung),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/eeg",
-            get(handlers::get_eeg_status),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/versorgung",
-            get(handlers::get_versorgung),
-        )
-        // ── Contract + self-service writes (§ 41 EnWG customer rights) ───
-        .route(
-            "/api/v1/portal/{malo_id}/vertrag",
-            get(handlers::get_portal_vertrag),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/kuendigungsfrist",
-            get(handlers::get_portal_kuendigungsfrist),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/tarifwechsel",
-            post(handlers::post_portal_tarifwechsel),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/kuendigen",
-            post(handlers::post_portal_kuendigen),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/kontakt",
-            get(handlers::get_portal_kontakt).put(handlers::put_portal_kontakt),
-        )
-        .route(
-            "/api/v1/portal/{malo_id}/sepa",
-            put(handlers::put_portal_sepa),
-        )
-        // ── Public, token-addressed: the one route without a customer session
-        // (see `crate::nachrechnen`).
+    let (api, doc) = crate::openapi::api_router();
+    api.merge(mako_service::openapi::serve(doc))
+        // ── Public, token-addressed HTML: the one route without a customer
+        // session and outside the API document (see `crate::nachrechnen`).
         .route("/nachrechnen/{token}", get(crate::nachrechnen::get_page))
         .layer(Extension(std::sync::Arc::new(
             crate::nachrechnen::Limiter::default(),

@@ -92,7 +92,6 @@ start() {
   local s=$1 var
   var="$(echo "$s" | tr 'a-z-' 'A-Z_')"
   prefixed "$s" env "${var}_CONFIG=$dir/$s.toml" \
-    MARKTD_WEBHOOK__ALLOW_LOOPBACK_SUBSCRIBERS=true \
     "EDMD_ARCHIVE__STORAGE_URI=file://$PWD/deploy/dev/.data/edmd-warehouse" \
     "$bin/$s"
 }

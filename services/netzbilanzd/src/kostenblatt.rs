@@ -317,6 +317,20 @@ fn decimal_from_json(v: &serde_json::Value) -> Option<Decimal> {
 ///
 /// `422` when `kosten_json` is not a `rubo4e::current::Kosten` — refused as the
 /// body deserialises, by `Bo4e<Kosten>`, with the gate's own `code`/`paths`.
+#[utoipa::path(
+    put,
+    path = "/api/v1/redispatch/kostenblatt/{activation_id}",
+    tag = "redispatch",
+    params(
+        ("activation_id" = String, Path, description = "The Redispatch activation"),
+    ),
+    request_body(content = serde_json::Value, description = "`UpsertKostenblattRequest`: the cost sheet"),
+    responses(
+        (status = 200, description = "Stored", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The cost sheet is refused", body = ApiError),
+    )
+)]
 pub async fn put_kostenblatt(
     claims: Claims,
     Extension(cedar): Authz,
@@ -346,6 +360,19 @@ pub async fn put_kostenblatt(
 /// # Errors
 ///
 /// `404` when the activation has no records for this tenant.
+#[utoipa::path(
+    get,
+    path = "/api/v1/redispatch/kostenblatt/{activation_id}",
+    tag = "redispatch",
+    params(
+        ("activation_id" = String, Path, description = "The Redispatch activation"),
+    ),
+    responses(
+        (status = 200, description = "The cost sheet", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "No such cost sheet", body = ApiError),
+    )
+)]
 pub async fn get_kostenblatt(
     claims: Claims,
     Extension(cedar): Authz,
@@ -385,6 +412,20 @@ pub struct KostenblattListQuery {
 /// # Errors
 ///
 /// `400` for a month outside 1–12.
+#[utoipa::path(
+    get,
+    path = "/api/v1/redispatch/kostenblatt",
+    tag = "redispatch",
+    params(
+        ("year" = i16, Query, description = "Year"),
+        ("month" = i16, Query, description = "Month 1–12"),
+        ("status" = Option<String>, Query, description = "Status"),
+    ),
+    responses(
+        (status = 200, description = "The month's Kostenblätter", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn list_kostenblatt(
     claims: Claims,
     Extension(cedar): Authz,
@@ -410,6 +451,19 @@ pub async fn list_kostenblatt(
 /// # Errors
 ///
 /// `400` for a month outside 1–12.
+#[utoipa::path(
+    get,
+    path = "/api/v1/redispatch/kostenblatt/gaps/{year}/{month}",
+    tag = "redispatch",
+    params(
+        ("year" = i16, Path, description = "Year"),
+        ("month" = i16, Path, description = "Month 1–12"),
+    ),
+    responses(
+        (status = 200, description = "Activations registered but never quantified", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn get_kostenblatt_gaps(
     claims: Claims,
     Extension(cedar): Authz,
@@ -441,6 +495,20 @@ pub async fn get_kostenblatt_gaps(
 /// # Errors
 ///
 /// `400` for a month outside 1–12.
+#[utoipa::path(
+    post,
+    path = "/api/v1/redispatch/kostenblatt/submit/{year}/{month}",
+    tag = "redispatch",
+    params(
+        ("year" = i16, Path, description = "Year"),
+        ("month" = i16, Path, description = "Month 1–12"),
+    ),
+    responses(
+        (status = 200, description = "Submitted", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The month is incomplete", body = ApiError),
+    )
+)]
 pub async fn post_submit_kostenblatt(
     claims: Claims,
     Extension(cedar): Authz,
@@ -527,6 +595,20 @@ pub struct ComputeRequest {
 /// - `404` when no energy data exists and no override was supplied.
 /// - `422` when the resolved quantity is not positive, or `edmd` is not
 ///   configured and no override was supplied.
+#[utoipa::path(
+    post,
+    path = "/api/v1/redispatch/kostenblatt/{activation_id}/compute",
+    tag = "redispatch",
+    params(
+        ("activation_id" = String, Path, description = "The Redispatch activation"),
+    ),
+    request_body(content = serde_json::Value, description = "`ComputeRequest`: the Ausfallarbeit inputs"),
+    responses(
+        (status = 201, description = "The computed cost sheet", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The inputs are refused", body = ApiError),
+    )
+)]
 pub async fn post_compute(
     claims: Claims,
     Extension(cedar): Authz,
@@ -647,32 +729,30 @@ pub async fn post_compute(
         .await
         .map_err(ApiError::Internal)?;
 
-    if cfg.erp_webhook_url.is_some() {
-        let ce = mako_service::CloudEvent::new(
-            mako_service::source("netzbilanzd", &cfg.tenant),
-            mako_events::netzbilanz::KOSTENBLATT_COMPUTED,
-            String::new(),
-            serde_json::json!({
-                "record_id": record_id,
-                "activation_id": activation_id,
-                "tr_id": req.tr_id,
-                "malo_id": req.malo_id,
-                "period_year": req.period_year,
-                "period_month": req.period_month,
-                "dispatch_kwh": dispatch_kwh.to_string(),
-                "einsatzkosten_eur": einsatzkosten.to_string(),
-                "dispatch_source": source,
-                // How much of the activation window the series spanned. A
-                // figure summed from half a window is short by half, and the
-                // kWh alone cannot say so.
-                "coverage_pct": coverage_pct.map(|p| p.to_string()),
-            }),
-        )
-        .without_subject();
-        mako_service::outbox::enqueue(&mut tx, &ce)
-            .await
-            .map_err(ApiError::from)?;
-    }
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("netzbilanzd", &cfg.tenant),
+        mako_events::netzbilanz::KOSTENBLATT_COMPUTED,
+        String::new(),
+        serde_json::json!({
+            "record_id": record_id,
+            "activation_id": activation_id,
+            "tr_id": req.tr_id,
+            "malo_id": req.malo_id,
+            "period_year": req.period_year,
+            "period_month": req.period_month,
+            "dispatch_kwh": dispatch_kwh.to_string(),
+            "einsatzkosten_eur": einsatzkosten.to_string(),
+            "dispatch_source": source,
+            // How much of the activation window the series spanned. A
+            // figure summed from half a window is short by half, and the
+            // kWh alone cannot say so.
+            "coverage_pct": coverage_pct.map(|p| p.to_string()),
+        }),
+    )
+    .without_subject();
+    mako_service::outbox::enqueue(&mut tx, &ce)
+        .await
+        .map_err(ApiError::from)?;
     tx.commit().await.map_err(ApiError::from)?;
 
     Ok((
@@ -772,6 +852,20 @@ pub struct VerguetungRequest {
 ///   when the Vergütungsart's revenue basis is missing, or when the Lastgang
 ///   spans only part of the activation window.
 /// - `404` when the Duldungsfall has no Lastgang to settle against.
+#[utoipa::path(
+    post,
+    path = "/api/v1/redispatch/verguetung/{activation_id}/compute",
+    tag = "redispatch",
+    params(
+        ("activation_id" = String, Path, description = "The Redispatch activation"),
+    ),
+    request_body(content = serde_json::Value, description = "`VerguetungRequest`: the Vergütung inputs"),
+    responses(
+        (status = 200, description = "The § 13a Abs. 2 EnWG Vergütung", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The inputs are refused", body = ApiError),
+    )
+)]
 pub async fn post_verguetung(
     claims: Claims,
     Extension(cedar): Authz,

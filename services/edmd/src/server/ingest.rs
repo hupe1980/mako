@@ -127,6 +127,20 @@ pub struct DirectPushRequest {
 /// Gap detection, consecutive-zero analysis, and 3-sigma outlier detection run at
 /// ingest time.  If `has_warnings = true`, `edmd` emits `de.messwert.reading.quality.warning`
 /// to the ERP webhook so `agentd` can investigate.
+#[utoipa::path(
+    post,
+    path = "/api/v1/meter-reads/rlm/{malo_id}",
+    tag = "ingest",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `DirectPushRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+    )
+)]
 pub async fn post_direct_reads_rlm(
     State(state): State<HandlerState>,
     claims: Claims,
@@ -155,6 +169,20 @@ pub async fn post_direct_reads_rlm(
 ///
 /// iMSys / SMGW direct push for **Gas RLM** customers.
 /// Accepts m³ readings and converts to kWh_Hs using Brennwert × Zustandszahl.
+#[utoipa::path(
+    post,
+    path = "/api/v1/meter-reads/gas/{malo_id}",
+    tag = "ingest",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `DirectPushRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+    )
+)]
 pub async fn post_direct_reads_gas(
     State(state): State<HandlerState>,
     claims: Claims,
@@ -888,6 +916,20 @@ mod ingest_contract_tests {
 ///   "correction_ids": ["<uuid of the correction record>"]
 /// }
 /// ```
+#[utoipa::path(
+    post,
+    path = "/api/v1/corrections/{malo_id}",
+    tag = "messwerte",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `CorrectionRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+    )
+)]
 pub async fn post_corrections(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1055,6 +1097,22 @@ pub struct BulkReadEntry {
 /// nothing behind for the caller to reconcile.
 ///
 /// Returns a summary of stored intervals and any validation issues.
+#[utoipa::path(
+    post,
+    path = "/api/v1/meter-reads/{malo_id}/bulk",
+    tag = "ingest",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `BulkReadRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 202, description = "Accepted", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+    )
+)]
 pub async fn post_bulk_reads(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

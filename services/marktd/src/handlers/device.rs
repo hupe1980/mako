@@ -147,6 +147,18 @@ fn default_bo4e_version() -> String {
 // ── SteuerbareRessource handlers (B4b) ───────────────────────────────────────
 
 /// `GET /api/v1/steuerbare-ressourcen/{sr_id}`
+#[utoipa::path(
+    get,
+    path = "/api/v1/steuerbare-ressourcen/{sr_id}",
+    tag = "device",
+    params(("sr_id" = String, Path, description = "SteuerbareRessource-ID")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_steuerbare_ressource(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -169,6 +181,19 @@ pub async fn get_steuerbare_ressource(
 }
 
 /// `PUT /api/v1/steuerbare-ressourcen/{sr_id}`
+#[utoipa::path(
+    put,
+    path = "/api/v1/steuerbare-ressourcen/{sr_id}",
+    tag = "device",
+    params(("sr_id" = String, Path, description = "SteuerbareRessource-ID")),
+    request_body = UpsertSrRequest,
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_steuerbare_ressource(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -244,6 +269,18 @@ pub async fn put_steuerbare_ressource(
 /// `rubo4e::current::Konfigurationsprodukt`.  Stored JSONB that no longer
 /// matches the schema (e.g. from a legacy manual write) is silently filtered
 /// out and reported in the `schema_drift` counter.
+#[utoipa::path(
+    get,
+    path = "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte",
+    tag = "device",
+    params(("sr_id" = String, Path, description = "SteuerbareRessource-ID")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_konfigurationsprodukte(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -334,6 +371,19 @@ pub struct PutKonfigurationsprodukteRequest {
 /// on every successful write so ERP subscribers and `processd` see the change.
 ///
 /// Returns `204 No Content` on success.
+#[utoipa::path(
+    put,
+    path = "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte",
+    tag = "device",
+    params(("sr_id" = String, Path, description = "SteuerbareRessource-ID")),
+    request_body = PutKonfigurationsprodukteRequest,
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_konfigurationsprodukte(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
@@ -440,6 +490,17 @@ pub async fn put_konfigurationsprodukte(
 ///
 /// Returns `204 No Content` on success (even when the `produktcode` was not
 /// in the list — idempotent), `404` when the SR is unknown.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}",
+    tag = "device",
+    params(("sr_id" = String, Path, description = "SteuerbareRessource-ID"), ("produktcode" = String, Path, description = "Konfigurationsprodukt code")),
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+    )
+)]
 pub async fn delete_konfigurationsprodukt(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
@@ -516,6 +577,18 @@ pub async fn delete_konfigurationsprodukt(
 }
 
 /// `GET /api/v1/melos/{melo_id}/zaehler`
+#[utoipa::path(
+    get,
+    path = "/api/v1/melos/{melo_id}/zaehler",
+    tag = "device",
+    params(("melo_id" = String, Path, description = "33-character Messlokations-ID")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn list_zaehler(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -562,6 +635,19 @@ pub async fn list_zaehler(
 }
 
 /// `PUT /api/v1/zaehler/{zaehler_id}`
+#[utoipa::path(
+    put,
+    path = "/api/v1/zaehler/{zaehler_id}",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer")),
+    request_body = UpsertZaehlerRequest,
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_zaehler(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -609,6 +695,18 @@ pub async fn put_zaehler(
 ///
 /// Returns `404 Not Found` if the Zaehler does not exist or has no `zaehlwerke`
 /// array in its payload.
+#[utoipa::path(
+    get,
+    path = "/api/v1/zaehler/{zaehler_id}/zaehlwerke",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_zaehlwerke(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -658,6 +756,18 @@ pub async fn get_zaehlwerke(
 }
 
 /// `GET /api/v1/zaehler/{zaehler_id}/geraete`
+#[utoipa::path(
+    get,
+    path = "/api/v1/zaehler/{zaehler_id}/geraete",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn list_geraete(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -704,6 +814,19 @@ pub async fn list_geraete(
 }
 
 /// `PUT /api/v1/geraete/{geraet_id}`
+#[utoipa::path(
+    put,
+    path = "/api/v1/geraete/{geraet_id}",
+    tag = "device",
+    params(("geraet_id" = String, Path, description = "Gerätenummer")),
+    request_body = UpsertGeraetRequest,
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_geraet(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -795,6 +918,18 @@ pub struct KonfigurationenEntry {
 /// Unlike `GET /api/v1/zaehler/{zaehler_id}/geraete` (list), this endpoint
 /// returns a `404 Not Found` if the device doesn't exist and is suitable for
 /// exact-identity lookup by ERP systems after WiM Geräteübernahme (PIDs 17001, 17002, 17009).
+#[utoipa::path(
+    get,
+    path = "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer"), ("geraet_id" = String, Path, description = "Gerätenummer")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_geraet(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -848,6 +983,18 @@ pub async fn get_geraet(
 ///   { "parameter": "CLS_FAEHIG",       "wert": "true",  "updated_at": "2026-07-18T08:00:00Z", "notiz": null }
 /// ]
 /// ```
+#[utoipa::path(
+    get,
+    path = "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer"), ("geraet_id" = String, Path, description = "Gerätenummer")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_geraet_konfigurationen(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -886,6 +1033,19 @@ pub async fn get_geraet_konfigurationen(
 /// tiered `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before
 /// expiry (BSI TR-03109-4 §6.3), once per tier per certificate; it does not read
 /// these entries.
+#[utoipa::path(
+    put,
+    path = "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer"), ("geraet_id" = String, Path, description = "Gerätenummer")),
+    request_body = PutKonfigurationenRequest,
+    responses(
+        (status = 204, description = "Written"),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_geraet_konfigurationen(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
@@ -1143,6 +1303,19 @@ use mako_markt::repository::{
 /// `valid_from` identify — one per tariff zone (HT/NT/EINZEL). Answers `200`
 /// with the register as stored, whose `id` the season windows are written
 /// under.
+#[utoipa::path(
+    put,
+    path = "/api/v1/zaehler/{zaehler_id}/register",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer")),
+    request_body(content = serde_json::Value, description = "`ZaehlzeitRegisterUpsert`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1166,6 +1339,18 @@ pub async fn put_zaehler_register(
 ///
 /// List all `ZaehlzeitRegister` records for a Zähler.
 /// Returns HT + NT registers for iMSys TOU meters; EINZEL for single-tariff meters.
+#[utoipa::path(
+    get,
+    path = "/api/v1/zaehler/{zaehler_id}/register",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn list_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1191,6 +1376,19 @@ pub async fn list_zaehler_register(
 /// identify — e.g. "HT applies Mon–Fri 07:00–22:00 in WINTER". A register the
 /// caller's tenant does not hold is `404`. Answers `200` with the window as
 /// stored.
+#[utoipa::path(
+    put,
+    path = "/api/v1/zaehler-register/{register_id}/saisons",
+    tag = "device",
+    params(("register_id" = String, Path, description = "Identifier of the Zählwerk/register")),
+    request_body(content = serde_json::Value, description = "`ZaehlzeitSaisonUpsert`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The request was refused; `code` names the rule", body = ApiError),
+    )
+)]
 pub async fn put_zaehler_saison(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1213,6 +1411,18 @@ pub async fn put_zaehler_saison(
 /// `GET /api/v1/zaehler-register/{register_id}/saisons`
 ///
 /// List all `ZaehlzeitSaison` windows for a register.
+#[utoipa::path(
+    get,
+    path = "/api/v1/zaehler-register/{register_id}/saisons",
+    tag = "device",
+    params(("register_id" = String, Path, description = "Identifier of the Zählwerk/register")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn list_zaehler_saisons(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1278,6 +1488,18 @@ pub async fn list_zaehler_saisons(
 /// controllable loads at specific switching times.
 /// This endpoint exposes those definitions in BO4E form for downstream ERP + portal
 /// consumption.
+#[utoipa::path(
+    get,
+    path = "/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_zaehlzeitdefinitionen(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1400,7 +1622,8 @@ pub async fn get_zaehlzeitdefinitionen(
 }
 
 /// Query parameters for `GET /api/v1/zaehler/{id}/zaehlzeitdefinitionen`.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ZaehlzeitdefinitionQuery {
     /// When `true`, only currently valid registers are included
     /// (`valid_to IS NULL OR valid_to >= today`).  Default: `false` (all registers).
@@ -1465,6 +1688,18 @@ fn wochentage_key_to_wiederholungstyp(key: &str) -> rubo4e::current::Wiederholun
 /// window. An instant no Zählzeit window covers is refused with `422`:
 /// answering `EINZEL` there would price a gap in the master data at a rate
 /// nobody configured. So is an instant two windows of different zones hold.
+#[utoipa::path(
+    get,
+    path = "/api/v1/zaehler/{zaehler_id}/tariff-zone",
+    tag = "device",
+    params(("zaehler_id" = String, Path, description = "Zählernummer")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_tariff_zone(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1506,7 +1741,8 @@ pub async fn get_tariff_zone(
     })))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct TariffZoneQuery {
     /// ISO 8601 local datetime, e.g. `2025-07-10T14:30:00`.
     pub datetime: Option<String>,
@@ -1621,6 +1857,18 @@ fn parse_bilanzierungsmethode(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/melos/{melo_id}/sharing-eligibility",
+    tag = "device",
+    params(("melo_id" = String, Path, description = "33-character Messlokations-ID")),
+    responses(
+        (status = 200, description = "OK", body = SharingEligibilityResponse),
+        (status = 401, description = "No valid credentials", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 404, description = "Not found", body = ApiError),
+    )
+)]
 pub async fn get_sharing_eligibility(
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1746,7 +1994,7 @@ async fn enqueue_and_commit(
     mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
     evt: &mako_markt::cloudevents::MarktEvent,
 ) -> anyhow::Result<()> {
-    crate::outbox::enqueue(&mut *tx, evt).await?;
+    crate::outbox::enqueue(&mut tx, evt).await?;
     tx.commit().await?;
     Ok(())
 }

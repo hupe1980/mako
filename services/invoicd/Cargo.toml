@@ -44,11 +44,13 @@ schemars           = { workspace = true }
 secrecy            = "0.10"
 reqwest            = { workspace = true }
 sqlx               = { workspace = true }
+utoipa             = { workspace = true }
+utoipa-axum        = { workspace = true }
 
 [dev-dependencies]
 mako-service = { workspace = true, features = ["testing"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
-
+tower = { workspace = true }
 [lints]
 workspace = true

@@ -11,10 +11,13 @@
 //! provisioned via `--auth-key NAME=TOKEN`. The health probes under `/health`
 //! are always unauthenticated.
 
+use std::sync::Arc;
+
 use utoipa::{
     Modify, OpenApi,
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
 };
+use utoipa_axum::router::OpenApiRouter;
 
 /// Security scheme modifier — registers the `bearer_token` HTTP Bearer scheme.
 struct SecurityAddon;
@@ -51,10 +54,10 @@ administrative APIs for MaLo cache and partner directory management.",
         license(name = "MIT OR Apache-2.0"),
         contact(name = "EDI-Energy-RS", url = "https://github.com/hupe1980/edi-energy-rs")
     ),
+    // The `/api/v1` operations enter through `OpenApiRouter`'s `routes!`
+    // (`startup::servers::serve_http`); the paths below are makod's other
+    // ports and the operator routes outside `/api/v1`.
     paths(
-        // ERP command gateway
-        crate::commands_api::handle_command,
-        crate::commands_api::probe::handle_probe,
         // EDIFACT ingest
         crate::edifact_api::ingest_edifact,
         // MaLo admin
@@ -107,62 +110,33 @@ administrative APIs for MaLo cache and partner directory management.",
     tags(
         (name = "commands",  description = "ERP command gateway — submit MaKo process commands"),
         (name = "edifact",   description = "Raw EDIFACT interchange ingestion"),
-        (name = "admin",     description = "MaLo cache and partner directory administration"),
+        (name = "admin",     description = "MaLo cache and partner directory administration, the policy report"),
+        (name = "invoic",    description = "The BO4E Rechnung an inbound INVOIC carried"),
+        (name = "format-candidates", description = "Which of the operator's own messages a candidate Formatversion would refuse"),
         (name = "health",    description = "Liveness and readiness probes"),
     )
 )]
 pub struct ApiDoc;
 
-/// Mounts `GET /api/v1/openapi.json`, the OpenAPI 3.1 document built once.
-pub fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
-    let doc = ApiDoc::openapi();
-    axum::Router::new().route(
-        "/api/v1/openapi.json",
-        axum::routing::get(move || {
-            let doc = doc.clone();
-            async move { axum::Json(doc) }
-        }),
-    )
+/// The document's frame: `info`, the security scheme, the tags, and the
+/// operations outside `/api/v1`. [`api_router`] adds every `/api/v1` operation.
+#[must_use]
+pub fn document() -> utoipa::openapi::OpenApi {
+    ApiDoc::openapi()
 }
 
-#[cfg(test)]
-mod tests {
-    use axum::body::Body;
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
-
-    /// The OpenAPI document is served at the platform-wide path, and no
-    /// browser UI is mounted: a bundled Swagger UI would fetch and unpack an
-    /// unverified archive at build time, so the service serves the document alone.
-    #[tokio::test]
-    async fn the_openapi_document_is_served_and_no_ui_is_mounted() {
-        let app: axum::Router = super::router();
-        let res = app
-            .clone()
-            .oneshot(
-                axum::http::Request::get("/api/v1/openapi.json")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(res.status(), axum::http::StatusCode::OK);
-        let body = res.into_body().collect().await.unwrap().to_bytes();
-        let doc: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(
-            doc["openapi"]
-                .as_str()
-                .is_some_and(|v| v.starts_with("3.1")),
-            "{doc}"
-        );
-        let ui = app
-            .oneshot(
-                axum::http::Request::get("/api/v1/docs/")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(ui.status(), axum::http::StatusCode::NOT_FOUND);
-    }
+/// makod's `/api/v1` routes on the REST port, each with its document entry:
+/// `split_for_parts` gives the router and the document
+/// `GET /api/v1/openapi.json` serves, and `services/makod/openapi.json` commits.
+pub fn api_router(
+    commands: Arc<crate::commands_api::CommandsApiState>,
+    invoic: Arc<crate::api::invoic_api::InvoicApiState>,
+    einrichtung: Arc<crate::api::einrichtung_api::EinrichtungState>,
+    format_impact: Arc<crate::api::format_impact_api::FormatImpactApiState>,
+) -> OpenApiRouter {
+    OpenApiRouter::with_openapi(document())
+        .merge(crate::commands_api::routes(commands))
+        .merge(crate::api::invoic_api::routes(invoic))
+        .merge(crate::api::einrichtung_api::api_routes(einrichtung))
+        .merge(crate::api::format_impact_api::routes(format_impact))
 }

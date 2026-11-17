@@ -7,9 +7,7 @@ import { call, type Service, ServiceUnavailable } from "../data/mcp";
 import { formatCount } from "../format/count";
 import { formatBerlinTime } from "../format/date";
 import { useT } from "../i18n";
-
-/** The Lieferant's Anmeldungen: Strom (verbrauchend, erzeugend) and Gas. */
-export const ANMELDUNG_PIDS = [55001, 55077, 44001];
+import { ANMELDUNG_PIDS } from "../inbox/anmeldung";
 
 /** One phrase of the line, and where it leads — a list on this page or another view. */
 function Zeile({

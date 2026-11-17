@@ -438,6 +438,17 @@ fn interval_count(req: &AusfallarbeitComputeRequest) -> usize {
 /// - `422` when the variant is not the one `BilAReM` Kap. 3.2.1 / 3.3 assigns
 ///   the TR, when its Wetterdaten basis misses the Kap.-3.2.1 Frist, or when
 ///   its inputs do not describe a computable Ausfallarbeit.
+#[utoipa::path(
+    post,
+    path = "/api/v1/redispatch/ausfallarbeit/compute",
+    tag = "redispatch",
+    request_body(content = serde_json::Value, description = "`AusfallarbeitComputeRequest`"),
+    responses(
+        (status = 200, description = "The Ausfallarbeit", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The inputs are refused", body = ApiError),
+    )
+)]
 pub async fn post_ausfallarbeit_compute(
     claims: Claims,
     Extension(cedar): Authz,
@@ -471,6 +482,17 @@ pub async fn post_ausfallarbeit_compute(
 ///
 /// - `400` when no TechnischeRessource is named.
 /// - `422` when the Kap.-3.4 cap cannot be applied to the given series.
+#[utoipa::path(
+    post,
+    path = "/api/v1/redispatch/ausfallarbeit/ueberbauung",
+    tag = "redispatch",
+    request_body(content = serde_json::Value, description = "`UeberbauungRequest`"),
+    responses(
+        (status = 200, description = "The Überbauung split", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The inputs are refused", body = ApiError),
+    )
+)]
 pub async fn post_ausfallarbeit_ueberbauung(
     claims: Claims,
     Extension(cedar): Authz,
@@ -545,6 +567,17 @@ pub struct KfBinResponse {
 ///
 /// `422` when `KF_V` falls outside `]0;1[`, or when the bin is unusable for a
 /// reason the Ersatzwert order does not cover.
+#[utoipa::path(
+    post,
+    path = "/api/v1/redispatch/ausfallarbeit/kf-bin",
+    tag = "redispatch",
+    request_body(content = serde_json::Value, description = "`KfBinRequest`"),
+    responses(
+        (status = 200, description = "The binned Korrekturfaktor", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The inputs are refused", body = ApiError),
+    )
+)]
 pub async fn post_ausfallarbeit_kf_bin(
     claims: Claims,
     Extension(cedar): Authz,
@@ -605,6 +638,17 @@ pub struct MaloSplitResponse {
 ///
 /// - `400` when no TechnischeRessource capacity is given.
 /// - `422` when the installed capacities sum to zero or less.
+#[utoipa::path(
+    post,
+    path = "/api/v1/redispatch/ausfallarbeit/malo-split",
+    tag = "redispatch",
+    request_body(content = serde_json::Value, description = "`MaloSplitRequest`"),
+    responses(
+        (status = 200, description = "The split per MaLo", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The inputs are refused", body = ApiError),
+    )
+)]
 pub async fn post_ausfallarbeit_malo_split(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1163,6 +1207,17 @@ pub struct VergleichstagResponse {
 /// - `400` when no candidates are given, or more than the per-request cap.
 /// - `422` when no day qualifies, or when the admitted quarter-hours carry no
 ///   irradiation at all — `G_VZ` would be zero.
+#[utoipa::path(
+    post,
+    path = "/api/v1/redispatch/ausfallarbeit/vergleichstag",
+    tag = "redispatch",
+    request_body(content = serde_json::Value, description = "`VergleichstagRequest`"),
+    responses(
+        (status = 200, description = "The Vergleichstag", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The inputs are refused", body = ApiError),
+    )
+)]
 pub async fn post_ausfallarbeit_vergleichstag(
     claims: Claims,
     Extension(cedar): Authz,
@@ -1211,6 +1266,17 @@ pub async fn post_ausfallarbeit_vergleichstag(
 /// - `422` when no admissible run of four exists on either side — the operator
 ///   then falls back to the vereinfachte Spitzabrechnung or the Pauschale, which
 ///   is a decision rather than a computation.
+#[utoipa::path(
+    post,
+    path = "/api/v1/redispatch/ausfallarbeit/vergleichszeitraum",
+    tag = "redispatch",
+    request_body(content = serde_json::Value, description = "`VergleichszeitraumRequest`"),
+    responses(
+        (status = 200, description = "The Vergleichszeitraum", body = serde_json::Value),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "The inputs are refused", body = ApiError),
+    )
+)]
 pub async fn post_ausfallarbeit_vergleichszeitraum(
     claims: Claims,
     Extension(cedar): Authz,

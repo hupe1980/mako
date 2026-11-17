@@ -11,7 +11,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{get, post},
 };
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::{Claims, OidcVerifier};
@@ -27,6 +27,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::domain::{
     BillingPeriodQuery, IngestionSource, MeterRead, QualityFlag, Sparte as EdmSparte,
@@ -35,10 +36,6 @@ use crate::domain::{
 };
 use crate::{
     handler::{HandlerState, handle_webhook},
-    smgw::{
-        get_smgw_compliance, get_smgw_session, list_smgw_sessions, post_smgw_compliance_scan,
-        put_smgw_session,
-    },
     store::{MeterStoreTimeSeriesRepository, MeterStoreTyp2Repository, build_stores},
 };
 
@@ -85,32 +82,46 @@ pub use zsg::*;
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-pub fn router(state: HandlerState) -> Router {
+/// The domain router: `/webhook`, edmd's own gauges, and every documented
+/// `/api/v1` route ([`crate::api::router`]).
+pub fn router(
+    state: HandlerState,
+    subscriptions: &mako_service::subscriptions::Subscriptions,
+) -> Router {
     Router::new()
         .route("/webhook", post(handle_webhook))
-        .route("/api/v1/deliveries/{malo_id}", get(get_deliveries))
-        .route(
-            "/api/v1/imbalance/{malo_id}/{year}/{month}",
-            get(get_imbalance),
-        )
-        .route("/api/v1/billing-period/{malo_id}", get(get_billing_period))
+        // `/health/live`, `/health/ready` and the generic `/metrics` are the
+        // runner's (`mako_service::run`), which probes the pool for real. This
+        // is edmd's own domain gauge, mounted beside them.
+        .route("/edmd/metrics", get(metrics))
+        // Every `/api/v1` route and `/api/v1/openapi.json` (`crate::api`).
+        .merge(crate::api::router(subscriptions))
+        .with_state(state)
+}
+
+/// The `/api/v1` routes of this module, each mounted with its document entry.
+pub(crate) fn api_routes() -> OpenApiRouter<HandlerState> {
+    OpenApiRouter::new()
+        .routes(routes!(get_deliveries))
+        .routes(routes!(get_imbalance))
+        .routes(routes!(get_billing_period))
         // Collection endpoint for netzbilanzd MaLo discovery.
         // netzbilanzd calls: GET /api/v1/billing-periods?from=YYYY-MM-DD&to=YYYY-MM-DD&tenant=...
-        .route("/api/v1/billing-periods", get(list_billing_periods))
-        .route("/api/v1/lastgang/{malo_id}", get(get_lastgang))
+        .routes(routes!(list_billing_periods))
+        .routes(routes!(get_lastgang))
         // The canonical projected series, in one direction, through
         // `domain::register`. `/lastgang` is the BO4E export and returns one
         // object per register; folding that back into one series *is* the
         // projection, so it is served made rather than left to each consumer.
-        .route("/api/v1/energy/{malo_id}", get(lastgang::get_energy_series))
+        .routes(routes!(lastgang::get_energy_series))
         // ── Zählerstandsgang (BK6-24-174 „Datenübermittlung ZSG") ─────────────
         // What an iMSys actually measures (§ 2 Satz 1 Nr. 27 MsbG). The
         // differencing into a Lastgang is the MSB's job, and edmd is the MSB.
-        .route(
-            "/api/v1/zaehlerstandsgang/{malo_id}",
-            post(zsg::post_zaehlerstandsgang).get(zsg::get_zaehlerstandsgang),
-        )
-        .route("/api/v1/zeitreihe/{malo_id}", get(get_zeitreihe))
+        .routes(routes!(
+            zsg::post_zaehlerstandsgang,
+            zsg::get_zaehlerstandsgang
+        ))
+        .routes(routes!(get_zeitreihe))
         // ESA "Werte nach Typ 2" — a deliberately separate read path from the
         // billing endpoints above. It reads `esa_typ2_reads` only, never
         // `meter_reads`, so Typ-2 data is unreachable from any billing query.
@@ -119,158 +130,81 @@ pub fn router(state: HandlerState) -> Router {
         // from the iMS over SM-PKI and never touch market communication, so
         // there is no MSCONS ingest to carry them. Two of the seven
         // Pflichtprodukte are 4.6.2 products.
-        .route(
-            "/api/v1/esa/typ2/{malo_id}",
-            get(get_esa_typ2).post(post_esa_typ2),
-        )
+        .routes(routes!(get_esa_typ2, post_esa_typ2))
         // ── Ablesesteuerung ───────────────────────────────────────────────────
-        .route(
-            "/api/v1/reading-orders",
-            post(create_reading_order).get(list_reading_orders),
-        )
-        .route("/api/v1/reading-orders/{id}", get(get_reading_order))
-        .route(
-            "/api/v1/reading-orders/{id}/complete",
-            put(complete_reading_order),
-        )
-        .route(
-            "/api/v1/reading-orders/{id}/cancel",
-            put(cancel_reading_order),
-        )
-        .route("/api/v1/reading-orders/{id}/fail", put(fail_reading_order))
+        .routes(routes!(create_reading_order, list_reading_orders))
+        .routes(routes!(get_reading_order))
+        .routes(routes!(complete_reading_order))
+        .routes(routes!(cancel_reading_order))
+        .routes(routes!(fail_reading_order))
         // N7: Jahresablesung campaign scheduler (§ 40b Abs. 1 EnWG)
-        .route(
-            "/api/v1/reading-orders/campaign",
-            post(jahresablesung_campaign),
-        )
-        .route(
-            "/api/v1/compliance/jahresablesung/{year}",
-            get(jahresablesung_compliance),
-        )
+        .routes(routes!(jahresablesung_campaign))
+        .routes(routes!(jahresablesung_compliance))
         // iMSys / SMGW direct push — bypasses EDIFACT for RLM/iMSys customers.
         // §41a EnWG dynamic tariffs require sub-hourly resolution;
         // MSCONS round-trip adds 15–60 min latency.
-        .route(
-            "/api/v1/meter-reads/rlm/{malo_id}",
-            post(post_direct_reads_rlm),
-        )
-        .route(
-            "/api/v1/meter-reads/gas/{malo_id}",
-            post(post_direct_reads_gas),
-        )
+        .routes(routes!(post_direct_reads_rlm))
+        .routes(routes!(post_direct_reads_gas))
         // retroactive quality scoring for existing meter_reads (MSCONS or direct push).
-        .route(
-            "/api/v1/quality-score/{malo_id}",
-            post(post_quality_rescore),
-        )
+        .routes(routes!(post_quality_rescore))
         // § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) bitemporal corrections: audit-trail preserving retroactive corrections.
-        .route("/api/v1/corrections/{malo_id}", post(post_corrections))
+        .routes(routes!(post_corrections))
         // Bulk ingestion: batched direct-push reads (performance path for large MSCONS deliveries)
-        .route("/api/v1/meter-reads/{malo_id}/bulk", post(post_bulk_reads))
+        .routes(routes!(post_bulk_reads))
         // § 60 Abs. 1 MsbG auto-substitute: fill gaps using prior-period average method
-        .route(
-            "/api/v1/meter-reads/{malo_id}/substitute",
-            post(post_substitute_values),
-        )
+        .routes(routes!(post_substitute_values))
         // resampled Lastgang — down-sample to hourly / daily / monthly buckets
-        .route(
-            "/api/v1/lastgang/{malo_id}/resampled",
-            get(get_lastgang_resampled),
-        )
+        .routes(routes!(get_lastgang_resampled))
         // Virtual meter — compute derived time series from a VirtualMeterRule
-        .route(
-            "/api/v1/virtual/{virtual_malo_id}/lastgang",
-            get(get_virtual_lastgang),
-        )
-        .route(
-            "/api/v1/virtual",
-            get(list_virtual_meters).post(create_virtual_meter),
-        )
-        .route(
-            "/api/v1/virtual/{virtual_malo_id}",
-            get(get_virtual_meter).delete(delete_virtual_meter),
-        )
+        .routes(routes!(get_virtual_lastgang))
+        .routes(routes!(list_virtual_meters, create_virtual_meter))
+        .routes(routes!(get_virtual_meter, delete_virtual_meter))
         // Quality assessments — per-batch quality history
-        .route(
-            "/api/v1/quality-assessments/{malo_id}",
-            get(list_quality_assessments),
-        )
+        .routes(routes!(list_quality_assessments))
         // Annual forecast (§ 40a Abs. 2 EnWG Verbrauchsschätzung / § 13 Abs. 1 StromGVV)
-        .route("/api/v1/forecast/{malo_id}", get(get_annual_forecast))
+        .routes(routes!(get_annual_forecast))
         // Summenzeitreihe — MABIS-ready monthly aggregated series
-        .route(
-            "/api/v1/summenzeitreihe/{malo_id}",
-            get(get_summenzeitreihe),
-        )
+        .routes(routes!(get_summenzeitreihe))
         // Gas quality data (PID 13007 Gasbeschaffenheitsdaten)
-        .route("/api/v1/gas-quality/{malo_id}", get(get_gas_quality))
+        .routes(routes!(get_gas_quality))
         // §22 EnWG Verlustenergie — indicative grid-loss balance
-        .route("/api/v1/netzverlust", get(get_netzverlust))
+        .routes(routes!(get_netzverlust))
         // § 60 Abs. 1 MsbG — estimated-reading confirmation obligations
-        .route("/api/v1/confirmations", get(list_confirmations))
+        .routes(routes!(list_confirmations))
         // Delivery surveillance — the measuring points that stopped delivering.
         // The V-rules can only judge data that arrived; this is the other half.
-        .route(
-            "/api/v1/surveillance/delivery",
-            get(crate::surveillance::get_delivery_surveillance),
-        )
-        .route(
-            "/api/v1/surveillance/delivery/scan",
-            post(crate::surveillance::post_delivery_surveillance_scan),
-        )
+        .routes(routes!(crate::surveillance::get_delivery_surveillance))
+        .routes(routes!(
+            crate::surveillance::post_delivery_surveillance_scan
+        ))
         // Iceberg/S3 archive endpoints
-        .route("/api/v1/archive/status", get(get_archive_status))
-        .route("/api/v1/archive/olap/{malo_id}", get(get_archive_olap))
-        .route("/api/v1/archive/portfolio", get(get_archive_portfolio))
-        .route(
-            "/api/v1/archive/timeseries/{malo_id}",
-            get(get_archive_timeseries),
-        )
+        .routes(routes!(get_archive_status))
+        .routes(routes!(get_archive_olap))
+        .routes(routes!(get_archive_portfolio))
+        .routes(routes!(get_archive_timeseries))
         // §42c Energy Sharing VZW quarter-hour allocation
-        .route("/api/v1/sharing/readiness", get(get_sharing_readiness))
-        .route("/api/v1/meter-reads/iot/{malo_id}", post(post_iot_reads))
-        .route(
-            "/api/v1/sharing/{community_id}/allocation",
-            get(get_sharing_allocation),
-        )
-        .route(
-            "/api/v1/sharing/participants/{malo_id}/allocation",
-            get(get_participant_allocation),
-        )
+        .routes(routes!(get_sharing_readiness))
+        .routes(routes!(post_iot_reads))
+        .routes(routes!(get_sharing_allocation))
+        .routes(routes!(get_participant_allocation))
         // Art. 17 DSGVO right to erasure — mark a MaLo for deletion from
         // hot PostgreSQL storage. Cold Iceberg deletion is scheduled asynchronously.
-        .route(
-            "/api/v1/gdpr/erasure/{malo_id}",
-            axum::routing::delete(post_gdpr_erasure),
-        )
-        .route(
-            "/api/v1/gdpr/erasures",
-            axum::routing::get(get_gdpr_erasures),
-        )
+        .routes(routes!(post_gdpr_erasure))
+        .routes(routes!(get_gdpr_erasures))
         // Analytical SQL — runs read-only SQL across both tiers in meterstore's
         // DataFusion session, returning JSON rows or an Arrow IPC stream. External
         // Iceberg clients (DuckDB/Spark/Trino) connect to meterstore's own catalog
         // facade, not an edmd-hosted one.
-        .route("/api/v1/query/sql", post(post_sql_query))
+        .routes(routes!(post_sql_query))
         // ── §14a SMGW session registry (§ 25 MsbG / BSI TR-03109) ────────────
         // `compliance` is a static segment and takes priority over {malo_id} in Axum 0.8.
-        .route("/api/v1/smgw", get(list_smgw_sessions))
-        .route("/api/v1/smgw/compliance", get(get_smgw_compliance))
-        .route(
-            "/api/v1/smgw/compliance/scan",
-            axum::routing::post(post_smgw_compliance_scan),
-        )
-        .route(
-            "/api/v1/smgw/{malo_id}",
-            get(get_smgw_session).put(put_smgw_session),
-        )
-        // `/health/live`, `/health/ready` and the generic `/metrics` are the
-        // runner's (`mako_service::run`), which probes the pool for real. This
-        // is edmd's own domain gauge, mounted beside them.
-        .route("/edmd/metrics", get(metrics))
-        // The documented reads and `/api/v1/openapi.json` (`crate::api`).
-        .merge(crate::api::router())
-        .with_state(state)
+        .routes(routes!(crate::smgw::list_smgw_sessions))
+        .routes(routes!(crate::smgw::get_smgw_compliance))
+        .routes(routes!(crate::smgw::post_smgw_compliance_scan))
+        .routes(routes!(
+            crate::smgw::get_smgw_session,
+            crate::smgw::put_smgw_session
+        ))
 }
 
 // ── REST handlers ─────────────────────────────────────────────────────────────
@@ -316,7 +250,8 @@ async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
 }
 
 /// Query params shared by virtual meter and other new endpoints.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct SimpleTimeParams {
     pub(crate) from: Option<String>,
     pub(crate) to: Option<String>,
@@ -418,9 +353,6 @@ pub struct RunConfig {
     pub marktd_api_key: secrecy::SecretString,
     /// The deployment's own MSB MP-ID, the operator of self-produced readings.
     pub own_mp_id: Option<String>,
-    pub subscriber_id: String,
-    pub webhook_url: String,
-    pub webhook_secret: Option<SecretString>,
     pub inbound_secret: Option<SecretString>,
     /// Tenant identifier — used as Cedar resource_tenant.
     pub tenant: String,
@@ -446,10 +378,15 @@ pub struct RunConfig {
     pub einrichtung: Arc<mako_service::einrichtung::Einrichtung>,
     /// `[policy] physische_loeschung`, named in every erasure result.
     pub physische_loeschung: mako_service::policy::PolicyTriple,
-    /// ERP webhook URL for outbound CloudEvents (direct push + quality warnings).
+    /// ERP webhook URL for outbound CloudEvents (direct push + quality warnings):
+    /// the webhook endpoint `default`.
     pub erp_webhook_url: Option<String>,
-    /// Optional secret signing every outbound CloudEvent (Standard Webhooks).
-    pub erp_webhook_secret: Option<String>,
+    /// Secret signing every delivery to `default` (Standard Webhooks), `env:`
+    /// already resolved.
+    pub erp_webhook_secret: Option<SecretString>,
+    /// `[subscriptions]` — retention and the loopback switch of the webhook
+    /// endpoints integrators register.
+    pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
     /// Request rate limits. Ingest endpoints accept unbounded batches, so an
     /// unthrottled client can saturate the write path for every other tenant.
     pub rate_limit: mako_service::RateLimitConfig,
@@ -586,6 +523,33 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     // needs the store handle, not just the business-table pool.
     let repo_for_surveillance = repo.clone();
 
+    // ── Outbox delivery ──────────────────────────────────────────────────────
+    // Every CloudEvent edmd publishes goes through `event_outbox`, so delivery
+    // survives a receiver restart rather than three attempts inside the request
+    // that produced it. The subscription module fans each row out to every
+    // active endpoint: `default` is `webhook.erp_webhook_url`, the others are
+    // registered under `/api/v1/webhooks/endpoints`. With neither, the events
+    // stay in the table, which is where an operator can still find them and
+    // where `GET /api/v1/events` serves them — the alternative, dropping them
+    // at the emit site, is what made a stored RLM push invisible to `billingd`.
+    if cfg.erp_webhook_url.is_none() {
+        tracing::info!(
+            "edmd: no webhook.erp_webhook_url configured — CloudEvents reach only the \
+             endpoints registered under /api/v1/webhooks/endpoints"
+        );
+    }
+    let subscriptions = mako_service::subscriptions::Subscriptions::new(
+        pool.clone(),
+        <crate::daemon::Edmd as mako_service::Daemon>::NAME,
+        cfg.tenant.clone(),
+        cfg.subscriptions.clone(),
+    )
+    .with_default_endpoint(cfg.erp_webhook_url.clone(), cfg.erp_webhook_secret.clone());
+    anyhow::Context::context(
+        subscriptions.start(cfg.shutdown.clone()).await,
+        "start the webhook subscriptions",
+    )?;
+
     let mcp_state = Arc::new(crate::mcp_server::EdmdMcpState {
         policy: Arc::new(cfg.einrichtung.policy.clone()),
         pool: pool.clone(),
@@ -593,6 +557,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         tenant: cfg.tenant.clone(),
         marktd_url: cfg.marktd_url.clone(),
         marktd_api_key: cfg.marktd_api_key.clone(),
+        subscriptions: subscriptions.clone(),
         auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
             &cfg.mcp,
             cfg.oidc.clone(),
@@ -620,39 +585,11 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
             cfg.marktd_api_key.clone(),
             mako_service::http::default_client(),
         ),
-        erp_webhook_url: cfg.erp_webhook_url,
-        erp_webhook_secret: cfg
-            .erp_webhook_secret
-            .clone()
-            .map(secrecy::SecretString::from),
         cold_tier_enabled: cfg.archive.as_ref().is_some_and(|a| a.enabled),
         smgw: cfg.smgw.clone(),
         surveillance: cfg.surveillance.clone(),
         physische_loeschung: cfg.physische_loeschung.clone(),
     };
-    // ── Outbox drain ─────────────────────────────────────────────────────────
-    // Every CloudEvent edmd publishes goes through `event_outbox`, so delivery
-    // survives a receiver restart rather than three attempts inside the request
-    // that produced it. Without a webhook URL the events accumulate in the
-    // table, which is where an operator can still find them — the alternative,
-    // dropping them at the emit site, is what made a stored RLM push invisible
-    // to `billingd`.
-    if let Some(url) = state.erp_webhook_url.clone() {
-        tokio::spawn(
-            mako_service::outbox::OutboxWorker::new(
-                state.repo.pool().clone(),
-                url,
-                state.erp_webhook_secret.clone(),
-            )
-            .run(cfg.shutdown.clone()),
-        );
-    } else {
-        tracing::warn!(
-            "edmd: no webhook.erp_webhook_url configured — CloudEvents are persisted to \
-             event_outbox and never delivered"
-        );
-    }
-
     // ── Kafka ingest consumer (optional) ─────────────────────────────────────
     // High-throughput intake for head-end systems that stream reading batches
     // instead of pushing per-gateway HTTP. Same validation, same store, same
@@ -664,58 +601,6 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
             state.tenant.clone(),
             cfg.shutdown.clone(),
         );
-    }
-
-    {
-        use mako_markt::marktd_client::{MarktdClient, SubscriptionRequest};
-        use mako_service::http::default_client;
-        let marktd = MarktdClient::new(
-            &cfg.marktd_url,
-            cfg.marktd_api_key.clone(),
-            default_client(),
-        );
-        let subscriber_id = cfg.subscriber_id.clone();
-        let webhook_url = cfg.webhook_url.clone();
-        let webhook_secret = cfg.webhook_secret.clone();
-        let shutdown = cfg.shutdown.clone();
-        // In the background: marktd may come up after edmd, and edmd receives
-        // nothing until the subscription stands.
-        tokio::spawn(async move {
-            let secret = webhook_secret.as_ref().map(|s| {
-                use secrecy::ExposeSecret;
-                let secret: &str = s.expose_secret();
-                secret
-            });
-            marktd
-                .subscribe_until_registered(
-                    &subscriber_id,
-                    &SubscriptionRequest {
-                        webhook_url: &webhook_url,
-                        webhook_secret: secret,
-                        // Exactly the types `handler.rs` branches on: process
-                        // completions — MSCONS deliveries for meter-data storage
-                        // and Lieferbeginn/Lieferende for supply-handover
-                        // readings — and MaLo updates, which refresh the cached
-                        // Bundesland. Not an operator choice — a narrower set
-                        // drops deliveries edmd needs and a wider one registers a
-                        // marktd fan-out edge it discards.
-                        event_types: &[
-                            mako_events::mako::PROCESS_COMPLETED,
-                            mako_events::markt::MALO_UPDATED,
-                        ],
-                        // No PID filter exists to send: `marktd`'s
-                        // `subscriptions` table narrows on `roles`, `event_types`
-                        // and `sparten` only. The narrowing that actually runs is
-                        // `handler.rs`'s branch on `ALL_MSCONS_PIDS` — a strict
-                        // superset of `MSCONS_PIDS` adding the Redispatch PIDs
-                        // 13020–13023/13026 — applied to every event marktd fans
-                        // out.
-                        active: true,
-                    },
-                    shutdown.cancelled_owned(),
-                )
-                .await;
-        });
     }
 
     let pool_arc = Arc::new(pool);
@@ -740,7 +625,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     // runner, so they are not added again here.
     let app = mako_service::ServiceBuilder::new()
         .merge(
-            router(state)
+            router(state, &subscriptions)
                 .nest("/api/v1/iceberg", iceberg_facade)
                 // Readiness and operator policy: GET /admin/einrichtung (Cedar
                 // `read-config`) and GET /api/v1/policy (Cedar `read-policy`).

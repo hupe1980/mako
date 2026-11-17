@@ -187,7 +187,7 @@ graph TD
     subgraph daemons ["Production daemons"]
         netzbilanzd["netzbilanzd :8680<br/>NB billing"]
         einsd["einsd :9180<br/>EEG settlement"]
-        billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>16 MCP tools"]
+        billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>18 MCP tools"]
         outputd["outputd :9880<br/>customer documents<br/>Typst templates · ZUGFeRD carrier"]
         invoicd["invoicd :8280<br/>INVOIC plausibility"]
     end

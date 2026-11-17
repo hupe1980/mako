@@ -146,6 +146,24 @@ pub struct ZsgPushRequest {
 /// the resulting Lastgang), and `200` for a replayed `session_id`.
 ///
 /// **Cedar action**: `write-meter-reads`
+#[utoipa::path(
+    post,
+    path = "/api/v1/zaehlerstandsgang/{malo_id}",
+    tag = "zaehlerstandsgang",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = serde_json::Value, description = "A `ZsgPushRequest`"),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 201, description = "Created", body = serde_json::Value),
+        (status = 202, description = "Accepted", body = serde_json::Value),
+        (status = 400, description = "Malformed request", body = mako_service::ApiError),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 413, description = "Batch too large", body = mako_service::ApiError),
+        (status = 422, description = "Refused on its content", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub async fn post_zaehlerstandsgang(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -596,6 +614,18 @@ pub async fn post_zaehlerstandsgang(
 /// The stored register readings — the primary record behind the derived
 /// Lastgang, and the source of the § 40 Abs. 2 Nr. 6 EnWG opening and closing
 /// Zählerstand on an invoice.
+#[utoipa::path(
+    get,
+    path = "/api/v1/zaehlerstandsgang/{malo_id}",
+    tag = "zaehlerstandsgang",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), SimpleTimeParams),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 500, description = "Internal error, with an `error_id` the log carries", body = mako_service::ApiError),
+    )
+)]
 pub(crate) async fn get_zaehlerstandsgang(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

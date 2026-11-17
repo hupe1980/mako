@@ -677,19 +677,6 @@ pub fn period(von: Option<&str>, bis: Option<&str>) -> Result<(Date, Date), Stri
     Ok((von, bis))
 }
 
-/// The counterparty routes, on the read model's state.
-pub fn routes() -> axum::Router<crate::obs::project::ObsState> {
-    axum::Router::new()
-        .route(
-            "/api/v1/counterparties",
-            axum::routing::get(get_counterparties),
-        )
-        .route(
-            "/api/v1/counterparties/{mp_id}/{rolle}",
-            axum::routing::get(get_counterparty_record),
-        )
-}
-
 /// Cedar `read-counterparty` — a market role of this tenant — and the
 /// caller's roles, which the rows are then kept to.
 fn authorize_akte(
@@ -706,7 +693,21 @@ fn authorize_akte(
 
 /// `GET /api/v1/counterparties?von=&bis=` — every counterparty and role with
 /// processes it owes in the period, the most late and unanswered first.
-async fn get_counterparties(
+#[utoipa::path(
+    get,
+    path = "/api/v1/counterparties",
+    tag = "counterparties",
+    params(
+        ("von" = Option<String>, Query, description = "Start of the period, `YYYY-MM-DD`"),
+        ("bis" = Option<String>, Query, description = "End of the period, `YYYY-MM-DD`"),
+    ),
+    responses(
+        (status = 200, description = "Every counterparty and role with processes it owes in the period", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-counterparty` refused", body = mako_service::ApiError),
+        (status = 422, description = "`invalid_period`", body = mako_service::ApiError),
+    ),
+)]
+pub(crate) async fn get_counterparties(
     claims: mako_service::oidc::Claims,
     axum::Extension(enforcer): axum::Extension<std::sync::Arc<mako_service::cedar::CedarEnforcer>>,
     axum::extract::State(state): axum::extract::State<crate::obs::project::ObsState>,
@@ -730,7 +731,24 @@ async fn get_counterparties(
 /// `GET /api/v1/counterparties/{mp_id}/{rolle}?von=&bis=[&format=csv]` — one
 /// counterparty's record; `format=csv` or `Accept: text/csv` answers the
 /// export of every process behind the figures.
-async fn get_counterparty_record(
+#[utoipa::path(
+    get,
+    path = "/api/v1/counterparties/{mp_id}/{rolle}",
+    tag = "counterparties",
+    params(
+        ("mp_id" = String, Path, description = "The counterparty's MP-ID"),
+        ("rolle" = String, Path, description = "The Marktrolle it answered in"),
+        ("von" = Option<String>, Query, description = "Start of the period, `YYYY-MM-DD`"),
+        ("bis" = Option<String>, Query, description = "End of the period, `YYYY-MM-DD`"),
+        ("format" = Option<String>, Query, description = "`csv` answers the export of every process behind the figures"),
+    ),
+    responses(
+        (status = 200, description = "The counterparty's record, or its CSV export", body = serde_json::Value),
+        (status = 403, description = "Cedar `read-counterparty` refused", body = mako_service::ApiError),
+        (status = 422, description = "`invalid_counterparty`, `invalid_period`", body = mako_service::ApiError),
+    ),
+)]
+pub(crate) async fn get_counterparty_record(
     claims: mako_service::oidc::Claims,
     axum::Extension(enforcer): axum::Extension<std::sync::Arc<mako_service::cedar::CedarEnforcer>>,
     axum::extract::State(state): axum::extract::State<crate::obs::project::ObsState>,

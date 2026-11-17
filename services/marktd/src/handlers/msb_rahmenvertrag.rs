@@ -94,7 +94,7 @@ pub async fn upsert_msb_rv(
             }),
         }),
     );
-    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
+    if let Err(e) = crate::outbox::enqueue(&mut tx, &evt).await {
         return ApiError::internal(anyhow::Error::from(e).context(format!(
             "msb_rv: durable enqueue for MSB-Rahmenvertrag {id}"
         )))
@@ -110,10 +110,12 @@ pub async fn upsert_msb_rv(
         .into_response()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub struct ListQuery {
     #[serde(default)]
+    #[param(value_type = Option<String>)]
     pub sparte: Option<Sparte>,
     #[serde(default)]
     pub nb_mp_id: Option<String>,
@@ -164,11 +166,15 @@ pub async fn list_msb_rv(
 
 /// The query of `GET /api/v1/msb-rahmenvertraege/check` — every field
 /// required, because each one selects which contract answers.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub struct CheckQuery {
+    #[param(value_type = String)]
     pub sparte: Sparte,
+    #[param(value_type = String)]
     pub nb_mp_id: MarktpartnerId,
+    #[param(value_type = String)]
     pub msb_mp_id: MarktpartnerId,
     /// The day the contract must be valid on — for an Anmeldung MSB, the
     /// Zuordnungsbeginn.
