@@ -9,6 +9,12 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.38.2] — 2026-11-18
+
+### Fixed
+
+- **Release images ship again.** The release workflow's Docker builder job runs for up to 90 minutes: on a hosted 4-core amd64 runner, compiling every dependency and linking 15 thin-LTO service binaries takes over an hour, so 0.38.0 and 0.38.1 published their crates but no images and no GitHub Release.
+
 ## [0.38.1] — 2026-11-18
 
 ### Fixed

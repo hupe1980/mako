@@ -663,7 +663,9 @@ jobs:
   docker-builder:
     name: Docker — ${{ matrix.stage }} (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    # The one job over an hour: a hosted 4-core runner compiles every
+    # dependency and links 15 thin-LTO binaries, and amd64 runs past 60 min.
+    timeout-minutes: 90
     needs: preflight          # parallel with `publish`
     permissions:
       contents: read
