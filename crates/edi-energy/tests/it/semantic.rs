@@ -967,3 +967,53 @@ fn validate_with_context_rejects_expired_release() {
         "expected ProfileNotFound for expired release, got {err:?}"
     );
 }
+
+// ── A free-text DE repeated inside one composite ──────────────────────────────
+
+/// 55616 with the Marktlokationsanschrift's C059 as `street`.
+#[cfg(feature = "utilmd")]
+fn utilmd_55616_with_street(street: &str) -> edi_energy::EdiEnergyReport {
+    let wire = format!(
+        "UNA:+.? 'UNB+UNOC:3+9990000000012:14+9990000000029:14+261014:0925+RTK001INT001++++++1'\
+UNH+1+UTILMD:D:11A:UN:S2.2'BGM+E03+RTK001DOC001'DTM+137:202610130900?+00:303'\
+NAD+MS+9990000000012::9'NAD+MR+9990000000029::9'IDE+24+RTK001V0001'STS+7++ZX6+ZW4'\
+LOC+Z16+10000000009'RFF+Z13:55616'RFF+Z49::1'DTM+Z25:202609302200?+00:303'SEQ+Z01+1'\
+CCI+++ZB3'CAV+Z91:9990000000036::Z39:Z19'CCI+++E03'CAV+E06'CCI+++Z83'CAV+Z53'\
+SEQ+ZH6+1'CCI+Z63'CAV+ZH7'CCI+Z69'CAV+Z64'\
+NAD+DP++++{street}+Musterstadt++12345+DE'RFF+Z46:1'UNT+26+1'UNZ+1+RTK001INT001'"
+    );
+    Platform::with_all_profiles()
+        .parse(wire.as_bytes())
+        .unwrap()
+        .validate_on_date(time::macros::date!(2026 - 10 - 14))
+        .unwrap()
+}
+
+#[cfg(feature = "utilmd")]
+#[test]
+fn every_position_of_the_street_composite_is_admitted_by_its_one_ahb_row() {
+    // UTILMD AHB Strom 2.2 lists C059 DE 3042 once; the MIG S2.2 gives four
+    // positions and puts the Hausnummer in the third
+    // (`Eichelbergstr.::36:Musterortsteil`).
+    for street in [
+        "Musterweg::12",
+        "Musterweg:12",
+        "Musterweg:::12",
+        "Musterweg:Zusatz:12",
+    ] {
+        let report = utilmd_55616_with_street(street);
+        let refused: Vec<_> = report
+            .issues_with_rule_prefix("AHB-55616-00485-NAD-3042")
+            .collect();
+        assert!(refused.is_empty(), "{street}: {refused:#?}");
+    }
+}
+
+#[cfg(feature = "utilmd")]
+#[test]
+fn the_street_rows_operands_stay_on_its_first_position() {
+    // `M [212]`: without DE 3124 the first DE 3042 is required, and a value in
+    // a later position does not stand in for it.
+    let report = utilmd_55616_with_street(":Zusatz:12");
+    assert_has_rule(&report, "AHB-55616-00485-NAD-3042-MISSING");
+}

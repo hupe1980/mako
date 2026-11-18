@@ -58,7 +58,9 @@ reported and skipped, not allowed to unresolve the rest of the message.
 `Muss`/`Soll`/`Kann` the column gives each segment and group, with its
 Bedingungen evaluated against the message, and each data element's operands
 (`X`, `M [7]`, the codes admitted). A place or element the column does not list
-is not to be used.
+is not to be used. One row for a free-text element that repeats inside one
+composite — C059 DE 3042, whose third position is the Hausnummer — admits the
+composite's further positions; its operands bind the first.
 
 **Layer 3** covers what the documents state in prose only: period order
 (`DTM+163` ≤ `DTM+164`), Lokations-ID check digits, and that a value declaring

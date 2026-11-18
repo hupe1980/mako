@@ -9,6 +9,12 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.38.3] — 2026-11-18
+
+### Fixed
+
+- **An address with its Hausnummer in place validates.** The AHB lists a free-text data element that repeats inside one composite once — UTILMD AHB Strom 2.2 names C059 DE 3042 in one row, where the MIG S2.2 gives four positions and puts the Hausnummer in the third (`Eichelbergstr.::36:Musterortsteil`). The validator applied that row to the first position only and refused every further one as `…-3042-NOT-PERMITTED`, so a NAD street, a C058 line or a C080 name continued into the next position was rejected. Such a row now admits the composite's further positions while its operands keep binding the first; a column that lists the occurrences one by one, and a coded data element, are still held position by position (#12).
+
 ## [0.38.2] — 2026-11-18
 
 ### Fixed

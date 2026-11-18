@@ -1398,6 +1398,7 @@ fn element_rules(
             .with_rule_id(format!("AHB-{pid}-{nr}-{tag}-{}-CODE", el.id))));
         }
     }
+    admit_composite_repetitions(af, layout, &mut ruled);
     // A data element the column does not list is not to be used.
     for (ei, ci, el) in layout.leaves() {
         if ruled.contains(&(ei, ci)) || el.status == "N" {
@@ -1424,6 +1425,36 @@ fn element_rules(
             .with_element_index(ei)
             .with_component_index(ci),
         );
+    }
+}
+
+/// An AHB names a free-text DE that repeats inside one composite once — the
+/// UTILMD AHB Strom 2.2 lists C059 DE 3042 as one row where the MIG S2.2 gives
+/// four, the third the Hausnummer (MIG example `Eichelbergstr.::36:Musterortsteil`).
+/// That row admits the composite's further positions, which the MIG marks `D`;
+/// its operands stay on the first. A column that enumerates the occurrences, or
+/// a coded DE, is held position by position.
+fn admit_composite_repetitions(
+    af: &Anwendungsfall,
+    layout: &SegmentNode,
+    ruled: &mut HashSet<(usize, usize)>,
+) {
+    let column: Vec<&ElementRule> = af.element_rules(&layout.nr).collect();
+    for rule in &column {
+        let enumerated = column.iter().any(|r| r.de == rule.de && r.occurrence > 0);
+        if rule.occurrence != 0 || enumerated || rule.operands.iter().any(|o| o.code.is_some()) {
+            continue;
+        }
+        let Some((ei, ci, _)) = layout.locate(&rule.de, 0) else {
+            continue;
+        };
+        if let Some(composite) = layout.elements.get(ei) {
+            for (cj, comp) in composite.components.iter().enumerate().skip(ci + 1) {
+                if comp.id == rule.de {
+                    ruled.insert((ei, cj));
+                }
+            }
+        }
     }
 }
 
