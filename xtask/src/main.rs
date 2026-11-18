@@ -39,6 +39,8 @@ Commands:
                         value ships for a series mako may not distribute
   check-specs         Local: every spec's Status matches its tasks, and specs/ and
                         concepts/ROADMAP.md name each other (skips when they are absent)
+  check-docker-build  Refuse a Dockerfile builder stage that runs more than one cargo build,
+                        or cooks, builds and copies different package lists
   check-runner-disk   Refuse a workflow job that compiles the workspace without reclaiming
                         runner disk — ~14 GB does not fit, and it fails as a linker SIGBUS
   check-runner-routes No daemon claims a route `mako_service::run` already mounts
@@ -206,6 +208,7 @@ mod check_controls_consulted;
 mod check_crate_lints;
 mod check_db_suites;
 mod check_desk;
+mod check_docker_build;
 mod check_dynamic_sql;
 mod check_error_tuples;
 mod check_eval_cases;
@@ -279,6 +282,7 @@ fn main() {
         Some("check-referenzreihen") => check_referenzreihen(),
         Some("check-specs") => check_specs(),
         Some("check-routes") => check_routes(),
+        Some("check-docker-build") => check_docker_build(),
         Some("check-runner-disk") => check_runner_disk(),
         Some("check-runner-routes") => check_runner_routes(),
         Some("check-sql") => check_sql(),
@@ -573,6 +577,13 @@ fn check_as4_controls() {
 fn check_routes() {
     let (workspace_root, _) = workspace_info();
     if !check_routes::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_docker_build() {
+    let (workspace_root, _) = workspace_info();
+    if !check_docker_build::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

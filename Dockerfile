@@ -136,12 +136,13 @@ ARG PROFILE=release
 
 # ── Dependency layer (cached) ──────────────────────────────────────────────────
 # cargo chef cook recreates minimal source stubs from recipe.json and compiles
-# all dependencies. This Docker layer is cached as long as recipe.json is
-# unchanged — i.e. until Cargo.lock or any Cargo.toml changes.
+# all dependencies into the `target` cache mount. A cache mount lives on the
+# BuildKit host and is not exported with the registry cache, so a fresh CI
+# runner cooks again.
 #
-# --mount=type=cache for the cargo registry avoids re-downloading crates on
-# each build without breaking Docker layer semantics (the compiled .rlib files
-# live in the Docker layer, not the mount).
+# The package list here and in the build below must be the same, built in one
+# invocation: Cargo unifies dependency features per invocation, so a package
+# built on its own compiles its shared dependencies a second time.
 COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
@@ -157,11 +158,10 @@ COPY . .
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} \
-                -p makod -p marktd \
+                -p makod -p marktd -p processd \
                 -p invoicd -p edmd -p netzbilanzd -p einsd \
                 -p productd -p billingd -p outputd -p accountingd -p vertragd \
                 -p portald -p agentd -p mako-seed \
-    && CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p processd --features integrated \
     && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
     && for bin in makod marktd processd invoicd edmd netzbilanzd einsd \
                   productd billingd outputd accountingd vertragd portald agentd mako-seed; do \

@@ -43,6 +43,8 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         }
     };
 
+    let old_version = first_version_field(&src);
+
     // Step 1: replace `version     = "…"` under [workspace.package].
     let updated = match replace_first_version_field(&src, new_version) {
         Some(s) => s,
@@ -125,6 +127,18 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         }
     }
 
+    // Every committed `services/<svc>/openapi.json` carries the crate version as
+    // `info.version`, and `assert_committed`, `api-catalog --check` and the
+    // Desk's `stand.ts` each refuse a document that disagrees with the build.
+    // Moving it here keeps a bump from leaving the tree red.
+    if let Some(old) = old_version.as_deref() {
+        let moved = bump_openapi_documents(workspace_root, old, new_version);
+        println!("  {moved} services/*/openapi.json info.version = \"{new_version}\"");
+        if !crate::api_catalog::run(std::path::Path::new(workspace_root), false) {
+            eprintln!("warning: could not republish site/static/api — run `just api-catalog`");
+        }
+    }
+
     // The Desk ships as the `mako-desk` image of the same release, so it
     // carries the workspace version; npm moves `package.json` and both root
     // entries of its lockfile together. `check-desk` refuses a drift.
@@ -145,6 +159,20 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
             _ => eprintln!(
                 "warning: could not set the Desk's version — run `npm version {new_version} \
                  --no-git-tag-version` in desk/ before committing"
+            ),
+        }
+    }
+
+    if desk.join("scripts/gen-api.ts").exists() {
+        match std::process::Command::new("npm")
+            .args(["run", "gen"])
+            .current_dir(&desk)
+            .stdout(std::process::Stdio::null())
+            .status()
+        {
+            Ok(st) if st.success() => println!("  desk/src/data/api regenerated"),
+            _ => eprintln!(
+                "warning: could not regenerate the Desk's API types — run `npm run gen` in desk/"
             ),
         }
     }
@@ -281,6 +309,36 @@ fn replace_first_version_field(src: &str, new_version: &str) -> Option<String> {
         result.pop();
     }
     replaced.then_some(result)
+}
+
+/// The value of the first `version = "…"` field, the `[workspace.package]` one.
+fn first_version_field(src: &str) -> Option<String> {
+    src.lines().find_map(|line| {
+        let rest = line.trim_start().strip_prefix("version")?.trim_start();
+        let quoted = rest.strip_prefix('=')?.trim_start().strip_prefix('"')?;
+        Some(quoted.split('"').next()?.to_owned())
+    })
+}
+
+/// Rewrites `"version": "<old>"` once in every `services/*/openapi.json`; the
+/// number of documents moved.
+fn bump_openapi_documents(workspace_root: &str, old: &str, new: &str) -> usize {
+    let from = format!("\"version\": \"{old}\"");
+    let to = format!("\"version\": \"{new}\"");
+    let Ok(dirs) = std::fs::read_dir(std::path::Path::new(workspace_root).join("services")) else {
+        return 0;
+    };
+    let mut moved = 0;
+    for dir in dirs.flatten() {
+        let path = dir.path().join("openapi.json");
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && text.contains(&from)
+            && std::fs::write(&path, text.replacen(&from, &to, 1)).is_ok()
+        {
+            moved += 1;
+        }
+    }
+    moved
 }
 
 /// Collect every dependency in `[workspace.dependencies]` that points at a
@@ -469,6 +527,12 @@ serde            = { version = \"1\", features = [\"derive\"] }
              serde        = { version = \"1\" }\n\
              # mako-old   = { path = \"../old\", version = \"0.1\" }\n";
         assert!(super::pinned_path_deps(manifest).is_empty());
+    }
+
+    #[test]
+    fn the_workspace_package_version_is_read() {
+        let src = "[workspace.package]\nversion     = \"0.38.0\"\nedition = \"2024\"\n";
+        assert_eq!(first_version_field(src).as_deref(), Some("0.38.0"));
     }
 
     #[test]

@@ -9,6 +9,13 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.38.1] — 2026-11-18
+
+### Fixed
+
+- **Release images build within the builder job's timeout.** The Dockerfile built processd in a second `cargo build`, so every dependency whose feature set differed between the two invocations compiled twice in release mode, and the amd64 builder of 0.38.0 ran past its 60 minutes and shipped no images. The builder stage now compiles every service in one invocation over the package list `cargo chef cook` prepares, and `cargo xtask check-docker-build` refuses a second invocation or a cooked, built or copied list that differs from the others.
+- **`just bump` moves the committed OpenAPI documents.** Each `services/<svc>/openapi.json` carries the crate version as `info.version`; the bump now rewrites it, republishes `site/static/api/` and regenerates the Desk's `stand.ts`, so a bump no longer leaves the tree red.
+
 ## [0.38.0] — 2026-11-17
 
 ### Added
