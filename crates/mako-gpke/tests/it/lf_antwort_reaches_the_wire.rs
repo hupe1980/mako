@@ -262,11 +262,11 @@ fn the_kuendigung_left_the_supplier_change_pid_table() {
 
 // ── The other half: the request has to reach a decider ────────────────────────
 
-/// An LF-answered Vorgang must emit `de.mako.process.initiated`.
+/// An LF-answered Vorgang must emit `de.mako.engine.process.initiated`.
 ///
 /// `makod` delivers a CloudEvent only for an outbox entry, and the APERAK these
 /// workflows emit is a technical acknowledgement — `processd`'s LF module
-/// subscribes to `de.mako.process.initiated` and to nothing else. Without this
+/// subscribes to `de.mako.engine.process.initiated` and to nothing else. Without this
 /// entry the answer automation is unreachable and every Frist expires
 /// unanswered, which is exactly what happened before these four workflows
 /// emitted one.

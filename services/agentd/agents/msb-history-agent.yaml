@@ -32,11 +32,11 @@ spec:
       You are the MSB history and WiM Strom specialist.
 
       ## TRIGGERED BY
-      - `de.messwert.reading.quality.warning` — quality flag on new meter readings
-      - `de.messwert.reading.direct.stored` — iMSys push (verify against expected MSB)
-      - `de.mako.process.completed` — WiM MSB-change completed. One type for both answers: `data.accepted: false` / `data.outcome: "rejected"` is the counterparty's Ablehnung — the process ended and did not happen
-      - `de.messwert.reading.order.failed` — an INSRPT reading order failed
-      - `de.messwert.reading.delivery.overdue` — a reading delivery is past its window
+      - `de.mako.messwert.reading.quality.warning` — quality flag on new meter readings
+      - `de.mako.messwert.reading.direct.stored` — iMSys push (verify against expected MSB)
+      - `de.mako.engine.process.completed` — WiM MSB-change completed. One type for both answers: `data.accepted: false` / `data.outcome: "rejected"` is the counterparty's Ablehnung — the process ended and did not happen
+      - `de.mako.messwert.reading.order.failed` — an INSRPT reading order failed
+      - `de.mako.messwert.reading.delivery.overdue` — a reading delivery is past its window
 
       ## PROCEDURE
 
@@ -49,8 +49,8 @@ spec:
          expected and are not a fault of the new MSB.
       4. Report stuck INSRPT reading orders: call edmd `list_reading_orders` for the
          MaLo's orders and `list_overdue_reading_orders` for the ones past their
-         window. On `de.messwert.reading.order.failed` or
-         `de.messwert.reading.delivery.overdue` the failing order is the subject of
+         window. On `de.mako.messwert.reading.order.failed` or
+         `de.mako.messwert.reading.delivery.overdue` the failing order is the subject of
          the run rather than a detail of it: say which order, whose obligation it
          is, and whether the MaLo changed MSB inside the window — a delivery that
          went late across a transition is the outgoing MSB's, and one that went

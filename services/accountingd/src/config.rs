@@ -6,7 +6,7 @@ use serde::Deserialize;
 /// EEG Einspeisevergütung payout configuration (`[eeg]` table in TOML).
 ///
 /// Controls whether `accountingd` automatically generates SEPA Credit Transfer
-/// pain.001 XML when `de.eeg.verguetung.berechnet` is received from `einsd`.
+/// pain.001 XML when `de.mako.eeg.verguetung.berechnet` is received from `einsd`.
 ///
 /// ## SCT Inst vs SCT CORE
 ///
@@ -39,7 +39,7 @@ pub struct EegConfig {
     pub sepa_instant: bool,
 
     /// Automatically generate and schedule a pain.001 immediately when
-    /// `de.eeg.verguetung.berechnet` is received.
+    /// `de.mako.eeg.verguetung.berechnet` is received.
     ///
     /// When `false` (default), operators manually call
     /// `POST /api/v1/eeg/payouts/run` to batch-generate pain.001 files.
@@ -81,8 +81,8 @@ pub struct AccountingdConfig {
     pub tenant: String,
 
     /// ERP / portal webhook URL — receives outbound CloudEvents:
-    /// `de.accounting.payment.due`, `de.accounting.mahnung.issued`,
-    /// `de.accounting.sperrauftrag`, `de.accounting.bankruecklast`.
+    /// `de.mako.accounting.payment.due`, `de.mako.accounting.mahnung.issued`,
+    /// `de.mako.accounting.sperrauftrag`, `de.mako.accounting.bankruecklast`.
     pub erp_webhook_url: Option<String>,
 
     /// HMAC-SHA256 signing secret for outbound webhooks (never logged).
@@ -303,7 +303,7 @@ pub struct AccountingdConfig {
     /// agreed in the contract. Not to be confused with the bank submission lead
     /// time, which is a separate deadline owed to a different party.
     ///
-    /// `de.accounting.payment.due` — the event the ERP turns into the debtor's
+    /// `de.mako.accounting.payment.due` — the event the ERP turns into the debtor's
     /// pre-notification — is emitted this many days ahead of the collection.
     pub sepa_pre_notification_days: Option<i64>,
 

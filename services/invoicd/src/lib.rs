@@ -3,7 +3,7 @@
 //! # What it does
 //!
 //! Every INVOIC a market partner sends the LF arrives as a
-//! `de.mako.process.initiated` CloudEvent from `marktd`. `invoicd` checks it
+//! `de.mako.engine.process.initiated` CloudEvent from `marktd`. `invoicd` checks it
 //! against the reference data the PID calls for, records the result, and
 //! answers the counterparty — accept or dispute — through `makod`.
 //!
@@ -16,7 +16,7 @@
 //!                              │
 //!                     makod ◄──answer command
 //!                              │
-//!                       ERP webhook ◄── de.invoic.receipt.*
+//!                       ERP webhook ◄── de.mako.invoic.receipt.*
 //! ```
 //!
 //! # Two invariants
@@ -37,7 +37,7 @@
 //! | [`handler`] | The inbound webhook pipeline |
 //! | [`server`] | Router, operator API, [`mako_service::Daemon`] impl |
 //! | [`pg`] | The receipt store |
-//! | [`payment_overdue`] | `de.invoic.payment.overdue` worker |
+//! | [`payment_overdue`] | `de.mako.invoic.payment.overdue` worker |
 //! | [`mcp_server`] | Read-only MCP surface |
 //!
 //! # Configuration
@@ -47,7 +47,7 @@
 //! overridable by an `INVOICD_`-prefixed environment variable (`__` separates
 //! nested sections, e.g. `INVOICD_DATABASE__URL`). See [`config`].
 //!
-//! `marktd` delivers `de.mako.process.initiated` to `POST /webhook` through
+//! `marktd` delivers `de.mako.engine.process.initiated` to `POST /webhook` through
 //! the webhook endpoint its own configuration names for invoicd; invoicd does
 //! not register itself. No PID filter is applied: every fan-out arrives and
 //! [`routing::disposition_for`] decides whether it is checked, refused into

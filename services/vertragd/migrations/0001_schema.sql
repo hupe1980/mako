@@ -911,7 +911,7 @@ CREATE TABLE aggregatorvertraege (
 COMMENT ON TABLE aggregatorvertraege IS
     '§41e EnWG Aggregatorvertrag (Art. 17 RL (EU) 2019/944 demand response '
     'through aggregation): SR-ID -> agreed capacity price and validity. '
-    'Read by billingd when settling de.vpp.dispatch.confirmed.';
+    'Read by billingd when settling de.mako.vpp.dispatch.confirmed.';
 
 CREATE INDEX agg_sr_tenant ON aggregatorvertraege (tenant, sr_id, vertragsbeginn DESC);
 CREATE INDEX agg_kunde     ON aggregatorvertraege (kunden_id) WHERE kunden_id IS NOT NULL;

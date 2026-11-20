@@ -15,7 +15,7 @@
 //!                  ├─ tools      MCP calls to mako's own services
 //!                  ├─ tasks      a mutating call waits for a named approver
 //!                  └─ deadlines  Werktage, from mako's BDEW holiday table
-//!             →  de.agent.decision.made → marktd audit log
+//!             →  de.mako.agent.decision.made → marktd audit log
 //! ```
 //!
 //! | Route | What it is for |

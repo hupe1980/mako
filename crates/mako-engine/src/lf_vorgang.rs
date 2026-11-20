@@ -1,4 +1,4 @@
-//! The `de.mako.process.initiated` contract for an **LF-answered Vorgang**.
+//! The `de.mako.engine.process.initiated` contract for an **LF-answered Vorgang**.
 //!
 //! Nine inbound Prüfidentifikatoren put a supplier in the answering seat, split
 //! across two Festlegungen — GPKE Strom (`mako-gpke`) and GeLi Gas
@@ -29,7 +29,7 @@ use crate::types::{MaLo, MarktpartnerCode, Pruefidentifikator};
 /// The `SG4` facts an LF-answered Vorgang carries beyond its Lokations-ID.
 ///
 /// Every LF tree branches on at least one of them, so a
-/// `de.mako.process.initiated` that omits them cannot be walked: the
+/// `de.mako.engine.process.initiated` that omits them cannot be walked: the
 /// Transaktionsgrundergänzung picks the code range, the Transaktionsgrund picks
 /// the branch, `DTM+154` starts `E_0624`'s own Frist and `DTM+471` decides
 /// whether `E_0614` may refuse for Vertragsbindung at all.
@@ -98,7 +98,7 @@ pub struct LfVorgangsdaten {
 }
 
 impl LfVorgangsdaten {
-    /// The `de.mako.process.initiated` notification for an inbound Vorgang.
+    /// The `de.mako.engine.process.initiated` notification for an inbound Vorgang.
     ///
     /// Without it `processd`'s LF module never sees the message: `makod`
     /// delivers a CloudEvent only for an outbox entry, and an APERAK is a

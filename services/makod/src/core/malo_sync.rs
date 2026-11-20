@@ -1,6 +1,6 @@
 //! The MaLo-Ident cache follows `marktd` through its durable fan-out.
 //!
-//! `marktd` holds the MaLo master record and enqueues `de.markt.malo.updated`
+//! `marktd` holds the MaLo master record and enqueues `de.mako.markt.malo.updated`
 //! in the transaction that changes it. makod subscribes to that event like any
 //! fan-out subscriber, reads the record back (`GET /api/v1/malos/{id}`) and
 //! upserts or drops its [`SlateDbMaloCache`] entry. The event carries only the

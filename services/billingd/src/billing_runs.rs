@@ -20,7 +20,7 @@
 //!    for someone to call an endpoint.
 //! 4. Accumulate the month's `billing_run_log` row (audit).
 //! 5. For iMSys MaLos, deliver the free monthly **Abrechnungsinformation**
-//!    (§ 40b Abs. 3 EnWG) as a `de.billing.abrechnungsinformation.monatlich`
+//!    (§ 40b Abs. 3 EnWG) as a `de.mako.billing.abrechnungsinformation.monatlich`
 //!    CloudEvent — a preview calculation, not a persisted invoice, logged in
 //!    `abrechnungsinfo_log` so each month is delivered exactly once.
 
@@ -597,7 +597,7 @@ async fn bill_one(
         .as_ref()
         .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
 
-    // Invoice row + its `de.billing.rechnung.erstellt` outbox event commit
+    // Invoice row + its `de.mako.billing.rechnung.erstellt` outbox event commit
     // atomically — a scheduled billing run can never leave a billed period
     // without its ERP event.
     let mut tx = pool.begin().await?;

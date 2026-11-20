@@ -6932,7 +6932,7 @@ fn half_a_zweitarif_is_refused_as_a_product_defect() {
 /// with each other — a correction no receiver can book.
 ///
 /// `billingd` runs the outbound gate on the result before persisting it and
-/// publishing `de.billing.rechnung.erstellt`. This pins the invariant that gate
+/// publishing `de.mako.billing.rechnung.erstellt`. This pins the invariant that gate
 /// asserts: negating a conformant invoice yields a conformant invoice.
 #[cfg(feature = "bo4e")]
 #[test]

@@ -1,11 +1,11 @@
-//! The Fristen worker: the IFTSTA 21039 escalation and the execution-window
-//! sweep.
+//! The Fristen worker: the day an order becomes due, the IFTSTA 21039
+//! escalation and the execution-window sweep.
 //!
 //! The IFTSTA itself is an outbox command committed with the order's outcome
 //! and delivered by the outbox worker ([`crate::sperr::iftsta_worker`]). What
 //! this worker adds is the alarm: an order whose command was dead-lettered, or
 //! that is past the Frist undelivered, is announced once as
-//! `de.sperr.iftsta.ausstehend`.
+//! `de.mako.sperr.iftsta.ausstehend`.
 
 use std::time::Duration;
 
@@ -40,9 +40,29 @@ pub async fn run(pool: PgPool, tenant: String, shutdown: CancellationToken) {
 ///
 /// Propagates database errors.
 pub async fn sweep(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
-    let mut did_work = escalate_stuck(pool, tenant).await?;
+    let mut did_work = announce_due(pool, tenant).await?;
+    did_work |= escalate_stuck(pool, tenant).await?;
     did_work |= announce_overdue_executions(pool, tenant).await?;
     Ok(did_work)
+}
+
+/// Announce every pending order whose day has come, once: the requested date
+/// has arrived, or the order names none.
+///
+/// The claim and the announcements are one transaction, so an order is
+/// announced by one replica and never stamped without its event.
+async fn announce_due(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let due = pg::claim_due(&mut tx, tenant).await?;
+    if due.is_empty() {
+        return Ok(false);
+    }
+    for order in &due {
+        mako_service::outbox::enqueue(&mut tx, &events::auftrag_faellig(tenant, order)).await?;
+    }
+    tx.commit().await?;
+    tracing::info!(count = due.len(), "processd sperr: orders became due");
+    Ok(true)
 }
 
 /// Announce every order whose IFTSTA was dead-lettered or is overdue, once.
@@ -51,7 +71,7 @@ pub async fn sweep(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
 /// only matches an order that has not been escalated yet, and it runs first
 /// inside the transaction that also writes the event. Announcing first and
 /// stamping afterwards let two replicas — which both read the same stuck list —
-/// each emit `de.sperr.iftsta.ausstehend` for one order, and only then have one
+/// each emit `de.mako.sperr.iftsta.ausstehend` for one order, and only then have one
 /// of them lose the stamp.
 async fn escalate_stuck(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
     let stuck = pg::list_stuck_iftsta(pool, tenant).await?;
@@ -89,10 +109,10 @@ async fn announce_overdue_executions(pool: &PgPool, tenant: &str) -> anyhow::Res
     if overdue.is_empty() {
         return Ok(false);
     }
-    for (id, malo_id, lf_mp_id, faellig_am) in overdue {
+    for (id, order, faellig_am) in overdue {
+        let malo_id = &order.malo_id;
         let mut tx = pool.begin().await?;
-        events::ausfuehrung_ueberfaellig(&mut tx, tenant, id, &malo_id, &lf_mp_id, faellig_am)
-            .await?;
+        events::ausfuehrung_ueberfaellig(&mut tx, tenant, id, &order, faellig_am).await?;
         pg::mark_ausfuehrung_escalated(&mut *tx, id, tenant).await?;
         tx.commit().await?;
         tracing::warn!(

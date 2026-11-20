@@ -63,7 +63,7 @@ spec:
       The set classified is the union of the **triggering event** and the rows processd
       `list_overdue_processes` returns — the one tool this specialist holds —
       deduplicated by process_id. The trigger matters: a
-      `de.obs.deadline.approaching` alert carries a deadline that is usually
+      `de.mako.obs.deadline.approaching` alert carries a deadline that is usually
       still in the future, and a run that ignored it answered only about
       processes that had already breached — saying nothing about the one it was
       woken for.
@@ -75,7 +75,7 @@ spec:
                        but Samstag (a Saturday arrival is due Sonntag 12:00),
                        next Werktag 12:00 for a Gas Folgeprozess, 3 Werktage for
                        a Gas Initialprozess. A lapse arrives as
-                       `de.mako.antwortfrist.abgelaufen`.
+                       `de.mako.engine.antwortfrist.abgelaufen`.
         Antwortfrist   the business answer — 11:00 of the 1. Werktag for a GPKE
                        Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for
                        WiM Strom. This is what `deadline_at` holds.

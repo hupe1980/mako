@@ -13,7 +13,7 @@ a refusal, never a substitute.
 | **Database** | PostgreSQL — `einspeiser`, `eeg_anlagen`, `settlement_receipts`, `marktwert_preise`, `enfg_ledger`, … |
 | **MCP** | 20 tools, 6 prompts at `/mcp` |
 | **Typed reads** | six shared with their REST `GET`s, pinned in `mcp.snapshot.json` and `openapi.json` |
-| **Emits** | `de.eeg.verguetung.berechnet`, `de.eeg.marktpraemie.berechnet`, `de.eeg.veraeusserungsform.gewechselt`, `de.eeg.anlage.*` |
+| **Emits** | `de.mako.eeg.verguetung.berechnet`, `de.mako.eeg.marktpraemie.berechnet`, `de.mako.eeg.veraeusserungsform.gewechselt`, `de.mako.eeg.anlage.*` |
 | **Consumes** | none |
 | **Depends on** | `edmd` (feed-in), `accountingd` and `marktd` (EnFG ledger) |
 

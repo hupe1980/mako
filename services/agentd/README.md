@@ -16,7 +16,7 @@ for audit. Specialists are advisory: they file worklist rows and proposals;
 | **Specialists** | 30 manifests in [`agents/`](agents/) — 28 `tool-calling`, 2 model-free coded skills |
 | **Grants** | read-only: 161 grants across 30 manifests, each named by its procedure |
 | **Answers** | All 30 specialists declare a closed `output.schema` |
-| **Emits** | `de.agent.decision.made` to `audit_webhook_url` |
+| **Emits** | `de.mako.agent.decision.made` to `audit_webhook_url` |
 | **Consumes** | CloudEvents at `POST /webhook`, routed by each specialist's subscription |
 | **Depends on** | the MCP servers in `[mcp_servers]`; a model provider |
 

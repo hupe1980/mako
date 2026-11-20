@@ -1,7 +1,7 @@
 //! EEG payouts per receipt chain.
 //!
 //! `einsd` announces every settlement receipt it issues as
-//! `de.eeg.verguetung.berechnet` or `de.eeg.marktpraemie.berechnet`. A
+//! `de.mako.eeg.verguetung.berechnet` or `de.mako.eeg.marktpraemie.berechnet`. A
 //! settlement period — plant (`tr_id`), billing year and month — is one
 //! **receipt chain**: the initial receipt and every § 147 AO correction after
 //! it each state the *whole* amount owed for the period. Two rules follow, and
@@ -44,9 +44,9 @@ use crate::config::AccountingdConfig;
 /// Which einsd event announced a receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Art {
-    /// `de.eeg.verguetung.berechnet`.
+    /// `de.mako.eeg.verguetung.berechnet`.
     Verguetung,
-    /// `de.eeg.marktpraemie.berechnet` — the § 20 EEG 2023 Marktprämie, which
+    /// `de.mako.eeg.marktpraemie.berechnet` — the § 20 EEG 2023 Marktprämie, which
     /// the Netzbetreiber owes the plant operator (§ 19 Abs. 1 Nr. 1).
     Marktpraemie,
 }

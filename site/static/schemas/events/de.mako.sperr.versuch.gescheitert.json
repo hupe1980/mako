@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VersuchGescheitert",
+  "description": "The `data` of `de.mako.sperr.versuch.gescheitert`.",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "description": "The executing system's own reference, where the order carries one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "malo_id": {
+      "type": "string"
+    },
+    "grund": {
+      "description": "Why the visit did not succeed, as reported.",
+      "type": "string"
+    },
+    "responsible": {
+      "description": "Whom the visit is put down to, where the report said.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Responsible"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sperrversuche": {
+      "description": "The attempts made so far.",
+      "type": "integer",
+      "format": "int32"
+    },
+    "verbleibend": {
+      "description": "The attempts the Festlegung still allows.",
+      "type": "integer",
+      "format": "int32"
+    }
+  },
+  "required": [
+    "order_id",
+    "malo_id",
+    "grund",
+    "sperrversuche",
+    "verbleibend"
+  ],
+  "$defs": {
+    "Responsible": {
+      "description": "Whom an unsuccessful visit is put down to.\n\nThe Lieferant asks why a Sperrung did not happen, and „niemand angetroffen\"\nand „der Monteur kam nicht\" are different answers with different costs.",
+      "oneOf": [
+        {
+          "description": "The Anschlussnutzer: refused access, or prevented the work.",
+          "type": "string",
+          "const": "customer"
+        },
+        {
+          "description": "The firm or team sent to do the work: did not come, came unequipped.",
+          "type": "string",
+          "const": "contractor"
+        },
+        {
+          "description": "The Netzbetreiber itself: a wrong address, a withdrawn or faulty order.",
+          "type": "string",
+          "const": "operator"
+        },
+        {
+          "description": "Nobody: nobody was there, the device could not be reached.",
+          "type": "string",
+          "const": "nobody"
+        }
+      ]
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.versuch.gescheitert.json"
+}

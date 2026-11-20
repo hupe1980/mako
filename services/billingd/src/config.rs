@@ -453,7 +453,7 @@ pub struct BillingdConfig {
     pub outputd_api_key: Option<String>,
 
     /// ERP webhook URL — the webhook endpoint `default`: receives every
-    /// CloudEvent billingd emits (`de.billing.rechnung.erstellt`, …).
+    /// CloudEvent billingd emits (`de.mako.billing.rechnung.erstellt`, …).
     pub erp_webhook_url: Option<String>,
 
     /// Standard Webhooks secret the `default` endpoint is signed with.
@@ -597,7 +597,7 @@ pub struct BillingdConfig {
     pub inbound_webhook_secret: Option<String>,
 
     /// Enable automatic VPP settlement billing triggered by
-    /// `de.vpp.dispatch.confirmed` CloudEvents on `POST /api/v1/webhooks/vpp-dispatch`.
+    /// `de.mako.vpp.dispatch.confirmed` CloudEvents on `POST /api/v1/webhooks/vpp-dispatch`.
     ///
     /// When `false` (default), the webhook endpoint still accepts events but
     /// returns `202 Accepted` without triggering billing.  The `POST
@@ -912,7 +912,7 @@ pub struct BillingRunsConfig {
     /// weeks of the period end for monthly billing and six otherwise, so a
     /// nightly run that bills and does not send is a deadline nobody is
     /// keeping. Off is for a deployment whose ERP owns delivery and takes the
-    /// invoice off the `de.billing.rechnung.erstellt` event instead; the
+    /// invoice off the `de.mako.billing.rechnung.erstellt` event instead; the
     /// documents are then never recorded here, and reproducing one is that
     /// ERP's problem.
     ///
@@ -1023,7 +1023,7 @@ impl BillingdConfig {
             );
         }
         // `OutboxWorker` signs only when it has a secret. With a webhook URL
-        // and no secret every de.billing.* CloudEvent — the Rechnung events
+        // and no secret every de.mako.billing.* CloudEvent — the Rechnung events
         // accountingd books from among them — reaches the ERP unsigned, and the
         // receiver has no way to tell one from a body anybody posted.
         if !self.allow_insecure_no_auth
@@ -1032,7 +1032,7 @@ impl BillingdConfig {
         {
             anyhow::bail!(
                 "refusing to start: erp_webhook_url is set but erp_hmac_secret is not — \
-                 every de.billing.* CloudEvent would be delivered to the ERP unsigned. \
+                 every de.mako.billing.* CloudEvent would be delivered to the ERP unsigned. \
                  Configure erp_hmac_secret or set allow_insecure_no_auth = true (dev only)."
             );
         }

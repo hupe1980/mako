@@ -86,7 +86,7 @@ async fn serve(url: &str, pool: &PgPool) -> String {
 }
 
 /// An endpoint registered through `POST /api/v1/webhooks/endpoints` receives
-/// the `de.tarif.product.updated` a product write commits, and the receiver
+/// the `de.mako.tarif.product.updated` a product write commits, and the receiver
 /// verifies its signature with the secret the registration showed.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
@@ -106,7 +106,7 @@ async fn a_productd_endpoint_receives_a_verifying_delivery() {
         .json(&serde_json::json!({
             "name": "erp-test",
             "url": hook,
-            "event_types": ["de.tarif.*"],
+            "event_types": ["de.mako.tarif.*"],
         }))
         .send()
         .await

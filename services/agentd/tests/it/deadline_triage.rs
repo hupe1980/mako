@@ -31,7 +31,7 @@ use agentd::plane::{Activation, Envelope, Plane, PlaneConfig, Stores};
 
 /// The specialist under test: the one with no model at all.
 const AGENT: &str = "deadline-alert-agent";
-const EVENT_TYPE: &str = "de.obs.deadline.approaching";
+const EVENT_TYPE: &str = "de.mako.obs.deadline.approaching";
 /// The desk its Rust names, and the one it widens to.
 const AUDIENCE: &str = "marktkommunikation";
 const ESCALATION: &str = "mako-operations";

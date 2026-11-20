@@ -160,10 +160,10 @@ async fn fake_marktd() -> String {
 /// The `[webhook] inbound_secret` the suite configures.
 const WEBHOOK_SECRET: &str = "edmd-router-test-webhook-secret";
 
-/// A `de.mako.process.completed` for an MSCONS delivery, signed as `marktd`
+/// A `de.mako.engine.process.completed` for an MSCONS delivery, signed as `marktd`
 /// signs its fan-out.
 fn process_completed(pid: u32, data: &serde_json::Value) -> axum::http::Request<axum::body::Body> {
-    signed_event("de.mako.process.completed", pid, data)
+    signed_event("de.mako.engine.process.completed", pid, data)
 }
 
 /// A CloudEvent of `ce_type`, signed as `marktd` signs its fan-out.
@@ -795,7 +795,11 @@ async fn an_insrpt_orders_no_reading() {
         "malo_id": "51238696012", "sparte": "STROM",
         "melo_id": "DE0001234567890123456789012345678",
     });
-    let (status, body) = call(app, signed_event("de.mako.process.initiated", 23005, &data)).await;
+    let (status, body) = call(
+        app,
+        signed_event("de.mako.engine.process.initiated", 23005, &data),
+    )
+    .await;
     assert!(status.is_success(), "{status}: {body}");
     let orders: i64 = sqlx::query_scalar("SELECT count(*) FROM ablese_auftraege")
         .fetch_one(&pool)
@@ -910,7 +914,7 @@ async fn a_malo_update_refreshes_its_cached_bundesland() {
     };
     let updated = |malo: &str| {
         let body = serde_json::json!({
-            "specversion": "1.0", "type": "de.markt.malo.updated",
+            "specversion": "1.0", "type": "de.mako.markt.malo.updated",
             "source": "/marktd/test", "id": uuid::Uuid::new_v4().to_string(),
             "subject": malo, "data": { "version": 1 },
         })
@@ -1119,4 +1123,166 @@ async fn an_edmd_event_reaches_a_subscribed_endpoint() {
     assert_eq!(event["subject"], "51238696012", "{event}");
     mako_service::webhook::verify_request(Some(ERP_SECRET.as_bytes()), &headers, &bytes)
         .expect("the delivery carries a valid Standard Webhooks signature");
+}
+
+/// A reading order carries the executing system's reference from its creation
+/// to its last event, the reference names one order, and each order is
+/// announced once — whichever path wrote it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_reading_order_echoes_its_external_ref_and_is_announced_once() {
+    use axum::http::StatusCode;
+    let Some((cfg, pool, _pg)) = database().await else {
+        return;
+    };
+    let tenant = cfg["identity"]["tenant"]
+        .as_str()
+        .expect("an [identity] tenant")
+        .to_owned();
+    let app = mako_service::build_for_test_on::<edmd::Edmd>(edmd_config(cfg), pool.clone())
+        .await
+        .expect("the router builds");
+    let order = |external_ref: Option<&str>, geplant_am: &str| {
+        serde_json::json!({
+            "malo_id": "51238696012", "anlass": "SONDERABLESUNG", "auftraggeber_rolle": "NB",
+            "geplant_am": geplant_am, "sparte": "STROM", "external_ref": external_ref,
+        })
+    };
+
+    let (status, first) = call(
+        app.clone(),
+        json_request(
+            "POST",
+            "/api/v1/reading-orders",
+            &order(Some("JOB-1"), "2026-06-01"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let first = first["id"].as_str().expect("an id").to_owned();
+
+    let (status, taken) = call(
+        app.clone(),
+        json_request(
+            "POST",
+            "/api/v1/reading-orders",
+            &order(Some("JOB-1"), "2026-06-02"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{taken}");
+    assert_eq!(taken["code"], "external_ref_taken");
+
+    // An order written by another path gets its reference attached.
+    let (status, second) = call(
+        app.clone(),
+        json_request("POST", "/api/v1/reading-orders", &order(None, "2026-06-03")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    let second = second["id"].as_str().expect("an id").to_owned();
+    let attach = |id: &str, external_ref: &str| {
+        json_request(
+            "PUT",
+            &format!("/api/v1/reading-orders/{id}/external-ref"),
+            &serde_json::json!({ "external_ref": external_ref }),
+        )
+    };
+    let (status, body) = call(app.clone(), attach(&second, "JOB-1")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, body) = call(app.clone(), attach(&second, "JOB-2")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, found) = call(
+        app.clone(),
+        axum::http::Request::builder()
+            .uri("/api/v1/reading-orders?external_ref=JOB-2")
+            .body(axum::body::Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found.as_array().map(Vec::len), Some(1), "{found}");
+    assert_eq!(found[0]["id"], second.as_str());
+
+    // The published vocabulary is what `fail` accepts.
+    let (status, reasons) = call(
+        app.clone(),
+        axum::http::Request::builder()
+            .uri("/api/v1/reading-orders/fail-reasons")
+            .body(axum::body::Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reasons}");
+    let kein_zutritt = reasons
+        .as_array()
+        .and_then(|r| r.iter().find(|e| e["code"] == "KEIN_ZUTRITT"))
+        .expect("KEIN_ZUTRITT is published");
+    assert_eq!(kein_zutritt["label"], "Kein Zutritt");
+
+    let (status, body) = call(
+        app.clone(),
+        json_request(
+            "PUT",
+            &format!("/api/v1/reading-orders/{first}/fail"),
+            &serde_json::json!({ "grund": "KEIN_ZUTRITT", "notiz": "Hoftor verschlossen" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = call(
+        app.clone(),
+        json_request(
+            "PUT",
+            &format!("/api/v1/reading-orders/{second}/complete"),
+            &serde_json::json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    assert_eq!(
+        edmd::server::announce_created(&pool, &tenant)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        edmd::server::announce_created(&pool, &tenant)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let events: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT ce_type, envelope->'data'->>'order_id', envelope->'data'->>'external_ref' \
+           FROM event_outbox WHERE ce_type LIKE 'de.mako.messwert.reading.order.%' ORDER BY ce_type",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("the outbox reads");
+    let of = |ty: &str| -> Vec<(Option<&str>, Option<&str>)> {
+        events
+            .iter()
+            .filter(|(t, _, _)| t == ty)
+            .map(|(_, id, r)| (id.as_deref(), r.as_deref()))
+            .collect()
+    };
+    assert_eq!(
+        of(mako_events::messwert::READING_ORDER_FAILED),
+        vec![(Some(first.as_str()), Some("JOB-1"))]
+    );
+    assert_eq!(
+        of(mako_events::messwert::READING_ORDER_COMPLETED),
+        vec![(Some(second.as_str()), Some("JOB-2"))]
+    );
+    let mut created = of(mako_events::messwert::READING_ORDER_CREATED);
+    created.sort_unstable();
+    let mut expected = vec![
+        (Some(first.as_str()), Some("JOB-1")),
+        (Some(second.as_str()), Some("JOB-2")),
+    ];
+    expected.sort_unstable();
+    assert_eq!(created, expected, "each order announced once: {events:?}");
 }

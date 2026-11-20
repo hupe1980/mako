@@ -26,7 +26,7 @@ Roles and identifiers are in the [domain model](@/docs/architecture/domain-model
   import, Kafka, and the Zählerstandsgang.
 - Validates every batch, one series per register, with `metering`'s
   validation rules and grades it A/B/C/F; raises
-  `de.messwert.reading.quality.warning` from every ingest door.
+  `de.mako.messwert.reading.quality.warning` from every ingest door.
 - Fills gaps with § 60 Abs. 1 MsbG Ersatzwerte and tracks their confirmation.
 - Serves the projected energy series, BO4E `Energiemenge` / `Lastgang` /
   `Zeitreihe` exports, `MeterBillingPeriod`, the Mehr-/Mindermengensaldo, the
@@ -88,11 +88,11 @@ graph TB
     catalog["/api/v1/iceberg<br/>meterstore CatalogFacade<br/>(read-only · Cedar read-archive-olap)"]
     qa["quality engine<br/>metering vee::validation<br/>per register"]
 
-    marktd -->|"de.mako.process.* <br/>HMAC POST /webhook"| edmd
+    marktd -->|"de.mako.engine.process.* <br/>HMAC POST /webhook"| edmd
     smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}<br/>POST /api/v1/meter-reads/gas/{malo_id}"| edmd
     edmd --> qa
     qa -->|"annotated reads (ValidatedReads)"| store
-    qa -->|"grade C/F <b>or</b> any finding<br/>de.messwert.reading.quality.warning"| erp
+    qa -->|"grade C/F <b>or</b> any finding<br/>de.mako.messwert.reading.quality.warning"| erp
     edmd --> edmdpg
     edmd -->|"mounts"| catalog
     catalog -.->|"table schemas + locations"| cold
@@ -155,6 +155,8 @@ graph TB
 │  PUT  /api/v1/reading-orders/{id}/complete                 ← record the reading               │
 │  PUT  /api/v1/reading-orders/{id}/cancel                   ← withdraw the order               │
 │  PUT  /api/v1/reading-orders/{id}/fail                     ← Ablesehindernis — still owed     │
+│  PUT  /api/v1/reading-orders/{id}/external-ref             ← the executing system's reference │
+│  GET  /api/v1/reading-orders/fail-reasons                  ← the Ablesehindernis vocabulary   │
 │  POST /api/v1/reading-orders/campaign                      ← Jahresablese-Kampagne            │
 │  GET  /api/v1/compliance/jahresablesung/{year}             ← § 40b Abs. 1 EnWG report         │
 │                                                                                               │
@@ -292,8 +294,8 @@ Iceberg catalog metadata pool of up to 4 — `meter_reads`, `esa_typ2_reads` and
 
 **What marktd delivers.** edmd registers nothing: marktd delivers to edmd's
 entry in its own `[[subscriptions.endpoints]]` — `url`
-`http://edmd:8380/webhook`, `event_types` `de.mako.process.completed` and
-`de.markt.malo.updated`, `secret` the `[webhook] inbound_secret` above (see
+`http://edmd:8380/webhook`, `event_types` `de.mako.engine.process.completed` and
+`de.mako.markt.malo.updated`, `secret` the `[webhook] inbound_secret` above (see
 [marktd's fan-out](@/docs/services/marktd.md#fan-out)). Verify its deliveries:
 
 ```bash
@@ -408,10 +410,10 @@ defaulted to zero.
 
 | `ce_type` | `makopid` | Action |
 |-----------|-----------|--------|
-| `de.mako.process.completed` | MSCONS set | Store readings |
-| `de.mako.process.completed` | 55002 / 55078, verdict accepted | `LIEFERBEGINN` reading order (GPKE Beginn-/Schlussablesung) |
-| `de.mako.process.completed` | 55005 (Abmeldung confirmed), 55008 (the Lieferant's Zustimmung to the NB's Lieferende, GPKE Teil 2 Kap. 2.5.2.2 Nr. 2) or 55007 with `ohne_antwort` (the NB's Beendigung aufgrund fehlender Antwort, Nr. 3), verdict accepted | `LIEFERENDE` reading order, planned for the completion's `process_date` |
-| `de.markt.malo.updated` | — | Re-read the MaLo's Bundesland at `marktd` into `malo_bundesland` |
+| `de.mako.engine.process.completed` | MSCONS set | Store readings |
+| `de.mako.engine.process.completed` | 55002 / 55078, verdict accepted | `LIEFERBEGINN` reading order (GPKE Beginn-/Schlussablesung) |
+| `de.mako.engine.process.completed` | 55005 (Abmeldung confirmed), 55008 (the Lieferant's Zustimmung to the NB's Lieferende, GPKE Teil 2 Kap. 2.5.2.2 Nr. 2) or 55007 with `ohne_antwort` (the NB's Beendigung aufgrund fehlender Antwort, Nr. 3), verdict accepted | `LIEFERENDE` reading order, planned for the completion's `process_date` |
+| `de.mako.markt.malo.updated` | — | Re-read the MaLo's Bundesland at `marktd` into `malo_bundesland` |
 | anything else | — | 204 (ignored) |
 
 A GPKE order's `auftraggeber_rolle` is the `marktrole` marktd sets on the
@@ -736,7 +738,7 @@ Every stored `ESTIMATED`/`SUBSTITUTED` interval opens an entry in
 slot (MaLo, `dtm_from`, register) resolves it. The daily `[confirmation]` worker
 moves entries open longer than `deadline_weeks` (8, modelled on the MaBiS
 BKA-Korrekturfenster; no statutory Frist exists) to `UEBERFAELLIG` and emits
-`de.messwert.reading.confirmation.overdue`.
+`de.mako.messwert.reading.confirmation.overdue`.
 
 `GET /api/v1/confirmations?status=UEBERFAELLIG` lists them.
 
@@ -843,7 +845,7 @@ energy register.
 | **C** | Substitute the affected slots first |
 | **F** | `billing_blocked` — the window needs clarifying |
 
-`de.messwert.reading.quality.warning` fires on a grade C/F **or** any finding,
+`de.mako.messwert.reading.quality.warning` fires on a grade C/F **or** any finding,
 from every door; `ingest_door` names it (`mscons`, `rlm-direct-push`,
 `iot-push`, `bulk-import`, `kafka-ingest`). The same predicate decides `202` vs
 `201`.
@@ -1193,11 +1195,13 @@ Orders live in `ablese_auftraege`, linked to their origin by
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/reading-orders` | Create |
-| `GET` | `/api/v1/reading-orders` | List (`?malo_id=&status=&anlass=&limit=`) |
+| `GET` | `/api/v1/reading-orders` | List (`?malo_id=&status=&anlass=&external_ref=&limit=`) |
 | `GET` | `/api/v1/reading-orders/{id}` | Status and result |
 | `PUT` | `/api/v1/reading-orders/{id}/complete` | Record the reading (with `mscons_ref` when it came by MSCONS) |
 | `PUT` | `/api/v1/reading-orders/{id}/cancel` | Withdraw — the obligation is discharged |
 | `PUT` | `/api/v1/reading-orders/{id}/fail` | Ablesehindernis — still owed |
+| `PUT` | `/api/v1/reading-orders/{id}/external-ref` | Attach the executing system's reference |
+| `GET` | `/api/v1/reading-orders/fail-reasons` | The Ablesehindernis vocabulary, with German labels |
 | `POST` | `/api/v1/reading-orders/campaign` | Jahresablese-Kampagne |
 | `GET` | `/api/v1/compliance/jahresablesung/{year}` | § 40b Abs. 1 EnWG report |
 
@@ -1230,9 +1234,16 @@ PUT /api/v1/reading-orders/{id}/fail
 
 `grund`: `KEIN_ZUTRITT`, `ZAEHLER_UNZUGAENGLICH`, `ZAEHLER_DEFEKT`,
 `ZAEHLER_NICHT_AUFFINDBAR`, `KUNDE_VERWEIGERT`, `ABLESUNG_UNPLAUSIBEL`,
-`SONSTIGES` (use `notiz`). `FEHLGESCHLAGEN` without a grund is refused by a
-`CHECK`. Failing emits `de.messwert.reading.order.failed`; completing emits
-nothing — `billingd` reads the Zählerstand from the billing period.
+`SONSTIGES` (use `notiz`) — the list `GET …/fail-reasons` serves with its
+labels. `FEHLGESCHLAGEN` without a grund is refused by a `CHECK`.
+
+An order is announced as `de.mako.messwert.reading.order.created` within half a
+minute of being written, whichever path wrote it — the API, a market process
+or the campaign; `…completed` and `…failed` commit with the completion and the
+failure. `external_ref` is the executing system's own reference — one opaque
+string, unique per tenant, given on creation or attached afterwards — and all
+three events echo it. `billingd` reads the Zählerstand from the billing
+period, not from the event.
 
 - **No order closes itself**, an iMSys's included: an arriving MSCONS reading is
   stored but does not touch the order. Until `complete`/`cancel`/`fail`, an order
@@ -1482,7 +1493,7 @@ curl -s "http://edmd:8380/api/v1/smgw/compliance" -H "Authorization: Bearer <tok
 curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" -H "Authorization: Bearer <token>"  # sweep + events
 ```
 
-`de.messwert.cls.compliance-issue` payload:
+`de.mako.messwert.cls.compliance-issue` payload:
 
 ```json
 {
@@ -1507,14 +1518,16 @@ accumulate in `event_outbox`, where `GET /api/v1/events` serves them.
 
 | Type | Raised by | When |
 |---|---|---|
-| `de.messwert.reading.direct.stored` | every direct-push ingest | A batch committed — `billingd` recomputes |
-| `de.messwert.reading.quality.warning` | every ingest door + rescore | grade C/F or any validation finding |
-| `de.messwert.reading.order.failed` | `PUT /reading-orders/{id}/fail` | An Ablesehindernis; the reading is still owed |
-| `de.messwert.reading.confirmation.overdue` | confirmation worker | One aggregate per sweep of newly overdue § 60 Abs. 1 estimates |
-| `de.messwert.reading.delivery.overdue` / `.resumed` | delivery sweep | A point went `SILENT`/`UNDER_COVERED` / recovered |
-| `de.messwert.esa.typ2.delivery.overdue` / `.resumed` | Typ-2 sweep | An ESA subscription register went silent / resumed |
-| `de.messwert.cls.compliance-issue` / `-resolved` | SMGW sweep | A §14a / certificate fault entered / left the register |
-| `de.messwert.smgw.cert.expiry-warning` | cert-expiry worker | 90 / 30 / 7 days before `valid_to`, once per tier |
+| `de.mako.messwert.reading.direct.stored` | every direct-push ingest | A batch committed — `billingd` recomputes |
+| `de.mako.messwert.reading.quality.warning` | every ingest door + rescore | grade C/F or any validation finding |
+| `de.mako.messwert.reading.order.created` | a reading order was written, by any path | The order, with what is to be read and by when |
+| `de.mako.messwert.reading.order.completed` | `PUT /reading-orders/{id}/complete` | The reading taken, with its instant and unit |
+| `de.mako.messwert.reading.order.failed` | `PUT /reading-orders/{id}/fail` | An Ablesehindernis; the reading is still owed |
+| `de.mako.messwert.reading.confirmation.overdue` | confirmation worker | One aggregate per sweep of newly overdue § 60 Abs. 1 estimates |
+| `de.mako.messwert.reading.delivery.overdue` / `.resumed` | delivery sweep | A point went `SILENT`/`UNDER_COVERED` / recovered |
+| `de.mako.messwert.esa.typ2.delivery.overdue` / `.resumed` | Typ-2 sweep | An ESA subscription register went silent / resumed |
+| `de.mako.messwert.cls.compliance-issue` / `-resolved` | SMGW sweep | A §14a / certificate fault entered / left the register |
+| `de.mako.messwert.smgw.cert.expiry-warning` | cert-expiry worker | 90 / 30 / 7 days before `valid_to`, once per tier |
 
 Subscribe to both halves of each pair; the registers announce only transitions.
 
@@ -1689,7 +1702,7 @@ not install; `GET /api/v1/archive/status` is the tiering signal it serves.
 
 | Watch | Target |
 |--------|--------|
-| Webhook `de.mako.process.*` success rate | > 99 % |
+| Webhook `de.mako.engine.process.*` success rate | > 99 % |
 | DB pool utilisation | < 80 % |
 | meterstore watermark lag (oldest hot-tier interval) | Within the settlement lag |
 | `GET /api/v1/surveillance/delivery?state=SILENT` | Empty, or explained |
@@ -1714,7 +1727,7 @@ not install; `GET /api/v1/archive/status` is the tiering signal it serves.
   identifiers, the BO4E gate.
 - [PID reference](@/docs/regulatory/pid-reference.md) — every Prüfidentifikator
   and its routing workflow.
-- [makod](@/docs/services/makod.md) — produces the `de.mako.process.*` events edmd
+- [makod](@/docs/services/makod.md) — produces the `de.mako.engine.process.*` events edmd
   consumes.
 - [netzbilanzd](@/docs/services/netzbilanzd.md) — reads `MeterBillingPeriod`, and the
   Summenzeitreihe it files with the BIKO.
@@ -1723,4 +1736,4 @@ not install; `GET /api/v1/archive/status` is the tiering signal it serves.
 - [einsd](@/docs/services/einsd.md) — reads the Einspeisung for the §51 EEG
   reduction.
 - [agentd](@/docs/services/agentd.md) — the specialists consuming
-  `de.messwert.*`.
+  `de.mako.messwert.*`.

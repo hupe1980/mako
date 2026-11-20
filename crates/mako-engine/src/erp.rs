@@ -30,7 +30,7 @@
 //!   "specversion": "1.0",
 //!   "id": "<idempotency_key>",
 //!   "source": "urn:mako:makod:tenant:<tenant_id>",
-//!   "type": "de.mako.aperak.accepted",
+//!   "type": "de.mako.engine.aperak.accepted",
 //!   "time": "2026-10-01T10:15:00+02:00",
 //!   "subject": "<process_id>",
 //!   "dataschema": "https://.../Marktlokation.json",
@@ -65,7 +65,7 @@ use crate::erc::ErcCode;
 use crate::ids::{ConversationId, EventId, ProcessId, TenantId};
 
 /// The outbox `message_type` of the lapse notice: the ERP notification that a
-/// business Frist lapsed (`de.mako.antwortfrist.abgelaufen`).
+/// business Frist lapsed (`de.mako.engine.antwortfrist.abgelaufen`).
 ///
 /// [`Process::run_timeout`](crate::process::Process::run_timeout) enqueues it
 /// for every label a workflow lists in

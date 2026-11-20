@@ -106,7 +106,7 @@ that marks the delivery done, and a failure there is recorded in the row's
 `last_error`, not retried as a second UTILMD 55001. A Stornierung or a
 withdrawn Kündigung parks the commands not yet delivered.
 
-The same table carries every `de.vertrag.*` CloudEvent, statutory notices
+The same table carries every `de.mako.vertrag.*` CloudEvent, statutory notices
 included. A crash costs a retry, never an obligation; what retries could not
 discharge is the operator's queue:
 
@@ -359,7 +359,7 @@ A `lieferende` earlier than the rule allows is a **422 quoting the rule**.
 Otherwise one transaction records the end date on each live component, enqueues
 the Lieferende UTILMDs and the Schlussablesung (a task of its own, so a
 `processd` outage cannot cost the reading), sets `vertragsende` and
-`kuendigung_zum`, clears `auto_renewal`, and emits `de.vertrag.kuendigung` with
+`kuendigung_zum`, clears `auto_renewal`, and emits `de.mako.vertrag.kuendigung` with
 the § 41 Abs. 8 Nr. 2 EnWG Textform confirmation. `eingang` records when the
 Kündigung was received, since the notice period runs from receipt.
 
@@ -370,7 +370,7 @@ Transaktionsgrund, which both columns make Muss: `UMZUG` is `E01` „Ein-/Auszug
 makod adds the Strom Lokationsart from the MaLo.
 
 Supply continues until the Lieferende: the daily worker ends the components then
-and closes the contract with `de.vertrag.abgeschlossen`.
+and closes the contract with `de.mako.vertrag.abgeschlossen`.
 
 ### Widerruf and Stornierung
 
@@ -439,6 +439,15 @@ the Anmeldung needs. Each refusal is a stable
 | `malo_id_abweichend` | 422 | the order's MaLo-ID is not the offer's |
 | `lieferbeginn_zu_frueh` | 422 | `fruehestens` — the offer's, or the Widerrufsfrist's below |
 | `anmeldedaten_unvollstaendig` | 422 | `fehlend: [...]` — a fact the Anmeldung needs |
+| `kunde_unbekannt` | 422 | `kunde.kunden_id` names no Kunde of this deployment |
+
+A `422` is final for that body: sending it again tomorrow is refused again,
+so a front end shows it to a person. The two `409`s pass — set the policy, or
+wait for the first request — and are the ones to retry.
+
+The answer names the `kunden_id`. A later order for the same person carries it
+as `kunde.kunden_id` and concludes under that Kunde, whose stored data it
+leaves as it is; without it every order creates a Kunde.
 
 The same key with the same body answers the first response unchanged; a
 hundred concurrent replays conclude one contract. Under `mit_bestellung` the
@@ -488,7 +497,7 @@ ends on the Lieferende path (`"LIEFERENDE"`) and the record states whether
 Wertersatz is owed — only when it holds both the express request and the
 Wertersatz information (§ 357a Abs. 2 Satz 1 Nr. 1 and Nr. 3 BGB). The contract
 becomes `WIDERRUFEN`, and the § 356a Abs. 4 BGB `WIDERRUFSBESTAETIGUNG` and
-`de.vertrag.widerruf.eingegangen` are owed. A second timely Widerruf answers
+`de.mako.vertrag.widerruf.eingegangen` are owed. A second timely Widerruf answers
 `200` with the first. A late one is recorded, its receipt confirmed, and
 refused `422 widerrufsfrist_abgelaufen` with the `frist`. A Widerruf of an
 order not yet accepted closes it `WIDERRUFEN`. A contract not concluded online
@@ -668,7 +677,7 @@ AO; `anonymization_log` records what, by whom and why.
 | Worker | Cadence | What it does |
 |---|---|---|
 | Outbound | per `mako_service::outbox` | One command worker each for processd, edmd and accountingd |
-| Webhooks | per `mako_service::subscriptions` | Fans `de.vertrag.*` out to every matching webhook endpoint, `default` (the ERP) included |
+| Webhooks | per `mako_service::subscriptions` | Fans `de.mako.vertrag.*` out to every matching webhook endpoint, `default` (the ERP) included |
 | Preisanpassung | daily | Sends the § 41 Abs. 5 notice for every scheduled Tarifwechsel whose notice is still owed, issues it as a document where `outputd` is configured, and logs at `ERROR` every change that took effect **without** its notice |
 | Auto-renewal | daily | Announces the extension once per term, then applies it |
 | Ablauf | daily | Ends supply whose Lieferende has passed and closes the contract behind it; announces a term or price guarantee running out, once per date |
@@ -725,9 +734,9 @@ A **consumer** contract becomes **unbefristet** with at most a month's notice
 
 ## CloudEvents emitted
 
-Fifteen `de.vertrag.*` types, all through `event_outbox` and all signed per
+Seventeen `de.mako.vertrag.*` types, all through `event_outbox` and all signed per
 [Standard Webhooks](https://www.standardwebhooks.com/).
-Each carries the `tenantid` and `correlationid` extensions. The eleven contract
+Each carries the `tenantid` and `correlationid` extensions. The thirteen contract
 events carry `subject` = the Vertrags-UUID and `correlationid` repeats it, so a
 consumer can join every event of one contract without parsing `data`. The four
 order events below carry `subject` = the front end's `bestellreferenz` and
@@ -736,27 +745,38 @@ by its own reference.
 
 | `type` | When | Beyond `vertrag_id` |
 |---|---|---|
-| `de.vertrag.aktiv` | Every component NB-confirmed | — |
-| `de.vertrag.kuendigung` | A Kündigung is accepted and the Lieferende dispatched | `lieferende`, `grund`, `frist`, `rechtsgrundlage`, and the § 41 Abs. 8 Nr. 2 EnWG `kuendigungsbestaetigung` block |
-| `de.vertrag.gekuendigt` | One child of a Rahmenvertrag-Kündigung cascade | as above, plus `rahmenvertrag_id` / `rahmenvertrag_nr` |
-| `de.vertrag.kuendigung-widerrufen` | `POST /widerruf-kuendigung` reverted a Kündigung still ahead of its Lieferende | — |
-| `de.vertrag.abgeschlossen` | The daily Ablauf worker ended the last component | `status: "ABGELAUFEN"` |
-| `de.vertrag.tarifwechsel` | A product change effective **today or earlier** | `komp_id`, `malo_id`, `old`/`new_product_code`, `wirksamkeit`, `initiator`, `sonderkuendigungsrecht` |
-| `de.vertrag.tarifwechsel-geplant` | The same change dated in the **future** — a slice that starts later, not a pending state | same payload, `geplant: true` |
-| `de.vertrag.preisaenderung.ankuendigung` | The § 41 Abs. 5 notice, sent as soon as the change is scheduled | the regime, `frist_gewahrt`, `umfang[]` + `umfang_vollstaendig`, `sonderkuendigungsrecht`, `dokument_id` |
-| `de.vertrag.preisgarantie-hinterlegt` | `PUT /vertraege/{id}/preisgarantie` stored or replaced a price lock | `preisgarantie_bis` |
-| `de.vertrag.autoerneuerung.ankuendigung` | 30 days before an automatic extension | `vertragsende`, `verlaengerung` (`UNBEFRISTET` with § 309 Nr. 9 lit. b BGB, or `BEFRISTET` with the new end) |
-| `de.vertrag.ablauf.ankuendigung` | 30 days before a `vertragsende` or a `preisgarantie_bis` | `faellig_am`, `auto_renewal`, `standort_bezeichnung` |
+| `de.mako.vertrag.aktiv` | Every component NB-confirmed | — |
+| `de.mako.vertrag.lieferbeginn.bestaetigt` | The grid operator confirmed one component's Anmeldung | `vertrags_nr`, `kunden_id`, the caller's `erp_contract_id` / `bestellreferenz`, `komp_id`, `sparte`, `malo_id`, `lieferbeginn` |
+| `de.mako.vertrag.lieferbeginn.abgelehnt` | The grid operator refused it | the same, plus `antwortcode`, the `codeliste` that defines it, and `reason` |
+| `de.mako.vertrag.kuendigung` | A Kündigung is accepted and the Lieferende dispatched | `lieferende`, `grund`, `frist`, `rechtsgrundlage`, and the § 41 Abs. 8 Nr. 2 EnWG `kuendigungsbestaetigung` block |
+| `de.mako.vertrag.gekuendigt` | One child of a Rahmenvertrag-Kündigung cascade | as above, plus `rahmenvertrag_id` / `rahmenvertrag_nr` |
+| `de.mako.vertrag.kuendigung-widerrufen` | `POST /widerruf-kuendigung` reverted a Kündigung still ahead of its Lieferende | — |
+| `de.mako.vertrag.abgeschlossen` | The daily Ablauf worker ended the last component | `status: "ABGELAUFEN"` |
+| `de.mako.vertrag.tarifwechsel` | A product change effective **today or earlier** | `komp_id`, `malo_id`, `old`/`new_product_code`, `wirksamkeit`, `initiator`, `sonderkuendigungsrecht` |
+| `de.mako.vertrag.tarifwechsel-geplant` | The same change dated in the **future** — a slice that starts later, not a pending state | same payload, `geplant: true` |
+| `de.mako.vertrag.preisaenderung.ankuendigung` | The § 41 Abs. 5 notice, sent as soon as the change is scheduled | the regime, `frist_gewahrt`, `umfang[]` + `umfang_vollstaendig`, `sonderkuendigungsrecht`, `dokument_id` |
+| `de.mako.vertrag.preisgarantie-hinterlegt` | `PUT /vertraege/{id}/preisgarantie` stored or replaced a price lock | `preisgarantie_bis` |
+| `de.mako.vertrag.autoerneuerung.ankuendigung` | 30 days before an automatic extension | `vertragsende`, `verlaengerung` (`UNBEFRISTET` with § 309 Nr. 9 lit. b BGB, or `BEFRISTET` with the new end) |
+| `de.mako.vertrag.ablauf.ankuendigung` | 30 days before a `vertragsende` or a `preisgarantie_bis` | `faellig_am`, `auto_renewal`, `standort_bezeichnung` |
 
 | `type` | When | `data` |
 |---|---|---|
-| `de.vertrag.bestellung.eingegangen` | An order was recorded | `bestellung_id`, `bestellreferenz`, `bestellnachweis` (`id`, `sha256`), `eingegangen_am` |
-| `de.vertrag.bestellung.angenommen` | The contract came about — at the order under `mit_bestellung`, at `/annehmen` under `mit_annahme` | `bestellung_id`, `bestellreferenz`, `vertrag_id`, `vertrags_nr`, `vertragsschluss_am`, `widerrufsfrist` |
-| `de.vertrag.bestellung.abgelehnt` | `/ablehnen` refused an order | `bestellung_id`, `bestellreferenz`, `grund` |
-| `de.vertrag.widerruf.eingegangen` | A Widerruf was recorded, timely or late | `bestellung_id`, `bestellreferenz`, `vertrag_id`, `widerruf` (`rechtzeitig`, `frist`, `wirkung`, `lieferende`, `wertersatz_geschuldet`) |
+| `de.mako.vertrag.bestellung.eingegangen` | An order was recorded | `bestellung_id`, `bestellreferenz`, `bestellnachweis` (`id`, `sha256`), `eingegangen_am` |
+| `de.mako.vertrag.bestellung.angenommen` | The contract came about — at the order under `mit_bestellung`, at `/annehmen` under `mit_annahme` | `bestellung_id`, `bestellreferenz`, `vertrag_id`, `vertrags_nr`, `vertragsschluss_am`, `widerrufsfrist` |
+| `de.mako.vertrag.bestellung.abgelehnt` | `/ablehnen` refused an order | `bestellung_id`, `bestellreferenz`, `grund` |
+| `de.mako.vertrag.widerruf.eingegangen` | A Widerruf was recorded, timely or late | `bestellung_id`, `bestellreferenz`, `vertrag_id`, `widerruf` (`rechtzeitig`, `frist`, `wirkung`, `lieferende`, `wertersatz_geschuldet`) |
 
-Subscribe to `de.vertrag.kuendigung` and `de.vertrag.kuendigung-widerrufen`
+Subscribe to `de.mako.vertrag.kuendigung` and `de.mako.vertrag.kuendigung-widerrufen`
 together, or a revoked termination stays acted on.
+
+The two `lieferbeginn` types are what a system that handed a contract over
+waits for: one per component, with its own reference on it and a published
+schema ([event catalog](@/docs/reference/events.md)). `de.mako.vertrag.aktiv` says
+only that every component of a contract is confirmed.
+`GET /api/v1/vertraege?erp_contract_id=` or `?bestellreferenz=` finds a
+contract by that reference in any status, a refused one included; each
+component then shows `abgelehnt_erc` and `abgelehnt_reason`. An
+Antwortcode means what its Codeliste says and nothing else.
 
 ### Webhooks
 

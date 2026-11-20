@@ -12,8 +12,8 @@ speaks no EDIFACT: Anmeldung and Kündigung reach the market through `processd`.
 | **Port** | 9780 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL, `public` schema (`migrations/0001_schema.sql`) |
 | **MCP** | 22 tools, 4 prompts at `/mcp` |
-| **Emits** | `de.vertrag.*` (contract lifecycle, Bestellung, Widerruf) through the transactional outbox, to every matching webhook endpoint |
-| **Consumes** | `de.mako.*` process outcomes at `POST /api/v1/events`; `de.tarif.angebot.angenommen` at `POST /api/v1/webhooks/angebot` |
+| **Emits** | `de.mako.vertrag.*` (contract lifecycle, Bestellung, Widerruf) through the transactional outbox, to every matching webhook endpoint |
+| **Consumes** | `de.mako.engine.*` process outcomes at `POST /api/v1/events`; `de.mako.tarif.angebot.angenommen` at `POST /api/v1/webhooks/angebot` |
 | **Depends on** | processd, accountingd, edmd, outputd, productd |
 
 ## Run

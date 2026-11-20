@@ -33,120 +33,114 @@ const BASE: &str = "https://hupe1980.github.io/mako/schemas/events/";
 
 /// Non-phantom types emitted without a payload bound to them.
 const UNTYPED: &[&str] = &[
-    "de.accounting.abschlag.posted",
-    "de.accounting.abwendung.angeboten",
-    "de.accounting.abwendung.gebrochen",
-    "de.accounting.bankruecklast",
-    "de.accounting.eeg.payout.rejected",
-    "de.accounting.entsperrauftrag",
-    "de.accounting.erstattung.faellig",
-    "de.accounting.interest.charged",
-    "de.accounting.jahresabschluss.abgeschlossen",
-    "de.accounting.mahnung.issued",
-    "de.accounting.payee.verification-mismatch",
-    "de.accounting.payment.due",
-    "de.accounting.payment.imported",
-    "de.accounting.sepa.collection-rejected",
-    "de.accounting.sepa.recall-requested",
-    "de.accounting.sepa.recall-resolved",
-    "de.accounting.sepa.reversal-issued",
-    "de.accounting.sperrandrohung",
-    "de.accounting.sperrankuendigung",
-    "de.accounting.sperrauftrag",
-    "de.agent.decision.made",
-    "de.billing.rechnung.erstellt",
-    "de.billing.xrechnung.b2g.ready",
-    "de.eeg.anlage.foerderung-auslaufend",
-    "de.eeg.anlage.mastr-registriert",
-    "de.eeg.marktpraemie.berechnet",
-    "de.eeg.settlement.batch-due",
-    "de.eeg.veraeusserungsform.gewechselt",
-    "de.eeg.verguetung.berechnet",
-    "de.gabi.alocat.missing",
-    "de.gabi.nomination.curtailed",
-    "de.gabi.nomination.rejected",
-    "de.gabi.nomres.missing",
-    "de.invoic.payment.overdue",
-    "de.invoic.receipt.disputed",
-    "de.invoic.receipt.settled",
-    "de.mabis.korrekturbedarf.opened",
-    "de.mabis.submission.failed",
-    "de.mako.abmeldeanfrage.beantwortet",
-    "de.mako.antwortfrist.abgelaufen",
-    "de.mako.aperak.accepted",
-    "de.mako.aperak.rejected",
-    "de.mako.contrl.received",
-    "de.mako.dead-letter.recorded",
-    "de.mako.edifact.outbound",
-    "de.mako.malo.identified",
-    "de.mako.netzzugang.uebermittlungsbedarf",
-    "de.mako.process.completed",
-    "de.mako.process.failed",
-    "de.mako.process.initiated",
-    "de.markt.einwilligung.erteilt",
-    "de.markt.einwilligung.widerrufen",
-    "de.markt.geraet.konfiguration.updated",
-    "de.markt.malo.stammdaten-geaendert",
-    "de.markt.malo.updated",
-    "de.markt.melo.updated",
-    "de.markt.mmma.import.failed",
-    "de.markt.mmma.import.success",
-    "de.markt.msb-rahmenvertrag.updated",
-    "de.markt.nb-contract.updated",
-    "de.markt.netzzugang.antrag.updated",
-    "de.markt.partner.updated",
-    "de.markt.pricat.published",
-    "de.markt.sr.konfigurationsprodukt.updated",
-    "de.markt.stammdaten.geaendert",
-    "de.markt.versorgung.changed",
-    "de.markt.versorgung.eog-begonnen",
-    "de.markt.versorgung.ersatz-auslaufend",
-    "de.markt.versorgung.gap-detected",
-    "de.messwert.cls.compliance-issue",
-    "de.messwert.cls.compliance-resolved",
-    "de.messwert.esa.typ2.delivery.overdue",
-    "de.messwert.esa.typ2.delivery.resumed",
-    "de.messwert.reading.confirmation.overdue",
-    "de.messwert.reading.delivery.overdue",
-    "de.messwert.reading.delivery.resumed",
-    "de.messwert.reading.direct.stored",
-    "de.messwert.reading.order.failed",
-    "de.messwert.reading.quality.warning",
-    "de.messwert.smgw.cert.expiry-warning",
-    "de.netzbilanz.invoic.dispatch-overdue",
-    "de.netzbilanz.invoic.dispatched",
-    "de.netzbilanz.invoic.disputed",
-    "de.netzbilanz.invoic.drafted",
-    "de.netzbilanz.invoic.paid",
-    "de.netzbilanz.kostenblatt.computed",
-    "de.obs.deadline.approaching",
-    "de.obs.stp.parity.alert",
-    "de.sperr.auftrag.eingegangen",
-    "de.sperr.ausfuehrung.ueberfaellig",
-    "de.sperr.ausgefuehrt",
-    "de.sperr.fehlgeschlagen",
-    "de.sperr.iftsta.ausstehend",
-    "de.sperr.storniert",
-    "de.sperr.versuch.gescheitert",
-    "de.tarif.angebot.angenommen",
-    "de.tarif.product.updated",
-    "de.vertrag.abgeschlossen",
-    "de.vertrag.ablauf.ankuendigung",
-    "de.vertrag.aktiv",
-    "de.vertrag.autoerneuerung.ankuendigung",
-    "de.vertrag.bestellung.abgelehnt",
-    "de.vertrag.bestellung.angenommen",
-    "de.vertrag.bestellung.eingegangen",
-    "de.vertrag.gekuendigt",
-    "de.vertrag.kuendigung",
-    "de.vertrag.kuendigung-widerrufen",
-    "de.vertrag.preisaenderung.ankuendigung",
-    "de.vertrag.preisgarantie-hinterlegt",
-    "de.vertrag.tarifwechsel",
-    "de.vertrag.tarifwechsel-geplant",
-    "de.vertrag.widerruf.eingegangen",
-    "de.vpp.dispatch.confirmed",
-    "de.vpp.settlement.berechnet",
+    "de.mako.accounting.abschlag.posted",
+    "de.mako.accounting.abwendung.angeboten",
+    "de.mako.accounting.abwendung.gebrochen",
+    "de.mako.accounting.bankruecklast",
+    "de.mako.accounting.eeg.payout.rejected",
+    "de.mako.accounting.entsperrauftrag",
+    "de.mako.accounting.erstattung.faellig",
+    "de.mako.accounting.interest.charged",
+    "de.mako.accounting.jahresabschluss.abgeschlossen",
+    "de.mako.accounting.mahnung.issued",
+    "de.mako.accounting.payee.verification-mismatch",
+    "de.mako.accounting.payment.due",
+    "de.mako.accounting.payment.imported",
+    "de.mako.accounting.sepa.collection-rejected",
+    "de.mako.accounting.sepa.recall-requested",
+    "de.mako.accounting.sepa.recall-resolved",
+    "de.mako.accounting.sepa.reversal-issued",
+    "de.mako.accounting.sperrandrohung",
+    "de.mako.accounting.sperrankuendigung",
+    "de.mako.accounting.sperrauftrag",
+    "de.mako.agent.decision.made",
+    "de.mako.billing.abrechnungsinformation.monatlich",
+    "de.mako.billing.rechnung.erstellt",
+    "de.mako.billing.xrechnung.b2g.ready",
+    "de.mako.eeg.anlage.foerderung-auslaufend",
+    "de.mako.eeg.anlage.mastr-registriert",
+    "de.mako.eeg.marktpraemie.berechnet",
+    "de.mako.eeg.settlement.batch-due",
+    "de.mako.eeg.veraeusserungsform.gewechselt",
+    "de.mako.eeg.verguetung.berechnet",
+    "de.mako.engine.abmeldeanfrage.beantwortet",
+    "de.mako.engine.antwortfrist.abgelaufen",
+    "de.mako.engine.aperak.accepted",
+    "de.mako.engine.aperak.rejected",
+    "de.mako.engine.contrl.received",
+    "de.mako.engine.dead-letter.recorded",
+    "de.mako.engine.edifact.outbound",
+    "de.mako.engine.malo.identified",
+    "de.mako.engine.netzzugang.uebermittlungsbedarf",
+    "de.mako.engine.process.completed",
+    "de.mako.engine.process.failed",
+    "de.mako.engine.process.initiated",
+    "de.mako.gabi.alocat.missing",
+    "de.mako.gabi.nomination.curtailed",
+    "de.mako.gabi.nomination.rejected",
+    "de.mako.gabi.nomres.missing",
+    "de.mako.invoic.payment.overdue",
+    "de.mako.invoic.receipt.disputed",
+    "de.mako.invoic.receipt.settled",
+    "de.mako.mabis.korrekturbedarf.opened",
+    "de.mako.mabis.submission.failed",
+    "de.mako.markt.einwilligung.erteilt",
+    "de.mako.markt.einwilligung.widerrufen",
+    "de.mako.markt.geraet.konfiguration.updated",
+    "de.mako.markt.malo.stammdaten-geaendert",
+    "de.mako.markt.malo.updated",
+    "de.mako.markt.melo.updated",
+    "de.mako.markt.mmma.import.failed",
+    "de.mako.markt.mmma.import.success",
+    "de.mako.markt.msb-rahmenvertrag.updated",
+    "de.mako.markt.nb-contract.updated",
+    "de.mako.markt.netzzugang.antrag.updated",
+    "de.mako.markt.partner.updated",
+    "de.mako.markt.pricat.published",
+    "de.mako.markt.sr.konfigurationsprodukt.updated",
+    "de.mako.markt.stammdaten.geaendert",
+    "de.mako.markt.versorgung.changed",
+    "de.mako.markt.versorgung.eog-begonnen",
+    "de.mako.markt.versorgung.ersatz-auslaufend",
+    "de.mako.markt.versorgung.gap-detected",
+    "de.mako.messwert.cls.compliance-issue",
+    "de.mako.messwert.cls.compliance-resolved",
+    "de.mako.messwert.esa.typ2.delivery.overdue",
+    "de.mako.messwert.esa.typ2.delivery.resumed",
+    "de.mako.messwert.reading.confirmation.overdue",
+    "de.mako.messwert.reading.delivery.overdue",
+    "de.mako.messwert.reading.delivery.resumed",
+    "de.mako.messwert.reading.direct.stored",
+    "de.mako.messwert.reading.quality.warning",
+    "de.mako.messwert.smgw.cert.expiry-warning",
+    "de.mako.netzbilanz.invoic.dispatch-overdue",
+    "de.mako.netzbilanz.invoic.dispatched",
+    "de.mako.netzbilanz.invoic.disputed",
+    "de.mako.netzbilanz.invoic.drafted",
+    "de.mako.netzbilanz.invoic.paid",
+    "de.mako.netzbilanz.kostenblatt.computed",
+    "de.mako.netzbilanz.kostenblatt.deadline-approaching",
+    "de.mako.obs.deadline.approaching",
+    "de.mako.obs.stp.parity.alert",
+    "de.mako.tarif.angebot.angenommen",
+    "de.mako.tarif.product.updated",
+    "de.mako.vertrag.abgeschlossen",
+    "de.mako.vertrag.ablauf.ankuendigung",
+    "de.mako.vertrag.aktiv",
+    "de.mako.vertrag.autoerneuerung.ankuendigung",
+    "de.mako.vertrag.bestellung.abgelehnt",
+    "de.mako.vertrag.bestellung.angenommen",
+    "de.mako.vertrag.bestellung.eingegangen",
+    "de.mako.vertrag.gekuendigt",
+    "de.mako.vertrag.kuendigung",
+    "de.mako.vertrag.kuendigung-widerrufen",
+    "de.mako.vertrag.preisaenderung.ankuendigung",
+    "de.mako.vertrag.preisgarantie-hinterlegt",
+    "de.mako.vertrag.tarifwechsel",
+    "de.mako.vertrag.tarifwechsel-geplant",
+    "de.mako.vertrag.widerruf.eingegangen",
+    "de.mako.vpp.dispatch.confirmed",
+    "de.mako.vpp.settlement.berechnet",
 ];
 
 /// One catalog constant.
@@ -177,7 +171,12 @@ fn parse_catalog(src: &str) -> Vec<Entry> {
         let Some(name) = rest.split(':').next() else {
             continue;
         };
-        let Some(value) = rest
+        // rustfmt moves a long value onto the next line.
+        let joined = match lines.get(i + 1) {
+            Some(next) if !rest.contains("= \"") => format!("{rest} {}", next.trim()),
+            _ => rest.to_owned(),
+        };
+        let Some(value) = joined
             .split_once("= \"")
             .and_then(|(_, v)| v.split('"').next())
         else {
@@ -535,13 +534,13 @@ mod tests {
     const SRC: &str = r#"
 pub mod vertrag {
     /// Ein Vertrag wurde gekündigt.
-    pub const GEKUENDIGT: &str = "de.vertrag.gekuendigt";
+    pub const GEKUENDIGT: &str = "de.mako.vertrag.gekuendigt";
     /// Not emitted.
     ///
     /// ⚠ phantom: no emitter.
-    pub const GEISTER: &str = "de.vertrag.geister";
+    pub const GEISTER: &str = "de.mako.vertrag.geister";
     /// Emitted, bound.
-    pub const AKTIV: &str = "de.vertrag.aktiv";
+    pub const AKTIV: &str = "de.mako.vertrag.aktiv";
 }
 #[cfg(test)]
 mod tests {
@@ -552,7 +551,7 @@ mod tests {
     fn the_catalog_is_parsed_with_its_phantoms() {
         let e = parse_catalog(SRC);
         assert_eq!(e.len(), 3);
-        assert_eq!(e[0].value, "de.vertrag.gekuendigt");
+        assert_eq!(e[0].value, "de.mako.vertrag.gekuendigt");
         assert_eq!(e[0].summary, "Ein Vertrag wurde gekündigt.");
         assert!(!e[0].phantom && e[1].phantom);
         assert_eq!(e[1].summary, "Not emitted.");
@@ -561,20 +560,28 @@ mod tests {
     #[test]
     fn a_type_leaving_the_ratchet_needs_a_schema() {
         let e = parse_catalog(SRC);
-        let typed = BTreeSet::from(["de.vertrag.aktiv".to_owned()]);
-        assert!(ratchet(&e, &typed, &["de.vertrag.gekuendigt"]).is_empty());
+        let typed = BTreeSet::from(["de.mako.vertrag.aktiv".to_owned()]);
+        assert!(ratchet(&e, &typed, &["de.mako.vertrag.gekuendigt"]).is_empty());
         let left = ratchet(&e, &typed, &[]);
         assert_eq!(left.len(), 1);
         assert!(
-            left[0].starts_with("de.vertrag.gekuendigt is emitted with no payload"),
+            left[0].starts_with("de.mako.vertrag.gekuendigt is emitted with no payload"),
             "{left:?}"
         );
-        let stale = ratchet(&e, &typed, &["de.vertrag.gekuendigt", "de.vertrag.aktiv"]);
+        let stale = ratchet(
+            &e,
+            &typed,
+            &["de.mako.vertrag.gekuendigt", "de.mako.vertrag.aktiv"],
+        );
         assert!(
             stale.iter().any(|p| p.contains("has a schema now")),
             "{stale:?}"
         );
-        let phantom = ratchet(&e, &typed, &["de.vertrag.gekuendigt", "de.vertrag.geister"]);
+        let phantom = ratchet(
+            &e,
+            &typed,
+            &["de.mako.vertrag.gekuendigt", "de.mako.vertrag.geister"],
+        );
         assert!(
             phantom.iter().any(|p| p.contains("is a phantom")),
             "{phantom:?}"
@@ -583,6 +590,21 @@ mod tests {
 
     /// A fixture tree with the real catalog and the real schemas: generated,
     /// it checks clean; with one row edited, `--check` refuses it.
+    /// rustfmt moves a long value onto the line after `pub const`; read on the
+    /// declaration's line alone, such a type is left off the page and out of
+    /// the ratchet.
+    #[test]
+    fn a_value_wrapped_onto_the_next_line_is_read() {
+        let src = "pub mod billing {\n    /// Monthly.\n    pub const LONG: &str =\n        \"de.mako.billing.a.very.long.type\";\n    pub const SHORT: &str = \"de.mako.billing.short\";\n}\n";
+        let entries = parse_catalog(src);
+        let values: Vec<&str> = entries.iter().map(|e| e.value.as_str()).collect();
+        assert_eq!(
+            values,
+            ["de.mako.billing.a.very.long.type", "de.mako.billing.short"]
+        );
+        assert_eq!(entries[0].summary, "Monthly.");
+    }
+
     #[test]
     fn a_stale_page_fails() {
         let real = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));

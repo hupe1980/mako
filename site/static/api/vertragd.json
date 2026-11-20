@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "vertragd — Verträge und Kunden",
-    "description": "REST API of `vertragd`: Kunden, Versorgungs- and Rahmenverträge, the online Vertragsschluss, the master data billing reads, and the webhook subscriptions to its `de.vertrag.*` CloudEvents.",
+    "description": "REST API of `vertragd`: Kunden, Versorgungs- and Rahmenverträge, the online Vertragsschluss, the master data billing reads, and the webhook subscriptions to its `de.mako.vertrag.*` CloudEvents.",
     "contact": {
       "name": "hupe1980"
     },
@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.38.3"
+    "version": "0.39.0"
   },
   "paths": {
     "/api/v1/aggregatorvertraege": {
@@ -169,7 +169,7 @@
           "bestellungen"
         ],
         "summary": "`POST /api/v1/bestellungen` — an online order (US1).",
-        "description": "The `Idempotency-Key` header is required once; the same key with the same\nbody answers with the first response, with another body `422\nidempotency_key_reused`, and while the first is still being processed `409\nidempotency_request_in_flight`.\n\nUnder `[policy] vertragsschluss = \"mit_bestellung\"` the Bestellnachweis,\nthe Bestellung, the contract, the Anmeldung's outbox command, the\ndocuments' commands and the `de.vertrag.bestellung.*` events commit in one\ntransaction (`201`). Under `\"mit_annahme\"` the order is stored\n`EINGEGANGEN` and the contract waits for `…/annehmen` (`202`).",
+        "description": "The `Idempotency-Key` header is required once; the same key with the same\nbody answers with the first response, with another body `422\nidempotency_key_reused`, and while the first is still being processed `409\nidempotency_request_in_flight`.\n\nUnder `[policy] vertragsschluss = \"mit_bestellung\"` the Bestellnachweis,\nthe Bestellung, the contract, the Anmeldung's outbox command, the\ndocuments' commands and the `de.mako.vertrag.bestellung.*` events commit in one\ntransaction (`201`). Under `\"mit_annahme\"` the order is stored\n`EINGEGANGEN` and the contract waits for `…/annehmen` (`202`).",
         "operationId": "bestellen",
         "requestBody": {
           "description": "`BestellungInput`",
@@ -550,7 +550,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -605,7 +605,7 @@
           "inbound"
         ],
         "summary": "`POST /api/v1/events` — inbound CloudEvents from `makod` / `processd`.",
-        "description": "A confirmation moves the component into supply and, in the same\ntransaction, enqueues everything that follows from it: the GPKE\nBeginnablesung, the tariff assignment `billingd` prices from, the billing\naccount, and — once every commodity is in supply — `de.vertrag.aktiv`. None\nof that is a detached task any more, so a restart mid-confirmation costs a\nretry rather than a lost obligation.",
+        "description": "A confirmation moves the component into supply and, in the same\ntransaction, enqueues everything that follows from it: the GPKE\nBeginnablesung, the tariff assignment `billingd` prices from, the billing\naccount, and — once every commodity is in supply — `de.mako.vertrag.aktiv`. None\nof that is a detached task any more, so a restart mid-confirmation costs a\nretry rather than a lost obligation.",
         "operationId": "cloud_event",
         "requestBody": {
           "description": "A CloudEvent, signed with the `inbound_secret` (Standard Webhooks)",
@@ -3121,7 +3121,7 @@
         "tags": [
           "vertraege"
         ],
-        "summary": "`GET /api/v1/vertraege` — open contracts.",
+        "summary": "`GET /api/v1/vertraege` — open contracts, or the contracts a caller's own\nreference names (`?erp_contract_id=` / `?bestellreferenz=`), whatever\ntheir status.",
         "operationId": "list_open",
         "parameters": [
           {
@@ -3131,6 +3131,24 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "erp_contract_id",
+            "in": "query",
+            "description": "The contract created with this `erp_contract_id`, in any status.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bestellreferenz",
+            "in": "query",
+            "description": "The contracts of the order with this `bestellreferenz`, in any status.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -3432,7 +3450,7 @@
           "vertraege"
         ],
         "summary": "`POST /api/v1/vertraege/{id}/kuendigen` — terminate the contract.",
-        "description": "The notice period comes from the *reason*, not from the contract: an\nordinary termination runs on the agreed period (capped for consumers by\n§ 309 Nr. 9 lit. c BGB), a Grundversorgungsvertrag on the two weeks of\n§ 20 Abs. 1 StromGVV/GasGVV, a move on the six weeks of § 41b Abs. 5 EnWG,\nand a price change ends the contract without notice on the day the change\ntakes effect (§ 41 Abs. 5 Satz 4 EnWG). A `lieferende` earlier than the rule\nallows is refused with the rule quoted.\n\nEverything then happens in one transaction: the components leave supply, the\nLieferende UTILMDs and the Schlussablesung are enqueued, and the\n`de.vertrag.kuendigung` CloudEvent — which carries the § 41 Abs. 8 Nr. 2\nEnWG Textform confirmation the supplier owes the customer — goes into the\noutbox.",
+        "description": "The notice period comes from the *reason*, not from the contract: an\nordinary termination runs on the agreed period (capped for consumers by\n§ 309 Nr. 9 lit. c BGB), a Grundversorgungsvertrag on the two weeks of\n§ 20 Abs. 1 StromGVV/GasGVV, a move on the six weeks of § 41b Abs. 5 EnWG,\nand a price change ends the contract without notice on the day the change\ntakes effect (§ 41 Abs. 5 Satz 4 EnWG). A `lieferende` earlier than the rule\nallows is refused with the rule quoted.\n\nEverything then happens in one transaction: the components leave supply, the\nLieferende UTILMDs and the Schlussablesung are enqueued, and the\n`de.mako.vertrag.kuendigung` CloudEvent — which carries the § 41 Abs. 8 Nr. 2\nEnWG Textform confirmation the supplier owes the customer — goes into the\noutbox.",
         "operationId": "kuendigen_vertrag",
         "parameters": [
           {
@@ -4024,7 +4042,7 @@
         "tags": [
           "inbound"
         ],
-        "summary": "`POST /api/v1/webhooks/angebot` — `de.tarif.angebot.angenommen` from\n`productd`.",
+        "summary": "`POST /api/v1/webhooks/angebot` — `de.mako.tarif.angebot.angenommen` from\n`productd`.",
         "description": "Creates the Rahmenvertrag and one Versorgungsvertrag per site, from the\n**accepted variant of the BO4E `Angebot`**: what the customer was quoted and\nwhat is contracted come from one document, so they cannot drift. The scalar\nfields on the event are the fallback for a quotation accepted before it was\never priced.\n\nIdempotent twice over — on the CloudEvent id, recorded once the work is\ndone, and on `erp_rahmenvertrag_id = angebot_id` — so a redelivery creates\nnothing, and a redelivery after a failure finishes the work.",
         "operationId": "angebot",
         "requestBody": {
@@ -4769,6 +4787,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -4829,6 +4848,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -4861,7 +4887,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -5079,6 +5105,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -5138,6 +5165,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [

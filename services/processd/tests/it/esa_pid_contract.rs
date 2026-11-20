@@ -87,7 +87,7 @@ fn parse_accepts_the_claimed_pids_and_rejects_the_answers() {
 /// The tests above check that the module listens on the right side of the
 /// handshake. They cannot catch the failure that had actually happened: the
 /// MSB-side workflow emitted **no `ProcessInitiated` at all**, so
-/// `de.mako.process.initiated` was never published for any Kapitel-4 PID and
+/// `de.mako.engine.process.initiated` was never published for any Kapitel-4 PID and
 /// this entire module — the four `mako_pruefung` walks, the operator queue and
 /// its Fristen — subscribed to an event that did not exist and never ran once.
 ///

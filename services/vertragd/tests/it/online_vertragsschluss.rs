@@ -380,10 +380,16 @@ async fn a_complete_order_concludes_the_contract_with_its_nachweis() {
         2,
         "Zusammenfassung and Bestätigung"
     );
-    assert_eq!(events(&pool, "de.vertrag.bestellung.eingegangen").await, 1);
-    assert_eq!(events(&pool, "de.vertrag.bestellung.angenommen").await, 1);
+    assert_eq!(
+        events(&pool, "de.mako.vertrag.bestellung.eingegangen").await,
+        1
+    );
+    assert_eq!(
+        events(&pool, "de.mako.vertrag.bestellung.angenommen").await,
+        1
+    );
     let subject: String = sqlx::query_scalar(
-        "SELECT envelope->>'subject' FROM event_outbox WHERE ce_type = 'de.vertrag.bestellung.angenommen'",
+        "SELECT envelope->>'subject' FROM event_outbox WHERE ce_type = 'de.mako.vertrag.bestellung.angenommen'",
     )
     .fetch_one(&pool)
     .await
@@ -673,7 +679,10 @@ async fn under_mit_annahme_the_contract_exists_only_after_acceptance() {
         .await
         .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
-    assert_eq!(events(&pool, "de.vertrag.bestellung.abgelehnt").await, 1);
+    assert_eq!(
+        events(&pool, "de.mako.vertrag.bestellung.abgelehnt").await,
+        1
+    );
     assert_eq!(
         count(&pool, "SELECT count(*) FROM versorgungsvertraege").await,
         1
@@ -795,7 +804,10 @@ async fn a_widerruf_sent_on_the_last_day_before_lieferbeginn_withdraws_the_anmel
         count(&pool, "SELECT count(*) FROM event_outbox WHERE event_id LIKE '%DOKUMENT:WIDERRUFSBESTAETIGUNG:%'").await,
         1
     );
-    assert_eq!(events(&pool, "de.vertrag.widerruf.eingegangen").await, 1);
+    assert_eq!(
+        events(&pool, "de.mako.vertrag.widerruf.eingegangen").await,
+        1
+    );
 
     let (status, again) = post_widerruf(
         &http,
@@ -932,5 +944,51 @@ async fn an_unaccepted_bestellung_closes_widerrufen() {
     assert_eq!(
         count(&pool, "SELECT count(*) FROM versorgungsvertraege").await,
         0
+    );
+}
+
+/// The order answer names the Kunde, a second order for that Kunde concludes
+/// under the same one, and an order naming a Kunde this deployment does not
+/// hold is refused before anything is stored.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_second_order_for_the_same_kunde_makes_no_second_kunde() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let productd = fake_productd(OffsetDateTime::now_utc() + time::Duration::days(14)).await;
+    let base = serve(
+        pool.clone(),
+        config(r#"vertragsschluss = "mit_bestellung""#, &productd),
+    )
+    .await;
+    let http = reqwest::Client::new();
+    let docs = rechtsdokumente(&http, &base).await;
+
+    let (status, first) =
+        post_order(&http, &base, Some("k-a"), &order(Uuid::new_v4(), &docs)).await;
+    assert_eq!(status, 201, "{first}");
+    let kunden_id = first["kunden_id"]
+        .as_str()
+        .expect("the answer names the Kunde");
+
+    let mut second = order(Uuid::new_v4(), &docs);
+    second["bestellreferenz"] = json!("WEB-2026-000124");
+    second["kunde"]["kunden_id"] = json!(kunden_id);
+    let (status, answer) = post_order(&http, &base, Some("k-b"), &second).await;
+    assert_eq!(status, 201, "{answer}");
+    assert_eq!(answer["kunden_id"], kunden_id);
+    assert_ne!(answer["vertrag_id"], first["vertrag_id"]);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM kunden").await, 1);
+
+    let mut unknown = order(Uuid::new_v4(), &docs);
+    unknown["bestellreferenz"] = json!("WEB-2026-000125");
+    unknown["kunde"]["kunden_id"] = json!(Uuid::new_v4());
+    let (status, refusal) = post_order(&http, &base, Some("k-c"), &unknown).await;
+    assert_eq!(status, 422, "{refusal}");
+    assert_eq!(refusal["code"], "kunde_unbekannt");
+    assert_eq!(
+        count(&pool, "SELECT COUNT(*) FROM versorgungsvertraege").await,
+        2
     );
 }

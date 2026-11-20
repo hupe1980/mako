@@ -52,7 +52,7 @@ pub const ALL: [&str; 12] = [
 
 /// The models settled as a Direktvermarktung, i.e. paid a Marktprämie.
 ///
-/// These emit `de.eeg.marktpraemie.berechnet` and resolve their market reference
+/// These emit `de.mako.eeg.marktpraemie.berechnet` and resolve their market reference
 /// through the Anlage 1 Marktwert rather than the generic EPEX average.
 #[must_use]
 pub fn ist_marktpraemie(model: &str) -> bool {

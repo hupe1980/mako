@@ -165,7 +165,7 @@ Commands:
   check-event-durability  Refuse a hand-built CloudEvent envelope, a publish with no durable
                         row or stated retry behind it, and a marker-shaped write on a pool
                         beside an outbox enqueue
-  check-process-verdict  Refuse a decision on `de.mako.process.completed` that reads neither
+  check-process-verdict  Refuse a decision on `de.mako.engine.process.completed` that reads neither
                         `data.accepted`/`data.outcome` nor the response PID, and an agent
                         trigger on it that does not point at the verdict
   dep-age             Report each direct dependency's pin against crates.io (network; a

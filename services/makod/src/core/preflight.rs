@@ -536,7 +536,7 @@ pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
                 "--netzzugang-endpoint-url is set, but no § 20b EnWG platform interface is \
                  published (§ 20b Abs. 3 EnWG leaves it to a BNetzA Festlegung nach § 29 Abs. 1, \
                  and none is issued). Remove the setting: § 20b requests reach the operator as \
-                 de.mako.netzzugang.uebermittlungsbedarf CloudEvents on the ERP webhook.",
+                 de.mako.engine.netzzugang.uebermittlungsbedarf CloudEvents on the ERP webhook.",
             )
             .bereich(Bereich::Erreichbarkeit)
             .quelle("§ 20b Abs. 3 EnWG"),

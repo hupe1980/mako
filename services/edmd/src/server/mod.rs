@@ -73,6 +73,7 @@ pub(crate) use iot::*;
 pub use jahresablesung::*;
 pub(crate) use lastgang::*;
 pub use quality::*;
+pub use reading_orders::announce_created;
 pub(crate) use reading_orders::*;
 pub use sharing::community_participations;
 pub(crate) use sharing::*;
@@ -137,6 +138,8 @@ pub(crate) fn api_routes() -> OpenApiRouter<HandlerState> {
         .routes(routes!(complete_reading_order))
         .routes(routes!(cancel_reading_order))
         .routes(routes!(fail_reading_order))
+        .routes(routes!(list_fail_reasons))
+        .routes(routes!(put_reading_order_external_ref))
         // N7: Jahresablesung campaign scheduler (§ 40b Abs. 1 EnWG)
         .routes(routes!(jahresablesung_campaign))
         .routes(routes!(jahresablesung_compliance))
@@ -686,6 +689,13 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
             cfg.shutdown.clone(),
         );
     }
+
+    // `de.mako.messwert.reading.order.created` for every writer of a reading order.
+    spawn_announcer(
+        Arc::clone(&pool_arc),
+        smgw_tenant.clone(),
+        cfg.shutdown.clone(),
+    );
 
     // § 60 Abs. 1 MsbG confirmation loop — escalates estimated/substituted
     // intervals that were never replaced by a plausibilised real value.

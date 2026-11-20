@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AuftragEingegangen",
+  "description": "The `data` of `de.mako.sperr.auftrag.eingegangen`.",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "description": "The executing system's own reference, where the order carries one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "malo_id": {
+      "type": "string"
+    },
+    "lf_mp_id": {
+      "description": "The ordering Lieferant's MP-ID.",
+      "type": "string"
+    },
+    "pid": {
+      "description": "17115 or 17117; absent for an order an operator created by hand.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "process_id": {
+      "description": "The makod process the order came in on.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "order_type": {
+      "description": "`sperrung` or `entsperrung`.",
+      "$ref": "#/$defs/OrderType"
+    },
+    "ausfuehrung_am": {
+      "description": "`DTM+203` — the fixed day the Lieferant requires.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "fruehestens_am": {
+      "description": "`DTM+469` — not before this day.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "ausfuehrung_faellig_am": {
+      "description": "The last day of the Netzbetreiber's execution window: 6 Werktage after\nthe frühestmöglicher Sperrtermin (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1), in\nthe BDEW-MaKo calendar. Absent for an order that names no date.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "arbeitszeit": {
+      "description": "`IMD 7081` on an Entsperrauftrag: `Z53` innerhalb, `Z54` auch außerhalb\nder Arbeitszeit.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "treffpunkt": {
+      "description": "`SG2 NAD+Z24` — where the technician goes.",
+      "$ref": "#/$defs/Treffpunkt"
+    },
+    "hinweis": {
+      "description": "`SG29 FTX+ACB` — the Lieferant's free text.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "order_id",
+    "malo_id",
+    "lf_mp_id",
+    "order_type",
+    "treffpunkt"
+  ],
+  "$defs": {
+    "OrderType": {
+      "description": "What the Netzbetreiber was asked to do — BGM 1001 on the ORDERS.",
+      "oneOf": [
+        {
+          "description": "`BGM+Z51` — Sperrung. Arrives as ORDERS **17115** (Sperrauftrag).",
+          "type": "string",
+          "const": "sperrung"
+        },
+        {
+          "description": "`BGM+Z52` — Entsperrung. Arrives as ORDERS **17117** (Entsperrauftrag).",
+          "type": "string",
+          "const": "entsperrung"
+        }
+      ]
+    },
+    "Treffpunkt": {
+      "description": "`SG2 NAD+Z24` — the meeting point for the field visit.",
+      "type": "object",
+      "properties": {
+        "hinweis": {
+          "description": "`NAD 3124` Zusatzinformation zur Identifizierung (\"Keller links\",\n\"Zählerschrank Hof\"). The AHB accepts this *instead of* a street.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "strasse": {
+          "description": "`NAD 3042` Straße und Hausnummer.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plz": {
+          "description": "`NAD 3251` Postleitzahl.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ort": {
+          "description": "`NAD 3164` Ort.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "land": {
+          "description": "`NAD 3207` Ländername, Code (ISO 3166 alpha-2).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.auftrag.eingegangen.json"
+}

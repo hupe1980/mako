@@ -89,7 +89,7 @@ pub const ESA_ANSWERED_PIDS: &[u32] = &[
     39_002,
 ];
 
-/// Fields extracted from `de.mako.process.initiated` for an ESA order PID.
+/// Fields extracted from `de.mako.engine.process.initiated` for an ESA order PID.
 #[derive(Debug, Clone)]
 pub struct EsaOrderPayload {
     pub process_id: uuid::Uuid,
@@ -137,7 +137,7 @@ pub struct EsaOrderPayload {
 }
 
 impl EsaOrderPayload {
-    /// Extract the fields from a `de.mako.process.initiated` event.
+    /// Extract the fields from a `de.mako.engine.process.initiated` event.
     ///
     /// `None` when the PID is not one this module answers or the event carries
     /// no process id — both mean „not for us" rather than „malformed".
@@ -731,7 +731,7 @@ async fn evaluate(
             // Prüfschritte 3/4 ask what has already gone out. `None` here means
             // „nichts beendet, nichts geliefert" — an assertion, not an unknown
             // — so it is only passed on when the process actually said so. The
-            // `de.mako.process.initiated` payload carries both.
+            // `de.mako.engine.process.initiated` payload carries both.
             let anfrage = wertebestellung::EsaBeendigung {
                 art,
                 beendigung_zum,

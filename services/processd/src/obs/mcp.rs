@@ -549,7 +549,7 @@ impl ProcessdMcpHandler {
     /// `frist_breached` counts processes that passed their *business*
     /// Antwortfrist, measured by the projection against `deadline_at`. `antwortfrist_abgelaufen`
     /// counts processes whose current state is `antwortfrist_abgelaufen`: the
-    /// `de.mako.antwortfrist.abgelaufen` event that `gpke-supplier-change` and
+    /// `de.mako.engine.antwortfrist.abgelaufen` event that `gpke-supplier-change` and
     /// `geli-gas-supplier-change` emit when *their* Antwortfrist lapses
     /// unanswered. Neither number measures an APERAK or CONTRL delivery
     /// window — no such lapse reaches the read model.
@@ -1080,7 +1080,7 @@ pub(crate) fn instructions() -> String {
     format!(
         "# Process read model\n\
              \n\
-             CQRS read model over every `de.mako.*` event. Antwortfrist monitoring and \
+             CQRS read model over every `de.mako.engine.*` event. Antwortfrist monitoring and \
              process KPIs.\n\
              \n\
              ## Two deadline clocks, never one number\n\

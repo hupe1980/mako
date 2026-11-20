@@ -876,7 +876,7 @@ impl PgVersorgungsStatusRepository {
 
     /// Record an announced incoming Lieferant (partial update).
     ///
-    /// Called when a UTILMD 55001 / 55077 / 44001 (`de.mako.process.initiated`,
+    /// Called when a UTILMD 55001 / 55077 / 44001 (`de.mako.engine.process.initiated`,
     /// NB side) is received. Adds one [`ZuordnungsStatus::Angekuendigt`](mako_markt::repository::ZuordnungsStatus::Angekuendigt)
     /// assignment without touching `lieferstatus` or any running one.
     ///
@@ -928,7 +928,7 @@ impl PgVersorgungsStatusRepository {
 
     /// Promote an announced assignment to a running one.
     ///
-    /// Called when UTILMD 55002 / 55003 / 44002 (`de.mako.process.completed`,
+    /// Called when UTILMD 55002 / 55003 / 44002 (`de.mako.engine.process.completed`,
     /// NB side) confirms the Anmeldung. Sets that assignment to
     /// [`ZuordnungsStatus::Aktiv`](mako_markt::repository::ZuordnungsStatus::Aktiv) and `lieferstatus = Beliefert`.
     ///
@@ -959,7 +959,7 @@ impl PgVersorgungsStatusRepository {
 
     /// End a running assignment, preserving every pending announcement.
     ///
-    /// Called when UTILMD 55013/44013 (`de.mako.process.completed`) is
+    /// Called when UTILMD 55013/44013 (`de.mako.engine.process.completed`) is
     /// processed. Removes the running assignments named by `lf_mp_id` — or
     /// **all** of them when it is `None`, which is what an untranchierte
     /// Marktlokation's Abmeldung means — and leaves the announced ones intact
@@ -992,7 +992,7 @@ impl PgVersorgungsStatusRepository {
     /// Record the start of the statutory fallback supply (§38/§36 EnWG).
     ///
     /// Called when the EoG Zuordnung completes (UTILMD 55013/44013
-    /// `de.mako.process.completed`): the Grundversorger becomes the supplier
+    /// `de.mako.engine.process.completed`): the Grundversorger becomes the supplier
     /// of record. Atomically sets
     /// - `lieferstatus = Ersatzversorgung` or `Grundversorgung`
     ///   (`eog_status` must be one of the two; any other value is an error),

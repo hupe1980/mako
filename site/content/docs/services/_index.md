@@ -62,7 +62,7 @@ graph TB
     marktd -->|webhook fan-out| processd & invoicd & edmd & agentd
     makod -->|commands| netzbilanzd & invoicd
     netzbilanzd -->|MSCONS 13003 cmd| makod
-    billingd -->|de.billing.rechnung.erstellt| accountingd
+    billingd -->|de.mako.billing.rechnung.erstellt| accountingd
     billingd -->|render · pin hash| outputd
     vertragd -->|start-supply| processd
     portald -->|aggregates| billingd & accountingd & edmd & einsd & marktd

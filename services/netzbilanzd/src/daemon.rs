@@ -292,7 +292,7 @@ pub struct ApiDoc;
 /// Start the two alert workers.
 ///
 /// The alerts enqueue on the outbox rather than posting for themselves, so
-/// every `de.netzbilanz.*` event takes one path — the subscription fan-out —
+/// every `de.mako.netzbilanz.*` event takes one path — the subscription fan-out —
 /// with one retry policy.
 fn spawn_workers(
     pool: &PgPool,

@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.38.3"
+    "version": "0.39.0"
   },
   "paths": {
     "/api/v1/archive/olap/{malo_id}": {
@@ -1209,7 +1209,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2097,7 +2097,7 @@
           "ingest"
         ],
         "summary": "`POST /api/v1/meter-reads/rlm/{malo_id}`",
-        "description": "iMSys / SMGW direct push for **Strom RLM** and **iMSys** customers.\n\n## Why direct push?\n\n- MSCONS round-trip via `makod` adds 15–60 min latency.\n- §41a EnWG dynamic tariffs need sub-hourly resolution for real-time billing.\n- High-frequency RLM meters (up to 96 intervals/day) saturate the EDIFACT pipeline.\n\n## Idempotency\n\nSubmit the same `session_id` twice to get the stored result back without re-processing.\n\n## Quality scoring\n\nGap detection, consecutive-zero analysis, and 3-sigma outlier detection run at\ningest time.  If `has_warnings = true`, `edmd` emits `de.messwert.reading.quality.warning`\nto the ERP webhook so `agentd` can investigate.",
+        "description": "iMSys / SMGW direct push for **Strom RLM** and **iMSys** customers.\n\n## Why direct push?\n\n- MSCONS round-trip via `makod` adds 15–60 min latency.\n- §41a EnWG dynamic tariffs need sub-hourly resolution for real-time billing.\n- High-frequency RLM meters (up to 96 intervals/day) saturate the EDIFACT pipeline.\n\n## Idempotency\n\nSubmit the same `session_id` twice to get the stored result back without re-processing.\n\n## Quality scoring\n\nGap detection, consecutive-zero analysis, and 3-sigma outlier detection run at\ningest time.  If `has_warnings = true`, `edmd` emits `de.mako.messwert.reading.quality.warning`\nto the ERP webhook so `agentd` can investigate.",
         "operationId": "post_direct_reads_rlm",
         "parameters": [
           {
@@ -2508,7 +2508,7 @@
           "quality"
         ],
         "summary": "`POST /api/v1/quality-score/{malo_id}[?from=&to=]`",
-        "description": "Retroactively re-scores **all** `meter_reads` for `malo_id` in the given\ndate window with the same validation every ingest door runs.\n\nThis is useful when:\n- MSCONS-ingested historical data was stored without quality scoring\n- The validation rules changed\n- A billing dispute requires re-verification of read quality\n\nThe handler re-runs `compute_quality()` over the window's version-resolved\nreads, records the verdict in `quality_assessments` (source `BATCH_RESCORE`),\nand emits `de.messwert.reading.quality.warning` for any newly-found warnings.\nmeterstore owns the readings and carries no per-interval `quality_warnings`\ncolumn, so the audit trail is the `quality_assessments` row, not a read update.\n\n## Response\n\n```json\n{\n  \"malo_id\": \"DE0001234567890723456789012345678\",\n  \"rows_rescored\": 96,\n  \"warnings_found\": 2,\n  \"grades\": { \"A\": 0, \"B\": 1, \"C\": 1, \"F\": 0 }\n}\n```",
+        "description": "Retroactively re-scores **all** `meter_reads` for `malo_id` in the given\ndate window with the same validation every ingest door runs.\n\nThis is useful when:\n- MSCONS-ingested historical data was stored without quality scoring\n- The validation rules changed\n- A billing dispute requires re-verification of read quality\n\nThe handler re-runs `compute_quality()` over the window's version-resolved\nreads, records the verdict in `quality_assessments` (source `BATCH_RESCORE`),\nand emits `de.mako.messwert.reading.quality.warning` for any newly-found warnings.\nmeterstore owns the readings and carries no per-interval `quality_warnings`\ncolumn, so the audit trail is the `quality_assessments` row, not a read update.\n\n## Response\n\n```json\n{\n  \"malo_id\": \"DE0001234567890723456789012345678\",\n  \"rows_rescored\": 96,\n  \"warnings_found\": 2,\n  \"grades\": { \"A\": 0, \"B\": 1, \"C\": 1, \"F\": 0 }\n}\n```",
         "operationId": "post_quality_rescore",
         "parameters": [
           {
@@ -2719,7 +2719,7 @@
         "tags": [
           "reading-orders"
         ],
-        "summary": "`GET /api/v1/reading-orders?malo_id=&status=&anlass=&limit=`",
+        "summary": "`GET /api/v1/reading-orders?malo_id=&status=&anlass=&external_ref=&limit=`",
         "operationId": "list_reading_orders",
         "parameters": [
           {
@@ -2741,6 +2741,15 @@
           {
             "name": "anlass",
             "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "external_ref",
+            "in": "query",
+            "description": "The order that carries this reference of the executing system.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2851,6 +2860,16 @@
               }
             }
           },
+          "409": {
+            "description": "`external_ref_taken`: another order carries it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Refused on its content",
             "content": {
@@ -2932,6 +2951,51 @@
           },
           "422": {
             "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reading-orders/fail-reasons": {
+      "get": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`GET /api/v1/reading-orders/fail-reasons`",
+        "description": "The closed list `PUT …/fail` accepts as `grund`, with its German labels —\nwhat a workforce tool maps its own reasons onto.",
+        "operationId": "list_fail_reasons",
+        "responses": {
+          "200": {
+            "description": "Every Ablesehindernis",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AblesehindernisEintrag"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
             "content": {
               "application/json": {
                 "schema": {
@@ -3155,6 +3219,103 @@
           },
           "422": {
             "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reading-orders/{id}/external-ref": {
+      "put": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`PUT /api/v1/reading-orders/{id}/external-ref`",
+        "description": "Attach the executing system's reference to an order — the way an order a\nmarket process or the Jahresablesung campaign created gets one. Every later\nevent of the order echoes it, and `GET /api/v1/reading-orders?external_ref=`\nfinds it.",
+        "operationId": "put_reading_order_external_ref",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Reading order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalRefRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Attached"
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`external_ref_taken`: another order carries it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blank, longer than 200 characters, or with a control character",
             "content": {
               "application/json": {
                 "schema": {
@@ -3710,7 +3871,7 @@
           "smgw"
         ],
         "summary": "`POST /api/v1/smgw/compliance/scan`",
-        "description": "Trigger an immediate, side-effecting compliance sweep:\n- Runs `run_cls_compliance_sweep()` synchronously\n- Reconciles all found issues against `cls_compliance_issues`\n- Emits `de.messwert.cls.compliance-issue` CloudEvents for each issue\n\nUse this endpoint for manual compliance audits or integration tests.\nThe daily background worker calls the same logic automatically.",
+        "description": "Trigger an immediate, side-effecting compliance sweep:\n- Runs `run_cls_compliance_sweep()` synchronously\n- Reconciles all found issues against `cls_compliance_issues`\n- Emits `de.mako.messwert.cls.compliance-issue` CloudEvents for each issue\n\nUse this endpoint for manual compliance audits or integration tests.\nThe daily background worker calls the same logic automatically.",
         "operationId": "post_smgw_compliance_scan",
         "responses": {
           "200": {
@@ -3809,7 +3970,7 @@
           "smgw"
         ],
         "summary": "`PUT /api/v1/smgw/{malo_id}`",
-        "description": "Register or update a `SmgwSession` for a MaLo.\n\nThe body is a [`SmgwSession`], read through `mako_service::Json`: a key the\nsession does not declare — at any depth — is a `422` naming it, so a\nmisspelt field is refused rather than read as absent. The session is stored\nas JSONB in its own serialisation. The caller is the MSB's\nGWA (Gateway-Administrator) system after a BSI TR-03109-4 Admin session;\nedmd subscribes to no `de.markt.*` event, so a Gerätekonfiguration changed\nin marktd reaches this table only through such a call.\n\nTriggers a synchronous compliance check.  Detected issues are logged to\n`cls_compliance_issues` immediately and CloudEvents emitted.  This makes the first\ncompliance check available within seconds of gateway registration, without waiting\nfor the daily sweep.\n\n## `gateway_status` extraction\n\nThe promoted `gateway_status` column is extracted from `session.status` so the\ncompliance sweep can pre-filter `WHERE gateway_status != 'REPLACED'` efficiently.",
+        "description": "Register or update a `SmgwSession` for a MaLo.\n\nThe body is a [`SmgwSession`], read through `mako_service::Json`: a key the\nsession does not declare — at any depth — is a `422` naming it, so a\nmisspelt field is refused rather than read as absent. The session is stored\nas JSONB in its own serialisation. The caller is the MSB's\nGWA (Gateway-Administrator) system after a BSI TR-03109-4 Admin session;\nedmd subscribes to no `de.mako.markt.*` event, so a Gerätekonfiguration changed\nin marktd reaches this table only through such a call.\n\nTriggers a synchronous compliance check.  Detected issues are logged to\n`cls_compliance_issues` immediately and CloudEvents emitted.  This makes the first\ncompliance check available within seconds of gateway registration, without waiting\nfor the daily sweep.\n\n## `gateway_status` extraction\n\nThe promoted `gateway_status` column is extracted from `session.status` so the\ncompliance sweep can pre-filter `WHERE gateway_status != 'REPLACED'` efficiently.",
         "operationId": "put_smgw_session",
         "parameters": [
           {
@@ -5379,6 +5540,37 @@
           }
         }
       },
+      "Ablesehindernis": {
+        "type": "string",
+        "description": "Why a reading could not be taken — the closed vocabulary of\n`PUT /api/v1/reading-orders/{id}/fail`, of `fehlschlag_grund` and of\n`de.mako.messwert.reading.order.failed`.",
+        "enum": [
+          "KEIN_ZUTRITT",
+          "ZAEHLER_UNZUGAENGLICH",
+          "ZAEHLER_DEFEKT",
+          "ZAEHLER_NICHT_AUFFINDBAR",
+          "KUNDE_VERWEIGERT",
+          "ABLESUNG_UNPLAUSIBEL",
+          "SONSTIGES"
+        ]
+      },
+      "AblesehindernisEintrag": {
+        "type": "object",
+        "description": "One entry of the published Ablesehindernis vocabulary.",
+        "required": [
+          "code",
+          "label"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Ablesehindernis",
+            "description": "The value `grund` takes."
+          },
+          "label": {
+            "type": "string",
+            "description": "The German label."
+          }
+        }
+      },
       "ApiError": {
         "type": "object",
         "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
@@ -5523,6 +5715,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -5583,6 +5776,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -5615,7 +5815,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -5688,6 +5888,19 @@
           "url": {
             "type": "string",
             "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExternalRefRequest": {
+        "type": "object",
+        "required": [
+          "external_ref"
+        ],
+        "properties": {
+          "external_ref": {
+            "type": "string",
+            "description": "The executing system's own reference: 1–200 characters, opaque, unique\nper tenant."
           }
         },
         "additionalProperties": false
@@ -6041,6 +6254,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -6100,6 +6314,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [

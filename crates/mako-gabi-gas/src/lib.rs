@@ -109,7 +109,7 @@ pub use domain::{
     GasQuantity,
     ImbalanceDirection as GasImbalanceDirection,
     NominationQuantity,
-    // CloudEvent type constants (de.gabi.*)
+    // CloudEvent type constants (de.mako.gabi.*)
     cloud_events as gabi_cloud_events,
 };
 pub use portfolio::{ConservationViolation, GasMarketRole, GasPortfolioBalance, PortfolioPosition};

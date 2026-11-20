@@ -321,7 +321,7 @@ async fn process_invoic(
     // message the counterparty has to reconcile away.
     // ── An open walk: held, nothing sent, nothing announced ──────────────────
     //
-    // No answer is dispatched and no `de.invoic.receipt.*` event enqueued —
+    // No answer is dispatched and no `de.mako.invoic.receipt.*` event enqueued —
     // `settled` is what the ERP books a payment on. The receipt stays
     // undispatched, so it is listed by `GET /api/v1/overdue-remadv` until a
     // person states the missing facts and answers.
@@ -1542,7 +1542,7 @@ pub struct PaymentEventCtx<'a> {
 }
 
 /// Conclude a checked invoice: stamp the answer's dispatch and enqueue the
-/// `de.invoic.receipt.*` event, in one transaction
+/// `de.mako.invoic.receipt.*` event, in one transaction
 /// ([`pg::receipts::conclude`]). The webhook module delivers the event with
 /// retry to the ERP (the endpoint `default`) and every other matching endpoint.
 ///

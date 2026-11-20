@@ -8,18 +8,22 @@
 //!
 //! # Conventions
 //!
-//! - Every type starts with `de.` and is entirely lowercase
-//!   (CloudEvents §3.1 recommends lowercase reverse-DNS types).
+//! - Every type is `de.mako.<domain>.<fact>` and entirely lowercase.
+//!   `de.mako` says whose contract the type is — a bare `de.<domain>` is a
+//!   name any other system may publish under too — and the domain is the one
+//!   glob a subscriber of that emitter names: `de.mako.engine.*` is `makod`,
+//!   `de.mako.vertrag.*` is `vertragd`. `every_type_is_de_mako_domain_fact`
+//!   enforces it.
 //! - Segments are separated by `.`, and a multi-word segment joins its words
 //!   with `-` — never `_`. German domain nouns keep their established spelling
 //!   (participles like `beliefert`, compound nouns like `nb-contract`).
 //!   `segments_use_hyphen_not_underscore` enforces this.
-//! - A namespace names its facts in one language. `de.vertrag.*` is German
-//!   throughout (`gekuendigt`, `preisgarantie-hinterlegt`); `de.mako.*`,
-//!   `de.gabi.*` and `de.accounting.*` are technical or English-domain and stay
+//! - A namespace names its facts in one language. `de.mako.vertrag.*` is German
+//!   throughout (`gekuendigt`, `preisgarantie-hinterlegt`); `de.mako.engine.*`,
+//!   `de.mako.gabi.*` and `de.mako.accounting.*` are technical or English-domain and stay
 //!   English. `german_namespaces_use_german_participles` enforces the German
 //!   set. This is about the *participle*, not the noun — and it does not mean
-//!   `.updated` and `.geaendert` are interchangeable: in `de.markt.*` they name
+//!   `.updated` and `.geaendert` are interchangeable: in `de.mako.markt.*` they name
 //!   different facts (any master-data write vs. a regulated GPKE
 //!   Stammdatenänderung carrying its patch).
 //! - `⚠ phantom:` in a doc comment means **no service in this workspace emits
@@ -31,7 +35,7 @@
 //!   not a promise — an external consumer may match on it, but this platform
 //!   will not make it fire.
 //!
-//! Glob subscription patterns (e.g. `de.mako.*` in `agentd` trigger
+//! Glob subscription patterns (e.g. `de.mako.engine.*` in `agentd` trigger
 //! configs) are not part of this catalog — only concrete types are. The
 //! canonical pattern matcher every subscription mechanism uses is
 //! [`matches()`](matches()).
@@ -50,28 +54,28 @@
 
 #![deny(unsafe_code)]
 
-/// Core MaKo process lifecycle + EDIFACT transport events (`de.mako.*`).
+/// Core MaKo process lifecycle + EDIFACT transport events (`de.mako.engine.*`).
 ///
 /// Emitted by `makod` toward the ERP adapter / event bus; consumed by
 /// `processd`, `edmd`, `invoicd`, `marktd`, `vertragd` and `agentd`.
 pub mod mako {
     /// A MaKo market process was started (first outbound message built).
-    pub const PROCESS_INITIATED: &str = "de.mako.process.initiated";
+    pub const PROCESS_INITIATED: &str = "de.mako.engine.process.initiated";
     /// Happy path finished — the process reached its terminal success state.
-    pub const PROCESS_COMPLETED: &str = "de.mako.process.completed";
+    pub const PROCESS_COMPLETED: &str = "de.mako.engine.process.completed";
     /// Unrecoverable failure — the process was cancelled/failed.
-    pub const PROCESS_FAILED: &str = "de.mako.process.failed";
+    pub const PROCESS_FAILED: &str = "de.mako.engine.process.failed";
     /// APERAK acknowledged the outbound message.
-    pub const APERAK_ACCEPTED: &str = "de.mako.aperak.accepted";
+    pub const APERAK_ACCEPTED: &str = "de.mako.engine.aperak.accepted";
     /// APERAK rejected the outbound message (carries BDEW ERC code).
-    pub const APERAK_REJECTED: &str = "de.mako.aperak.rejected";
+    pub const APERAK_REJECTED: &str = "de.mako.engine.aperak.rejected";
     /// The business Antwortfrist of a Wechselprozess lapsed unanswered —
     /// not an APERAK delivery window, which makod alerts on itself.
-    pub const ANTWORTFRIST_ABGELAUFEN: &str = "de.mako.antwortfrist.abgelaufen";
+    pub const ANTWORTFRIST_ABGELAUFEN: &str = "de.mako.engine.antwortfrist.abgelaufen";
     /// CONTRL received for an outbound interchange.
-    pub const CONTRL_RECEIVED: &str = "de.mako.contrl.received";
+    pub const CONTRL_RECEIVED: &str = "de.mako.engine.contrl.received";
     /// MaLo identified during Lieferantenwechsel (GPKE identification step).
-    pub const MALO_IDENTIFIED: &str = "de.mako.malo.identified";
+    pub const MALO_IDENTIFIED: &str = "de.mako.engine.malo.identified";
     /// The LFA answered the NB's Anfrage zur Beendigung der Zuordnung — or its
     /// 09:00 window lapsed, which the Festlegung reads as a Zustimmung.
     ///
@@ -81,21 +85,21 @@ pub mod mako {
     /// `malo_id`, `anmeldung_process_id`, `lfa_mp_id`, `zustimmung`,
     /// `fristablauf`, and — when the LFA named them — `antwortcode`, `grund`
     /// and the Fall-b `zuordnungsende`.
-    pub const ABMELDEANFRAGE_BEANTWORTET: &str = "de.mako.abmeldeanfrage.beantwortet";
+    pub const ABMELDEANFRAGE_BEANTWORTET: &str = "de.mako.engine.abmeldeanfrage.beantwortet";
     /// Outbound EDIFACT interchange handed to the webhook EDIFACT sender.
     ///
     /// Emitted **only** by `WebhookEdifactSender`, the development / ERP
     /// integration transport used when there is no AS4 infrastructure; the
     /// production `BdewAs4Sender` path does not emit it. The CloudEvent is the
     /// delivery envelope carrying the interchange, not a notification about it.
-    pub const EDIFACT_OUTBOUND: &str = "de.mako.edifact.outbound";
+    pub const EDIFACT_OUTBOUND: &str = "de.mako.engine.edifact.outbound";
     /// An inbound message was refused into the dead-letter queue, or an
     /// outbound one was given up after its delivery budget. makod writes it in
     /// the same transaction as the dead-letter record, so every record has one.
     /// `data` carries `dead_letter_id`, `reason` (the category label),
     /// `detail`, `rejected_at` and — where the message named them — `pid`,
     /// `message_ref`, `message_type`, `sender` and `receiver`.
-    pub const DEAD_LETTER_RECORDED: &str = "de.mako.dead-letter.recorded";
+    pub const DEAD_LETTER_RECORDED: &str = "de.mako.engine.dead-letter.recorded";
     // Design note: there are deliberately NO per-process outcome types
     // (`de.mako.gpke.lieferbeginn.bestaetigt` and friends). Process outcomes
     // are the generic `PROCESS_*`/`APERAK_*` family — the process family
@@ -104,7 +108,8 @@ pub mod mako {
     // emitter would be consumed without code changes. Minting per-process
     // constants here without an emitter would institutionalize fiction.
     /// §20 NZV Netzzugang: aggregated Übermittlungsbedarf toward the NB.
-    pub const NETZZUGANG_UEBERMITTLUNGSBEDARF: &str = "de.mako.netzzugang.uebermittlungsbedarf";
+    pub const NETZZUGANG_UEBERMITTLUNGSBEDARF: &str =
+        "de.mako.engine.netzzugang.uebermittlungsbedarf";
     /// A test delivery to one webhook endpoint, sent on request by any service
     /// that hosts `mako_service::subscriptions` and signed like a real one, so
     /// a receiver that verifies it verifies every delivery. `data` carries
@@ -112,37 +117,38 @@ pub mod mako {
     pub const WEBHOOK_TEST: &str = "de.mako.webhook.test";
 }
 
-/// Market master-data events (`de.markt.*`), emitted by `marktd`.
+/// Market master-data events (`de.mako.markt.*`), emitted by `marktd`.
 pub mod markt {
     /// Marktlokation stammdaten changed.
-    pub const MALO_UPDATED: &str = "de.markt.malo.updated";
+    pub const MALO_UPDATED: &str = "de.mako.markt.malo.updated";
     /// A UTILMD Stammdatenänderung (GPKE Teil 4 / GeLi Gas) was applied to a
     /// MaLo's typed columns — carries the applied `patch` for ERP audit.
-    pub const MALO_STAMMDATEN_GEAENDERT: &str = "de.markt.malo.stammdaten-geaendert";
+    pub const MALO_STAMMDATEN_GEAENDERT: &str = "de.mako.markt.malo.stammdaten-geaendert";
     /// Object-generic Stammdatenänderung applied to a non-MaLo master-data object
     /// (MeLo/NeLo/Tranche). The subject is the object's location id; the payload
     /// carries the `objekt` marker.
-    pub const STAMMDATEN_GEAENDERT: &str = "de.markt.stammdaten.geaendert";
+    pub const STAMMDATEN_GEAENDERT: &str = "de.mako.markt.stammdaten.geaendert";
     /// Messlokation stammdaten changed.
-    pub const MELO_UPDATED: &str = "de.markt.melo.updated";
+    pub const MELO_UPDATED: &str = "de.mako.markt.melo.updated";
     /// Marktpartner record changed.
-    pub const PARTNER_UPDATED: &str = "de.markt.partner.updated";
+    pub const PARTNER_UPDATED: &str = "de.mako.markt.partner.updated";
     /// Netzbetreiber contract (Lieferanten-Rahmenvertrag) changed.
-    pub const NB_CONTRACT_UPDATED: &str = "de.markt.nb-contract.updated";
+    pub const NB_CONTRACT_UPDATED: &str = "de.mako.markt.nb-contract.updated";
     /// MSB-Rahmenvertrag (NB ↔ MSB, either Sparte) changed.
-    pub const MSB_RAHMENVERTRAG_UPDATED: &str = "de.markt.msb-rahmenvertrag.updated";
+    pub const MSB_RAHMENVERTRAG_UPDATED: &str = "de.mako.markt.msb-rahmenvertrag.updated";
     /// Device (Gerät) configuration changed.
-    pub const GERAET_KONFIGURATION_UPDATED: &str = "de.markt.geraet.konfiguration.updated";
+    pub const GERAET_KONFIGURATION_UPDATED: &str = "de.mako.markt.geraet.konfiguration.updated";
     /// Steuerbare-Ressource Konfigurationsprodukt changed (§14a).
-    pub const SR_KONFIGURATIONSPRODUKT_UPDATED: &str = "de.markt.sr.konfigurationsprodukt.updated";
+    pub const SR_KONFIGURATIONSPRODUKT_UPDATED: &str =
+        "de.mako.markt.sr.konfigurationsprodukt.updated";
     /// §20 NZV Netzzugang application state changed.
-    pub const NETZZUGANG_ANTRAG_UPDATED: &str = "de.markt.netzzugang.antrag.updated";
+    pub const NETZZUGANG_ANTRAG_UPDATED: &str = "de.mako.markt.netzzugang.antrag.updated";
     /// Einwilligung (consent) granted.
-    pub const EINWILLIGUNG_ERTEILT: &str = "de.markt.einwilligung.erteilt";
+    pub const EINWILLIGUNG_ERTEILT: &str = "de.mako.markt.einwilligung.erteilt";
     /// Einwilligung (consent) revoked.
-    pub const EINWILLIGUNG_WIDERRUFEN: &str = "de.markt.einwilligung.widerrufen";
+    pub const EINWILLIGUNG_WIDERRUFEN: &str = "de.mako.markt.einwilligung.widerrufen";
     /// Versorgung state changed (generic transition).
-    pub const VERSORGUNG_CHANGED: &str = "de.markt.versorgung.changed";
+    pub const VERSORGUNG_CHANGED: &str = "de.mako.markt.versorgung.changed";
     /// ⚠ phantom: no emitter. Versorgung entered `BELIEFERT` (supply active).
     ///
     /// Superseded before it was ever wired. `marktd` announces **every**
@@ -161,58 +167,58 @@ pub mod markt {
     /// catalogue is a published contract where withdrawing a declared type
     /// breaks a consumer matching on it for no gain. A phantom whose emission
     /// would itself be a defect gets deleted instead — that is why there is no
-    /// generic `de.eeg.settlement.berechnet` (see the [`crate::eeg`] module).
-    pub const VERSORGUNG_BELIEFERT: &str = "de.markt.versorgung.beliefert";
+    /// generic `de.mako.eeg.settlement.berechnet` (see the [`crate::eeg`] module).
+    pub const VERSORGUNG_BELIEFERT: &str = "de.mako.markt.versorgung.beliefert";
     /// Supply gap detected: a MaLo became `Unbeliefert` with no announced
     /// successor — the NB must activate Ersatz-/Grundversorgung (§38 EnWG).
     /// Consumed by the `processd` EoG gap-closure automation.
-    pub const VERSORGUNG_GAP_DETECTED: &str = "de.markt.versorgung.gap-detected";
+    pub const VERSORGUNG_GAP_DETECTED: &str = "de.mako.markt.versorgung.gap-detected";
     /// Statutory fallback supply began (Ersatz- or Grundversorgung);
     /// `data.eog_art` carries the regime, `data.eog_seit` the start date.
-    pub const VERSORGUNG_EOG_BEGONNEN: &str = "de.markt.versorgung.eog-begonnen";
+    pub const VERSORGUNG_EOG_BEGONNEN: &str = "de.mako.markt.versorgung.eog-begonnen";
     /// §38 Abs. 4 EnWG: a running Ersatzversorgung approaches its 3-month
     /// maximum. Emitted by the `processd` EoG timer.
-    pub const VERSORGUNG_ERSATZ_AUSLAUFEND: &str = "de.markt.versorgung.ersatz-auslaufend";
+    pub const VERSORGUNG_ERSATZ_AUSLAUFEND: &str = "de.mako.markt.versorgung.ersatz-auslaufend";
     /// PRICAT price catalog published.
-    pub const PRICAT_PUBLISHED: &str = "de.markt.pricat.published";
+    pub const PRICAT_PUBLISHED: &str = "de.mako.markt.pricat.published";
     /// MMMA import batch succeeded.
-    pub const MMMA_IMPORT_SUCCESS: &str = "de.markt.mmma.import.success";
+    pub const MMMA_IMPORT_SUCCESS: &str = "de.mako.markt.mmma.import.success";
     /// MMMA import batch failed.
-    pub const MMMA_IMPORT_FAILED: &str = "de.markt.mmma.import.failed";
+    pub const MMMA_IMPORT_FAILED: &str = "de.mako.markt.mmma.import.failed";
 }
 
-/// Billing events (`de.billing.*`), emitted by `billingd`.
+/// Billing events (`de.mako.billing.*`), emitted by `billingd`.
 pub mod billing {
     /// Invoice (Rechnung) created. A credit note / Stornorechnung is the same
     /// event with `data.is_correction = true` and a negated amount — there is
     /// deliberately no separate `gutschrift` type (one signed document stream is
     /// cleaner for the double-entry ledger, and avoids a double-booking hazard).
-    pub const RECHNUNG_ERSTELLT: &str = "de.billing.rechnung.erstellt";
+    pub const RECHNUNG_ERSTELLT: &str = "de.mako.billing.rechnung.erstellt";
     /// Monthly Abrechnungsinformation (§40 EnWG) generated.
     pub const ABRECHNUNGSINFORMATION_MONATLICH: &str =
-        "de.billing.abrechnungsinformation.monatlich";
+        "de.mako.billing.abrechnungsinformation.monatlich";
     /// XRechnung for a B2G recipient is ready for dispatch.
-    pub const XRECHNUNG_B2G_READY: &str = "de.billing.xrechnung.b2g.ready";
+    pub const XRECHNUNG_B2G_READY: &str = "de.mako.billing.xrechnung.b2g.ready";
 }
 
-/// INVOIC receipt/payment events (`de.invoic.*`), emitted by `invoicd`.
+/// INVOIC receipt/payment events (`de.mako.invoic.*`), emitted by `invoicd`.
 pub mod invoic {
     /// Inbound INVOIC disputed (REMADV Ablehnung path).
-    pub const RECEIPT_DISPUTED: &str = "de.invoic.receipt.disputed";
+    pub const RECEIPT_DISPUTED: &str = "de.mako.invoic.receipt.disputed";
     /// Inbound INVOIC settled (REMADV Zahlungsavis).
-    pub const RECEIPT_SETTLED: &str = "de.invoic.receipt.settled";
+    pub const RECEIPT_SETTLED: &str = "de.mako.invoic.receipt.settled";
     /// Outbound INVOIC payment overdue (no REMADV in time).
-    pub const PAYMENT_OVERDUE: &str = "de.invoic.payment.overdue";
+    pub const PAYMENT_OVERDUE: &str = "de.mako.invoic.payment.overdue";
 }
 
-/// EEG/KWKG settlement events (`de.eeg.*`), emitted by `einsd`.
+/// EEG/KWKG settlement events (`de.mako.eeg.*`), emitted by `einsd`.
 ///
-/// `agentd` additionally subscribes to the globs `de.eeg.*`,
-/// `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*` and
-/// `de.eeg.compliance.*` (no concrete `de.eeg.compliance.*` type exists).
-/// There is deliberately no `de.eeg.*` catch-all subscription.
+/// `agentd` additionally subscribes to the globs `de.mako.eeg.*`,
+/// `de.mako.eeg.anlage.*`, `de.mako.eeg.verguetung.*`, `de.mako.eeg.marktpraemie.*` and
+/// `de.mako.eeg.compliance.*` (no concrete `de.mako.eeg.compliance.*` type exists).
+/// There is deliberately no `de.mako.eeg.*` catch-all subscription.
 ///
-/// There is also deliberately **no generic `de.eeg.settlement.berechnet`**. A
+/// There is also deliberately **no generic `de.mako.eeg.settlement.berechnet`**. A
 /// settlement announces itself as exactly one of [`eeg::VERGUETUNG_BERECHNET`] or
 /// [`eeg::MARKTPRAEMIE_BERECHNET`], chosen in `einsd::handlers::enqueue_settlement_ce`
 /// from the plant's Vergütungsmodell — and that choice *is* the payout gate:
@@ -222,32 +228,32 @@ pub mod invoic {
 /// type could only ever be a second announcement of a payout already announced.
 pub mod eeg {
     /// Einspeisevergütung settlement computed (feed-in tariff schemes).
-    pub const VERGUETUNG_BERECHNET: &str = "de.eeg.verguetung.berechnet";
+    pub const VERGUETUNG_BERECHNET: &str = "de.mako.eeg.verguetung.berechnet";
     /// Marktprämie settlement computed (Direktvermarktung schemes).
-    pub const MARKTPRAEMIE_BERECHNET: &str = "de.eeg.marktpraemie.berechnet";
+    pub const MARKTPRAEMIE_BERECHNET: &str = "de.mako.eeg.marktpraemie.berechnet";
     /// Monthly auto-settle batch trigger. Emitted by einsd's auto-settle worker
     /// (`emit_batch_due_ce`); subscribed by agentd's `einsd-batch-agent`.
-    pub const SETTLEMENT_BATCH_DUE: &str = "de.eeg.settlement.batch-due";
+    pub const SETTLEMENT_BATCH_DUE: &str = "de.mako.eeg.settlement.batch-due";
     /// EEG-Anlage Förderung ends within the warning window.
-    pub const ANLAGE_FOERDERUNG_AUSLAUFEND: &str = "de.eeg.anlage.foerderung-auslaufend";
+    pub const ANLAGE_FOERDERUNG_AUSLAUFEND: &str = "de.mako.eeg.anlage.foerderung-auslaufend";
     /// EEG-Anlage MaStR registration confirmed.
-    pub const ANLAGE_MASTR_REGISTRIERT: &str = "de.eeg.anlage.mastr-registriert";
+    pub const ANLAGE_MASTR_REGISTRIERT: &str = "de.mako.eeg.anlage.mastr-registriert";
     /// §21b Veräußerungsform switched.
-    pub const VERAEUSSERUNGSFORM_GEWECHSELT: &str = "de.eeg.veraeusserungsform.gewechselt";
+    pub const VERAEUSSERUNGSFORM_GEWECHSELT: &str = "de.mako.eeg.veraeusserungsform.gewechselt";
 }
 
-/// FI-CA subledger events (`de.accounting.*`), emitted by `accountingd`.
+/// FI-CA subledger events (`de.mako.accounting.*`), emitted by `accountingd`.
 pub mod accounting {
     /// Dunning notice (Mahnung) issued.
-    pub const MAHNUNG_ISSUED: &str = "de.accounting.mahnung.issued";
+    pub const MAHNUNG_ISSUED: &str = "de.mako.accounting.mahnung.issued";
     /// Abschlag (installment) posted.
-    pub const ABSCHLAG_POSTED: &str = "de.accounting.abschlag.posted";
+    pub const ABSCHLAG_POSTED: &str = "de.mako.accounting.abschlag.posted";
     /// Payment due notification.
-    pub const PAYMENT_DUE: &str = "de.accounting.payment.due";
+    pub const PAYMENT_DUE: &str = "de.mako.accounting.payment.due";
     /// Bank statement payment imported and matched.
-    pub const PAYMENT_IMPORTED: &str = "de.accounting.payment.imported";
+    pub const PAYMENT_IMPORTED: &str = "de.mako.accounting.payment.imported";
     /// Refund (Erstattung) due to the customer.
-    pub const ERSTATTUNG_FAELLIG: &str = "de.accounting.erstattung.faellig";
+    pub const ERSTATTUNG_FAELLIG: &str = "de.mako.accounting.erstattung.faellig";
     /// § 40b Abs. 1 EnWG — the annual reconciliation for one Marktlokation is
     /// committed.
     ///
@@ -259,41 +265,42 @@ pub mod accounting {
     /// Carries the settlement, its components and the recalibrated monthly
     /// Abschlag, so a consumer reacting to the annual cycle needs no second
     /// call.
-    pub const JAHRESABSCHLUSS_ABGESCHLOSSEN: &str = "de.accounting.jahresabschluss.abgeschlossen";
+    pub const JAHRESABSCHLUSS_ABGESCHLOSSEN: &str =
+        "de.mako.accounting.jahresabschluss.abgeschlossen";
     /// Late-payment interest (§288 BGB) charged.
-    pub const INTEREST_CHARGED: &str = "de.accounting.interest.charged";
+    pub const INTEREST_CHARGED: &str = "de.mako.accounting.interest.charged";
     /// EEG payout rejected (e.g. missing bank data).
-    pub const EEG_PAYOUT_REJECTED: &str = "de.accounting.eeg.payout.rejected";
+    pub const EEG_PAYOUT_REJECTED: &str = "de.mako.accounting.eeg.payout.rejected";
     /// §41f Abs. 1 EnWG — Sperrandrohung: disconnection threatened after an
     /// unresolved Mahnstufe-3 dunning case, opening the 4-Wochen-Frist.
-    pub const SPERRANDROHUNG: &str = "de.accounting.sperrandrohung";
+    pub const SPERRANDROHUNG: &str = "de.mako.accounting.sperrandrohung";
     /// §41f Abs. 5 EnWG — Sperrankündigung: the concrete disconnection date is
     /// announced 8 Werktage in advance (after the 4-Wochen Androhung Frist).
-    pub const SPERRANKUENDIGUNG: &str = "de.accounting.sperrankuendigung";
+    pub const SPERRANKUENDIGUNG: &str = "de.mako.accounting.sperrankuendigung";
     /// §41f Abs. 1 EnWG — Sperrauftrag: **ORDERS 17115** dispatched to the
     /// Netzbetreiber once the Androhung (4 Wochen) and Ankündigung (8 Werktage)
     /// Fristen have elapsed, the Abs. 3 arrears gates still hold, and no
     /// Abwendungsvereinbarung / Unverhältnismäßigkeit halted the sequence. The
     /// event announces the market message; it does not carry it.
-    pub const SPERRAUFTRAG: &str = "de.accounting.sperrauftrag";
+    pub const SPERRAUFTRAG: &str = "de.mako.accounting.sperrauftrag";
     /// §41f Abs. 7 EnWG — Entsperrauftrag: **ORDERS 17117** dispatched once the
     /// grounds for the interruption are gone (the arrears were settled). The
     /// statute makes the restoration *unverzüglich* and unconditional on being
     /// asked, so this follows automatically from the case settling.
-    pub const ENTSPERRAUFTRAG: &str = "de.accounting.entsperrauftrag";
+    pub const ENTSPERRAUFTRAG: &str = "de.mako.accounting.entsperrauftrag";
     /// §41g Abs. 1 S. 2 EnWG — the Grundversorger's offer of an
     /// Abwendungsvereinbarung: due within one week of the customer demanding it
     /// after the Androhung, and at the latest together with the Ankündigung.
     /// Carries the interest-free instalment terms (§41g Abs. 1 S. 7–9).
-    pub const ABWENDUNG_ANGEBOTEN: &str = "de.accounting.abwendung.angeboten";
+    pub const ABWENDUNG_ANGEBOTEN: &str = "de.mako.accounting.abwendung.angeboten";
     /// §41g Abs. 1 S. 11 EnWG — an accepted Abwendungsvereinbarung was broken.
     /// The supplier may resume the interruption, but must re-observe §41f
     /// Abs. 1 S. 2 and issue a **fresh** Ankündigung (§41f Abs. 5).
-    pub const ABWENDUNG_GEBROCHEN: &str = "de.accounting.abwendung.gebrochen";
+    pub const ABWENDUNG_GEBROCHEN: &str = "de.mako.accounting.abwendung.gebrochen";
     /// SEPA direct-debit return (Bankrücklastschrift) — emitted by
     /// `accountingd` when a camt.053/054 booking carries a return reason code
     /// or debits the account, and subscribed by agentd's `payment-agent`.
-    pub const BANKRUECKLAST: &str = "de.accounting.bankruecklast";
+    pub const BANKRUECKLAST: &str = "de.mako.accounting.bankruecklast";
     /// A pain.002 rejected a submitted direct-debit collection: the money will
     /// never arrive, so the receivable stays open and the mandate needs
     /// attention (`AC01` wrong IBAN, `MD01` no mandate, `AM04` no funds).
@@ -301,60 +308,63 @@ pub mod accounting {
     /// Distinct from [`BANKRUECKLAST`], which is a collection that *settled*
     /// and was then returned — a different reconciliation, and a different
     /// R-transaction fee.
-    pub const SEPA_COLLECTION_REJECTED: &str = "de.accounting.sepa.collection-rejected";
+    pub const SEPA_COLLECTION_REJECTED: &str = "de.mako.accounting.sepa.collection-rejected";
     /// The creditor gave a settled collection back via pain.007.
-    pub const SEPA_REVERSAL_ISSUED: &str = "de.accounting.sepa.reversal-issued";
+    pub const SEPA_REVERSAL_ISSUED: &str = "de.mako.accounting.sepa.reversal-issued";
     /// A camt.055 recall was sent for a submitted pain.008: the creditor is
     /// asking the bank to stop a collection **before** it settles.
     ///
     /// Distinct from [`SEPA_REVERSAL_ISSUED`], which gives back a collection
     /// that already settled — a different message, a different moment, and a
     /// different reconciliation.
-    pub const SEPA_RECALL_REQUESTED: &str = "de.accounting.sepa.recall-requested";
+    pub const SEPA_RECALL_REQUESTED: &str = "de.mako.accounting.sepa.recall-requested";
     /// The bank answered a camt.055 with a camt.029. The outcome is `ACCR`
     /// (stopped), `RJCR` (the collection stands), `PDCR` (still open) or `PACR`
     /// (some of the named transactions).
-    pub const SEPA_RECALL_RESOLVED: &str = "de.accounting.sepa.recall-resolved";
+    pub const SEPA_RECALL_RESOLVED: &str = "de.mako.accounting.sepa.recall-resolved";
     /// Verification of Payee reported something other than a match for an
     /// outgoing credit transfer. Mandatory for euro credit transfers since
     /// 9 October 2025: executing after a `RVNM` no-match shifts liability to
     /// the payer, so this is a decision an operator has to make.
-    pub const PAYEE_VERIFICATION_MISMATCH: &str = "de.accounting.payee.verification-mismatch";
+    pub const PAYEE_VERIFICATION_MISMATCH: &str = "de.mako.accounting.payee.verification-mismatch";
 }
 
-/// MaBiS/Netzbilanzierung INVOIC events (`de.netzbilanz.*`), emitted by
+/// MaBiS/Netzbilanzierung INVOIC events (`de.mako.netzbilanz.*`), emitted by
 /// `netzbilanzd`.
 pub mod netzbilanz {
     /// A Netzbetreiber invoice was settled and stored as a draft.
-    pub const INVOIC_DRAFTED: &str = "de.netzbilanz.invoic.drafted";
+    pub const INVOIC_DRAFTED: &str = "de.mako.netzbilanz.invoic.drafted";
     /// The invoice was handed to `makod` for EDIFACT dispatch.
-    pub const INVOIC_DISPATCHED: &str = "de.netzbilanz.invoic.dispatched";
+    pub const INVOIC_DISPATCHED: &str = "de.mako.netzbilanz.invoic.dispatched";
     /// A draft is still undispatched past its window.
-    pub const INVOIC_DISPATCH_OVERDUE: &str = "de.netzbilanz.invoic.dispatch-overdue";
+    pub const INVOIC_DISPATCH_OVERDUE: &str = "de.mako.netzbilanz.invoic.dispatch-overdue";
     /// The counterparty confirmed payment (REMADV 33001, the only Bestätigung).
-    pub const INVOIC_PAID: &str = "de.netzbilanz.invoic.paid";
+    pub const INVOIC_PAID: &str = "de.mako.netzbilanz.invoic.paid";
     /// The counterparty rejected the invoice (REMADV 33002/33003/33004).
-    pub const INVOIC_DISPUTED: &str = "de.netzbilanz.invoic.disputed";
+    pub const INVOIC_DISPUTED: &str = "de.mako.netzbilanz.invoic.disputed";
     /// Kostenblatt computed.
-    pub const KOSTENBLATT_COMPUTED: &str = "de.netzbilanz.kostenblatt.computed";
+    pub const KOSTENBLATT_COMPUTED: &str = "de.mako.netzbilanz.kostenblatt.computed";
     /// Kostenblatt submission deadline approaching.
     pub const KOSTENBLATT_DEADLINE_APPROACHING: &str =
-        "de.netzbilanz.kostenblatt.deadline-approaching";
+        "de.mako.netzbilanz.kostenblatt.deadline-approaching";
 }
 
-/// Meter-reading / energy-data events (`de.messwert.*`), emitted by `edmd`.
+/// Meter-reading / energy-data events (`de.mako.messwert.*`), emitted by `edmd`.
 ///
-/// Renamed from the legacy `de.edmd.*` prefix — the context is the
-/// Messwert (meter value), not the daemon that happens to store it.
+/// Named for the Messwert, not for the daemon that happens to store it.
 pub mod messwert {
     /// Hampel grade C/F, or any V-rule finding, on newly ingested readings.
-    pub const READING_QUALITY_WARNING: &str = "de.messwert.reading.quality.warning";
+    pub const READING_QUALITY_WARNING: &str = "de.mako.messwert.reading.quality.warning";
     /// Direct iMSys/SMGW push stored.
-    pub const READING_DIRECT_STORED: &str = "de.messwert.reading.direct.stored";
+    pub const READING_DIRECT_STORED: &str = "de.mako.messwert.reading.direct.stored";
+    /// An Ablesesteuerung reading order was created.
+    pub const READING_ORDER_CREATED: &str = "de.mako.messwert.reading.order.created";
+    /// A reading order was completed with its reading.
+    pub const READING_ORDER_COMPLETED: &str = "de.mako.messwert.reading.order.completed";
     /// Ablesesteuerung reading order failed.
-    pub const READING_ORDER_FAILED: &str = "de.messwert.reading.order.failed";
+    pub const READING_ORDER_FAILED: &str = "de.mako.messwert.reading.order.failed";
     /// Expected reading confirmation overdue.
-    pub const READING_CONFIRMATION_OVERDUE: &str = "de.messwert.reading.confirmation.overdue";
+    pub const READING_CONFIRMATION_OVERDUE: &str = "de.mako.messwert.reading.confirmation.overdue";
     /// A measuring point has stopped delivering, or is delivering too little of
     /// the settlement window to bill.
     ///
@@ -366,16 +376,16 @@ pub mod messwert {
     /// (§ 60 Abs. 1 MsbG — the duty is to transmit „zu den Zeitpunkten …,
     /// die diese … vorgeben", which is what a stalled head-end breaches;
     /// Abs. 2 is a Soll-rule about processing inside the Smart-Meter-Gateway).
-    pub const READING_DELIVERY_OVERDUE: &str = "de.messwert.reading.delivery.overdue";
+    pub const READING_DELIVERY_OVERDUE: &str = "de.mako.messwert.reading.delivery.overdue";
     /// A measuring point that was overdue is delivering again.
-    pub const READING_DELIVERY_RESUMED: &str = "de.messwert.reading.delivery.resumed";
+    pub const READING_DELIVERY_RESUMED: &str = "de.mako.messwert.reading.delivery.resumed";
     /// §14a SMGW/CLS compliance issue **opened** (§ 25 MsbG monitoring duty).
     ///
     /// Fires on the transition into a fault, not on every sweep that still sees
     /// it — see `cls_compliance_issues`.
-    pub const CLS_COMPLIANCE_ISSUE: &str = "de.messwert.cls.compliance-issue";
+    pub const CLS_COMPLIANCE_ISSUE: &str = "de.mako.messwert.cls.compliance-issue";
     /// A §14a SMGW/CLS compliance issue a later sweep no longer finds.
-    pub const CLS_COMPLIANCE_RESOLVED: &str = "de.messwert.cls.compliance-resolved";
+    pub const CLS_COMPLIANCE_RESOLVED: &str = "de.mako.messwert.cls.compliance-resolved";
     /// An **ESA Typ-2** subscription has stopped delivering.
     ///
     /// Distinct from [`READING_DELIVERY_OVERDUE`], which watches the
@@ -384,9 +394,9 @@ pub mod messwert {
     /// run that could come up short, so nothing else would notice it. Mixing
     /// the two would also cross the Typ-1/Typ-2 separation the whole store
     /// split exists to keep (Codeliste der Konfigurationen 1.4 Kap. 4.6).
-    pub const ESA_TYP2_DELIVERY_OVERDUE: &str = "de.messwert.esa.typ2.delivery.overdue";
+    pub const ESA_TYP2_DELIVERY_OVERDUE: &str = "de.mako.messwert.esa.typ2.delivery.overdue";
     /// An ESA Typ-2 subscription that was overdue is delivering again.
-    pub const ESA_TYP2_DELIVERY_RESUMED: &str = "de.messwert.esa.typ2.delivery.resumed";
+    pub const ESA_TYP2_DELIVERY_RESUMED: &str = "de.mako.messwert.esa.typ2.delivery.resumed";
     /// SMGW certificate approaching expiry — tiered advance warning at 90 / 30 /
     /// 7 days before `valid_to`, once per tier per certificate.
     ///
@@ -394,36 +404,39 @@ pub mod messwert {
     /// certificate runtimes while the Root-CP fixes the renewal lead time and
     /// the Zertifikatswechsel overlap. An expired certificate silently ends §14a
     /// Fernsteuerbarkeit.
-    pub const SMGW_CERT_EXPIRY_WARNING: &str = "de.messwert.smgw.cert.expiry-warning";
+    pub const SMGW_CERT_EXPIRY_WARNING: &str = "de.mako.messwert.smgw.cert.expiry-warning";
 }
 
-/// Product & tariff catalog events (`de.tarif.*`), emitted by `productd`.
-///
-/// Renamed from the legacy `de.tarifbd.*` prefix (and the stray top-level
-/// `de.angebot.angenommen`).
+/// Product & tariff catalog events (`de.mako.tarif.*`), emitted by `productd`.
 pub mod tarif {
     /// Product created/updated in the catalog.
-    pub const PRODUCT_UPDATED: &str = "de.tarif.product.updated";
+    pub const PRODUCT_UPDATED: &str = "de.mako.tarif.product.updated";
     /// B2B Angebot accepted — vertragd auto-creates the Rahmenvertrag.
-    pub const ANGEBOT_ANGENOMMEN: &str = "de.tarif.angebot.angenommen";
+    pub const ANGEBOT_ANGENOMMEN: &str = "de.mako.tarif.angebot.angenommen";
     /// ⚠ phantom: B2B quote expired. Subscribed by agentd (`productd-agent`),
     /// emitted by nothing — `productd` expires an Angebot in place without
     /// announcing it.
-    pub const ANGEBOT_ABGELAUFEN: &str = "de.tarif.angebot.abgelaufen";
+    pub const ANGEBOT_ABGELAUFEN: &str = "de.mako.tarif.angebot.abgelaufen";
     /// ⚠ phantom: EPEX D-1 prices not imported by 18:00 CET. Subscribed by
     /// agentd (`productd-agent`), emitted by nothing — no worker watches the
     /// import window.
-    pub const EPEX_MISSING: &str = "de.tarif.epex.missing";
+    pub const EPEX_MISSING: &str = "de.mako.tarif.epex.missing";
 }
 
-/// Contract lifecycle events (`de.vertrag.*`), emitted by `vertragd`.
+/// Contract lifecycle events (`de.mako.vertrag.*`), emitted by `vertragd`.
 ///
-/// `agentd` additionally subscribes to the glob `de.vertrag.*`.
+/// `agentd` additionally subscribes to the glob `de.mako.vertrag.*`.
 pub mod vertrag {
     /// All components NB-confirmed — billing may start.
-    pub const AKTIV: &str = "de.vertrag.aktiv";
+    pub const AKTIV: &str = "de.mako.vertrag.aktiv";
+    /// The grid operator confirmed one component's Anmeldung: supply begins
+    /// on its Lieferbeginn. Per component, with the caller's references.
+    pub const LIEFERBEGINN_BESTAETIGT: &str = "de.mako.vertrag.lieferbeginn.bestaetigt";
+    /// The grid operator refused one component's Anmeldung, with the
+    /// Antwortcode and the Codeliste it is defined in.
+    pub const LIEFERBEGINN_ABGELEHNT: &str = "de.mako.vertrag.lieferbeginn.abgelehnt";
     /// Lieferende dispatched (Rahmenvertrag cascade, per child).
-    pub const GEKUENDIGT: &str = "de.vertrag.gekuendigt";
+    pub const GEKUENDIGT: &str = "de.mako.vertrag.gekuendigt";
     /// Kündigung accepted; the Lieferende and the Schlussablesung are
     /// enqueued. Carries the § 41 Abs. 8 Nr. 2 EnWG Textform confirmation the
     /// supplier owes the customer — the document is produced downstream, the
@@ -431,58 +444,58 @@ pub mod vertrag {
     ///
     /// A cascade Kündigung over a Rahmenvertrag emits [`GEKUENDIGT`] per child
     /// instead, because the framework contract is what was terminated.
-    pub const KUENDIGUNG: &str = "de.vertrag.kuendigung";
+    pub const KUENDIGUNG: &str = "de.mako.vertrag.kuendigung";
     /// Kündigung withdrawn before Lieferende.
-    pub const KUENDIGUNG_WIDERRUFEN: &str = "de.vertrag.kuendigung-widerrufen";
+    pub const KUENDIGUNG_WIDERRUFEN: &str = "de.mako.vertrag.kuendigung-widerrufen";
     /// Product change applied immediately.
-    pub const TARIFWECHSEL: &str = "de.vertrag.tarifwechsel";
+    pub const TARIFWECHSEL: &str = "de.mako.vertrag.tarifwechsel";
     /// Future-dated product change stored.
-    pub const TARIFWECHSEL_GEPLANT: &str = "de.vertrag.tarifwechsel-geplant";
+    pub const TARIFWECHSEL_GEPLANT: &str = "de.mako.vertrag.tarifwechsel-geplant";
     /// Price guarantee stored/replaced.
-    pub const PREISGARANTIE_HINTERLEGT: &str = "de.vertrag.preisgarantie-hinterlegt";
+    pub const PREISGARANTIE_HINTERLEGT: &str = "de.mako.vertrag.preisgarantie-hinterlegt";
     /// § 41 Abs. 5 EnWG price-change notice. Sent as soon as the change is
     /// scheduled — Satz 2 is a floor, not a ceiling — and carrying the regime
     /// that applied plus the Satz 4 Sonderkündigungsrecht.
-    pub const PREISAENDERUNG_ANKUENDIGUNG: &str = "de.vertrag.preisaenderung.ankuendigung";
+    pub const PREISAENDERUNG_ANKUENDIGUNG: &str = "de.mako.vertrag.preisaenderung.ankuendigung";
     /// 30 days before auto-renewal.
-    pub const AUTOERNEUERUNG_ANKUENDIGUNG: &str = "de.vertrag.autoerneuerung.ankuendigung";
+    pub const AUTOERNEUERUNG_ANKUENDIGUNG: &str = "de.mako.vertrag.autoerneuerung.ankuendigung";
     /// 30 days before vertragsende / preisgarantie_bis.
-    pub const ABLAUF_ANKUENDIGUNG: &str = "de.vertrag.ablauf.ankuendigung";
+    pub const ABLAUF_ANKUENDIGUNG: &str = "de.mako.vertrag.ablauf.ankuendigung";
     /// Supply has actually ended: every commodity has passed its Lieferende and
     /// the contract is `ABGELAUFEN`. Distinct from [`GEKUENDIGT`], which is the
     /// day the termination was *accepted* — months earlier for a notice period
     /// that long, and with supply and invoicing running throughout. This is the
     /// event a Schlussrechnung and the § 147 AO retention clock hang off.
-    pub const ABGESCHLOSSEN: &str = "de.vertrag.abgeschlossen";
+    pub const ABGESCHLOSSEN: &str = "de.mako.vertrag.abgeschlossen";
     /// An online order was received and its Bestellnachweis stored
     /// (`POST /api/v1/bestellungen`). `subject` is the partner's own
     /// `bestellreferenz`, so a front end correlates without polling.
-    pub const BESTELLUNG_EINGEGANGEN: &str = "de.vertrag.bestellung.eingegangen";
+    pub const BESTELLUNG_EINGEGANGEN: &str = "de.mako.vertrag.bestellung.eingegangen";
     /// An online order became a contract — at the click under
     /// `[policy] vertragsschluss = "mit_bestellung"`, at the operator's
     /// acceptance under `"mit_annahme"`. Carries the `vertrag_id` and the
     /// Vertragsschluss instant; `subject` is the `bestellreferenz`.
-    pub const BESTELLUNG_ANGENOMMEN: &str = "de.vertrag.bestellung.angenommen";
+    pub const BESTELLUNG_ANGENOMMEN: &str = "de.mako.vertrag.bestellung.angenommen";
     /// The operator refused an order under `mit_annahme`. Carries the
     /// operator's `grund`; `subject` is the `bestellreferenz`.
-    pub const BESTELLUNG_ABGELEHNT: &str = "de.vertrag.bestellung.abgelehnt";
+    pub const BESTELLUNG_ABGELEHNT: &str = "de.mako.vertrag.bestellung.abgelehnt";
     /// A consumer's Widerruf (§ 355 BGB) was recorded — timely or not. Carries
     /// `rechtzeitig`, the Frist it was decided against, its `wirkung`
     /// (`STORNIERT`, `LIEFERENDE`, `BESTELLUNG_GESCHLOSSEN`) and
     /// `wertersatz_geschuldet` (§ 357a Abs. 2 Satz 1 BGB), which `billingd`
     /// reads; `subject` is the `bestellreferenz`.
-    pub const WIDERRUF_EINGEGANGEN: &str = "de.vertrag.widerruf.eingegangen";
+    pub const WIDERRUF_EINGEGANGEN: &str = "de.mako.vertrag.widerruf.eingegangen";
 }
 
-/// Virtual-power-plant events (`de.vpp.*`).
+/// Virtual-power-plant events (`de.mako.vpp.*`).
 pub mod vpp {
     /// VPP dispatch confirmed (ERP event type, emitted via mako-engine).
-    pub const DISPATCH_CONFIRMED: &str = "de.vpp.dispatch.confirmed";
+    pub const DISPATCH_CONFIRMED: &str = "de.mako.vpp.dispatch.confirmed";
     /// VPP settlement computed (emitted by `billingd`).
-    pub const SETTLEMENT_BERECHNET: &str = "de.vpp.settlement.berechnet";
+    pub const SETTLEMENT_BERECHNET: &str = "de.mako.vpp.settlement.berechnet";
 }
 
-/// Agent runtime events (`de.agent.*`), emitted by `agentd`.
+/// Agent runtime events (`de.mako.agent.*`), emitted by `agentd`.
 pub mod agent {
     /// An agent run reached a terminal state and produced a decision.
     ///
@@ -495,10 +508,10 @@ pub mod agent {
     ///
     /// There is no separate dead-letter event: a run that fails is resumable
     /// from its journal rather than a message that has nowhere left to go.
-    pub const DECISION_MADE: &str = "de.agent.decision.made";
+    pub const DECISION_MADE: &str = "de.mako.agent.decision.made";
 }
 
-/// GaBi Gas balancing events (`de.gabi.*`), defined in `mako-gabi-gas`.
+/// GaBi Gas balancing events (`de.mako.gabi.*`), defined in `mako-gabi-gas`.
 ///
 /// # What is emitted
 ///
@@ -515,8 +528,8 @@ pub mod agent {
 /// right — and unlike every other domain here, it has no generic fallback
 /// either: `mako-gabi-gas` never enqueues a `ProcessInitiated` or
 /// `ProcessCompleted` entry, so its ALOCAT and NOMINT/NOMRES streams put no
-/// `de.mako.process.*` event on the bus for a subscriber to fall back on. A BKV
-/// watching `de.gabi.*` sees a curtailment and never sees a confirmation.
+/// `de.mako.engine.process.*` event on the bus for a subscriber to fall back on. A BKV
+/// watching `de.mako.gabi.*` sees a curtailment and never sees a confirmation.
 ///
 /// That is a feature gap, not dead vocabulary, and the ten phantom constants
 /// below are the shape it would take. What each still needs:
@@ -530,7 +543,7 @@ pub mod agent {
 /// | [`gabi::IMBALANCE_CALCULATED`] | `GasImbalanceSaldo::calculate` exists and is tested, but nothing calls it | a process. Nomination and allocation are separate streams keyed differently, so no single workflow holds both sides of one gas day |
 /// | [`gabi::GAS_QUALITY_VIOLATION`] | `GasBeschaffenheit::validate` (DVGW G 260 ranges) exists and is tested, but nothing calls it | an inbound source. Gasbeschaffenheitsdaten arrive on MSCONS 13007, which is a `mako-geli-gas` PID — no GaBi Gas message carries a Brennwert to check |
 /// | [`gabi::MEASUREMENT_RECEIVED`] | MSCONS 13013, the Gas Allokationsliste | nothing, and it should stay unemitted: `gabi-gas-mmma` is a PID registration with no workflow of its own, and `makod` delegates 13013 to `GpkeAllokationslisteWorkflow`. The fact is already announced under `gpke-allokationsliste` |
-/// | [`gabi::INVOIC_MMM_RECEIVED`] (31007/31008), [`gabi::INVOIC_KAPAZITAET_RECEIVED`] (31010) | the shared `mako_invoic::InvoicWorkflow` | nothing, and these should stay unemitted: that machine already enqueues `ProcessInitiated` carrying `data.workflow = "gabi-gas-invoic"` and `data.pid`, so both facts are on the bus. A `de.gabi.*` twin would name them a second time and would require the family-generic machine to grow a per-family hook |
+/// | [`gabi::INVOIC_MMM_RECEIVED`] (31007/31008), [`gabi::INVOIC_KAPAZITAET_RECEIVED`] (31010) | the shared `mako_invoic::InvoicWorkflow` | nothing, and these should stay unemitted: that machine already enqueues `ProcessInitiated` carrying `data.workflow = "gabi-gas-invoic"` and `data.pid`, so both facts are on the bus. A `de.mako.gabi.*` twin would name them a second time and would require the family-generic machine to grow a per-family hook |
 /// | [`gabi::FINAL_ALOCAT_DEADLINE`] | — | nothing: it duplicates [`gabi::ALOCAT_MISSING`], which is what the § 47 Ziffer 1 window closing unsettled already means |
 ///
 /// Wiring the first four is a three-file change and none of the files is this
@@ -546,13 +559,13 @@ pub mod agent {
 /// arrive with a subscriber, or it swaps one silence for another.
 pub mod gabi {
     /// ⚠ phantom: no emitter.
-    pub const MEASUREMENT_RECEIVED: &str = "de.gabi.measurement.received";
+    pub const MEASUREMENT_RECEIVED: &str = "de.mako.gabi.measurement.received";
     /// ⚠ phantom: no emitter.
-    pub const ALLOCATION_COMPLETED: &str = "de.gabi.allocation.completed";
+    pub const ALLOCATION_COMPLETED: &str = "de.mako.gabi.allocation.completed";
     /// ⚠ phantom: no emitter.
-    pub const NOMINATION_CREATED: &str = "de.gabi.nomination.created";
+    pub const NOMINATION_CREATED: &str = "de.mako.gabi.nomination.created";
     /// ⚠ phantom: no emitter.
-    pub const NOMINATION_CONFIRMED: &str = "de.gabi.nomination.confirmed";
+    pub const NOMINATION_CONFIRMED: &str = "de.mako.gabi.nomination.confirmed";
     /// The FNB/MGV confirmed **less** than was nominated.
     ///
     /// Emitted by `makod` from `gabi-gas-nomination` when the NOMRES states a
@@ -560,27 +573,27 @@ pub mod gabi {
     /// difference until it re-nominates or buys the gap, so the `data` payload
     /// carries `gas_day`, `nominated_kwh`, `confirmed_kwh` and `curtailed_kwh`
     /// beside the parties.
-    pub const NOMINATION_CURTAILED: &str = "de.gabi.nomination.curtailed";
+    pub const NOMINATION_CURTAILED: &str = "de.mako.gabi.nomination.curtailed";
     /// The FNB/MGV refused the nomination.
     ///
     /// Emitted by `makod` from `gabi-gas-nomination`; the `data` payload
     /// carries `gas_day`, `reason` and the parties. Nothing flows on this
     /// nomination, so the BKV must re-nominate.
-    pub const NOMINATION_REJECTED: &str = "de.gabi.nomination.rejected";
+    pub const NOMINATION_REJECTED: &str = "de.mako.gabi.nomination.rejected";
     /// The `KoV` NOMRES window closed with no answer on file.
     ///
     /// Emitted by `makod` when the `gabi-gas-nomination` deadline fires: the
     /// nomination's status is unknown at gas-day start, which is an operator
     /// call rather than something to assume either way.
-    pub const NOMRES_MISSING: &str = "de.gabi.nomres.missing";
+    pub const NOMRES_MISSING: &str = "de.mako.gabi.nomres.missing";
     /// ⚠ phantom: no emitter.
-    pub const IMBALANCE_CALCULATED: &str = "de.gabi.imbalance.calculated";
+    pub const IMBALANCE_CALCULATED: &str = "de.mako.gabi.imbalance.calculated";
     /// ⚠ phantom: no emitter.
-    pub const CORRECTION_CREATED: &str = "de.gabi.correction.created";
+    pub const CORRECTION_CREATED: &str = "de.mako.gabi.correction.created";
     /// ⚠ phantom: no emitter.
-    pub const INVOIC_MMM_RECEIVED: &str = "de.gabi.invoic.mmm.received";
+    pub const INVOIC_MMM_RECEIVED: &str = "de.mako.gabi.invoic.mmm.received";
     /// ⚠ phantom: no emitter.
-    pub const INVOIC_KAPAZITAET_RECEIVED: &str = "de.gabi.invoic.kapazitaet.received";
+    pub const INVOIC_KAPAZITAET_RECEIVED: &str = "de.mako.gabi.invoic.kapazitaet.received";
     /// The § 47 Ziffer 1 KoV XV final-allocation window closed with no binding final
     /// ALOCAT on file, so the gas day's imbalance cannot be settled.
     ///
@@ -590,14 +603,14 @@ pub mod gabi {
     /// `pruefidentifikator` — the key the emitter actually writes
     /// (`mako_gabi_gas::allocation`). The operator's action is to open a
     /// Clearingfall with the FNB/MGV.
-    pub const ALOCAT_MISSING: &str = "de.gabi.alocat.missing";
+    pub const ALOCAT_MISSING: &str = "de.mako.gabi.alocat.missing";
     /// ⚠ phantom: no emitter.
-    pub const GAS_QUALITY_VIOLATION: &str = "de.gabi.quality.violation";
+    pub const GAS_QUALITY_VIOLATION: &str = "de.mako.gabi.quality.violation";
     /// ⚠ phantom: no emitter.
-    pub const FINAL_ALOCAT_DEADLINE: &str = "de.gabi.alocat.final.deadline";
+    pub const FINAL_ALOCAT_DEADLINE: &str = "de.mako.gabi.alocat.final.deadline";
 }
 
-/// Process-observability events (`de.obs.*`).
+/// Process-observability events (`de.mako.obs.*`).
 ///
 /// Produced by the sweep workers of `processd`'s process read model
 /// (`services/processd/src/obs/worker.rs`) and consumed by `agentd`
@@ -606,52 +619,60 @@ pub mod obs {
     /// §20 EnWG STP parity-gap alert: the completion-rate gap between affiliate-
     /// and non-affiliate-initiated Anmeldungen exceeds the configured threshold.
     /// Emitted by processd's parity sweep; consumed by agentd (`compliance-agent`).
-    pub const STP_PARITY_ALERT: &str = "de.obs.stp.parity.alert";
+    pub const STP_PARITY_ALERT: &str = "de.mako.obs.stp.parity.alert";
     /// A tracked process is approaching its regulatory response deadline (within
     /// the warn window). Emitted per process by processd's deadline sweep; consumed
     /// by agentd (`deadline-alert-agent`).
-    pub const DEADLINE_APPROACHING: &str = "de.obs.deadline.approaching";
+    pub const DEADLINE_APPROACHING: &str = "de.mako.obs.deadline.approaching";
 }
 
-/// Sperr/Entsperr execution events (`de.sperr.*`), emitted by `processd`'s
+/// Sperr/Entsperr execution events (`de.mako.sperr.*`), emitted by `processd`'s
 /// Sperrauftrag queue (NB role).
 ///
 /// These are the **NB side**: the grid operator's record of a Sperr- or
 /// Entsperrauftrag it received (ORDERS 17115/17117) and physically carried out.
-/// They are not the LF's §41f notices — those are `de.accounting.sperr*`.
+/// They are not the LF's §41f notices — those are `de.mako.accounting.sperr*`.
 ///
 /// Consumed by agentd's `sperrd-agent`, which watches the execution SLA and the
 /// IFTSTA 21039 dispatch.
 pub mod sperr {
     /// A Sperr-/Entsperrauftrag entered the field-service queue — either from an
     /// inbound ORDERS 17115/17117 or from an operator creating one directly.
-    pub const AUFTRAG_EINGEGANGEN: &str = "de.sperr.auftrag.eingegangen";
+    pub const AUFTRAG_EINGEGANGEN: &str = "de.mako.sperr.auftrag.eingegangen";
+    /// The day a pending order may be carried out has arrived: its requested
+    /// date, or at once for an order that names none. Announced once per
+    /// order, with the Treffpunkt and the window.
+    pub const AUFTRAG_FAELLIG: &str = "de.mako.sperr.auftrag.faellig";
     /// The field team carried the order out. The IFTSTA 21039 reporting
     /// `STS+Z37/Z38 → Z14 erfolgreich` has been handed to `makod`.
-    pub const AUSGEFUEHRT: &str = "de.sperr.ausgefuehrt";
+    pub const AUSGEFUEHRT: &str = "de.mako.sperr.ausgefuehrt";
     /// The order could not be carried out (`Z13 gescheitert`) — meter access
     /// denied, safety block, address not found. Carries the EBD Prüfschritt code
     /// so the LF learns *why* instead of waiting out its ORDRSP deadline.
-    pub const FEHLGESCHLAGEN: &str = "de.sperr.fehlgeschlagen";
+    pub const FEHLGESCHLAGEN: &str = "de.mako.sperr.fehlgeschlagen";
     /// A Sperrversuch did not succeed but the order stays in the queue: GPKE
     /// Teil 2 Kap. 3.5.1.2 Nr. 5 gives the NB **two** Sperrversuche within one
     /// Sperrauftrag, and only the second turns into `FEHLGESCHLAGEN`.
-    pub const VERSUCH_GESCHEITERT: &str = "de.sperr.versuch.gescheitert";
+    pub const VERSUCH_GESCHEITERT: &str = "de.mako.sperr.versuch.gescheitert";
     /// A pending order was withdrawn before execution (operator action, or an
     /// inbound ORDCHG 39000 Stornierung). No IFTSTA is dispatched.
-    pub const STORNIERT: &str = "de.sperr.storniert";
+    pub const STORNIERT: &str = "de.mako.sperr.storniert";
     /// A pending order is past the window GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 gives the
     /// NB for the physical act — 6 Werktage after the frühestmöglicher
     /// Sperrtermin. Announced once per order.
-    pub const AUSFUEHRUNG_UEBERFAELLIG: &str = "de.sperr.ausfuehrung.ueberfaellig";
+    pub const AUSFUEHRUNG_UEBERFAELLIG: &str = "de.mako.sperr.ausfuehrung.ueberfaellig";
+    /// An execution was reported for an order withdrawn before the report
+    /// arrived. The supply was interrupted whatever the queue says, so the
+    /// report is kept and a person resolves it; no IFTSTA is dispatched.
+    pub const AUSFUEHRUNG_NACH_STORNO: &str = "de.mako.sperr.ausfuehrung.nach-storno";
     /// An order is terminal in `processd`'s Sperrauftrag queue but its IFTSTA 21039 has still not
     /// reached `makod` after the retry budget. Until it does, the LF's
     /// `gpke-sperrung-lf` process cannot close — this is the one state in the
     /// service that needs a human.
-    pub const IFTSTA_AUSSTEHEND: &str = "de.sperr.iftsta.ausstehend";
+    pub const IFTSTA_AUSSTEHEND: &str = "de.mako.sperr.iftsta.ausstehend";
 }
 
-/// MaBiS Summenzeitreihe submission events (`de.mabis.*`), emitted by
+/// MaBiS Summenzeitreihe submission events (`de.mako.mabis.*`), emitted by
 /// `netzbilanzd`.
 ///
 /// Both are failure signals: a healthy submission cycle is silent, because the
@@ -662,18 +683,18 @@ pub mod mabis {
     /// (BK6-24-174 Anlage 3 Kap. 3.10). Carries the run id, the
     /// Bilanzierungsgebiet, the period, the phase and `attempt_count` — after
     /// three attempts the scheduler stops retrying and a human has to look.
-    pub const SUBMISSION_FAILED: &str = "de.mabis.submission.failed";
+    pub const SUBMISSION_FAILED: &str = "de.mako.mabis.submission.failed";
     /// A negative Prüfmitteilung opened a Korrekturbedarf (Kap. 9.8.1): the BIKO
     /// or a BKV objected to a filed Summenzeitreihe, and a corrected version
     /// must be submitted within the Clearing window.
-    pub const KORREKTURBEDARF_OPENED: &str = "de.mabis.korrekturbedarf.opened";
+    pub const KORREKTURBEDARF_OPENED: &str = "de.mako.mabis.korrekturbedarf.opened";
 }
 
 /// Every concrete CloudEvents type in the catalog.
 #[must_use]
 pub fn all() -> &'static [&'static str] {
     &[
-        // de.mako.*
+        // de.mako.engine.*
         mako::PROCESS_INITIATED,
         mako::PROCESS_COMPLETED,
         mako::PROCESS_FAILED,
@@ -687,7 +708,7 @@ pub fn all() -> &'static [&'static str] {
         mako::DEAD_LETTER_RECORDED,
         mako::NETZZUGANG_UEBERMITTLUNGSBEDARF,
         mako::WEBHOOK_TEST,
-        // de.markt.*
+        // de.mako.markt.*
         markt::MALO_UPDATED,
         markt::MALO_STAMMDATEN_GEAENDERT,
         markt::STAMMDATEN_GEAENDERT,
@@ -708,22 +729,22 @@ pub fn all() -> &'static [&'static str] {
         markt::PRICAT_PUBLISHED,
         markt::MMMA_IMPORT_SUCCESS,
         markt::MMMA_IMPORT_FAILED,
-        // de.billing.*
+        // de.mako.billing.*
         billing::RECHNUNG_ERSTELLT,
         billing::ABRECHNUNGSINFORMATION_MONATLICH,
         billing::XRECHNUNG_B2G_READY,
-        // de.invoic.*
+        // de.mako.invoic.*
         invoic::RECEIPT_DISPUTED,
         invoic::RECEIPT_SETTLED,
         invoic::PAYMENT_OVERDUE,
-        // de.eeg.*
+        // de.mako.eeg.*
         eeg::VERGUETUNG_BERECHNET,
         eeg::MARKTPRAEMIE_BERECHNET,
         eeg::SETTLEMENT_BATCH_DUE,
         eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
         eeg::ANLAGE_MASTR_REGISTRIERT,
         eeg::VERAEUSSERUNGSFORM_GEWECHSELT,
-        // de.accounting.*
+        // de.mako.accounting.*
         accounting::MAHNUNG_ISSUED,
         accounting::ABSCHLAG_POSTED,
         accounting::PAYMENT_DUE,
@@ -744,7 +765,7 @@ pub fn all() -> &'static [&'static str] {
         accounting::SEPA_RECALL_REQUESTED,
         accounting::SEPA_RECALL_RESOLVED,
         accounting::PAYEE_VERIFICATION_MISMATCH,
-        // de.netzbilanz.*
+        // de.mako.netzbilanz.*
         netzbilanz::INVOIC_DRAFTED,
         netzbilanz::INVOIC_DISPATCHED,
         netzbilanz::INVOIC_DISPATCH_OVERDUE,
@@ -752,9 +773,11 @@ pub fn all() -> &'static [&'static str] {
         netzbilanz::INVOIC_DISPUTED,
         netzbilanz::KOSTENBLATT_COMPUTED,
         netzbilanz::KOSTENBLATT_DEADLINE_APPROACHING,
-        // de.messwert.*
+        // de.mako.messwert.*
         messwert::READING_QUALITY_WARNING,
         messwert::READING_DIRECT_STORED,
+        messwert::READING_ORDER_CREATED,
+        messwert::READING_ORDER_COMPLETED,
         messwert::READING_ORDER_FAILED,
         messwert::READING_CONFIRMATION_OVERDUE,
         messwert::READING_DELIVERY_OVERDUE,
@@ -764,14 +787,16 @@ pub fn all() -> &'static [&'static str] {
         messwert::CLS_COMPLIANCE_ISSUE,
         messwert::CLS_COMPLIANCE_RESOLVED,
         messwert::SMGW_CERT_EXPIRY_WARNING,
-        // de.tarif.*
+        // de.mako.tarif.*
         tarif::PRODUCT_UPDATED,
         tarif::ANGEBOT_ANGENOMMEN,
         tarif::ANGEBOT_ABGELAUFEN,
         tarif::EPEX_MISSING,
-        // de.vertrag.*
+        // de.mako.vertrag.*
         vertrag::ABGESCHLOSSEN,
         vertrag::AKTIV,
+        vertrag::LIEFERBEGINN_BESTAETIGT,
+        vertrag::LIEFERBEGINN_ABGELEHNT,
         vertrag::GEKUENDIGT,
         vertrag::KUENDIGUNG,
         vertrag::KUENDIGUNG_WIDERRUFEN,
@@ -785,12 +810,12 @@ pub fn all() -> &'static [&'static str] {
         vertrag::BESTELLUNG_ANGENOMMEN,
         vertrag::BESTELLUNG_ABGELEHNT,
         vertrag::WIDERRUF_EINGEGANGEN,
-        // de.vpp.*
+        // de.mako.vpp.*
         vpp::DISPATCH_CONFIRMED,
         vpp::SETTLEMENT_BERECHNET,
-        // de.agent.*
+        // de.mako.agent.*
         agent::DECISION_MADE,
-        // de.gabi.*
+        // de.mako.gabi.*
         gabi::MEASUREMENT_RECEIVED,
         gabi::ALLOCATION_COMPLETED,
         gabi::NOMINATION_CREATED,
@@ -805,18 +830,20 @@ pub fn all() -> &'static [&'static str] {
         gabi::ALOCAT_MISSING,
         gabi::GAS_QUALITY_VIOLATION,
         gabi::FINAL_ALOCAT_DEADLINE,
-        // de.obs.*
+        // de.mako.obs.*
         obs::STP_PARITY_ALERT,
         obs::DEADLINE_APPROACHING,
-        // de.sperr.*
+        // de.mako.sperr.*
         sperr::AUFTRAG_EINGEGANGEN,
+        sperr::AUFTRAG_FAELLIG,
         sperr::VERSUCH_GESCHEITERT,
         sperr::AUSFUEHRUNG_UEBERFAELLIG,
+        sperr::AUSFUEHRUNG_NACH_STORNO,
         sperr::AUSGEFUEHRT,
         sperr::FEHLGESCHLAGEN,
         sperr::STORNIERT,
         sperr::IFTSTA_AUSSTEHEND,
-        // de.mabis.*
+        // de.mako.mabis.*
         mabis::SUBMISSION_FAILED,
         mabis::KORREKTURBEDARF_OPENED,
     ]
@@ -828,7 +855,7 @@ pub fn all() -> &'static [&'static str] {
 ///
 /// Semantics: `*` matches any (possibly empty) sequence, `?` matches exactly
 /// one character, everything else is literal. A bare `*` matches everything.
-/// Trailing-`*` prefix patterns (`de.mako.*`) therefore behave exactly like
+/// Trailing-`*` prefix patterns (`de.mako.engine.*`) therefore behave exactly like
 /// the historical marktd prefix matcher, and mid-pattern globs
 /// (`de.*.rechnung.*`) work too.
 ///
@@ -889,27 +916,33 @@ mod matcher_tests {
     #[test]
     fn trailing_star_is_prefix_match() {
         // The historical marktd subscription semantics.
-        assert!(matches("de.mako.*", "de.mako.process.initiated"));
-        assert!(matches("de.markt.*", "de.markt.malo.updated"));
-        assert!(!matches("de.mako.*", "de.markt.malo.updated"));
+        assert!(matches(
+            "de.mako.engine.*",
+            "de.mako.engine.process.initiated"
+        ));
+        assert!(matches("de.mako.markt.*", "de.mako.markt.malo.updated"));
+        assert!(!matches("de.mako.engine.*", "de.mako.markt.malo.updated"));
         // Prefix boundary is character-wise:
         // `starts_with(trim_end_matches('*'))`.
-        assert!(matches("de.mako.process.*", "de.mako.process.failed"));
+        assert!(matches(
+            "de.mako.engine.process.*",
+            "de.mako.engine.process.failed"
+        ));
     }
 
     #[test]
     fn mid_glob_and_question_mark() {
         assert!(matches(
-            "de.*.rechnung.erstellt",
-            "de.billing.rechnung.erstellt"
+            "de.mako.*.rechnung.erstellt",
+            "de.mako.billing.rechnung.erstellt"
         ));
         assert!(matches(
-            "de.e?g.verguetung.berechnet",
-            "de.eeg.verguetung.berechnet"
+            "de.mako.e?g.verguetung.berechnet",
+            "de.mako.eeg.verguetung.berechnet"
         ));
         assert!(!matches(
-            "de.e?g.verguetung.berechnet",
-            "de.eeeg.verguetung.berechnet"
+            "de.mako.e?g.verguetung.berechnet",
+            "de.mako.eeeg.verguetung.berechnet"
         ));
     }
 
@@ -924,10 +957,23 @@ mod matcher_tests {
 mod tests {
     use super::all;
 
+    /// Every type is `de.mako.<domain>.<fact>`: `de.mako` says whose contract
+    /// it is, and the domain is the one glob a subscriber of that emitter
+    /// names. A type under a bare `de.<domain>` collides with whatever another
+    /// system publishes under the same word.
     #[test]
-    fn every_type_starts_with_de_prefix() {
+    fn every_type_is_de_mako_domain_fact() {
         for ty in all() {
-            assert!(ty.starts_with("de."), "{ty} must start with `de.`");
+            let mut segments = ty.split('.');
+            assert_eq!(
+                (segments.next(), segments.next()),
+                (Some("de"), Some("mako")),
+                "{ty} must start with `de.mako.`"
+            );
+            assert!(
+                segments.count() >= 2,
+                "{ty} must name a domain and a fact after `de.mako.`"
+            );
         }
     }
 
@@ -946,12 +992,19 @@ mod tests {
         let src = include_str!("lib.rs");
         let catalog = src.split("#[cfg(test)]").next().expect("catalog section");
 
-        let declared: Vec<&str> = catalog
-            .lines()
-            .filter_map(|line| {
+        let lines: Vec<&str> = catalog.lines().collect();
+        let declared: Vec<String> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| {
                 let rest = line.trim().strip_prefix("pub const ")?;
-                let (_, value) = rest.split_once("= \"")?;
-                value.split('"').next()
+                // rustfmt moves a long value onto the next line.
+                let joined = match lines.get(i + 1) {
+                    Some(next) if !rest.contains("= \"") => format!("{rest} {}", next.trim()),
+                    _ => rest.to_owned(),
+                };
+                let (_, value) = joined.split_once("= \"")?;
+                value.split('"').next().map(str::to_owned)
             })
             .filter(|v| v.starts_with("de."))
             .collect();
@@ -962,7 +1015,10 @@ mod tests {
             declared.len()
         );
 
-        let missing: Vec<&&str> = declared.iter().filter(|v| !all().contains(v)).collect();
+        let missing: Vec<&String> = declared
+            .iter()
+            .filter(|v| !all().contains(&v.as_str()))
+            .collect();
         assert!(
             missing.is_empty(),
             "these event types are declared and absent from `all()`, so nothing can \
@@ -975,7 +1031,7 @@ mod tests {
     /// `⚠ phantom:` marks a type the catalog declares but no service emits, so
     /// any constant not named anywhere outside this crate must carry it. The
     /// reverse does not hold: being *named* outside this crate is not being
-    /// emitted (`de.eeg.compliance.*` is subscribed by agentd with no emitter),
+    /// emitted (`de.mako.eeg.compliance.*` is subscribed by agentd with no emitter),
     /// so a marked constant this test would not demand is legitimate.
     #[test]
     fn unreferenced_constants_are_marked_phantom() {
@@ -999,7 +1055,12 @@ mod tests {
             let Some(name) = rest.split(':').next() else {
                 continue;
             };
-            let Some(value) = rest
+            // rustfmt moves a long value onto the next line.
+            let joined = match lines.get(i + 1) {
+                Some(next) if !rest.contains("= \"") => format!("{rest} {}", next.trim()),
+                _ => rest.to_owned(),
+            };
+            let Some(value) = joined
                 .split_once("= \"")
                 .and_then(|(_, v)| v.split('"').next())
             else {
@@ -1115,11 +1176,11 @@ mod tests {
 
     /// Namespaces whose domain vocabulary is German keep German participles.
     ///
-    /// `de.vertrag.*` names every contract-lifecycle fact in the contract's own
+    /// `de.mako.vertrag.*` names every contract-lifecycle fact in the contract's own
     /// language (`gekuendigt`, `kuendigung-widerrufen`), so an English
     /// participle on a German noun makes a subscriber guess which language each
-    /// fact uses. Technical or English-domain namespaces (`de.mako.*`,
-    /// `de.gabi.*`, `de.accounting.*`) stay English.
+    /// fact uses. Technical or English-domain namespaces (`de.mako.engine.*`,
+    /// `de.mako.gabi.*`, `de.mako.accounting.*`) stay English.
     #[test]
     fn german_namespaces_use_german_participles() {
         /// Namespaces whose events are named in German.
@@ -1141,7 +1202,7 @@ mod tests {
         ];
 
         for ty in all() {
-            let Some(ns) = ty.split('.').nth(1) else {
+            let Some(ns) = ty.split('.').nth(2) else {
                 continue;
             };
             if !GERMAN_NAMESPACES.contains(&ns) {
@@ -1150,7 +1211,7 @@ mod tests {
             for bad in ENGLISH_PARTICIPLES {
                 assert!(
                     !ty.ends_with(&format!("-{bad}")) && !ty.ends_with(&format!(".{bad}")),
-                    "{ty}: `de.{ns}.*` names its facts in German — use the German \
+                    "{ty}: `de.mako.{ns}.*` names its facts in German — use the German \
                      participle instead of {bad:?} (e.g. `preisgarantie-hinterlegt`, \
                      not `preisgarantie-updated`)"
                 );
@@ -1232,20 +1293,6 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for ty in types {
             assert!(seen.insert(*ty), "duplicate catalog entry: {ty}");
-        }
-    }
-
-    #[test]
-    fn legacy_prefixes_are_gone() {
-        for ty in all() {
-            assert!(
-                !ty.starts_with("de.edmd.") && !ty.starts_with("de.tarifbd."),
-                "{ty} uses a retired service-name prefix (use de.messwert / de.tarif)"
-            );
-            assert_ne!(
-                *ty, "de.angebot.angenommen",
-                "moved to de.tarif.angebot.angenommen"
-            );
         }
     }
 }

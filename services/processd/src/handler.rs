@@ -6,7 +6,7 @@
 //!
 //! ## Event routing
 //!
-//! 1. **Process read model** — every `de.mako.*` lifecycle event is projected
+//! 1. **Process read model** — every `de.mako.engine.*` lifecycle event is projected
 //!    into `process_projections` first, for every role build
 //!    ([`crate::obs::project::project`]).
 //! 2. **Sperrauftrag queue** — `process.initiated` 17115 / 17117 opens a work
@@ -89,7 +89,7 @@ pub fn answerable_pids() -> Vec<u32> {
 #[cfg(feature = "role-msb")]
 const STEUERUNGSAUFTRAG_ANTWORT_FRIST_WT: u32 = 5;
 
-/// `POST /webhook` — receive a `de.mako.*` event from `marktd`.
+/// `POST /webhook` — receive a `de.mako.engine.*` event from `marktd`.
 pub async fn handle_webhook(
     State(state): State<ProcessdState>,
     headers: HeaderMap,
@@ -171,7 +171,7 @@ pub async fn handle_webhook(
 
     // ── 3. Route by event type ────────────────────────────────────────────
     // 3a. EoG gap-closure automation (§36/§38 EnWG, NB role) — consumes the
-    //     de.markt.versorgung.* triggers before the process.initiated guard.
+    //     de.mako.markt.versorgung.* triggers before the process.initiated guard.
     #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
     if ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED
         || ce_type == mako_events::markt::VERSORGUNG_EOG_BEGONNEN

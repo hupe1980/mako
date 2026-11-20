@@ -61,7 +61,7 @@ impl Ctx {
 #[openapi(
     info(
         title = "vertragd — Verträge und Kunden",
-        description = "REST API of `vertragd`: Kunden, Versorgungs- and Rahmenverträge, the online Vertragsschluss, the master data billing reads, and the webhook subscriptions to its `de.vertrag.*` CloudEvents."
+        description = "REST API of `vertragd`: Kunden, Versorgungs- and Rahmenverträge, the online Vertragsschluss, the master data billing reads, and the webhook subscriptions to its `de.mako.vertrag.*` CloudEvents."
     ),
     tags(
         (name = "kunden", description = "Kunden, portal identities, DSGVO Auskunft and Löschung"),

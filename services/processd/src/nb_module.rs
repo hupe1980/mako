@@ -143,7 +143,7 @@ const fn sparte_of(pid: u32) -> Sparte {
 
 // ── NB module payload ─────────────────────────────────────────────────────────
 
-/// Fields extracted from a `de.mako.process.initiated` CloudEvent payload
+/// Fields extracted from a `de.mako.engine.process.initiated` CloudEvent payload
 /// for a Lieferbeginn PID.
 #[derive(Debug, Clone)]
 pub struct AnmeldungPayload {
@@ -214,7 +214,7 @@ impl AnmeldungPayload {
             .is_some_and(|pid| u32::try_from(pid).is_ok_and(|pid| ANMELDUNG_PIDS.contains(&pid)))
     }
 
-    /// Parse from the `data` field of a `de.mako.process.initiated` CloudEvent.
+    /// Parse from the `data` field of a `de.mako.engine.process.initiated` CloudEvent.
     pub fn parse(event: &serde_json::Value) -> Option<Self> {
         let data = &event["data"];
         let pid = event
@@ -436,7 +436,7 @@ fn geschaeftsvorfall_of(ergaenzung: &str) -> Option<Geschaeftsvorfall> {
 
 // ── evaluate_and_decide ───────────────────────────────────────────────────────
 
-/// Decide one `de.mako.process.initiated` event addressed to the NB.
+/// Decide one `de.mako.engine.process.initiated` event addressed to the NB.
 ///
 /// Routes to the Anmeldung pipeline (55001 / 55077 / 44001) or the Abmeldung
 /// pipeline (55004 / 44004). Returns `true` when this module handled the event
@@ -1052,7 +1052,7 @@ const fn abmeldeanfrage_command(sparte: Sparte) -> &'static str {
 
 /// Resume an Anmeldung decision on the LFA's answer to the 55010.
 ///
-/// Consumes `de.mako.abmeldeanfrage.beantwortet`, which `makod` emits both when
+/// Consumes `de.mako.engine.abmeldeanfrage.beantwortet`, which `makod` emits both when
 /// the LFA answers (55011 / 55012) and when its 09:00 window lapses — „Verstreicht
 /// die Frist, ohne dass eine Antwort beim NB eingeht, gilt dies als Bestätigung
 /// nach Fall a)". The two are the same input to `E_0623`, and only the clock
@@ -1830,7 +1830,7 @@ pub(crate) fn answer_commands(pid: u32) -> (&'static str, &'static str) {
 
 // ── Abmeldung ─────────────────────────────────────────────────────────────────
 
-/// Fields extracted from a `de.mako.process.initiated` for an Abmeldung PID.
+/// Fields extracted from a `de.mako.engine.process.initiated` for an Abmeldung PID.
 #[derive(Debug, Clone)]
 pub struct AbmeldungPayload {
     pub pid: u32,
@@ -2406,7 +2406,7 @@ mod tests {
 
     fn initiated(pid: u64, process_date: &str) -> serde_json::Value {
         serde_json::json!({
-            "type": "de.mako.process.initiated",
+            "type": "de.mako.engine.process.initiated",
             "makopid": pid,
             "subject": "f0d3004b-34bf-4a95-a981-80891bb9bbdf",
             "data": {

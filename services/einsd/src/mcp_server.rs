@@ -66,7 +66,7 @@ pub struct EinsdMcpState {
     pub pool: PgPool,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
-    /// Needed to emit `de.eeg.settlement.*` CloudEvents from `trigger_settle`.
+    /// Needed to emit `de.mako.eeg.settlement.*` CloudEvents from `trigger_settle`.
     ///
     /// A settlement run through MCP creates the same payment obligation as one
     /// through REST, so it has to notify accountingd and the ERP the same way.
@@ -452,8 +452,8 @@ impl EinsdMcpHandler {
         Runs the same path as the REST endpoint and the monthly worker, so the amount does \
         not depend on which one triggered it: Einspeisemenge from edmd, market price from the \
         store, and the §51/§51a figures derived from the ¼h feed-in against the EPEX spot \
-        curve, unless supplied. Emits de.eeg.verguetung.berechnet or \
-        de.eeg.marktpraemie.berechnet. KWKG hour-limit enforcement is automatic."
+        curve, unless supplied. Emits de.mako.eeg.verguetung.berechnet or \
+        de.mako.eeg.marktpraemie.berechnet. KWKG hour-limit enforcement is automatic."
     )]
     async fn trigger_settle(
         &self,
@@ -1362,7 +1362,7 @@ impl EinsdMcpHandler {
                  §51 reduces the eligible kWh; §§53b–54 cut the AW before the formula;\n\
                  §52 Abs. 1 violations are charged separately as a Pflichtzahlung and are\n\
                  never netted into settlement_eur; §13a EnWG curtailment is added on top.\n\n\
-                 CloudEvents: de.eeg.verguetung.berechnet and de.eeg.marktpraemie.berechnet\n\
+                 CloudEvents: de.mako.eeg.verguetung.berechnet and de.mako.eeg.marktpraemie.berechnet\n\
                  carry the Gutschrift number, the USt and the bank details accountingd needs\n\
                  for the pain.001. Only a `calculated` run emits one.",
             ),
@@ -1383,7 +1383,7 @@ impl EinsdMcpHandler {
                 Role::Assistant,
                 "## Förderende pipeline\n\n\
                  list_expiring (days=365) for the annual view, (days=180) for the urgent one.\n\
-                 A background worker emits de.eeg.anlage.foerderung-auslaufend **once per\n\
+                 A background worker emits de.mako.eeg.anlage.foerderung-auslaufend **once per\n\
                  plant** inside the 180-day window — not once per sweep — and a repowering\n\
                  re-arms it.\n\n\
                  The EEG sets no advance-notice period for this; it is an operational\n\

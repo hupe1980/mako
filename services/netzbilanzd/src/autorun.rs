@@ -439,7 +439,7 @@ async fn enqueue_alert(
     }
 }
 
-/// Emit `de.netzbilanz.invoic.dispatch-overdue` for drafts stuck undispatched.
+/// Emit `de.mako.netzbilanz.invoic.dispatch-overdue` for drafts stuck undispatched.
 pub async fn dispatch_overdue_alert(pool: &PgPool, cfg: &NetzbilanzConfig, stale_hours: i64) {
     let rows = match pg::list_undispatched_stale(pool, &cfg.tenant, stale_hours, 100).await {
         Ok(r) if !r.is_empty() => r,
@@ -479,7 +479,7 @@ pub async fn dispatch_overdue_alert(pool: &PgPool, cfg: &NetzbilanzConfig, stale
     .await;
 }
 
-/// Emit `de.netzbilanz.kostenblatt.deadline-approaching` before the 15th.
+/// Emit `de.mako.netzbilanz.kostenblatt.deadline-approaching` before the 15th.
 pub async fn kostenblatt_deadline_alert(pool: &PgPool, cfg: &NetzbilanzConfig) {
     // The 15th and the Aktivierungsmonat are German calendar dates.
     let today = mako_fristen::heute();

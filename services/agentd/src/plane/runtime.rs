@@ -328,7 +328,7 @@ pub enum Admitted {
 /// no specialist delegates, so either field would be structurally empty — and a
 /// zero that reads as "this agent called no tools" is worse than no field.
 ///
-/// **This is not the shape an ERP subscriber receives.** `de.agent.decision.made`
+/// **This is not the shape an ERP subscriber receives.** `de.mako.agent.decision.made`
 /// is delivered by the journal-backed outbox from the run's own sealed record —
 /// see [`crate::plane::sweep::spawn_delivery`]. This is the operator's
 /// "what just happened" view of a run that has concluded.
@@ -2430,7 +2430,7 @@ mod tests {
     #[test]
     fn one_event_can_match_several_specialists() {
         let router = Router::build(&Activation::all()).expect("routes");
-        let matched = router.matching("de.mako.process.failed");
+        let matched = router.matching("de.mako.engine.process.failed");
         assert!(
             !matched.is_empty(),
             "a process failure must reach at least one specialist"
@@ -2504,7 +2504,7 @@ mod tests {
         assert_eq!(router.routes()[0].name, "mako-agent");
 
         // `processd-agent` also subscribes to this event, and must not appear.
-        let matched = router.matching("de.mako.process.failed");
+        let matched = router.matching("de.mako.engine.process.failed");
         assert!(
             matched.iter().all(|r| r.name == "mako-agent"),
             "an unenabled specialist matched anyway: {:?}",
@@ -2529,7 +2529,7 @@ mod tests {
     fn activating_no_specialist_routes_no_events() {
         let router = Router::build(&Activation::named(Vec::new())).expect("routes");
         assert!(router.routes().is_empty());
-        assert!(router.matching("de.mako.process.failed").is_empty());
+        assert!(router.matching("de.mako.engine.process.failed").is_empty());
     }
 }
 

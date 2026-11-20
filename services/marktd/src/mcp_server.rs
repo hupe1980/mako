@@ -158,7 +158,7 @@ pub struct GetNbContractParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetCorrelationParams {
-    /// UUID of the `makod` workflow process (from `de.mako.process.initiated` CloudEvents `process_id` extension).
+    /// UUID of the `makod` workflow process (from `de.mako.engine.process.initiated` CloudEvents `process_id` extension).
     pub process_id: Option<String>,
     /// ERP-side order reference (from `erp_order_id` CloudEvents extension).
     /// Matches the reference set by the ERP when submitting a command.
@@ -796,7 +796,7 @@ impl MdmdMcpHandler {
 
     /// Look up a process correlation record.
     ///
-    /// Provide either `process_id` (the UUID from `de.mako.process.initiated`
+    /// Provide either `process_id` (the UUID from `de.mako.engine.process.initiated`
     /// CloudEvents `process_id` extension) or `erp_order_id` (the ERP-side work-
     /// order reference).  Returns workflow name, BDEW PID, MaLo, current status
     /// (`RUNNING` / `COMPLETED` / `FAILED`), and timing.

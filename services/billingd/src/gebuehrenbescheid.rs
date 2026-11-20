@@ -205,7 +205,7 @@ pub fn view(
 }
 
 /// Write `gebuehr` as a Gebührenbescheid record in the caller's transaction and,
-/// unless the period is held, enqueue its `de.billing.rechnung.erstellt` — the
+/// unless the period is held, enqueue its `de.mako.billing.rechnung.erstellt` — the
 /// Gebühr is a receivable like the invoice beside it.
 ///
 /// # Errors

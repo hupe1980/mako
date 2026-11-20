@@ -198,7 +198,7 @@ const MAKO_AGENT: Specialist = Specialist {
     trigger_patterns: &[
         mako_events::mako::PROCESS_FAILED,
         mako_events::mako::ANTWORTFRIST_ABGELAUFEN,
-        "de.mako.aperak.*",
+        "de.mako.engine.aperak.*",
     ],
 };
 
@@ -246,7 +246,10 @@ const NETZBILANZ_AGENT: Specialist = Specialist {
 ))]
 const INVOICE_RECONCILIATION_AGENT: Specialist = Specialist {
     name: "invoice-reconciliation-agent",
-    trigger_patterns: &[mako_events::invoic::PAYMENT_OVERDUE, "de.invoic.receipt.*"],
+    trigger_patterns: &[
+        mako_events::invoic::PAYMENT_OVERDUE,
+        "de.mako.invoic.receipt.*",
+    ],
 };
 
 #[cfg(any(
@@ -308,10 +311,10 @@ const EEG_AGENT: Specialist = Specialist {
 const EEG_COMPLIANCE_AGENT: Specialist = Specialist {
     name: "eeg-compliance-agent",
     trigger_patterns: &[
-        "de.eeg.anlage.*",
-        "de.eeg.verguetung.*",
-        "de.eeg.marktpraemie.*",
-        "de.eeg.compliance.*",
+        "de.mako.eeg.anlage.*",
+        "de.mako.eeg.verguetung.*",
+        "de.mako.eeg.marktpraemie.*",
+        "de.mako.eeg.compliance.*",
         // The event the § 21b Abs. 1 / § 21c duty is *about*. A change of
         // Veräußerungsform is what § 52 Abs. 1 Nr. 9 penalises going
         // unreported, and it is the moment the 100 kW question is live.
@@ -409,7 +412,7 @@ const TARIFF_OPTIMIZATION_AGENT: Specialist = Specialist {
 const VERTRAGD_AGENT: Specialist = Specialist {
     name: "vertragd-agent",
     trigger_patterns: &[
-        "de.vertrag.*",
+        "de.mako.vertrag.*",
         mako_events::mako::APERAK_REJECTED,
         mako_events::mako::PROCESS_FAILED,
         mako_events::vertrag::ABLAUF_ANKUENDIGUNG,
@@ -447,7 +450,7 @@ const SPERRD_AGENT: Specialist = Specialist {
     name: "sperrd-agent",
     trigger_patterns: &[
         mako_events::accounting::SPERRAUFTRAG,
-        "de.sperr.*",
+        "de.mako.sperr.*",
         mako_events::mako::PROCESS_COMPLETED,
     ],
 };
@@ -462,7 +465,7 @@ const PORTALD_AGENT: Specialist = Specialist {
         mako_events::billing::RECHNUNG_ERSTELLT,
         mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
         mako_events::accounting::MAHNUNG_ISSUED,
-        "de.vertrag.*",
+        "de.mako.vertrag.*",
     ],
 };
 
@@ -541,7 +544,7 @@ const EINSD_BATCH_AGENT: Specialist = Specialist {
     name: "einsd-batch-agent",
     trigger_patterns: &[
         mako_events::eeg::SETTLEMENT_BATCH_DUE,
-        "de.eeg.compliance.*",
+        "de.mako.eeg.compliance.*",
         mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
     ],
 };
@@ -718,8 +721,8 @@ mod trigger_contract_tests {
     /// live but nothing fires it. Removing an entry here is the last step of
     /// wiring the emitter, not a chore.
     const UNEMITTED_PATTERNS: &[(&str, &str)] = &[(
-        "de.eeg.compliance.*",
-        "einsd does not emit a concrete de.eeg.compliance.* type yet; \
+        "de.mako.eeg.compliance.*",
+        "einsd does not emit a concrete de.mako.eeg.compliance.* type yet; \
              mako-events documents the gap on the `eeg` module",
     )];
 
@@ -752,7 +755,7 @@ mod trigger_contract_tests {
                 continue;
             }
             // A line may name more than one type:
-            // ``- `de.eeg.verguetung.*` / `de.eeg.marktpraemie.*` — settlement``
+            // ``- `de.mako.eeg.verguetung.*` / `de.mako.eeg.marktpraemie.*` — settlement``
             let mut rest = line;
             while let Some(open) = rest.find('`') {
                 rest = &rest[open + 1..];

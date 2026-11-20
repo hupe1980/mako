@@ -14,8 +14,8 @@ recent window in PostgreSQL, settled history in Apache Iceberg V2.
 | **Database** | PostgreSQL — `migrations/0001_schema.sql` plus the meterstore tables created at startup; Iceberg catalog for the cold tier |
 | **MCP** | 19 tools, 5 prompts at `/mcp` |
 | **OpenAPI** | `GET /api/v1/openapi.json`, committed as `openapi.json` — every `/api/v1` route |
-| **Emits** | `de.messwert.reading.*`, `de.messwert.esa.typ2.delivery.*`, `de.messwert.cls.*`, `de.messwert.smgw.cert.expiry-warning` |
-| **Consumes** | `de.mako.process.completed` (MSCONS, GPKE Lieferbeginn/-ende), `de.markt.malo.updated` at `POST /webhook` |
+| **Emits** | `de.mako.messwert.reading.*`, `de.mako.messwert.esa.typ2.delivery.*`, `de.mako.messwert.cls.*`, `de.mako.messwert.smgw.cert.expiry-warning` |
+| **Consumes** | `de.mako.engine.process.completed` (MSCONS, GPKE Lieferbeginn/-ende), `de.mako.markt.malo.updated` at `POST /webhook` |
 | **Depends on** | `marktd` (subscription, Bundesland, Lokationszuordnung) |
 
 ## Run

@@ -10,7 +10,7 @@
 //! in all responses); the status PATCH accepts an optional `expected_version`
 //! and fails with a version-conflict problem response on mismatch.
 //!
-//! Every state change emits `de.markt.netzzugang.antrag.updated`.
+//! Every state change emits `de.mako.markt.netzzugang.antrag.updated`.
 
 use mako_service::ApiError;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ use super::{Claims, IntoMdmResponse as _, Tenant};
 
 /// Injected `Arc<PgNetzzugangRepository>`.
 pub type NetzzugangRepoExt = Arc<crate::pg::PgNetzzugangRepository>;
-/// Enqueue `de.markt.netzzugang.antrag.updated` on the write's transaction and
+/// Enqueue `de.mako.markt.netzzugang.antrag.updated` on the write's transaction and
 /// commit both, so the request never changes without its event.
 async fn emit_and_commit(
     mut tx: sqlx::Transaction<'_, sqlx::Postgres>,

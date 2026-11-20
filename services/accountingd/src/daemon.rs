@@ -8,16 +8,16 @@
 //!
 //! | CE type | Source | Effect |
 //! |---|---|---|
-//! | `de.billing.rechnung.erstellt` | `billingd` | Debit entry (Brutto-Betrag) |
-//! | `de.invoic.receipt.settled` | `invoicd` | Credit entry (NNE invoice settled) |
-//! | `de.eeg.verguetung.berechnet` | `einsd` | Credit entry (EEG settlement) |
+//! | `de.mako.billing.rechnung.erstellt` | `billingd` | Debit entry (Brutto-Betrag) |
+//! | `de.mako.invoic.receipt.settled` | `invoicd` | Credit entry (NNE invoice settled) |
+//! | `de.mako.eeg.verguetung.berechnet` | `einsd` | Credit entry (EEG settlement) |
 //!
 //! ## CloudEvents emitted (outbound webhook → ERP)
 //!
 //! | CE type | Trigger |
 //! |---|---|
-//! | `de.accounting.payment.due` | SEPA collection run dispatched (once per run) |
-//! | `de.accounting.erstattung.faellig` | Jahresabschluss refund (pain.001 attached) |
+//! | `de.mako.accounting.payment.due` | SEPA collection run dispatched (once per run) |
+//! | `de.mako.accounting.erstattung.faellig` | Jahresabschluss refund (pain.001 attached) |
 //!
 //! All outbound CloudEvents are signed with Standard Webhooks when
 //! `erp_hmac_secret` is set. The §§41f/41g Sperr- and Entsperrauftrag are
@@ -429,7 +429,7 @@ impl Daemon for Accountingd {
         // ── SEPA pre-notification scheduler ─────────────────────────────────────
         // Runs daily, finds the accounts whose `billing_day` falls
         // `sepa_pre_notification_days` ahead, builds one pain.008 for that
-        // collection date and announces it as `de.accounting.payment.due` — the
+        // collection date and announces it as `de.mako.accounting.payment.due` — the
         // event the ERP turns into the debtor's pre-notification.
         //
         // **14 calendar days by default.** The EPC SDD Core Rulebook requires the
@@ -589,7 +589,7 @@ impl Daemon for Accountingd {
 
                                 // Claim the run for dispatch AND persist the CE atomically.
                                 // Persist-before-dispatch fixes the pre-flip bug: the
-                                // DISPATCHED flag flip and the `de.accounting.payment.due`
+                                // DISPATCHED flag flip and the `de.mako.accounting.payment.due`
                                 // outbox enqueue commit in ONE transaction, so the event is
                                 // durable *exactly when* the run is marked dispatched. A
                                 // replica or same-day restart still sees DISPATCHED and does
@@ -737,7 +737,7 @@ impl Daemon for Accountingd {
                     "[{}] is configured without the other: rendering a Mahnung needs `outputd_url` \
                      and addressing it needs `vertragd_url` (§ 126b BGB names the recipient). \
                      Configure both, or neither and let the ERP send the letters off the \
-                     de.accounting.mahnung.issued CloudEvent.",
+                     de.mako.accounting.mahnung.issued CloudEvent.",
                     if out.is_some() {
                         "outputd_url"
                     } else {

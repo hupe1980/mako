@@ -1,13 +1,13 @@
 //! `processd` — Process decision engine for German energy market automation.
 //!
-//! Consumes `de.mako.process.initiated` from `marktd`'s durable fan-out and
+//! Consumes `de.mako.engine.process.initiated` from `marktd`'s durable fan-out and
 //! applies the policy of the role that owes the answer, inside the regulatory
 //! Frist. What it cannot decide it puts in front of an operator with that Frist
 //! attached.
 //!
 //! # Role
 //!
-//! Consumes `de.mako.process.initiated` CloudEvents from `marktd` and applies
+//! Consumes `de.mako.engine.process.initiated` CloudEvents from `marktd` and applies
 //! role-specific policy to make decisions within regulatory deadlines.
 //!
 //! ## LF module (`role-lf-strom`, `role-lf-gas`)
@@ -57,10 +57,10 @@
 //!
 //! ## Process read model (every role)
 //!
-//! Every `de.mako.*` lifecycle event is projected into `process_projections`
+//! Every `de.mako.engine.*` lifecycle event is projected into `process_projections`
 //! ([`obs`]): per-PID KPIs, the overdue list against each process's business
 //! Antwortfrist, and the § 7a Abs. 5 EnWG Gleichbehandlung evidence. Two sweep
-//! workers emit `de.obs.deadline.approaching` and `de.obs.stp.parity.alert`.
+//! workers emit `de.mako.obs.deadline.approaching` and `de.mako.obs.stp.parity.alert`.
 //!
 //! ## Sperrauftrag queue (`role-nb-strom`, `role-nb-gas`)
 //!
@@ -110,7 +110,7 @@ mod idempotency;
 pub mod klaerfall;
 pub mod mcp_server;
 pub mod metrics;
-/// The process read model — every `de.mako.*` event projected per process.
+/// The process read model — every `de.mako.engine.*` event projected per process.
 pub mod obs;
 pub mod openapi;
 pub mod pg;

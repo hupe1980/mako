@@ -42,7 +42,7 @@ fn verify_signature(ctx: &Ctx, headers: &HeaderMap, body: &Bytes) -> ApiResult<(
 /// A confirmation moves the component into supply and, in the same
 /// transaction, enqueues everything that follows from it: the GPKE
 /// Beginnablesung, the tariff assignment `billingd` prices from, the billing
-/// account, and — once every commodity is in supply — `de.vertrag.aktiv`. None
+/// account, and — once every commodity is in supply — `de.mako.vertrag.aktiv`. None
 /// of that is a detached task any more, so a restart mid-confirmation costs a
 /// retry rather than a lost obligation.
 #[utoipa::path(
@@ -191,6 +191,52 @@ async fn apply_outcome(
         }
     }
 
+    // The component's own fact, for whoever handed the contract over: supply
+    // begins, or the grid operator refused and why.
+    let vertrag: crate::events::Vertragsbezug = sqlx::query_as(
+        "SELECT v.id AS vertrag_id, v.vertrags_nr, v.kunden_id, v.erp_contract_id,
+                (SELECT b.bestellreferenz FROM bestellungen b
+                  WHERE b.vertrag_id = v.id AND b.tenant = v.tenant LIMIT 1) AS bestellreferenz
+           FROM versorgungsvertraege v WHERE v.id = $1 AND v.tenant = $2",
+    )
+    .bind(k.vertrag_id)
+    .bind(ctx.tenant())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| ApiError::Internal(e.into()))?;
+    let komponente = crate::events::Komponentenbezug {
+        komp_id: k.id,
+        sparte: k.sparte.clone(),
+        malo_id: outcome.malo_id.clone().or_else(|| k.malo_id.clone()),
+        lieferbeginn: k.lieferbeginn.to_string(),
+    };
+    let ce = if outcome.confirmed {
+        crate::events::typed_event(
+            k.vertrag_id,
+            ctx.tenant(),
+            &crate::events::LieferbeginnBestaetigt {
+                vertrag,
+                komponente,
+            },
+        )
+    } else {
+        crate::events::typed_event(
+            k.vertrag_id,
+            ctx.tenant(),
+            &crate::events::LieferbeginnAbgelehnt {
+                vertrag,
+                komponente,
+                antwortcode: outcome.erc_code.clone(),
+                codeliste: outcome.codeliste.clone(),
+                reason: outcome.reason.clone(),
+            },
+        )
+    }
+    .map_err(|e| ApiError::Internal(e.into()))?;
+    mako_service::outbox::enqueue(&mut *tx, &ce)
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+
     // Recompute the contract status from the components as they now stand.
     let alle = pg::list_komponenten(&mut *tx, k.vertrag_id)
         .await
@@ -215,7 +261,7 @@ async fn apply_outcome(
 
 // ── CPQ: accepted quotation → contract ───────────────────────────────────────
 
-/// `POST /api/v1/webhooks/angebot` — `de.tarif.angebot.angenommen` from
+/// `POST /api/v1/webhooks/angebot` — `de.mako.tarif.angebot.angenommen` from
 /// `productd`.
 ///
 /// Creates the Rahmenvertrag and one Versorgungsvertrag per site, from the

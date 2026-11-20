@@ -160,7 +160,7 @@ fn reject(
 ///
 /// # Parameters
 ///
-/// - `anfrage` — parsed fields from the `de.mako.process.initiated` CloudEvent.
+/// - `anfrage` — parsed fields from the `de.mako.engine.process.initiated` CloudEvent.
 /// - `versorgung` — current supply state from `marktd`. `None` means the MaLo
 ///   is unknown to this NB.
 /// - `now` — current instant, injected by the caller for testability.

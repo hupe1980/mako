@@ -1,6 +1,6 @@
 //! Rebuild `process_projections` from `marktd`'s event feed.
 //!
-//! The projection is a read model: every row is a function of the `de.mako.*`
+//! The projection is a read model: every row is a function of the `de.mako.engine.*`
 //! events `marktd` fanned out. `marktd` serves its outbox, in commit order, at
 //! `GET /api/v1/events` — the same envelopes its fan-out POSTs to `/webhook`.
 //! A rebuild pages that feed by its cursor and hands each envelope to
@@ -64,7 +64,7 @@ pub enum RebuildError {
     Store(#[from] ObsError),
 }
 
-/// Replay every `de.mako.*` event `marktd`'s feed holds into the projection,
+/// Replay every `de.mako.engine.*` event `marktd`'s feed holds into the projection,
 /// oldest first, page by page until the feed names no next cursor.
 ///
 /// # Errors
@@ -80,7 +80,7 @@ pub async fn rebuild(
     let mut cursor: Option<String> = None;
     let mut report = RebuildReport::default();
     loop {
-        let mut query = vec![("type", "de.mako.*"), ("limit", limit.as_str())];
+        let mut query = vec![("type", "de.mako.engine.*"), ("limit", limit.as_str())];
         if let Some(c) = cursor.as_deref() {
             query.push(("cursor", c));
         }

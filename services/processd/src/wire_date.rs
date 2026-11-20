@@ -1,4 +1,4 @@
-//! Parsing the date shapes a `de.mako.process.initiated` payload can carry.
+//! Parsing the date shapes a `de.mako.engine.process.initiated` payload can carry.
 //!
 //! | Shape | Where it comes from |
 //! |---|---|
@@ -166,7 +166,7 @@ mod tests {
     /// A multi-byte character straddling the cut is refused, not a panic.
     ///
     /// `"2026-10-0ü"` is eleven bytes with `ü` spanning 9..11, so byte 10 is
-    /// inside a character. The value arrives in a `de.mako.process.initiated`
+    /// inside a character. The value arrives in a `de.mako.engine.process.initiated`
     /// body, which makes this reachable from the wire.
     #[test]
     fn a_date_cut_inside_a_character_is_refused() {

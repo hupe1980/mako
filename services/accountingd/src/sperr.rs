@@ -240,7 +240,14 @@ pub async fn run_sperr_sequence(
                 );
                 // committed apart: announced after the dispatch mark above, which must survive
                 // a failed announcement.
-                announce(pool, &ce, case_id, &malo_id, "de.accounting.sperrauftrag").await;
+                announce(
+                    pool,
+                    &ce,
+                    case_id,
+                    &malo_id,
+                    "de.mako.accounting.sperrauftrag",
+                )
+                .await;
                 summary.sperrauftraege += 1;
                 tracing::info!(%malo_id, verzug_ct, %reference, "accountingd: Sperrauftrag ORDERS 17115 dispatched (§41f EnWG)");
             }
@@ -298,7 +305,7 @@ pub async fn run_sperr_sequence(
                     &ce,
                     case_id,
                     &malo_id,
-                    "de.accounting.entsperrauftrag",
+                    "de.mako.accounting.entsperrauftrag",
                 )
                 .await;
                 summary.entsperrauftraege += 1;

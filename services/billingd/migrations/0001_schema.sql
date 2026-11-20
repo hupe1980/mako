@@ -12,7 +12,7 @@
 -- `invoice_number_series`: § 14 Abs. 4 Nr. 4 UStG fortlaufende Rechnungsnummer.
 -- `billing_run_log`: § 40b EnWG monthly batch-run audit.
 -- `abrechnungsinfo_log`: § 40b Abs. 3 EnWG monthly info dispatch claim.
--- `vpp_dispatch_ledger`: idempotency guard for de.vpp.dispatch.confirmed.
+-- `vpp_dispatch_ledger`: idempotency guard for de.mako.vpp.dispatch.confirmed.
 
 -- ── § 14 Abs. 4 Nr. 4 UStG — the number series ───────────────────────────────
 --
@@ -469,7 +469,7 @@ COMMENT ON TABLE abrechnungsinfo_log IS
     'so a transient failure postpones the info rather than cancelling it.';
 
 -- ── VPP dispatch idempotency ──────────────────────────────────────────────────
--- Prevents double-billing when the outbox retries a de.vpp.dispatch.confirmed
+-- Prevents double-billing when the outbox retries a de.mako.vpp.dispatch.confirmed
 -- delivery. The §41e EnWG Aggregatorvertrag itself is Contract-context master
 -- data and lives in `vertragd.aggregatorvertraege`; billingd reads it over HTTP.
 
@@ -483,6 +483,6 @@ CREATE TABLE vpp_dispatch_ledger (
 );
 
 COMMENT ON TABLE vpp_dispatch_ledger IS
-    'Idempotency guard for de.vpp.dispatch.confirmed webhook delivery. '
+    'Idempotency guard for de.mako.vpp.dispatch.confirmed webhook delivery. '
     'Prevents double-billing on outbox retry, and is the reason per-dispatch '
     'VPP settlements are exempt from br_unique_original.';

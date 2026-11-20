@@ -542,7 +542,7 @@ pub enum SupplierChangeCommand {
         /// `"SLP"` | `"RLM"` | `"IMS"` — maps to BO4E `Bilanzierungsmethode`.
         /// Populated from TM+EM qualifier: Z01=SLP, Z02=RLM, Z04=IMS.
         /// Used by `marktd` to update `malo.bilanzierungsmethode` on receipt of
-        /// `de.mako.process.initiated`.
+        /// `de.mako.engine.process.initiated`.
         bilanzierungsmethode: Option<String>,
         /// Gas GaBi RLM Fallgruppe from UTILMD `TM+Z10` segment.
         ///
@@ -1032,7 +1032,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 // Notify the NB ERP that a new Lieferbeginn/Lieferende/Kündigung
                 // Anfrage has arrived and is awaiting the NB decision.
                 // The OutboxErpWorker delivers this as a CloudEvent
-                // (`de.mako.process.initiated`) to the configured ERP webhook URL
+                // (`de.mako.engine.process.initiated`) to the configured ERP webhook URL
                 // so the ERP can review and then call
                 // `gpke.lieferbeginn.bestaetigen` / `gpke.lieferbeginn.ablehnen`
                 // via the command API.

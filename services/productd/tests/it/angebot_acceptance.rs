@@ -2,7 +2,7 @@
 //! with the acceptance.
 //!
 //! The customer's acceptance is binding the moment it answers 200. If the
-//! `de.tarif.angebot.angenommen` that makes `vertragd` create the
+//! `de.mako.tarif.angebot.angenommen` that makes `vertragd` create the
 //! Rahmenvertrag is a POST attempted once after the commit, a `vertragd`
 //! outage leaves an accepted Angebot with no contract and nothing that retries
 //! it — and the customer's own retry is a 409, because the Angebot is decided.

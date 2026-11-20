@@ -224,7 +224,7 @@ pub async fn put_preisblatt(
     let bo4e_version = default_bo4e_version();
 
     // The durable price sheet, its PRICAT version snapshot and the
-    // de.markt.pricat.published event commit in ONE transaction. A detached
+    // de.mako.markt.pricat.published event commit in ONE transaction. A detached
     // best-effort task would let the two stores diverge and drop the PRICAT
     // 27003 dispatch to the LFs while the operator still saw 204.
     let mut tx = match pool.begin().await {
@@ -267,7 +267,7 @@ pub async fn put_preisblatt(
         Err(e) => return failure(e),
     };
 
-    // Emit de.markt.pricat.published so ERP webhook subscribers and the PRICAT
+    // Emit de.mako.markt.pricat.published so ERP webhook subscribers and the PRICAT
     // dispatch worker are notified.
     let evt = MarktEvent::new(
         &tenant,

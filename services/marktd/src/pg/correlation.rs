@@ -79,7 +79,7 @@ impl PgCorrelationIndex {
         Ok(())
     }
 
-    /// Update `edifact_conv_id` when the first `de.mako.*` event is received.
+    /// Update `edifact_conv_id` when the first `de.mako.engine.*` event is received.
     pub async fn update_edifact_conv_id(
         &self,
         process_id: Uuid,

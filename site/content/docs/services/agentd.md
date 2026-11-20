@@ -143,7 +143,7 @@ what it last cosigned for `mako/agentd/<tenant>`.
 ### Durability instead of a dead-letter queue
 
 A failed run resumes from its last completed effect; there is no retry worklist
-and no exhaustion event. `de.agent.decision.made` carries the real outcome in
+and no exhaustion event. `de.mako.agent.decision.made` carries the real outcome in
 the journal's own spelling — `succeeded`, `failed`, `exhausted`, `quarantined`,
 `cancelled`, `abandoned`, `withheld` — see [CloudEvents emitted](#cloudevents-emitted).
 
@@ -624,15 +624,15 @@ sequenceDiagram
     participant A2 as billing-regulatory-guard-agent
     participant J as Journal
 
-    CE->>R: de.billing.rechnung.erstellt
+    CE->>R: de.mako.billing.rechnung.erstellt
     Note over R: two specialists subscribe
     R->>A1: run(billing.anomaly, payload)
     R->>A2: run(billing.regulatory.guard, payload)
     A1->>J: model call · tool call · result
     A2->>J: model call · tool call · result
     Note over A1,A2: separate runs, separate journals —<br/>independent opinions, neither abandoned
-    A1-->>CE: de.agent.decision.made (outcome, run_id)
-    A2-->>CE: de.agent.decision.made (outcome, run_id)
+    A1-->>CE: de.mako.agent.decision.made (outcome, run_id)
+    A2-->>CE: de.mako.agent.decision.made (outcome, run_id)
 ```
 
 ### Deterministic GaBi triage
@@ -650,7 +650,7 @@ sequenceDiagram
 
     A->>J: validate event fields and record deadline label
     A->>W: open urgent final-ALOCAT clearing task
-    A-->>H: de.agent.decision.made (completed)
+    A-->>H: de.mako.agent.decision.made (completed)
     H->>W: claim and resolve the clearing task
     Note over W: unanswered work escalates to mako-operations
 ```
@@ -665,36 +665,36 @@ procedure by `cargo xtask check-prompt-tools`.
 
 | Specialist | Capability | Shape | Reach | Subscribes to |
 |---|---|---|---|---|
-| `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.mako.aperak.*` |
-| `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.process.failed`, `de.mako.antwortfrist.abgelaufen`, `de.obs.deadline.approaching` |
+| `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.engine.process.failed`, `de.mako.engine.antwortfrist.abgelaufen`, `de.mako.engine.aperak.*` |
+| `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.engine.process.failed`, `de.mako.engine.antwortfrist.abgelaufen`, `de.mako.obs.deadline.approaching` |
 | `desk-assistant` | `desk.assistant` | `tool-calling` | 5 on makod, processd, vertragd | none — started from the Desk by a person's question (`POST /api/v1/runs`); every sentence cites its call and is checked (`GET /api/v1/runs/{run}/antwort`); on a held decision it may propose one, which the Desk prefills and never sends |
 | `einrichtung-assistent` | `einrichtung.vorbelegen` | `tool-calling` | none — reads no service | none — started from the Desk's Einrichtung with one sentence (`POST /api/v1/runs`, input `satz`); its answer is the interview's answers in `angaben` — the Rollen among `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`, `esa-strom`, `bkv-strom` — every MP-ID and Bilanzkreis kept only where the sentence contains it, each confirmed by the person |
-| `billing-agent` | `billing` | `tool-calling` | 9 on accountingd, billingd, invoicd, marktd | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
-| `netzbilanz-agent` | `netzbilanz` | `tool-calling` | 7 on marktd, netzbilanzd | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue`, `de.netzbilanz.invoic.disputed` |
-| `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | 6 on accountingd, billingd, invoicd | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
-| `billing-anomaly-agent` | `billing.anomaly` | `tool-calling` | 6 on billingd, edmd | `de.billing.rechnung.erstellt` |
-| `billing-regulatory-guard-agent` | `billing.regulatory.guard` | `tool-calling` | 5 on billingd, marktd, productd, vertragd | `de.billing.rechnung.erstellt` |
+| `billing-agent` | `billing` | `tool-calling` | 9 on accountingd, billingd, invoicd, marktd | `de.mako.invoic.receipt.disputed`, `de.mako.accounting.mahnung.issued` |
+| `netzbilanz-agent` | `netzbilanz` | `tool-calling` | 7 on marktd, netzbilanzd | `de.mako.netzbilanz.invoic.drafted`, `de.mako.netzbilanz.invoic.dispatched`, `de.mako.netzbilanz.invoic.dispatch-overdue`, `de.mako.netzbilanz.invoic.disputed` |
+| `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | 6 on accountingd, billingd, invoicd | `de.mako.invoic.payment.overdue`, `de.mako.invoic.receipt.*` |
+| `billing-anomaly-agent` | `billing.anomaly` | `tool-calling` | 6 on billingd, edmd | `de.mako.billing.rechnung.erstellt` |
+| `billing-regulatory-guard-agent` | `billing.regulatory.guard` | `tool-calling` | 5 on billingd, marktd, productd, vertragd | `de.mako.billing.rechnung.erstellt` |
 | `jahresabrechnung-agent` | `jahresabrechnung` | `tool-calling` | 7 on accountingd, edmd, marktd, productd | _manual / scheduled_ |
-| `eeg-agent` | `eeg` | `tool-calling` | 4 on edmd, einsd, productd | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` |
-| `eeg-compliance-agent` | `eeg.compliance` | `tool-calling` | 5 on einsd | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*`, `de.eeg.compliance.*`, `de.eeg.veraeusserungsform.gewechselt` |
-| `payment-reconciliation-agent` | `payment.reconciliation` | `tool-calling` | 4 on accountingd | `de.accounting.payment.due`, `de.accounting.bankruecklast`, `de.accounting.sepa.collection-rejected`, `de.accounting.sperrandrohung`, `de.accounting.sperrankuendigung`, `de.accounting.abwendung.angeboten`, `de.accounting.abwendung.gebrochen` |
-| `compliance-agent` | `compliance` | `tool-calling` | 5 on processd | `de.obs.stp.parity.alert` |
-| `msb-history-agent` | `msb.history` | `tool-calling` | 6 on edmd, marktd | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed`, `de.messwert.reading.order.failed`, `de.messwert.reading.delivery.overdue` |
-| `meter-data-agent` | `meter.data` | `tool-calling` | 3 on edmd | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
-| `grid-anomaly-agent` | `grid.anomaly` | `tool-calling` | 3 on marktd | `de.markt.nb-contract.updated`, `de.markt.malo.updated` |
-| `tariff-optimization-agent` | `tariff.optimization` | `tool-calling` | 6 on billingd, edmd, productd | `de.billing.rechnung.erstellt`, `de.mako.process.completed` |
-| `vertragd-agent` | `vertragd` | `tool-calling` | 9 on marktd, processd, productd, vertragd | `de.vertrag.*`, `de.mako.aperak.rejected`, `de.mako.process.failed`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` |
-| `productd-agent` | `productd` | `tool-calling` | 6 on productd | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` |
-| `processd-agent` | `processd` | `tool-calling` | 7 on marktd, processd | `de.mako.process.initiated`, `de.mako.aperak.rejected`, `de.mako.process.failed` |
-| `sperrd-agent` | `sperrd` | `tool-calling` | 6 on makod, processd | `de.accounting.sperrauftrag`, `de.sperr.*`, `de.mako.process.completed` |
-| `portald-agent` | `portald` | `tool-calling` | 8 on accountingd, billingd, einsd, marktd | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` |
+| `eeg-agent` | `eeg` | `tool-calling` | 4 on edmd, einsd, productd | `de.mako.eeg.anlage.foerderung-auslaufend`, `de.mako.messwert.reading.direct.stored` |
+| `eeg-compliance-agent` | `eeg.compliance` | `tool-calling` | 5 on einsd | `de.mako.eeg.anlage.*`, `de.mako.eeg.verguetung.*`, `de.mako.eeg.marktpraemie.*`, `de.mako.eeg.compliance.*`, `de.mako.eeg.veraeusserungsform.gewechselt` |
+| `payment-reconciliation-agent` | `payment.reconciliation` | `tool-calling` | 4 on accountingd | `de.mako.accounting.payment.due`, `de.mako.accounting.bankruecklast`, `de.mako.accounting.sepa.collection-rejected`, `de.mako.accounting.sperrandrohung`, `de.mako.accounting.sperrankuendigung`, `de.mako.accounting.abwendung.angeboten`, `de.mako.accounting.abwendung.gebrochen` |
+| `compliance-agent` | `compliance` | `tool-calling` | 5 on processd | `de.mako.obs.stp.parity.alert` |
+| `msb-history-agent` | `msb.history` | `tool-calling` | 6 on edmd, marktd | `de.mako.messwert.reading.quality.warning`, `de.mako.messwert.reading.direct.stored`, `de.mako.engine.process.completed`, `de.mako.messwert.reading.order.failed`, `de.mako.messwert.reading.delivery.overdue` |
+| `meter-data-agent` | `meter.data` | `tool-calling` | 3 on edmd | `de.mako.messwert.reading.quality.warning`, `de.mako.engine.process.completed` |
+| `grid-anomaly-agent` | `grid.anomaly` | `tool-calling` | 3 on marktd | `de.mako.markt.nb-contract.updated`, `de.mako.markt.malo.updated` |
+| `tariff-optimization-agent` | `tariff.optimization` | `tool-calling` | 6 on billingd, edmd, productd | `de.mako.billing.rechnung.erstellt`, `de.mako.engine.process.completed` |
+| `vertragd-agent` | `vertragd` | `tool-calling` | 9 on marktd, processd, productd, vertragd | `de.mako.vertrag.*`, `de.mako.engine.aperak.rejected`, `de.mako.engine.process.failed`, `de.mako.vertrag.ablauf.ankuendigung`, `de.mako.vertrag.preisaenderung.ankuendigung` |
+| `productd-agent` | `productd` | `tool-calling` | 6 on productd | `de.mako.tarif.product.updated`, `de.mako.tarif.angebot.abgelaufen`, `de.mako.tarif.epex.missing` |
+| `processd-agent` | `processd` | `tool-calling` | 7 on marktd, processd | `de.mako.engine.process.initiated`, `de.mako.engine.aperak.rejected`, `de.mako.engine.process.failed` |
+| `sperrd-agent` | `sperrd` | `tool-calling` | 6 on makod, processd | `de.mako.accounting.sperrauftrag`, `de.mako.sperr.*`, `de.mako.engine.process.completed` |
+| `portald-agent` | `portald` | `tool-calling` | 8 on accountingd, billingd, einsd, marktd | `de.mako.billing.rechnung.erstellt`, `de.mako.eeg.anlage.foerderung-auslaufend`, `de.mako.accounting.mahnung.issued`, `de.mako.vertrag.*` |
 | `regulatory-reporting-agent` | `regulatory.reporting` | `tool-calling` | 5 on processd | _manual / scheduled_ |
-| `replacement-value-agent` | `replacement.value` | `tool-calling` | 3 on edmd | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
-| `mabis-agent` | `mabis.submission` | `tool-calling` | 7 on edmd, netzbilanzd | `de.mabis.submission.failed`, `de.mabis.korrekturbedarf.opened`, `de.messwert.reading.quality.warning` |
-| `smgw-diagnostics-agent` | `smgw.diagnostics` | `tool-calling` | 5 on edmd, marktd | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` |
-| `vpp-billing-agent` | `vpp.billing` | `tool-calling` | 3 on billingd, marktd | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` |
-| `gabi-gas-agent` | `gabi.gas.balancing` | **coded skill** (no model) | 0 | `de.gabi.alocat.missing` |
-| `einsd-batch-agent` | `einsd.batch` | `tool-calling` | 8 on edmd, einsd, productd | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` |
+| `replacement-value-agent` | `replacement.value` | `tool-calling` | 3 on edmd | `de.mako.messwert.reading.quality.warning`, `de.mako.engine.process.completed` |
+| `mabis-agent` | `mabis.submission` | `tool-calling` | 7 on edmd, netzbilanzd | `de.mako.mabis.submission.failed`, `de.mako.mabis.korrekturbedarf.opened`, `de.mako.messwert.reading.quality.warning` |
+| `smgw-diagnostics-agent` | `smgw.diagnostics` | `tool-calling` | 5 on edmd, marktd | `de.mako.messwert.cls.compliance-issue`, `de.mako.messwert.smgw.cert.expiry-warning`, `de.mako.messwert.reading.quality.warning`, `de.mako.messwert.reading.direct.stored`, `de.mako.engine.process.initiated`, `de.mako.markt.geraet.konfiguration.updated` |
+| `vpp-billing-agent` | `vpp.billing` | `tool-calling` | 3 on billingd, marktd | `de.mako.vpp.dispatch.confirmed`, `de.mako.vpp.settlement.berechnet` |
+| `gabi-gas-agent` | `gabi.gas.balancing` | **coded skill** (no model) | 0 | `de.mako.gabi.alocat.missing` |
+| `einsd-batch-agent` | `einsd.batch` | `tool-calling` | 8 on edmd, einsd, productd | `de.mako.eeg.settlement.batch-due`, `de.mako.eeg.compliance.*`, `de.mako.eeg.anlage.foerderung-auslaufend` |
 
 Activate them with `[bundled_agents]`. A role-scoped build contains only its own
 role's specialists, so `enable_all` never activates another Marktrolle's agents.
@@ -951,7 +951,7 @@ curl -X POST http://agentd:9580/webhook \
   -H "webhook-signature: $WEBHOOK_SIGNATURE" \
   -d '{
     "specversion": "1.0",
-    "type": "de.billing.rechnung.erstellt",
+    "type": "de.mako.billing.rechnung.erstellt",
     "source": "urn:mako:billingd:tenant:9900357000004",
     "id": "123e4567-e89b-12d3-a456-426614174000",
     "data": { "malo_id": "51238696012", "record_id": "..." }
@@ -1004,7 +1004,7 @@ curl -X POST -H "Authorization: Bearer $JWT" -H "Content-Type: application/json"
 
 | Event type | When |
 |---|---|
-| `de.agent.decision.made` | A run reaches a terminal state. Carries `{run, case, outcome, chain_head}` under a `tenantid` extension, with the run id as both `id` and `subject`. |
+| `de.mako.agent.decision.made` | A run reaches a terminal state. Carries `{run, case, outcome, chain_head}` under a `tenantid` extension, with the run id as both `id` and `subject`. |
 
 The answer is not in it: shipping a run's output would be an undeclared egress.
 `chain_head` lets a receiver ask this plane to prove the run;

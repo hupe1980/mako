@@ -458,7 +458,7 @@ pub async fn put_product(
     // Announce the version to every webhook subscriber — the ERP and the
     // productd-agent, whose §42 Energiemix completeness and §41a EPEX checks
     // run against it. This is the only emitter of the agent's
-    // `de.tarif.product.updated` trigger, so it commits with the version it
+    // `de.mako.tarif.product.updated` trigger, so it commits with the version it
     // announces.
     let announcement = mako_service::CloudEvent::new(
         mako_service::source("productd", &cfg.tenant),
@@ -1925,7 +1925,7 @@ fn default_gueltig_bis() -> time::Date {
 /// ## Acceptance lifecycle
 ///
 /// `POST /api/v1/angebote/{id}/annehmen` transitions to ANGENOMMEN and emits
-/// `de.tarif.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the
+/// `de.mako.tarif.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the
 /// `Rahmenvertrag` + `Versorgungsverträge` from the accepted Angebot data.
 #[utoipa::path(
     post,
@@ -2579,7 +2579,7 @@ pub struct AnnehmenRequest {
 ///
 /// Validates that the Angebot is still within its `gueltig_bis` window, then
 /// transitions to `ANGENOMMEN` and, in the same transaction, enqueues
-/// `de.tarif.angebot.angenommen` for the configured ERP webhook (`vertragd`).
+/// `de.mako.tarif.angebot.angenommen` for the configured ERP webhook (`vertragd`).
 /// The outbox worker delivers it with retry; `vertragd` answers with the
 /// Rahmenvertrag it created, and the worker links it onto the Angebot in the
 /// transaction that marks the delivery done. So the answer here never carries
@@ -2653,7 +2653,7 @@ pub async fn post_angebot_annehmen(
             "erp_dispatch": erp_dispatch,
             "message": match erp_dispatch {
                 "queued" =>
-                    "Angebot angenommen — de.tarif.angebot.angenommen is queued; the Angebot \
+                    "Angebot angenommen — de.mako.tarif.angebot.angenommen is queued; the Angebot \
                      names its Rahmenvertrag once vertragd has created it",
                 _ =>
                     "Angebot angenommen — no erp_webhook_url is configured, so NO Rahmenvertrag \

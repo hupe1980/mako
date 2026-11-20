@@ -323,7 +323,7 @@ impl PgMsbRahmenvertragRepository {
     /// Insert or update a record by its natural key
     /// `(tenant, sparte, nb_mp_id, msb_mp_id, valid_from)` inside the caller's
     /// transaction — the handler enqueues the CloudEvent in the same one, so
-    /// a stored contract and its `de.markt.msb-rahmenvertrag.updated` commit
+    /// a stored contract and its `de.mako.markt.msb-rahmenvertrag.updated` commit
     /// together or not at all.
     ///
     /// Optimistic locking: a non-zero `version` must match the stored one or

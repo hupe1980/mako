@@ -425,7 +425,7 @@ fn startup_refuses_an_open_mcp_surface() {
 /// A delivery target without a signing secret is refused.
 ///
 /// The `default` webhook endpoint is signed only with one, so this posture ships every
-/// `de.netzbilanz.*` CloudEvent to the ERP unsigned — and nothing at runtime
+/// `de.mako.netzbilanz.*` CloudEvent to the ERP unsigned — and nothing at runtime
 /// says so.
 #[test]
 fn startup_refuses_a_webhook_url_without_its_signing_secret() {

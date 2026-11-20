@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AusfuehrungUeberfaellig",
+  "description": "The `data` of `de.mako.sperr.ausfuehrung.ueberfaellig`.",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "description": "The executing system's own reference, where the order carries one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "malo_id": {
+      "type": "string"
+    },
+    "lf_mp_id": {
+      "type": "string"
+    },
+    "faellig_am": {
+      "description": "The last day of the window that has passed.",
+      "type": "string",
+      "format": "date"
+    },
+    "frist": {
+      "description": "The window, with its source.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "order_id",
+    "malo_id",
+    "lf_mp_id",
+    "faellig_am",
+    "frist"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.ausfuehrung.ueberfaellig.json"
+}

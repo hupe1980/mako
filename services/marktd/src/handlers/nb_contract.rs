@@ -10,7 +10,7 @@
 //! with ERP systems.  The `vertragsart` and `vertragsstatus` columns are
 //! extracted from `data` on every write.
 //!
-//! A `de.markt.nb-contract.updated` CloudEvent is emitted on every successful
+//! A `de.mako.markt.nb-contract.updated` CloudEvent is emitted on every successful
 //! upsert so subscribers can rebuild Vertrag caches without polling.
 
 use mako_service::ApiError;
@@ -260,7 +260,7 @@ pub async fn put_nb_contract(
     };
     match crate::pg::PgNbContractRepository::upsert_tx(&mut tx, rec).await {
         Ok(version) => {
-            // Emit de.markt.nb-contract.updated so ERP subscribers can rebuild
+            // Emit de.mako.markt.nb-contract.updated so ERP subscribers can rebuild
             // Vertrag caches without polling.
             let evt = MarktEvent::new(
                 &tenant.0,

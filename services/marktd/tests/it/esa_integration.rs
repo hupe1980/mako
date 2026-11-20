@@ -621,7 +621,7 @@ async fn an_expired_consent_is_closed_and_returned_for_the_abbestellung() {
 ///
 /// `revoked_at` is the sweep's own filter, so committing it is spending the
 /// only retry there is: a consent closed without its
-/// `de.markt.einwilligung.widerrufen` event can never be selected again, no
+/// `de.mako.markt.einwilligung.widerrufen` event can never be selected again, no
 /// Abbestellung is ever sent, and the ESA keeps receiving Typ-2 Messwerte with
 /// no lawful basis (Art. 6 Abs. 1 lit. a DSGVO). The revocation and the event
 /// therefore commit together — this drives the two halves

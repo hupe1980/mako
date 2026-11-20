@@ -1,4 +1,4 @@
-//! The read-model `processd` projects `de.mako.*` events into, and the reports it
+//! The read-model `processd` projects `de.mako.engine.*` events into, and the reports it
 //! answers from.
 //!
 //! ## Two clocks, never one number
@@ -9,7 +9,7 @@
 //! | Clock | What it is | Where it comes from |
 //! |---|---|---|
 //! | **APERAK Frist** | the *technical* acknowledgement — 45 min Strom (Sonntag 12:00 for a Saturday arrival), next Werktag 12:00 Gas Folgeprozess, 3 Werktage Gas Initialprozess | `mako_fristen`; a missed one reaches no workflow and is makod's delivery-window alert, never this read model |
-//! | **Antwortfrist** | the *business* answer — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | `mako_fristen::antwort`, stored as [`ProcessProjection::deadline_at`]; a lapse the workflow observed arrives as `de.mako.antwortfrist.abgelaufen` |
+//! | **Antwortfrist** | the *business* answer — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | `mako_fristen::antwort`, stored as [`ProcessProjection::deadline_at`]; a lapse the workflow observed arrives as `de.mako.engine.antwortfrist.abgelaufen` |
 //!
 //! They differ by orders of magnitude and they fail for different reasons: a
 //! missed APERAK is a transport or validation fault, a missed Antwortfrist is a
@@ -25,21 +25,21 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessState {
-    /// `de.mako.process.initiated` received — process started.
+    /// `de.mako.engine.process.initiated` received — process started.
     Initiated,
-    /// `de.mako.aperak.accepted` received — APERAK acknowledged.
+    /// `de.mako.engine.aperak.accepted` received — APERAK acknowledged.
     Running,
-    /// `de.mako.antwortfrist.abgelaufen` received — the GPKE / GeLi Gas
+    /// `de.mako.engine.antwortfrist.abgelaufen` received — the GPKE / GeLi Gas
     /// workflow saw its business Antwortfrist lapse unanswered.
     AntwortfristAbgelaufen,
-    /// `de.mako.process.completed` received with a positive verdict — the
+    /// `de.mako.engine.process.completed` received with a positive verdict — the
     /// process did what it set out to do.
     Completed,
-    /// The counterparty refused: `de.mako.aperak.rejected` (an ERC code), or a
-    /// `de.mako.process.completed` whose verdict is negative — an Ablehnung
+    /// The counterparty refused: `de.mako.engine.aperak.rejected` (an ERC code), or a
+    /// `de.mako.engine.process.completed` whose verdict is negative — an Ablehnung
     /// such as a 55003/55080 answering an Anmeldung.
     Rejected,
-    /// `de.mako.process.failed` received — unrecoverable failure.
+    /// `de.mako.engine.process.failed` received — unrecoverable failure.
     ///
     /// Not `Cancelled`: nothing in mako emits a cancellation, and that name puts
     /// unrecoverable failures in a bucket the STP rate reads as a normal ending.
@@ -48,9 +48,9 @@ pub enum ProcessState {
 
 impl ProcessState {
     /// The state a CloudEvent moves the process into, from its type and, for a
-    /// `de.mako.process.completed`, the verdict in its `data`.
+    /// `de.mako.engine.process.completed`, the verdict in its `data`.
     ///
-    /// `de.mako.process.completed` is one type for a Bestätigung and an
+    /// `de.mako.engine.process.completed` is one type for a Bestätigung and an
     /// Ablehnung (BK6-24-174 GPKE Teil 2: 55002/55078 confirm an Anmeldung,
     /// 55003/55080 refuse it): it says the process ended, and `data.accepted` /
     /// `data.outcome` say how. Keyed on the type alone, every refused Anmeldung
@@ -206,7 +206,7 @@ impl DeadlineRisk {
 /// Per-process read-model projection.
 ///
 /// One row per live or recently completed process, updated on every
-/// `de.mako.*` event `processd` receives.
+/// `de.mako.engine.*` event `processd` receives.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessProjection {
     /// UUID — `subject` field of the originating CloudEvent.
@@ -268,7 +268,7 @@ pub struct ProcessProjection {
     /// § 7a Abs. 5 EnWG parity flag: `true` when the initiating Lieferant is
     /// part of the same vertically integrated undertaking as this operator.
     ///
-    /// Set on `de.mako.process.initiated` for Lieferbeginn PIDs by comparing
+    /// Set on `de.mako.engine.process.initiated` for Lieferbeginn PIDs by comparing
     /// `data.new_supplier` against `[identity] verbundene_lieferanten`. It is the grouping
     /// key of the Gleichbehandlungsbericht evidence — see
     /// [`ParityGroup`].

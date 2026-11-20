@@ -72,7 +72,8 @@ pub fn api(subs: &Subscriptions) -> OpenApiRouter<ProcessdState> {
         .routes(routes!(crate::sperr::handlers::get_order))
         .routes(routes!(crate::sperr::handlers::execute_order))
         .routes(routes!(crate::sperr::handlers::fail_order))
-        .routes(routes!(crate::sperr::handlers::cancel_order));
+        .routes(routes!(crate::sperr::handlers::cancel_order))
+        .routes(routes!(crate::sperr::handlers::put_external_ref));
     api.merge(subs.router())
 }
 

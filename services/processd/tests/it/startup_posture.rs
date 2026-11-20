@@ -58,7 +58,7 @@ fn startup_refuses_an_unsigned_inbound_webhook() {
         .check_auth_posture()
         .expect_err("an unsigned inbound webhook must not start");
     let msg = err.to_string();
-    for named in ["webhook.inbound_secret", "de.mako.process.initiated"] {
+    for named in ["webhook.inbound_secret", "de.mako.engine.process.initiated"] {
         assert!(
             msg.contains(named),
             "the refusal must name the unsigned door — {named:?} is missing from: {msg}"

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReadingOrderCompleted",
+  "description": "The `data` of `de.mako.messwert.reading.order.completed`.",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "description": "The executing system's own reference, where the order carries one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "malo_id": {
+      "type": "string"
+    },
+    "melo_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "anlass": {
+      "type": "string"
+    },
+    "sparte": {
+      "type": "string"
+    },
+    "obis_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "abgelesen_am": {
+      "description": "The instant the register held the value, RFC 3339.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "zaehlerstand": {
+      "description": "The register value; absent for an order closed without a reading.",
+      "type": [
+        "string",
+        "number",
+        "null"
+      ],
+      "pattern": "^-?\\d+(\\.\\d+)?([eE]\\d+)?$"
+    },
+    "einheit": {
+      "description": "The unit `zaehlerstand` counts in.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mscons_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "order_id",
+    "malo_id",
+    "anlass",
+    "sparte",
+    "abgelesen_am"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.messwert.reading.order.completed.json"
+}

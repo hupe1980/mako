@@ -158,7 +158,7 @@ pub async fn upsert_product(
 }
 
 /// [`upsert_product`], enqueueing `announcement` in the same transaction, so
-/// the new version and its `de.tarif.product.updated` commit together.
+/// the new version and its `de.mako.tarif.product.updated` commit together.
 ///
 /// # Errors
 ///
@@ -283,7 +283,7 @@ pub async fn upsert_product_announced(
     if let Some(ce) = announcement {
         mako_service::outbox::enqueue(&mut tx, ce)
             .await
-            .context("enqueue de.tarif.product.updated")?;
+            .context("enqueue de.mako.tarif.product.updated")?;
     }
     tx.commit().await.context("commit upsert_product")?;
     Ok(id)
@@ -1219,7 +1219,7 @@ pub const ANGEBOT_TARGET: &str = "angebot-vertrag";
 /// row in the transaction that accepts it.
 ///
 /// The acceptance is binding the moment it commits, and the
-/// `de.tarif.angebot.angenommen` it owes `vertragd` is what becomes the
+/// `de.mako.tarif.angebot.angenommen` it owes `vertragd` is what becomes the
 /// contract: committed apart, an outage between the two leaves an accepted
 /// Angebot that nothing ever contracts, and the customer's retry is a 409.
 pub async fn accept_angebot(
@@ -1251,7 +1251,7 @@ pub async fn accept_angebot(
     }
 
     // A quotation must be priced before it can be accepted — otherwise
-    // `de.tarif.angebot.angenommen` would carry an empty BO4E `Angebot` and the
+    // `de.mako.tarif.angebot.angenommen` would carry an empty BO4E `Angebot` and the
     // downstream Rahmenvertrag build has nothing to derive the contract from.
     if !angebot_is_priced(&angebot.bo4e) {
         return Err(AcceptError::NichtBepreist);

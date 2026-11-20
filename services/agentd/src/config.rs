@@ -86,7 +86,7 @@ pub struct AgentdConfig {
 
     /// Audit CloudEvent webhook: an inbound path that fans the event out to subscribers (marktd).
     pub audit_webhook_url: Option<String>,
-    /// Secret signing every `de.agent.decision.made` delivery.
+    /// Secret signing every `de.mako.agent.decision.made` delivery.
     ///
     /// [Standard Webhooks](https://www.standardwebhooks.com/), signed by
     /// agentplane's `push::Destination` — the same scheme

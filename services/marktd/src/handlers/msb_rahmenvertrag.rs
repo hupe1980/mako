@@ -4,7 +4,7 @@
 //! Kap. 2.3.2 Nr. 2 Ziff. 3; AWH WiM Gas 2.0 Kap. 3.5.2 Nr. 2 Ziff. 3), per
 //! (Sparte, NB, MSB) — see [`crate::pg::msb_rahmenvertrag`] for the Gas-only
 //! Fassung and adaptation duty of GeLi Gas 3.0 Tenor 13–15. Every change
-//! emits `de.markt.msb-rahmenvertrag.updated` in the write's transaction;
+//! emits `de.mako.markt.msb-rahmenvertrag.updated` in the write's transaction;
 //! `GET /api/v1/msb-rahmenvertraege/check` is the lookup `processd`'s
 //! Anmeldung MSB arm reads.
 

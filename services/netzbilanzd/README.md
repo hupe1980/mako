@@ -12,7 +12,7 @@ Summenzeitreihen (MSCONS 13003) with the BIKO through `makod`.
 | **Port** | 8680 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — invoice drafts and numbering, Kostenblätter, MaBiS submission runs |
 | **MCP** | 15 tools, 7 prompts at `/mcp` |
-| **Emits** | `de.netzbilanz.invoic.*`, `de.netzbilanz.kostenblatt.*`, `de.mabis.submission.failed`, `de.mabis.korrekturbedarf.opened` |
+| **Emits** | `de.mako.netzbilanz.invoic.*`, `de.mako.netzbilanz.kostenblatt.*`, `de.mako.mabis.submission.failed`, `de.mako.mabis.korrekturbedarf.opened` |
 | **Consumes** | REMADV CloudEvents at `POST /api/v1/webhooks/remadv` |
 | **Depends on** | `marktd` (MaLo, MaBiS-Zählpunkte, KAV Grenzpreis Strom), `makod` (dispatch), `edmd` (energy, MaBiS Lastgänge) |
 

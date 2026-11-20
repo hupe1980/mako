@@ -3,7 +3,7 @@
 //!
 //! One subscription carries the union of what the decision modules, the
 //! process read model and the Sperrauftrag queue read, so `marktd` delivers a
-//! `de.mako.process.initiated` once. These pin that the one delivery projects
+//! `de.mako.engine.process.initiated` once. These pin that the one delivery projects
 //! the process **and** hands it on — to the Sperrauftrag queue for an ORDERS
 //! 17115, to the NB Anmeldung module for a 55001.
 

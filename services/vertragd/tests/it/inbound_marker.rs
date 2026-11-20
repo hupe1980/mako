@@ -238,3 +238,117 @@ async fn a_confirmation_sends_the_contracts_verbraucher_status() {
         );
     }
 }
+
+/// The grid operator's answer to one component is announced with the
+/// references of whoever handed the contract over — and a refusal carries the
+/// Antwortcode with the Codeliste that defines it, which is also what the
+/// component stores.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_grid_operators_answer_is_announced_with_the_callers_reference() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let kunde = make_kunde(&pool, TENANT).await;
+    for (reference, process, data) in [
+        (
+            "C-OK",
+            "P-OK",
+            serde_json::json!({ "process_id": "P-OK", "accepted": true, "malo_id": "51238696012" }),
+        ),
+        (
+            "C-NO",
+            "P-NO",
+            serde_json::json!({
+                "process_id": "P-NO", "accepted": false, "outcome": "rejected",
+                "antwortcode": "A02", "codeliste": "E_0622", "reason": "abgelehnt",
+            }),
+        ),
+    ] {
+        let created =
+            pg::insert_versorgungsvertrag(&pool, kunde, TENANT, TENANT, &vertrag_input(reference))
+                .await
+                .expect("create");
+        sqlx::query("UPDATE vertragskomponenten SET mako_process_id = $1 WHERE vertrag_id = $2")
+            .bind(process)
+            .bind(created.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let ce = serde_json::json!({
+            "specversion": "1.0", "id": format!("ce-{process}"), "source": "/makod/test",
+            "type": mako_events::mako::PROCESS_COMPLETED, "data": data,
+        });
+        assert_eq!(post(&pool, "/api/v1/events", &ce).await, StatusCode::OK);
+    }
+
+    let event = |ce_type: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT envelope FROM event_outbox WHERE ce_type = $1",
+            )
+            .bind(ce_type)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let confirmed = event(mako_events::vertrag::LIEFERBEGINN_BESTAETIGT).await;
+    assert_eq!(confirmed.len(), 1, "{confirmed:?}");
+    let data = &confirmed[0]["data"];
+    assert_eq!(data["erp_contract_id"], "C-OK");
+    assert_eq!(data["kunden_id"], kunde.to_string());
+    assert_eq!(data["malo_id"], "51238696012");
+    assert!(data["lieferbeginn"].is_string() && data["komp_id"].is_string());
+    assert_eq!(confirmed[0]["subject"], data["vertrag_id"]);
+    assert!(
+        confirmed[0]["dataschema"]
+            .as_str()
+            .is_some_and(|s| s.ends_with("de.mako.vertrag.lieferbeginn.bestaetigt.json")),
+        "{}",
+        confirmed[0]
+    );
+
+    let refused = event(mako_events::vertrag::LIEFERBEGINN_ABGELEHNT).await;
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    let data = &refused[0]["data"];
+    assert_eq!(data["erp_contract_id"], "C-NO");
+    assert_eq!(data["antwortcode"], "A02");
+    assert_eq!(data["codeliste"], "E_0622");
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT k.abgelehnt_erc FROM vertragskomponenten k
+           JOIN versorgungsvertraege v ON v.id = k.vertrag_id WHERE v.erp_contract_id = 'C-NO'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored.as_deref(),
+        Some("A02"),
+        "the component keeps the code"
+    );
+
+    // The caller finds its contract by its own reference, whatever became of it.
+    let found = pg::list_vertraege_by_referenz(&pool, TENANT, Some("C-NO"), None)
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert!(
+        pg::list_vertraege_by_referenz(&pool, "another-tenant", Some("C-NO"), None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // The portfolio row says what the contract is.
+    let portfolio = pg::list_portfolio_by_kunde(&pool, kunde, TENANT)
+        .await
+        .unwrap();
+    assert!(
+        portfolio
+            .iter()
+            .all(|row| row.vertragsart == "SONDERVERTRAG"),
+        "{portfolio:?}"
+    );
+    assert!(!portfolio.is_empty());
+}

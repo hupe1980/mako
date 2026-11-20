@@ -1197,7 +1197,7 @@ mod webhook_signing_tests {
         time::OffsetDateTime::now_utc().unix_timestamp()
     }
 
-    /// The `de.tarif.angebot.angenommen` emit signs with the shared signer, so
+    /// The `de.mako.tarif.angebot.angenommen` emit signs with the shared signer, so
     /// what an ERP receives here verifies the same way as every other mako
     /// outbound. This path POSTs directly (it reads the response back to link
     /// the Rahmenvertrag), which is exactly the kind of call site that tends to
@@ -1205,8 +1205,8 @@ mod webhook_signing_tests {
     #[test]
     fn the_three_headers_verify_against_the_shared_verifier() {
         let secret = b"test-secret";
-        let body = br#"{"specversion":"1.0","type":"de.tarif.angebot.angenommen"}"#;
-        let id = "de.tarif.angebot.angenommen/a1b2c3d4";
+        let body = br#"{"specversion":"1.0","type":"de.mako.tarif.angebot.angenommen"}"#;
+        let id = "de.mako.tarif.angebot.angenommen/a1b2c3d4";
         let ts = now();
 
         let mut headers = axum::http::HeaderMap::new();

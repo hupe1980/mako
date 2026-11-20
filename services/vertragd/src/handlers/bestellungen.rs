@@ -154,7 +154,7 @@ pub async fn get_rechtsdokument(
 ///
 /// Under `[policy] vertragsschluss = "mit_bestellung"` the Bestellnachweis,
 /// the Bestellung, the contract, the Anmeldung's outbox command, the
-/// documents' commands and the `de.vertrag.bestellung.*` events commit in one
+/// documents' commands and the `de.mako.vertrag.bestellung.*` events commit in one
 /// transaction (`201`). Under `"mit_annahme"` the order is stored
 /// `EINGEGANGEN` and the contract waits for `…/annehmen` (`202`).
 #[utoipa::path(
@@ -580,6 +580,7 @@ fn productd(ctx: &Ctx) -> ApiResult<ProductdClient> {
 /// What concluding an order produced.
 struct Abschluss {
     vertrag_id: Uuid,
+    kunden_id: Uuid,
     vertrags_nr: String,
     am: OffsetDateTime,
     widerrufsfrist: Option<mako_fristen::vorlauf::Widerrufsfrist>,
@@ -591,6 +592,7 @@ impl Abschluss {
             "bestellung_id": bestellung_id,
             "status": "ANGENOMMEN",
             "vertrag_id": self.vertrag_id,
+            "kunden_id": self.kunden_id,
             "vertrags_nr": self.vertrags_nr,
             "vertragsschluss_am": dokumente::berlin_iso(self.am),
             "bestellnachweis": { "id": nachweis.id(), "sha256": nachweis.sha256() },
@@ -609,7 +611,7 @@ fn frist_json(f: mako_fristen::vorlauf::Widerrufsfrist) -> serde_json::Value {
 
 /// Conclude an order into a contract inside `tx`: the Kunde, the contract
 /// with its Anmeldung command, the Bestellung `ANGENOMMEN`, the
-/// `de.vertrag.bestellung.angenommen` event and the documents the statute owes
+/// `de.mako.vertrag.bestellung.angenommen` event and the documents the statute owes
 /// — the § 41 Abs. 4 EnWG Vertragszusammenfassung always, the § 312f Abs. 2
 /// BGB Vertragsbestätigung for a consumer.
 #[expect(
@@ -629,7 +631,11 @@ async fn schliesse_vertrag(
     let tenant = ctx.tenant();
     let kunden_id = store::insert_bestellkunde(&mut *tx, tenant, &input.kunde)
         .await
-        .map_err(internal)?;
+        .map_err(internal)?
+        .ok_or_else(|| {
+            ApiError::unprocessable("kunde.kunden_id names no Kunde of this deployment")
+                .with_code("kunde_unbekannt")
+        })?;
     let vertrag_input = pg::CreateVersorgungsvertragInput {
         rahmenvertrag_id: None,
         kundentyp: input.kunde.kundentyp.clone(),
@@ -671,6 +677,7 @@ async fn schliesse_vertrag(
         .then(|| mako_fristen::vorlauf::widerrufsfrist(schluss, nachweis.belehrung_am(), CAL));
     let abschluss = Abschluss {
         vertrag_id: inserted.id,
+        kunden_id,
         vertrags_nr: inserted.vertrags_nr.clone(),
         am,
         widerrufsfrist,
@@ -686,6 +693,7 @@ async fn schliesse_vertrag(
             "bestellung_id": bestellung_id,
             "bestellreferenz": input.bestellreferenz,
             "vertrag_id": inserted.id,
+            "kunden_id": kunden_id,
             "vertrags_nr": inserted.vertrags_nr,
             "vertragsschluss_am": dokumente::berlin_iso(am),
             "widerrufsfrist": widerrufsfrist.map(frist_json),
@@ -843,7 +851,7 @@ async fn rechtsdokument_text(
     String::from_utf8(row.inhalt).map_err(internal)
 }
 
-/// Enqueue a `de.vertrag.bestellung.*` / `de.vertrag.widerruf.*` CloudEvent
+/// Enqueue a `de.mako.vertrag.bestellung.*` / `de.mako.vertrag.widerruf.*` CloudEvent
 /// whose `subject` is the partner's `bestellreferenz`.
 async fn enqueue_bestell_event(
     tx: &mut sqlx::PgConnection,
@@ -1381,7 +1389,7 @@ async fn vertragsbestaetigung_zugestellt(ctx: &Ctx, vertrag_id: Uuid) -> ApiResu
 }
 
 /// What every recorded Widerruf owes in its transaction: the
-/// `de.vertrag.widerruf.eingegangen` event and the § 356a Abs. 4 BGB
+/// `de.mako.vertrag.widerruf.eingegangen` event and the § 356a Abs. 4 BGB
 /// Eingangsbestätigung.
 async fn widerruf_folgen(
     tx: &mut sqlx::PgConnection,

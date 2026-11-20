@@ -27,7 +27,7 @@
 //! Both halves are needed. `list_overdue_processes` returns only rows already
 //! past their Frist, so classifying it alone answers `BREACH` every time and
 //! leaves the other three bands unreachable — while saying nothing about the
-//! process the run was woken for, whose `de.obs.deadline.approaching` carries a
+//! process the run was woken for, whose `de.mako.obs.deadline.approaching` carries a
 //! deadline still in the future.
 
 use std::collections::BTreeMap;
@@ -69,8 +69,8 @@ const TRIAGE_OBLIGATION: &str = "deadline-breach-triage";
 /// Werktage the triage row runs for.
 const TRIAGE_WERKTAGE: u64 = 1;
 
-/// Deadline triage for `de.obs.deadline.approaching`, `de.mako.antwortfrist.abgelaufen`
-/// and `de.mako.process.failed`.
+/// Deadline triage for `de.mako.obs.deadline.approaching`, `de.mako.engine.antwortfrist.abgelaufen`
+/// and `de.mako.engine.process.failed`.
 #[derive(Debug, Default)]
 pub struct DeadlineTriage;
 
@@ -149,7 +149,7 @@ pub fn classify(remaining_secs: i64) -> Severity {
 
 /// The triggering event as a classifiable row, when it names a deadline.
 ///
-/// `de.obs.deadline.approaching` carries `due_at`, not `deadline_at` — the
+/// `de.mako.obs.deadline.approaching` carries `due_at`, not `deadline_at` — the
 /// field this skill classifies on — so the shapes are reconciled here rather
 /// than by hoping two services agree on a key. Anything without a readable
 /// deadline yields `None` and the event is simply reported back as the trigger.
@@ -238,7 +238,7 @@ impl Skill for DeadlineTriage {
             .cloned()
             .unwrap_or_default();
 
-        // The triggering event is a row too. `de.obs.deadline.approaching`
+        // The triggering event is a row too. `de.mako.obs.deadline.approaching`
         // carries the deadline it is warning about, and it is the reason this
         // run exists — answering only about *other* processes leaves the alert
         // unanswered.

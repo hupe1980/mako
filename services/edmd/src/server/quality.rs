@@ -500,7 +500,7 @@ pub struct QualityRescoreQuery {
 ///
 /// The handler re-runs `compute_quality()` over the window's version-resolved
 /// reads, records the verdict in `quality_assessments` (source `BATCH_RESCORE`),
-/// and emits `de.messwert.reading.quality.warning` for any newly-found warnings.
+/// and emits `de.mako.messwert.reading.quality.warning` for any newly-found warnings.
 /// meterstore owns the readings and carries no per-interval `quality_warnings`
 /// column, so the audit trail is the `quality_assessments` row, not a read update.
 ///

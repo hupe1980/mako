@@ -12,9 +12,9 @@
 //! | `EIGENVERBRAUCH` | §21 Abs. 3 EEG | Self-consumption; no settlement |
 //!
 //! Emits CloudEvents:
-//! - `de.eeg.verguetung.berechnet` — VERGUETUNG/POST_EEG_SPOT/EIGENVERBRAUCH settled
-//! - `de.eeg.marktpraemie.berechnet` — DIREKTVERMARKTUNG settled
-//! - `de.eeg.anlage.foerderung-auslaufend` — `foerderendedatum` within 180 days
+//! - `de.mako.eeg.verguetung.berechnet` — VERGUETUNG/POST_EEG_SPOT/EIGENVERBRAUCH settled
+//! - `de.mako.eeg.marktpraemie.berechnet` — DIREKTVERMARKTUNG settled
+//! - `de.mako.eeg.anlage.foerderung-auslaufend` — `foerderendedatum` within 180 days
 //!
 //! Port: `:9180`
 //!
@@ -130,7 +130,7 @@ impl Daemon for Einsd {
             tokio::spawn(worker.run(ct.clone()));
         }
 
-        // Background worker: `de.eeg.anlage.foerderung-auslaufend`.
+        // Background worker: `de.mako.eeg.anlage.foerderung-auslaufend`.
         //
         // The alert is emitted **once per plant**, not once per sweep. The window
         // is 180 days wide and the sweep ran every six hours, so every expiring

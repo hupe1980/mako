@@ -1,14 +1,14 @@
-//! Turning an inbound `de.mako.process.initiated` into a work order.
+//! Turning an inbound `de.mako.engine.process.initiated` into a work order.
 //!
 //! `makod` spawns the NB-role `gpke-sperrung` workflow when an ORDERS 17115 or
-//! 17117 arrives over AS4, and announces it as `de.mako.process.initiated` with
+//! 17117 arrives over AS4, and announces it as `de.mako.engine.process.initiated` with
 //! the Prüfidentifikator in the `makopid` CloudEvents extension. This module
 //! maps that announcement onto a row the field team can work from.
 
 use crate::sperr::model::{Arbeitszeit, OrderType};
 use crate::sperr::pg::{CreateOrderRequest, Treffpunkt};
 
-/// Build a work order from a `de.mako.process.initiated` CloudEvent.
+/// Build a work order from a `de.mako.engine.process.initiated` CloudEvent.
 ///
 /// Returns `None` — not an error — when the event is not an executable
 /// Sperr-/Entsperrauftrag. Most events reaching the webhook are other process
@@ -69,6 +69,9 @@ pub fn order_from_process_initiated(event: &serde_json::Value) -> Option<CreateO
             land: str_at(t, "land").map(|c| c.to_uppercase()),
         }),
         hinweis: str_at(data, "hinweis"),
+        // An order from the market has no executing system yet; whichever takes
+        // it attaches its reference afterwards.
+        external_ref: None,
     })
 }
 
@@ -157,7 +160,7 @@ mod tests {
     fn other_process_kinds_are_ignored() {
         assert!(order_from_process_initiated(&ce(55001, serde_json::json!({}))).is_none());
         let wrong_type = serde_json::json!({
-            "type": "de.mako.process.completed",
+            "type": "de.mako.engine.process.completed",
             "makopid": 17115,
             "data": { "malo_id": "51238696012", "lf_mp_id": "9900012345678" },
         });

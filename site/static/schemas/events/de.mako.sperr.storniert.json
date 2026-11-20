@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Storniert",
+  "description": "The `data` of `de.mako.sperr.storniert`.",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "description": "The executing system's own reference, where the order carries one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "malo_id": {
+      "type": "string"
+    },
+    "lf_mp_id": {
+      "type": "string"
+    },
+    "note": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "order_id",
+    "malo_id",
+    "lf_mp_id",
+    "note"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.storniert.json"
+}

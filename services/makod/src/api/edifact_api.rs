@@ -232,7 +232,7 @@ pub struct MessageResult {
 
     /// UUID of the process that was spawned or resumed.
     ///
-    /// Matches the `subject` of the `de.mako.process.initiated` CloudEvent
+    /// Matches the `subject` of the `de.mako.engine.process.initiated` CloudEvent
     /// sent to the ERP webhook. Present only when `status == "routed"` and
     /// Phase 2 dispatch succeeded.
     #[serde(skip_serializing_if = "Option::is_none")]

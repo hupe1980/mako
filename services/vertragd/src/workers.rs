@@ -541,7 +541,7 @@ pub async fn ablauf(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result<()> {
     // customer is still being supplied and still owed a Schlussrechnung — so
     // this is the only place the transition happens.
     //
-    // The closures and their `de.vertrag.abgeschlossen` rows commit together:
+    // The closures and their `de.mako.vertrag.abgeschlossen` rows commit together:
     // a closed contract is no longer due, so one committed without its event
     // would never be announced. A failed enqueue rolls every closure back and
     // the next run retries them all.

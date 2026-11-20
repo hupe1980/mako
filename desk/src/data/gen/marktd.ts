@@ -446,6 +446,11 @@ export interface Endpoint {
    */
   event_types: string[];
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * CloudEvent extensions an event must carry with these values
    * (`marktsparte`, `marktrole`).
    */
@@ -497,4 +502,4 @@ export interface PartnerName {
 export const marktdUntyped = ["get_correlation","get_malo","get_melo","get_melo_standorteigenschaften","get_nb_contract","get_nb_energiemix","get_partner","get_policy","get_preisblatt","get_referenzwert","get_rollenzuordnung","get_steuerbare_ressource","get_technische_ressource","get_versorgungsstatus","list_malo","list_partners","list_pricat_versions","list_referenzreihen"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const marktdOberflaeche: Record<string, string> = {"get_lokationsbuendel":"62d812b6","get_versorgung_at":"befc8caa","get_versorgungsstatus_history":"53cfd007","list_webhook_deliveries":"e1d7bb7c","list_webhook_endpoints":"aa9442dc","partner_namen":"3a65fea4"};
+export const marktdOberflaeche: Record<string, string> = {"get_lokationsbuendel":"62d812b6","get_versorgung_at":"befc8caa","get_versorgungsstatus_history":"53cfd007","list_webhook_deliveries":"e1d7bb7c","list_webhook_endpoints":"532802a1","partner_namen":"3a65fea4"};

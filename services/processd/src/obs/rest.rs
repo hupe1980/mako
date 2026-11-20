@@ -337,7 +337,7 @@ pub(crate) struct GleichbehandlungQuery {
 ///
 /// **`gap_pp` is `affiliate − third_party`, in percentage points.** A positive
 /// gap means the affiliate fared better, which is the concern. This convention
-/// is `ParityComparison`'s and is shared with the `de.obs.stp.parity.alert`
+/// is `ParityComparison`'s and is shared with the `de.mako.obs.stp.parity.alert`
 /// CloudEvent and the MCP tool: three surfaces read one sign, because a sign
 /// computed per surface is a sign that can disagree about which side was
 /// favoured.

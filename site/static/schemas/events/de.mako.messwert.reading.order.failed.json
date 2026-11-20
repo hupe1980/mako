@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReadingOrderFailed",
+  "description": "The `data` of `de.mako.messwert.reading.order.failed`.",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "description": "The executing system's own reference, where the order carries one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "malo_id": {
+      "type": "string"
+    },
+    "anlass": {
+      "type": "string"
+    },
+    "grund": {
+      "$ref": "#/$defs/Ablesehindernis"
+    },
+    "notiz": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ausfuehrt_bis": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "ausfuehrender_msb": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recommended_action": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "order_id",
+    "malo_id",
+    "anlass",
+    "grund",
+    "recommended_action"
+  ],
+  "$defs": {
+    "Ablesehindernis": {
+      "description": "Why a reading could not be taken — the closed vocabulary of\n`PUT /api/v1/reading-orders/{id}/fail`, of `fehlschlag_grund` and of\n`de.mako.messwert.reading.order.failed`.",
+      "oneOf": [
+        {
+          "description": "Kein Zutritt zum Gebäude oder Grundstück.",
+          "type": "string",
+          "const": "KEIN_ZUTRITT"
+        },
+        {
+          "description": "Zähler nicht zugänglich (verbaut, verschlossen).",
+          "type": "string",
+          "const": "ZAEHLER_UNZUGAENGLICH"
+        },
+        {
+          "description": "Zähler defekt oder nicht ablesbar.",
+          "type": "string",
+          "const": "ZAEHLER_DEFEKT"
+        },
+        {
+          "description": "Zähler nicht auffindbar.",
+          "type": "string",
+          "const": "ZAEHLER_NICHT_AUFFINDBAR"
+        },
+        {
+          "description": "Ablesung von der Kundin oder dem Kunden verweigert.",
+          "type": "string",
+          "const": "KUNDE_VERWEIGERT"
+        },
+        {
+          "description": "Abgelesener Wert unplausibel.",
+          "type": "string",
+          "const": "ABLESUNG_UNPLAUSIBEL"
+        },
+        {
+          "description": "Sonstiges Hindernis; die Notiz sagt, welches.",
+          "type": "string",
+          "const": "SONSTIGES"
+        }
+      ]
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.messwert.reading.order.failed.json"
+}

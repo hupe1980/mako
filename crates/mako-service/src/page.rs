@@ -260,18 +260,20 @@ mod tests {
     #[test]
     fn a_cursor_from_another_filter_is_refused() {
         let rows: Vec<i64> = (1..=6).collect();
-        let page = Page::from_rows(rows, 5, &("events", "de.vertrag.*"), |r| *r);
+        let page = Page::from_rows(rows, 5, &("events", "de.mako.vertrag.*"), |r| *r);
         assert_eq!(page.items, [1, 2, 3, 4, 5]);
         let cursor = page.next_cursor.expect("a sixth row means a next page");
         let same = q(None, Some(cursor.clone()));
         assert_eq!(
-            same.after::<i64>(&("events", "de.vertrag.*")).unwrap(),
+            same.after::<i64>(&("events", "de.mako.vertrag.*")).unwrap(),
             Some(5)
         );
-        let other = same.after::<i64>(&("events", "de.markt.*")).unwrap_err();
+        let other = same
+            .after::<i64>(&("events", "de.mako.markt.*"))
+            .unwrap_err();
         assert_eq!(other.code(), Some("cursor_invalid"));
         let shape = same
-            .after::<(String, String)>(&("events", "de.vertrag.*"))
+            .after::<(String, String)>(&("events", "de.mako.vertrag.*"))
             .unwrap_err();
         assert_eq!(shape.code(), Some("cursor_invalid"));
         let garbage = q(None, Some("%%%".into())).after::<i64>(&()).unwrap_err();

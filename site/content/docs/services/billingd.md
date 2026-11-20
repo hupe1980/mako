@@ -82,7 +82,7 @@ graph TB
     accountingd["accountingd :9380"]
 
     ERP --> vertragd & productd & edmd & marktd --> engine --> pg
-    pg -->|"de.billing.rechnung.erstellt (outbox)"| accountingd
+    pg -->|"de.mako.billing.rechnung.erstellt (outbox)"| accountingd
 ```
 
 ---
@@ -556,11 +556,11 @@ naming `record_id`, `rechnungsnummer` and `outcome`. `outcome` becomes
 `POST /api/v1/billing/{id}/correction` with `{ "reason": "…" }` writes, in one
 transaction, a record with every monetary field negated (`is_correction = true`,
 `originalRechnungsnummer`, an `ST` number), enqueues
-`de.billing.rechnung.erstellt` with `is_correction: true` (accountingd books the
+`de.mako.billing.rechnung.erstellt` with `is_correction: true` (accountingd books the
 credit, and cancels the payout item of a Schlussrechnung's Guthaben), and sets
 the original's `outcome = cancelled`.
 
-Every `de.billing.rechnung.erstellt` carries `schlussrechnung`, `true` for a
+Every `de.mako.billing.rechnung.erstellt` carries `schlussrechnung`, `true` for a
 Schlussrechnung's own event — read off the issued document's `rechnungstyp`
 (`ABSCHLUSSRECHNUNG`), never on a Storno. accountingd raises the § 40c Abs. 3
 EnWG payout item for a Schlussrechnung's Guthaben from it.
@@ -630,7 +630,7 @@ UStG requires EN 16931 conformance.
 the model against the full XRechnung 3.0 profile (`Validated<XRechnung>`),
 writes CII from that proof with `en16931_formats::write` — so BT-24 names the
 profile whose rules ran — and on success emits
-`de.billing.xrechnung.b2g.ready` for the ERP's PEPPOL gateway; a violation is
+`de.mako.billing.xrechnung.b2g.ready` for the ERP's PEPPOL gateway; a violation is
 `422` with `violated_rules` and `buyer_gaps`.
 
 **Per-line VAT.** Each line carries its own BT-151/BT-152; `Tax`, `Abschlag` and
@@ -746,7 +746,7 @@ Kunde's address in vertragd: without it the invoice goes out as domestic.
 
 Every invoice-producing path (`/calculate`, the billing runs, Sammelrechnung,
 GGV and the § 41e VPP settlement) asks the rule before the record is written,
-so a refused invoice leaves no record and no `de.billing.rechnung.erstellt`;
+so a refused invoice leaves no record and no `de.mako.billing.rechnung.erstellt`;
 `/preview` answers the same refusal. The rule is
 `mako_fristen::empfaengerland::pruefe_empfaengerland`, the one outputd's issue
 path asks.
@@ -851,7 +851,7 @@ never sent starts no Rechtsbehelfsfrist. A failure is logged at `error` and
 retried with `POST …/versenden`. A held period is never sent.
 
 **§ 40b Abs. 3 EnWG.** With `abrechnungsinformation` (default true) iMSys MaLos
-get the free monthly `de.billing.abrechnungsinformation.monatlich`, claimed once
+get the free monthly `de.mako.billing.abrechnungsinformation.monatlich`, claimed once
 per MaLo and month in `abrechnungsinfo_log` and released again on every path
 that does not deliver.
 
@@ -861,7 +861,7 @@ that does not deliver.
 
 A confirmed WiM Steuerungsauftrag — JSON over the BDEW API-Webdienste Strom
 `controlMeasuresV1` channel, run by makod as `wim-steuerungsauftrag`, no EDIFACT
-and no Prüfidentifikator — reaches billingd as `de.vpp.dispatch.confirmed`. The
+and no Prüfidentifikator — reaches billingd as `de.mako.vpp.dispatch.confirmed`. The
 settlement is a **Gutschrift** (§ 14 Abs. 2 Satz 2 UStG): the aggregator pays the
 flexibility provider. § 41e EnWG governs the contract; the remuneration is
 contractual.
@@ -873,9 +873,9 @@ sequenceDiagram
     participant billingd
     participant accountingd
     NB->>makod: Steuerungsauftrag (controlMeasuresV1)
-    makod--)billingd: de.vpp.dispatch.confirmed {tx_id, location_id, max_power_kw, execution_time_from/until}
+    makod--)billingd: de.mako.vpp.dispatch.confirmed {tx_id, location_id, max_power_kw, execution_time_from/until}
     billingd->>billingd: signature + tx_id idempotency, Aggregatorvertrag for the SR
-    billingd--)accountingd: de.vpp.settlement.berechnet
+    billingd--)accountingd: de.mako.vpp.settlement.berechnet
 ```
 
 `POST /api/v1/webhooks/vpp-dispatch` settles **only when `sender_mp_id` is the
@@ -907,7 +907,7 @@ channel and is recorded, not paid.
    name        = "billingd-vpp"
    url         = "http://billingd:9280/api/v1/webhooks/vpp-dispatch"
    secret      = "env:BILLINGD_INBOUND_HMAC_SECRET"
-   event_types = ["de.vpp.dispatch.confirmed"]
+   event_types = ["de.mako.vpp.dispatch.confirmed"]
    ```
 
 `flexibility_kwh = max_power_kw × (execution_time_until − execution_time_from) /
@@ -982,7 +982,7 @@ public_url = "https://kundenportal.example.de/nachrechnen/"
 | `POST` | `/api/v1/billing/sammelrechnung/{rahmenvertrag_id}` | B2B Sammelrechnung, one transaction, scored as a bundle |
 | `POST` | `/api/v1/billing/ggv/{ggv_id}` | § 42b EnWG GGV run, one transaction |
 | `POST` | `/api/v1/billing/vpp/{vpp_id}` | Manual § 41e settlement |
-| `POST` | `/api/v1/webhooks/vpp-dispatch` | Signed `de.vpp.dispatch.confirmed` |
+| `POST` | `/api/v1/webhooks/vpp-dispatch` | Signed `de.mako.vpp.dispatch.confirmed` |
 | `GET` | `/api/v1/billing/review-queue` | REVIEW and HELD, highest risk first |
 | `GET` | `/api/v1/billing/unbilled` | The § 40c watch, earliest `due_on` first (`?open=false` includes settled) |
 | `GET` | `/api/v1/billing/deadline-summary` | Per Lieferant: owed, issued on time, issued late, overdue |

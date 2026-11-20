@@ -55,7 +55,7 @@
 //   "versenden-angebot"   — POST /api/v1/angebote/{id}/versenden — the
 //                           quotation leaves the house to the prospect
 //   "entscheiden-angebot" — POST /api/v1/angebote/{id}/annehmen, /ablehnen —
-//                           acceptance emits `de.tarif.angebot.angenommen`,
+//                           acceptance emits `de.mako.tarif.angebot.angenommen`,
 //                           which `vertragd` turns into a supply contract at
 //                           the accepted price
 //   "expire-angebote"     — POST /api/v1/angebote/expire — the tenant-wide

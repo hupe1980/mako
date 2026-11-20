@@ -67,7 +67,7 @@ impl Daemon for Invoicd {
             .run(pool)
             .await
             .context("run invoicd migrations")?;
-        // The `de.invoic.receipt.*` events commit with the receipt's
+        // The `de.mako.invoic.receipt.*` events commit with the receipt's
         // conclusion here and are delivered from it.
         mako_service::outbox::ensure_schema(pool)
             .await
@@ -1056,7 +1056,7 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
 
     if cfg.erp.webhook_url.is_none() {
         tracing::warn!(
-            "invoicd: no [erp] webhook_url — de.invoic.receipt.* and de.invoic.payment.overdue \
+            "invoicd: no [erp] webhook_url — de.mako.invoic.receipt.* and de.mako.invoic.payment.overdue \
              events reach only endpoints registered under /api/v1/webhooks/endpoints; without \
              one the ERP does not learn that an invoice was settled, disputed or has passed \
              its Zahlungsziel"

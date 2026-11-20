@@ -1799,7 +1799,7 @@ pub(super) fn cmd_gpke_eog_ablehnen<'a>(
 /// Dispatch the NB's UTILMD 55013 Anmeldung / Zuordnung EOG (§36/§38 EnWG).
 ///
 /// Called for `gpke.eog.anmelden` — typically by the `processd` gap-closure
-/// automation after `de.markt.versorgung.gap-detected`, or manually by the
+/// automation after `de.mako.markt.versorgung.gap-detected`, or manually by the
 /// operator. GPKE Teil 2 Kap. 2.3: the Zuordnung is sent "unverzüglich" and
 /// may be retroactive.
 ///

@@ -147,7 +147,7 @@ healthy run ends lapsed or rejected.
 
 `OutboxErpWorker` (`services/makod/src/core/erp_adapter.rs`) maps an
 `AntwortfristAbgelaufen` outbox entry to `ErpEventType::AntwortfristAbgelaufen` and delivers it as
-the CloudEvent `de.mako.antwortfrist.abgelaufen`, with the inbound PID in the `makopid`
+the CloudEvent `de.mako.engine.antwortfrist.abgelaufen`, with the inbound PID in the `makopid`
 extension. Envelope and receiver: [ERP Integration](@/docs/architecture/erp-integration.md).
 
 ## Adding a new workflow with compensation

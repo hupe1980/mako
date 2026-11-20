@@ -50,7 +50,7 @@ const SITES: &[(&str, usize, &str)] = &[
     ("services/processd/src/klaerfall.rs", 2, SPLICE),
     ("services/processd/src/pg/approval.rs", 4, SPLICE),
     ("services/processd/src/pg/neuanlage.rs", 3, SPLICE),
-    ("services/processd/src/sperr/pg.rs", 3, SPLICE),
+    ("services/processd/src/sperr/pg.rs", 4, SPLICE),
     ("services/vertragd/src/pg/aggregator.rs", 2, SPLICE),
     ("services/vertragd/src/pg/bestellungen.rs", 5, SPLICE),
     ("services/vertragd/src/pg/kunden.rs", 3, SPLICE),

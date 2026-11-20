@@ -6,10 +6,10 @@
 //!
 //! | Origin | Signal | Cause | Key |
 //! |---|---|---|---|
-//! | `aperak` | `de.mako.aperak.rejected` | the ERC code, [`recommended_action`] | the rejected message (`bezug_message_ref`) |
-//! | `dead_letter` | `de.mako.dead-letter.recorded` | the reason, [`action_for_label`] | the message, else `dead-letter:<reason>` |
-//! | `refusal` | `de.mako.process.completed` whose Antwortcode refuses | the code in its tree, [`mako_pruefung::codes::lies`] | the process |
-//! | `frist_missed` | `de.mako.antwortfrist.abgelaufen` | the lapse | the process |
+//! | `aperak` | `de.mako.engine.aperak.rejected` | the ERC code, [`recommended_action`] | the rejected message (`bezug_message_ref`) |
+//! | `dead_letter` | `de.mako.engine.dead-letter.recorded` | the reason, [`action_for_label`] | the message, else `dead-letter:<reason>` |
+//! | `refusal` | `de.mako.engine.process.completed` whose Antwortcode refuses | the code in its tree, [`mako_pruefung::codes::lies`] | the process |
+//! | `frist_missed` | `de.mako.engine.antwortfrist.abgelaufen` | the lapse | the process |
 //! | `operator_decision` | an `approval_queue` row, opened in its enqueue transaction | the Freigabe | the process |
 //!
 //! The key is the message *and* the partner that sent the signal: a

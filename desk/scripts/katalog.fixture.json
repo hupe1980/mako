@@ -62,7 +62,7 @@
       "ausloeser": [
         "mako_events::mako::PROCESS_FAILED",
         "mako_events::mako::ANTWORTFRIST_ABGELAUFEN",
-        "\"de.mako.aperak.*\""
+        "\"de.mako.engine.aperak.*\""
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -152,7 +152,7 @@
       "digest": null,
       "aktiv": true,
       "ausloeser": [
-        "\"de.vertrag.*\"",
+        "\"de.mako.vertrag.*\"",
         "mako_events::mako::APERAK_REJECTED",
         "mako_events::mako::PROCESS_FAILED",
         "mako_events::vertrag::ABLAUF_ANKUENDIGUNG",

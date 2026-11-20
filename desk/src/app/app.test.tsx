@@ -2558,7 +2558,7 @@ describe("the Desk", () => {
       version: "1.0.0",
       digest: "d",
       aktiv,
-      ausloeser: modell ? [] : ["de.mako.process.failed"],
+      ausloeser: modell ? [] : ["de.mako.engine.process.failed"],
       modell,
       liest: [{ werkzeug: "makod/get_process", wozu: "Die Prozesse." }],
       nur_lesend: true,

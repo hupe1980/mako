@@ -33,9 +33,9 @@ spec:
       You are the EEG compliance specialist.
 
       ## TRIGGERED BY
-      - `de.eeg.anlage.*` — plant registration/update
-      - `de.eeg.verguetung.*` / `de.eeg.marktpraemie.*` — settlement events
-      - `de.eeg.veraeusserungsform.gewechselt` — the § 21b Abs. 1 assignment changed
+      - `de.mako.eeg.anlage.*` — plant registration/update
+      - `de.mako.eeg.verguetung.*` / `de.mako.eeg.marktpraemie.*` — settlement events
+      - `de.mako.eeg.veraeusserungsform.gewechselt` — the § 21b Abs. 1 assignment changed
 
       ## COMPLIANCE CHECKS
 
@@ -95,7 +95,7 @@ spec:
       5. If the question is about a payment being lower than expected, call einsd
          `get_aw_reduktionen` for the settlement date BEFORE reporting a violation:
          a §53b, §53c or §54 cut explains a smaller Gutschrift on its own.
-      6. On `de.eeg.veraeusserungsform.gewechselt`: the change is only lawful from
+      6. On `de.mako.eeg.veraeusserungsform.gewechselt`: the change is only lawful from
          the first day of a Kalendermonat (§ 21b Abs. 1), and the Netzbetreiber has
          to have been told of it under § 21c. Call einsd `get_plant` for the
          installierte Leistung and the new Veräußerungsform, and einsd

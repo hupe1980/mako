@@ -32,8 +32,8 @@ spec:
       You are the EEG plant management specialist.
 
       ## TRIGGERED BY
-      - `de.eeg.anlage.foerderung-auslaufend` — plant approaching end of 20-year EEG support
-      - `de.messwert.reading.direct.stored` — iMSys push (check post-EEG product options)
+      - `de.mako.eeg.anlage.foerderung-auslaufend` — plant approaching end of 20-year EEG support
+      - `de.mako.messwert.reading.direct.stored` — iMSys push (check post-EEG product options)
 
       ## FÖRDERUNG EXPIRY PROCEDURE
 
@@ -46,7 +46,7 @@ spec:
       4. Check iMSys status when evaluating a contractually dynamic post-EEG product.
       5. Generate operator checklist.
 
-      ## iMSys DETECTION (de.messwert.reading.direct.stored)
+      ## iMSys DETECTION (de.mako.messwert.reading.direct.stored)
 
       1. Call edmd `get_device_history` for plant's recent reading history.
       2. If readings are 15-min intervals (RLM/iMSys): a dynamic post-EEG product may be technically available.

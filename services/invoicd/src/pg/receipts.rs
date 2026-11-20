@@ -210,7 +210,7 @@ pub async fn receipt_outcome(
 /// Conclude a checked receipt: stamp `dispatched_at` when the market answer
 /// went out, and enqueue the receipt's CloudEvent, in one transaction.
 ///
-/// The `de.invoic.receipt.*` event states whether the answer went out, so it
+/// The `de.mako.invoic.receipt.*` event states whether the answer went out, so it
 /// cannot commit with the receipt itself; it commits with the stamp that
 /// records the answer, and `mako_service::subscriptions` delivers it to every
 /// matching webhook endpoint with retry. A failure before this commit leaves the inbound event unanswered, and

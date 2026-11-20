@@ -1,4 +1,4 @@
-//! vertragd's `de.vertrag.*` CloudEvents reach the webhook endpoint `default`
+//! vertragd's `de.mako.vertrag.*` CloudEvents reach the webhook endpoint `default`
 //! — the configured `erp_webhook_url` — through the shared subscription module,
 //! signed with `erp_hmac_secret` per Standard Webhooks.
 #![expect(
@@ -102,7 +102,7 @@ async fn a_contract_event_reaches_the_default_endpoint_signed() {
         loop {
             let (headers, body) = deliveries.recv().await.expect("the receiver runs");
             let event: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
-            if event["type"] == "de.vertrag.preisgarantie-hinterlegt" {
+            if event["type"] == "de.mako.vertrag.preisgarantie-hinterlegt" {
                 return (headers, body);
             }
         }

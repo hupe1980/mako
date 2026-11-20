@@ -12,7 +12,7 @@ who is on it — that assignment lives in `vertragd`.
 | **Port** | 9080 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL, `public` schema — `products`, `epex_prices`, `nehs_prices`, `angebote`, `endkunden_angebote` (append-only) |
 | **MCP** | 16 tools, 3 prompts at `/mcp` |
-| **Emits** | `de.tarif.product.updated` to every webhook subscriber; `de.tarif.angebot.angenommen` to `erp_webhook_url` (vertragd) — both through the transactional outbox |
+| **Emits** | `de.mako.tarif.product.updated` to every webhook subscriber; `de.mako.tarif.angebot.angenommen` to `erp_webhook_url` (vertragd) — both through the transactional outbox |
 | **Consumes** | none |
 | **Depends on** | billingd (`[policy] behg_regime`), marktd (Preisblätter for an Endkunden-Angebot) |
 

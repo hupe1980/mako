@@ -221,9 +221,9 @@ mod tests {
 
     #[test]
     fn a_delivery_signed_with_the_subscription_secret_is_printed() {
-        let body = br#"{"type":"de.markt.malo.updated","subject":"51238696012","data":{}}"#;
+        let body = br#"{"type":"de.mako.markt.malo.updated","subject":"51238696012","data":{}}"#;
         let event = verified(b"s3cret", &signed(b"s3cret", body), body).expect("verifies");
-        assert_eq!(event["type"], "de.markt.malo.updated");
+        assert_eq!(event["type"], "de.mako.markt.malo.updated");
     }
 
     /// marktd issues a `whsec_` secret and signs with the key it encodes; the
@@ -233,13 +233,13 @@ mod tests {
         let secret = "whsec_c2VjcmV0LWtleS1ieXRlcw==";
         let key = mako_service::webhook::signing_key(secret);
         assert_eq!(key, b"secret-key-bytes");
-        let body = br#"{"type":"de.markt.malo.updated","data":{}}"#;
+        let body = br#"{"type":"de.mako.markt.malo.updated","data":{}}"#;
         assert!(verified(&key, &signed(&key, body), body).is_ok());
     }
 
     #[test]
     fn a_tampered_body_or_another_secret_is_refused() {
-        let body = br#"{"type":"de.markt.malo.updated","data":{}}"#;
+        let body = br#"{"type":"de.mako.markt.malo.updated","data":{}}"#;
         let headers = signed(b"s3cret", body);
         assert!(verified(b"s3cret", &headers, br#"{"type":"forged"}"#).is_err());
         assert!(verified(b"other", &headers, body).is_err());

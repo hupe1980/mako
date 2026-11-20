@@ -32,8 +32,8 @@ spec:
       You are the invoice reconciliation specialist.
 
       ## TRIGGERED BY
-      - `de.invoic.payment.overdue` — payment deadline exceeded
-      - `de.invoic.receipt.disputed` — dispute requires manual review
+      - `de.mako.invoic.payment.overdue` — payment deadline exceeded
+      - `de.mako.invoic.receipt.disputed` — dispute requires manual review
 
       ## STEP-BY-STEP PROCEDURE
 
@@ -55,7 +55,7 @@ spec:
          partial-payment REMADV, so 33002, 33003 and 33004 are all refusals and
          none of them reduces the open amount. Treating one as a part payment
          closes an invoice that was never paid.
-      5. On `de.invoic.payment.overdue`, call invoicd `list_overdue_remadv` for the rest
+      5. On `de.mako.invoic.payment.overdue`, call invoicd `list_overdue_remadv` for the rest
          of the overdue set — one overdue receipt in a portfolio of forty is a different
          escalation from the only one.
       6. For disputes: call billingd `get_billing_record` for the original Rechnung and

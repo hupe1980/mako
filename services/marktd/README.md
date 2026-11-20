@@ -12,8 +12,8 @@ records `makod`'s process events and fans them out; `processd` decides.
 | **Port** | 8180 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL 15+ with `btree_gist`; validity is half-open `[valid_from, valid_to)` under `EXCLUDE` constraints |
 | **MCP** | 24 tools, 4 prompts at `/mcp` |
-| **Emits** | `de.markt.*` (e.g. `versorgung.changed`, `malo.updated`) and relayed `de.mako.*`, HMAC-signed, from `urn:mako:marktd:tenant:{tenant}` |
-| **Consumes** | `de.mako.*` from `makod` at `[webhook] inbound_path` (HMAC) |
+| **Emits** | `de.mako.markt.*` (e.g. `versorgung.changed`, `malo.updated`) and relayed `de.mako.engine.*`, HMAC-signed, from `urn:mako:marktd:tenant:{tenant}` |
+| **Consumes** | `de.mako.engine.*` from `makod` at `[webhook] inbound_path` (HMAC) |
 | **Depends on** | makod |
 
 ## Run

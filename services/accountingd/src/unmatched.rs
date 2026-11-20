@@ -285,7 +285,7 @@ pub struct ZahlungZugeordnet {
 /// Book line `payment_id` to the account (`malo_id`, `lf_mp_id`) and close it.
 ///
 /// The booking draft, the `bank_import_log` row, the
-/// `de.accounting.payment.imported` / `.bankruecklast` event and the closed
+/// `de.mako.accounting.payment.imported` / `.bankruecklast` event and the closed
 /// line commit in one transaction; the draft is then booked (a ledger that is
 /// down leaves it `offen` for the recovery worker).
 ///

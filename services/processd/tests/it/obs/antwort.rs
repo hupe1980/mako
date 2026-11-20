@@ -2,7 +2,7 @@
 //! named, against real PostgreSQL.
 //!
 //! makod states the code of an answered Lieferbeginn on the
-//! `de.mako.process.completed` it emits (`data.antwortcode`,
+//! `de.mako.engine.process.completed` it emits (`data.antwortcode`,
 //! `data.codeliste`). Without it a refused Anmeldung is a `completed` row and
 //! nothing else: the reason the Netzbetreiber gave is on the wire and in
 //! makod's Verlauf, and on no read of the process.

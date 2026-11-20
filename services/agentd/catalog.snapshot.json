@@ -5,11 +5,11 @@
       "titel": "Marktprozesse erklären",
       "zweck": "Erklärt abgelehnte Anmeldungen, APERAK-Fehler und hängende Prozesse.",
       "version": "2.0.0",
-      "digest": "e22d97e64f6e61b002c31c9a7f59538dd0a107e89df7dca395db12f190e29ec5",
+      "digest": "bf3c827136abd853b5be4775bda8d5c57152e4d7177b38b0bcb479dd0daada4c",
       "ausloeser": [
-        "de.mako.process.failed",
-        "de.mako.antwortfrist.abgelaufen",
-        "de.mako.aperak.*"
+        "de.mako.engine.process.failed",
+        "de.mako.engine.antwortfrist.abgelaufen",
+        "de.mako.engine.aperak.*"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -51,11 +51,11 @@
       "titel": "Fristen-Wächter",
       "zweck": "Ordnet jeden Prozess nahe oder nach seiner Antwortfrist nach Dringlichkeit und nennt, wer antworten muss.",
       "version": "4.0.0",
-      "digest": "7cfa36714aa74b1f44355d8db78e07c4dd9cb671da830fbe15c8397e4d8d879c",
+      "digest": "8239762cdf99d041d0cf77a7aaa77a93cd9463b0303c0c430f8b4b00f506a8c2",
       "ausloeser": [
-        "de.mako.process.failed",
-        "de.mako.antwortfrist.abgelaufen",
-        "de.obs.deadline.approaching"
+        "de.mako.engine.process.failed",
+        "de.mako.engine.antwortfrist.abgelaufen",
+        "de.mako.obs.deadline.approaching"
       ],
       "modell": null,
       "liest": [
@@ -144,10 +144,10 @@
       "titel": "Rechnungseinwände",
       "zweck": "Prüft eine bestrittene Rechnung gegen die Zahlungsavise und schlägt die Korrektur der Abrechnung vor.",
       "version": "2.0.0",
-      "digest": "8d5bfdaa550582c095d3338955a9f459d1dd6d15c4a42cbaf25822e8626242a4",
+      "digest": "56654df4ab477d3df7b8d3057f6573d80271cf3bae38f3c2872654b2759e6d24",
       "ausloeser": [
-        "de.invoic.receipt.disputed",
-        "de.accounting.mahnung.issued"
+        "de.mako.invoic.receipt.disputed",
+        "de.mako.accounting.mahnung.issued"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -181,7 +181,7 @@
         },
         {
           "werkzeug": "accountingd/get_balance",
-          "wozu": "The open balance behind a Mahnung, on `de.accounting.mahnung.issued`."
+          "wozu": "The open balance behind a Mahnung, on `de.mako.accounting.mahnung.issued`."
         },
         {
           "werkzeug": "accountingd/list_dunning",
@@ -197,12 +197,12 @@
       "titel": "Netzentgeltabrechnung",
       "zweck": "Überwacht Abrechnungsentwürfe des Netzbetreibers, überfällige Versände und Zahlungsbestätigungen.",
       "version": "2.0.0",
-      "digest": "dd6d93289b14e8f29b576d0bb4459f0df18906a3f1d2a221aa966e9171547665",
+      "digest": "7ec46591bc7ba211f8ccfaf181ec2eed144fb1361d423f00535dcca2baf5c193",
       "ausloeser": [
-        "de.netzbilanz.invoic.drafted",
-        "de.netzbilanz.invoic.dispatched",
-        "de.netzbilanz.invoic.dispatch-overdue",
-        "de.netzbilanz.invoic.disputed"
+        "de.mako.netzbilanz.invoic.drafted",
+        "de.mako.netzbilanz.invoic.dispatched",
+        "de.mako.netzbilanz.invoic.dispatch-overdue",
+        "de.mako.netzbilanz.invoic.disputed"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -244,10 +244,10 @@
       "titel": "Zahlungsavise abgleichen",
       "zweck": "Ordnet eingehende Zahlungsavise offenen Rechnungen zu und nennt den nächsten Schritt bei Abweisungen.",
       "version": "2.0.0",
-      "digest": "ca1a737f2d8b2a25685ca82f6adab24bb792b01910d7b8a313f31e010a49a8b5",
+      "digest": "3ea58a71d7dc046629d94c9af863e18d1c430257f54d7d05d3172bf6ba646b81",
       "ausloeser": [
-        "de.invoic.payment.overdue",
-        "de.invoic.receipt.*"
+        "de.mako.invoic.payment.overdue",
+        "de.mako.invoic.receipt.*"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -285,9 +285,9 @@
       "titel": "Auffällige Rechnungen",
       "zweck": "Sucht Rechnungen, die stark vom Verlauf der letzten Monate abweichen, und nennt die wahrscheinliche Ursache.",
       "version": "2.0.0",
-      "digest": "6cb7bb0101a39fdd7f129596740b3aa450d8ddceaec67327be59fe43979bb639",
+      "digest": "d876842c7ac99ce1c9338674b183f53ed959d741f9781c240587f7daf9c6abf6",
       "ausloeser": [
-        "de.billing.rechnung.erstellt"
+        "de.mako.billing.rechnung.erstellt"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -325,9 +325,9 @@
       "titel": "Pflichtangaben der Rechnung",
       "zweck": "Prüft jede versandte Endkundenrechnung auf die gesetzlichen Pflichtangaben.",
       "version": "2.0.0",
-      "digest": "241d800fd373bae494bcf9778adc513052a69e0519a8cf9013413fd9e0aa82c5",
+      "digest": "6e7543226dd9ebc5106ce3d1384860d46d484585063be96f5b80470695534ab3",
       "ausloeser": [
-        "de.billing.rechnung.erstellt"
+        "de.mako.billing.rechnung.erstellt"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -403,10 +403,10 @@
       "titel": "EEG-Anlagen",
       "zweck": "Begleitet Förderende, Anschlussvermarktung und Abrechnungsfragen der Erzeugungsanlagen.",
       "version": "2.0.0",
-      "digest": "0dc3f91900dbe5ddcd95cc24c386823781aa150d3276640abf6a6807b8e98b62",
+      "digest": "e4664f338916240edcf27d3274a76e41daed95239b1d1468085991385555fb4f",
       "ausloeser": [
-        "de.eeg.anlage.foerderung-auslaufend",
-        "de.messwert.reading.direct.stored"
+        "de.mako.eeg.anlage.foerderung-auslaufend",
+        "de.mako.messwert.reading.direct.stored"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -436,13 +436,13 @@
       "titel": "EEG-Pflichten",
       "zweck": "Prüft die Pflichtzahlungen und Vermarktungspflichten der Anlagen auf Verstöße.",
       "version": "2.0.0",
-      "digest": "ca5efce8d7bee12b9062992e8d30a44e3b0deebbf6a61d6318ed57d04b87b54f",
+      "digest": "6e191025cf77888e0bbafc9a51ce70b64c760e3e65d4cc6e7d23e39a6bb2cfe0",
       "ausloeser": [
-        "de.eeg.anlage.*",
-        "de.eeg.verguetung.*",
-        "de.eeg.marktpraemie.*",
-        "de.eeg.compliance.*",
-        "de.eeg.veraeusserungsform.gewechselt"
+        "de.mako.eeg.anlage.*",
+        "de.mako.eeg.verguetung.*",
+        "de.mako.eeg.marktpraemie.*",
+        "de.mako.eeg.compliance.*",
+        "de.mako.eeg.veraeusserungsform.gewechselt"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -476,15 +476,15 @@
       "titel": "Zahlungen und Mahnwesen",
       "zweck": "Gleicht Bankrückläufer mit dem Kundenkonto ab und nennt die nächste Mahnstufe.",
       "version": "2.0.0",
-      "digest": "a31150094bf65df09bd807be7cb7464219ac73e5bb9c5602d17b2a12949466a8",
+      "digest": "e204d7f5638acefeeeed5acd7c8541d5cabfe6c0b5f13c3d48f1e5d2e2121f13",
       "ausloeser": [
-        "de.accounting.payment.due",
-        "de.accounting.bankruecklast",
-        "de.accounting.sepa.collection-rejected",
-        "de.accounting.sperrandrohung",
-        "de.accounting.sperrankuendigung",
-        "de.accounting.abwendung.angeboten",
-        "de.accounting.abwendung.gebrochen"
+        "de.mako.accounting.payment.due",
+        "de.mako.accounting.bankruecklast",
+        "de.mako.accounting.sepa.collection-rejected",
+        "de.mako.accounting.sperrandrohung",
+        "de.mako.accounting.sperrankuendigung",
+        "de.mako.accounting.abwendung.angeboten",
+        "de.mako.accounting.abwendung.gebrochen"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -514,9 +514,9 @@
       "titel": "Gleichbehandlung im Netz",
       "zweck": "Vergleicht, wie schnell und automatisch Anmeldungen verbundener und fremder Lieferanten bearbeitet werden.",
       "version": "2.1.0",
-      "digest": "44aa1919a2364612f502ff430029feb0e83037d564b0edf56542d902d7b1ebc3",
+      "digest": "0c41e4a6a7ea866c626c22c21d049989112e803fd5eecc3d0ea0e675e191cc96",
       "ausloeser": [
-        "de.obs.stp.parity.alert"
+        "de.mako.obs.stp.parity.alert"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -550,13 +550,13 @@
       "titel": "Messstellenwechsel",
       "zweck": "Verfolgt Wechsel des Messstellenbetreibers und hängende Ableseaufträge.",
       "version": "2.0.0",
-      "digest": "092343505cd052f81d279b17df228823311c82e7d299daa63ba92dd126a086c1",
+      "digest": "dc814e5466f8e24b1b481464cd47c67aa532ffcb96143d92781b42d33a186023",
       "ausloeser": [
-        "de.messwert.reading.quality.warning",
-        "de.messwert.reading.direct.stored",
-        "de.mako.process.completed",
-        "de.messwert.reading.order.failed",
-        "de.messwert.reading.delivery.overdue"
+        "de.mako.messwert.reading.quality.warning",
+        "de.mako.messwert.reading.direct.stored",
+        "de.mako.engine.process.completed",
+        "de.mako.messwert.reading.order.failed",
+        "de.mako.messwert.reading.delivery.overdue"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -594,10 +594,10 @@
       "titel": "Messwertqualität",
       "zweck": "Findet Lücken in Messwerten, liest ihre Qualität und nennt, welches Ersatzwertverfahren zulässig ist.",
       "version": "2.0.0",
-      "digest": "5be2b50b9c031fe65724fffb69a43b7127ac0f79e68a8b0e32624e8d5fa56bcd",
+      "digest": "316d17fefff4c8ae16b033e54866921ae72baac4d2f17f90d0db788a7fc4bed9",
       "ausloeser": [
-        "de.messwert.reading.quality.warning",
-        "de.mako.process.completed"
+        "de.mako.messwert.reading.quality.warning",
+        "de.mako.engine.process.completed"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -623,10 +623,10 @@
       "titel": "Lücken in den Netzdaten",
       "zweck": "Findet Marktlokationen, denen Netzzuordnung oder Netzvertrag fehlt, bevor eine Anmeldung daran scheitert.",
       "version": "2.0.0",
-      "digest": "8b6868d88a3fd30eaefbba444b47ce1dbd1f16e617a47053764390fc453e7715",
+      "digest": "995798c64ed7693c29877fc15f9f97f621b77274191c0e838e01116207ca03eb",
       "ausloeser": [
-        "de.markt.nb-contract.updated",
-        "de.markt.malo.updated"
+        "de.mako.markt.nb-contract.updated",
+        "de.mako.markt.malo.updated"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -652,10 +652,10 @@
       "titel": "Dynamische Tarife",
       "zweck": "Findet Kunden mit intelligentem Messsystem, für die ein dynamischer Tarif in Frage kommt.",
       "version": "2.0.0",
-      "digest": "22f68528ba2249d90d078eaf0db3896547bca1b5abdf879b4c9b78acdc7f8719",
+      "digest": "011c0df1a2a3682dbab18b83970ae85bcae34b9f3e54b5d9d77557e24e41a2e5",
       "ausloeser": [
-        "de.billing.rechnung.erstellt",
-        "de.mako.process.completed"
+        "de.mako.billing.rechnung.erstellt",
+        "de.mako.engine.process.completed"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -693,13 +693,13 @@
       "titel": "Verträge und Kunden",
       "zweck": "Wacht über Preisgarantien, Preisänderungsmitteilungen, auslaufende Verträge und hängende Anmeldungen.",
       "version": "2.1.0",
-      "digest": "20ba807440f50c0b1ddcb7179942fa78cb9d6eb4e48abbb51943e8ac9680b4fb",
+      "digest": "16238181cb8d000442528f7594126d0255528ca487f5fc4a2078a0122782cf04",
       "ausloeser": [
-        "de.vertrag.*",
-        "de.mako.aperak.rejected",
-        "de.mako.process.failed",
-        "de.vertrag.ablauf.ankuendigung",
-        "de.vertrag.preisaenderung.ankuendigung"
+        "de.mako.vertrag.*",
+        "de.mako.engine.aperak.rejected",
+        "de.mako.engine.process.failed",
+        "de.mako.vertrag.ablauf.ankuendigung",
+        "de.mako.vertrag.preisaenderung.ankuendigung"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -749,11 +749,11 @@
       "titel": "Produktkatalog",
       "zweck": "Prüft den Produktkatalog auf fehlende Börsenpreise und eine veraltete Stromkennzeichnung.",
       "version": "2.0.0",
-      "digest": "aee0bf003282eac66189fb74ccf60471d8579410fda6d5e3608fc9b208075d5b",
+      "digest": "58f57bcea0036b209f274ed27e445d53413eff4df2595e511b1beda3b4b179a5",
       "ausloeser": [
-        "de.tarif.product.updated",
-        "de.tarif.angebot.abgelaufen",
-        "de.tarif.epex.missing"
+        "de.mako.tarif.product.updated",
+        "de.mako.tarif.angebot.abgelaufen",
+        "de.mako.tarif.epex.missing"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -791,11 +791,11 @@
       "titel": "Entscheidungen erklären",
       "zweck": "Erklärt, welcher Prüfschritt eine Anmeldung abgelehnt hat, und verfolgt die Freigabewarteschlange.",
       "version": "2.0.0",
-      "digest": "39dc854c2aad3273a5f44c95d7cb1d5078b9abec42b0a66e6e6c36c061a23a97",
+      "digest": "88e2b30bc3571f6b064c0721a44d70af45d6b8c2d9935dd1028afa6886f88ebc",
       "ausloeser": [
-        "de.mako.process.initiated",
-        "de.mako.aperak.rejected",
-        "de.mako.process.failed"
+        "de.mako.engine.process.initiated",
+        "de.mako.engine.aperak.rejected",
+        "de.mako.engine.process.failed"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -837,11 +837,11 @@
       "titel": "Sperraufträge",
       "zweck": "Verfolgt Sperr- und Entsperraufträge und meldet, was über dem gewünschten Termin liegt.",
       "version": "2.0.0",
-      "digest": "ef05770e76cfab1626c067b77a5a5736c1e6b8070fd77b6a81b05932b5e4f4c4",
+      "digest": "03acbb1e1da82472f16b04b80d2f843d97197072ea8fb81428533236b99d454a",
       "ausloeser": [
-        "de.accounting.sperrauftrag",
-        "de.sperr.*",
-        "de.mako.process.completed"
+        "de.mako.accounting.sperrauftrag",
+        "de.mako.sperr.*",
+        "de.mako.engine.process.completed"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -875,12 +875,12 @@
       "titel": "Kundenbenachrichtigungen",
       "zweck": "Stößt Benachrichtigungen im Kundenportal an, etwa zur neuen Rechnung oder zum Tarifwechsel.",
       "version": "2.0.0",
-      "digest": "9578b5ba9f4f8b9cc295f73f61d5b36ea0c8c0990a24cec1c0a5a97c4230723f",
+      "digest": "791ad86191e30f6686ca9d1ec4c439b2c30522289c3571134380fb5539cca647",
       "ausloeser": [
-        "de.billing.rechnung.erstellt",
-        "de.eeg.anlage.foerderung-auslaufend",
-        "de.accounting.mahnung.issued",
-        "de.vertrag.*"
+        "de.mako.billing.rechnung.erstellt",
+        "de.mako.eeg.anlage.foerderung-auslaufend",
+        "de.mako.accounting.mahnung.issued",
+        "de.mako.vertrag.*"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -960,10 +960,10 @@
       "titel": "Ersatzwerte",
       "zweck": "Empfiehlt für fehlende Messwerte das Ersatzwertverfahren, mit Begründung.",
       "version": "2.0.0",
-      "digest": "aaab3aee2fa29ae616d068ff5ba22b944976cd8fd00b319beeace5f8d9447f4a",
+      "digest": "9592ffaa4f624b97555bdadd4f6d413cc1dc22a8e18b1fbdbf10d5e43cfa6bb3",
       "ausloeser": [
-        "de.messwert.reading.quality.warning",
-        "de.mako.process.completed"
+        "de.mako.messwert.reading.quality.warning",
+        "de.mako.engine.process.completed"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -989,11 +989,11 @@
       "titel": "Bilanzierung (MaBiS)",
       "zweck": "Überwacht die Summenzeitreihen und ihre Clearingfenster und erklärt fehlgeschlagene Lieferungen.",
       "version": "3.0.0",
-      "digest": "ff093eb739c733ef8cc50b6c2cc44701a380966490064762bf484da86c8a325a",
+      "digest": "3776ab536f730888d7cc6608dd622ae54763fbba09f93609ee1432b68690b3dc",
       "ausloeser": [
-        "de.mabis.submission.failed",
-        "de.mabis.korrekturbedarf.opened",
-        "de.messwert.reading.quality.warning"
+        "de.mako.mabis.submission.failed",
+        "de.mako.mabis.korrekturbedarf.opened",
+        "de.mako.messwert.reading.quality.warning"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -1035,14 +1035,14 @@
       "titel": "Smart-Meter-Gateways",
       "zweck": "Findet ablaufende Zertifikate, Kommunikationsfehler und stockende Rollouts der Gateways.",
       "version": "2.0.0",
-      "digest": "37d5345a333427d656fce1498249f83a1b418f272ba30dee5053ae2714912977",
+      "digest": "5b6c2aadfcabba5fb6590aeb63fe0b71419b7264343b06d535fb537155a36a1b",
       "ausloeser": [
-        "de.messwert.cls.compliance-issue",
-        "de.messwert.smgw.cert.expiry-warning",
-        "de.messwert.reading.quality.warning",
-        "de.messwert.reading.direct.stored",
-        "de.mako.process.initiated",
-        "de.markt.geraet.konfiguration.updated"
+        "de.mako.messwert.cls.compliance-issue",
+        "de.mako.messwert.smgw.cert.expiry-warning",
+        "de.mako.messwert.reading.quality.warning",
+        "de.mako.messwert.reading.direct.stored",
+        "de.mako.engine.process.initiated",
+        "de.mako.markt.geraet.konfiguration.updated"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -1076,10 +1076,10 @@
       "titel": "Virtuelles Kraftwerk",
       "zweck": "Prüft die Abrechnung von Abrufen des virtuellen Kraftwerks auf Unstimmigkeiten.",
       "version": "2.0.0",
-      "digest": "31e126f1c3d7dca5cc5eb14eea61095b09207fba420c0c5941dca87c4d9d4e70",
+      "digest": "10df7862702ab474022bbca31a40afe2d34414f60c750f076decc28f0925ad6b",
       "ausloeser": [
-        "de.vpp.dispatch.confirmed",
-        "de.vpp.settlement.berechnet"
+        "de.mako.vpp.dispatch.confirmed",
+        "de.mako.vpp.settlement.berechnet"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [
@@ -1105,9 +1105,9 @@
       "titel": "Fehlende Gas-Allokation",
       "zweck": "Legt einen Klärfall an, wenn die verbindliche Allokation für einen Gastag ausbleibt.",
       "version": "2.0.0",
-      "digest": "975588b42dfcf402034e081484414e80078801e9478d9e961d258ea5f84c4f57",
+      "digest": "e5852d941215b9cfc2829111f8164b2a4e023fcf264a8067271239994bf9caf6",
       "ausloeser": [
-        "de.gabi.alocat.missing"
+        "de.mako.gabi.alocat.missing"
       ],
       "modell": null,
       "liest": [],
@@ -1120,11 +1120,11 @@
       "titel": "Monatliche EEG-Abrechnung",
       "zweck": "Startet die monatliche Abrechnung aller Anlagen und meldet, was dabei auffällt.",
       "version": "2.0.0",
-      "digest": "c91f6d5f73498b2c3a155139e37610b19b165bf6eb106bd1dc46d96472cdb253",
+      "digest": "a17e87ed85133e4c346be269d111105349e834251ecd576884de98fff3ccb319",
       "ausloeser": [
-        "de.eeg.settlement.batch-due",
-        "de.eeg.compliance.*",
-        "de.eeg.anlage.foerderung-auslaufend"
+        "de.mako.eeg.settlement.batch-due",
+        "de.mako.eeg.compliance.*",
+        "de.mako.eeg.anlage.foerderung-auslaufend"
       ],
       "modell": "anthropic/claude-sonnet-5",
       "liest": [

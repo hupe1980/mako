@@ -60,6 +60,7 @@ fn order(process_id: Option<String>) -> CreateOrderRequest {
             land: Some("DE".to_owned()),
         },
         hinweis: Some("Hund im Garten".to_owned()),
+        external_ref: None,
     }
 }
 
@@ -150,6 +151,7 @@ async fn an_outcome_commits_with_its_iftsta_command() {
         reason: "Zutritt verweigert",
         pruefschritt_code: Some("A04"),
         endgueltig: true,
+        responsible: None,
     };
     let reported = pg::report_outcome(&pool, id, TENANT, &outcome)
         .await
@@ -212,13 +214,21 @@ async fn an_order_reaches_exactly_one_terminal_outcome() {
         reason: "Zutritt verweigert",
         pruefschritt_code: Some("A04"),
         endgueltig: true,
+        responsible: None,
     };
     assert_eq!(
         pg::report_outcome(&pool, id, TENANT, &failed)
             .await
             .unwrap(),
-        pg::Reported::NotFound,
-        "the claim guard refuses the second outcome"
+        pg::Reported::NichtOffen {
+            status: OrderStatus::Executed,
+            executed_at: pg::fetch_order_pg(&pool, id, TENANT)
+                .await
+                .unwrap()
+                .unwrap()
+                .executed_at,
+        },
+        "the claim guard refuses the second outcome and says what the order became"
     );
     let row = pg::fetch_order_pg(&pool, id, TENANT)
         .await
@@ -241,9 +251,11 @@ async fn cancelling_is_pending_only_and_announced() {
         .unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    let cancelled = pg::cancel_order_pg(&mut *tx, id, TENANT).await.unwrap();
-    assert!(cancelled.is_some());
-    processd::sperr::events::storniert(&mut tx, TENANT, id, "51238696012", "9900012345678")
+    let pg::Cancelled::Done(betroffen) = pg::cancel_order_pg(&mut tx, id, TENANT).await.unwrap()
+    else {
+        panic!("a pending order is withdrawn");
+    };
+    processd::sperr::events::storniert(&mut tx, TENANT, id, &betroffen)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -256,14 +268,320 @@ async fn cancelling_is_pending_only_and_announced() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(queued, 1, "de.sperr.storniert is on the outbox");
+    assert_eq!(queued, 1, "de.mako.sperr.storniert is on the outbox");
 
     // A terminal order stays terminal.
-    let again = pg::cancel_order_pg(&pool, id, TENANT).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let again = pg::cancel_order_pg(&mut conn, id, TENANT).await.unwrap();
     assert!(
-        again.is_none(),
-        "a cancelled order cannot be cancelled twice"
+        matches!(
+            again,
+            pg::Cancelled::NichtOffen {
+                status: OrderStatus::Cancelled,
+                executed_at: None,
+            }
+        ),
+        "a cancelled order cannot be cancelled twice: {again:?}"
     );
+    assert!(matches!(
+        pg::cancel_order_pg(&mut conn, Uuid::new_v4(), TENANT)
+            .await
+            .unwrap(),
+        pg::Cancelled::NotFound
+    ));
+}
+
+/// A cancel that reaches an order already carried out says so, with the
+/// instant of the act: the caller has to know which came first.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_cancel_after_the_act_answers_with_the_instant_of_the_act() {
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("proc"))))
+        .await
+        .unwrap()
+        .unwrap();
+    pg::report_outcome(&pool, id, TENANT, &executed())
+        .await
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let late = pg::cancel_order_pg(&mut conn, id, TENANT).await.unwrap();
+    assert!(
+        matches!(
+            late,
+            pg::Cancelled::NichtOffen {
+                status: OrderStatus::Executed,
+                executed_at: Some(_),
+            }
+        ),
+        "{late:?}"
+    );
+}
+
+/// An execution reported for a withdrawn order is kept and announced, not
+/// refused: the supply was interrupted whatever the queue says. No IFTSTA is
+/// queued, and a second report changes nothing.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_execution_reported_after_the_withdrawal_is_kept_as_a_conflict() {
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let mut req = order(Some(uniq("proc")));
+    req.external_ref = Some("JOB-4711".to_owned());
+    let id = pg::create_order_pg(&pool, TENANT, &req)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    assert!(matches!(
+        pg::cancel_order_pg(&mut conn, id, TENANT).await.unwrap(),
+        pg::Cancelled::Done(_)
+    ));
+
+    let reported = pg::report_outcome(&pool, id, TENANT, &executed())
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            reported,
+            pg::Reported::NachStorno {
+                cancelled_at: Some(_)
+            }
+        ),
+        "{reported:?}"
+    );
+
+    let row = pg::fetch_order_pg(&pool, id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.status, OrderStatus::Cancelled, "the withdrawal stands");
+    assert!(
+        row.executed_at.is_some(),
+        "and the report is kept beside it"
+    );
+    assert!(
+        row.iftsta_faellig_am.is_none(),
+        "no IFTSTA is owed by default"
+    );
+    let lesart = mako_service::policy::Policy::default();
+    assert_eq!(
+        pg::SperrOrderView::new(row, &lesart).conflict,
+        Some(pg::EXECUTED_AFTER_CANCEL)
+    );
+
+    let (announced, external_ref): (i64, Option<String>) = sqlx::query_as(
+        "SELECT COUNT(*), MAX(envelope->'data'->>'external_ref') FROM event_outbox \
+         WHERE ce_type = $1 AND envelope->'data'->>'order_id' = $2",
+    )
+    .bind(mako_events::sperr::AUSFUEHRUNG_NACH_STORNO)
+    .bind(id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(announced, 1);
+    assert_eq!(external_ref.as_deref(), Some("JOB-4711"));
+    let commands: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM event_outbox WHERE event_id = $1")
+        .bind(pg::iftsta_key(id))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        commands, 0,
+        "which Auftragsstatus a withdrawn order owes is a person's decision"
+    );
+
+    let again = pg::report_outcome(&pool, id, TENANT, &executed())
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            again,
+            pg::Reported::NichtOffen {
+                status: OrderStatus::Cancelled,
+                executed_at: Some(_),
+            }
+        ),
+        "{again:?}"
+    );
+}
+
+/// The executing system's reference is unique per tenant, found by the list,
+/// attachable to an order that arrived without one, and echoed on its events.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_external_ref_names_one_order_and_is_echoed() {
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("proc"))))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pg::set_external_ref(&pool, id, TENANT, "JOB-1")
+            .await
+            .unwrap(),
+        pg::RefSet::Done
+    );
+    assert_eq!(
+        pg::set_external_ref(&pool, Uuid::new_v4(), TENANT, "JOB-2")
+            .await
+            .unwrap(),
+        pg::RefSet::NotFound
+    );
+
+    let mut second = order(Some(uniq("proc")));
+    second.external_ref = Some("JOB-1".to_owned());
+    let taken = pg::create_order_pg(&pool, TENANT, &second)
+        .await
+        .unwrap_err();
+    assert!(taken.is::<pg::ExternalRefTaken>(), "{taken:#}");
+    second.external_ref = None;
+    let other = pg::create_order_pg(&pool, TENANT, &second)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pg::set_external_ref(&pool, other, TENANT, "JOB-1")
+            .await
+            .unwrap(),
+        pg::RefSet::Taken
+    );
+    // Another tenant's reference is its own.
+    let mut foreign = order(Some(uniq("proc")));
+    foreign.external_ref = Some("JOB-1".to_owned());
+    pg::create_order_pg(&pool, "other-tenant", &foreign)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let found = pg::list_orders_pg(&pool, TENANT, None, None, Some("JOB-1"), false, 100)
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].id, id.to_string());
+
+    let failed = pg::Outcome::Failed {
+        reason: "niemand angetroffen",
+        pruefschritt_code: None,
+        endgueltig: false,
+        responsible: Some(processd::sperr::model::Responsible::Nobody),
+    };
+    pg::report_outcome(&pool, id, TENANT, &failed)
+        .await
+        .unwrap();
+    let (external_ref, responsible): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT envelope->'data'->>'external_ref', envelope->'data'->>'responsible' \
+         FROM event_outbox WHERE ce_type = $1 AND envelope->'data'->>'order_id' = $2",
+    )
+    .bind(mako_events::sperr::VERSUCH_GESCHEITERT)
+    .bind(id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(external_ref.as_deref(), Some("JOB-1"));
+    assert_eq!(responsible.as_deref(), Some("nobody"));
+    let row = pg::fetch_order_pg(&pool, id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.responsible,
+        Some(processd::sperr::model::Responsible::Nobody),
+        "the first visit's party is on the order while it is still open"
+    );
+    assert_eq!(
+        row.letzter_versuch_grund.as_deref(),
+        Some("niemand angetroffen")
+    );
+}
+
+/// The day an order may be carried out is announced once, with the Treffpunkt
+/// and the window — and an Entsperrauftrag, which names no date, is due at once.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_order_becoming_due_is_announced_once_with_where_to_go() {
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let mut past = order(Some(uniq("proc")));
+    past.ausfuehrung_am = Some(date!(2020 - 01 - 01));
+    past.external_ref = Some("JOB-DUE".to_owned());
+    let due_id = pg::create_order_pg(&pool, TENANT, &past)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let mut future = order(Some(uniq("proc")));
+    future.ausfuehrung_am = None;
+    future.fruehestens_am = Some(date!(2099 - 01 - 01));
+    let future_id = pg::create_order_pg(&pool, TENANT, &future)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let mut entsperrung = order(Some(uniq("proc")));
+    entsperrung.order_type = OrderType::Entsperrung;
+    entsperrung.ausfuehrung_am = None;
+    entsperrung.arbeitszeit = Some(Arbeitszeit::AuchAusserhalb);
+    let entsperr_id = pg::create_order_pg(&pool, TENANT, &entsperrung)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let listed: Vec<String> = pg::list_orders_pg(
+        &pool,
+        TENANT,
+        Some(OrderStatus::Pending),
+        None,
+        None,
+        true,
+        100,
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|r| r.id)
+    .collect();
+    assert!(listed.contains(&due_id.to_string()));
+    assert!(
+        listed.contains(&entsperr_id.to_string()),
+        "an Entsperrauftrag names no date and is owed unverzüglich: due at once, not never"
+    );
+    assert!(!listed.contains(&future_id.to_string()));
+
+    assert!(processd::sperr::worker::sweep(&pool, TENANT).await.unwrap());
+    processd::sperr::worker::sweep(&pool, TENANT).await.unwrap();
+
+    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT envelope->>'subject', envelope->'data' FROM event_outbox WHERE ce_type = $1",
+    )
+    .bind(mako_events::sperr::AUFTRAG_FAELLIG)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "each due order once, the future one not: {rows:?}"
+    );
+    let (_, data) = rows
+        .iter()
+        .find(|(subject, _)| *subject == due_id.to_string())
+        .expect("the due order is announced under its own id");
+    assert_eq!(data["external_ref"], "JOB-DUE");
+    assert_eq!(data["treffpunkt"]["strasse"], "Musterstraße 12");
+    assert_eq!(data["ausfuehrung_am"], "2020-01-01");
+    assert_eq!(data["order_type"], "sperrung");
+    let (_, entsperr) = rows
+        .iter()
+        .find(|(subject, _)| *subject == entsperr_id.to_string())
+        .expect("the Entsperrauftrag is announced");
+    assert_eq!(entsperr["arbeitszeit"], "Z54");
 }
 
 /// A dead-lettered IFTSTA is escalated, once.
@@ -347,7 +665,7 @@ async fn the_queue_is_tenant_isolated() {
         .unwrap()
         .unwrap();
 
-    let rows = pg::list_orders_pg(&pool, TENANT, None, None, false, 100)
+    let rows = pg::list_orders_pg(&pool, TENANT, None, None, None, false, 100)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
@@ -360,7 +678,7 @@ async fn the_queue_is_tenant_isolated() {
         "another tenant cannot read this order by id"
     );
     assert!(
-        pg::list_orders_pg(&pool, "", None, None, false, 100)
+        pg::list_orders_pg(&pool, "", None, None, None, false, 100)
             .await
             .unwrap()
             .is_empty(),
@@ -408,13 +726,21 @@ async fn the_due_list_is_the_field_dispatch_list() {
     future.fruehestens_am = Some(date!(2099 - 01 - 01));
     pg::create_order_pg(&pool, TENANT, &future).await.unwrap();
 
-    let due = pg::list_orders_pg(&pool, TENANT, Some(OrderStatus::Pending), None, true, 100)
-        .await
-        .unwrap();
+    let due = pg::list_orders_pg(
+        &pool,
+        TENANT,
+        Some(OrderStatus::Pending),
+        None,
+        None,
+        true,
+        100,
+    )
+    .await
+    .unwrap();
     assert_eq!(due.len(), 1, "only the order whose date has arrived is due");
     assert_eq!(due[0].id, due_id.to_string());
 
-    let all = pg::list_orders_pg(&pool, TENANT, None, None, false, 100)
+    let all = pg::list_orders_pg(&pool, TENANT, None, None, None, false, 100)
         .await
         .unwrap();
     assert_eq!(all.len(), 2);
@@ -475,6 +801,7 @@ async fn the_first_sperrversuch_does_not_close_the_order() {
         reason,
         pruefschritt_code: Some("A04"),
         endgueltig: false,
+        responsible: None,
     };
 
     let first = pg::report_outcome(&pool, id, TENANT, &versuch("niemand angetroffen"))
@@ -540,6 +867,7 @@ async fn an_endgueltige_verhinderung_closes_the_order_at_once() {
             reason: "gerichtliche Verfügung untersagt die Sperrung",
             pruefschritt_code: Some("A05"),
             endgueltig: true,
+            responsible: None,
         },
     )
     .await
@@ -875,6 +1203,7 @@ async fn every_state_change_commits_with_its_announcement() {
         reason: "niemand angetroffen",
         pruefschritt_code: Some("A04"),
         endgueltig: false,
+        responsible: None,
     };
     pg::report_outcome(&pool, id, TENANT, &versuch)
         .await

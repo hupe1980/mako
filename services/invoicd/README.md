@@ -11,8 +11,8 @@ through `makod`. It handles PIDs 31001–31009 and 31011; 31010
 | **Port** | 8280 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `invoic_receipts`, `leistungsnachweise`, `invoic_dlq` |
 | **MCP** | 11 tools, 4 prompts at `/mcp` |
-| **Emits** | `de.invoic.receipt.settled`, `de.invoic.receipt.disputed`, `de.invoic.payment.overdue` to the ERP (the webhook endpoint `default`) and every registered endpoint |
-| **Consumes** | `de.mako.process.initiated` from `marktd` at `POST /webhook` (HMAC) |
+| **Emits** | `de.mako.invoic.receipt.settled`, `de.mako.invoic.receipt.disputed`, `de.mako.invoic.payment.overdue` to the ERP (the webhook endpoint `default`) and every registered endpoint |
+| **Consumes** | `de.mako.engine.process.initiated` from `marktd` at `POST /webhook` (HMAC) |
 | **Depends on** | `makod` (answer commands, the Rechnung), `marktd` (Preisblätter, MMM prices, ESA-Angebote) |
 
 ## Run

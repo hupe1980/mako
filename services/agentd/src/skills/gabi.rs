@@ -39,7 +39,7 @@ fn required<'a>(payload: &'a Value, field: &str) -> Result<&'a str, SkillError> 
         .get(field)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| SkillError::Other(format!("de.gabi.alocat.missing lacks `{field}`")))
+        .ok_or_else(|| SkillError::Other(format!("de.mako.gabi.alocat.missing lacks `{field}`")))
 }
 
 #[async_trait::async_trait]

@@ -472,7 +472,7 @@ impl ProcessdMcpHandler {
 
     /// The agent twin of `GET /api/v1/webhooks/endpoints`.
     #[tool(
-        description = "List the webhook endpoints processd delivers its CloudEvents (de.sperr.*) to, a page ordered by name: url, event-type patterns, extension filters, owner (`config` for the endpoint `default`, the configured [sperr] erp_webhook_url; `api` for one registered through REST), whether it is active and the last delivery status. Secrets are never listed. Page on `next_cursor`.",
+        description = "List the webhook endpoints processd delivers its CloudEvents (de.mako.sperr.*) to, a page ordered by name: url, event-type patterns, extension filters, owner (`config` for the endpoint `default`, the configured [sperr] erp_webhook_url; `api` for one registered through REST), whether it is active and the last delivery status. Secrets are never listed. Page on `next_cursor`.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
     )]

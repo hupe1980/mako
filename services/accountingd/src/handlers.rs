@@ -442,7 +442,7 @@ pub struct AbschlaegeQuery {
 /// billing switched off.
 ///
 /// **On the service graph.** `accountingd` sits downstream of `billingd` for
-/// *events* (`de.billing.rechnung.erstellt` → the receivable). This is a read
+/// *events* (`de.mako.billing.rechnung.erstellt` → the receivable). This is a read
 /// in the other direction, at billing time, and it does not invert anything:
 /// the advance register is customer-account state that only the ledger holds,
 /// exactly as SAP IS-U billing reads FI-CA advances. What would invert the
@@ -639,10 +639,10 @@ pub struct LedgerQuery {
 /// with HTTP 403 to prevent fake invoice injection.
 ///
 /// Supported event types:
-/// - `de.billing.rechnung.erstellt` → debit entry
-/// - `de.invoic.receipt.settled`    → credit entry (NNE receipt paid)
-/// - `de.invoic.receipt.disputed`   → no entry (dispute logged)
-/// - `de.eeg.verguetung.berechnet`  → credit entry (EEG settlement)
+/// - `de.mako.billing.rechnung.erstellt` → debit entry
+/// - `de.mako.invoic.receipt.settled`    → credit entry (NNE receipt paid)
+/// - `de.mako.invoic.receipt.disputed`   → no entry (dispute logged)
+/// - `de.mako.eeg.verguetung.berechnet`  → credit entry (EEG settlement)
 pub async fn ingest_webhook(
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
@@ -694,7 +694,7 @@ pub async fn ingest_webhook(
 
     match ce_type {
         // ── Billing invoice (billingd) ────────────────────────────────────────
-        // de.billing.rechnung.erstellt:
+        // de.mako.billing.rechnung.erstellt:
         //   is_correction=false → RECHNUNG debit  (customer owes money)
         //   is_correction=true  → STORNO debit/credit (negated amount; billing reversal)
         mako_events::billing::RECHNUNG_ERSTELLT => {
@@ -900,7 +900,7 @@ pub async fn ingest_webhook(
         }
 
         // ── NNE / INVOIC receipt settled (invoicd) ────────────────────────────
-        // de.invoic.receipt.settled: the LF confirmed an inbound NNE invoice from the NB.
+        // de.mako.invoic.receipt.settled: the LF confirmed an inbound NNE invoice from the NB.
         // For the customer ledger this is not directly relevant (it's an NB↔LF settlement),
         // but if the LF passes the NNE cost through to the customer (MSB pass-through billing),
         // a corresponding RECHNUNG should have been created by billingd already.
@@ -968,8 +968,8 @@ pub async fn ingest_webhook(
         }
 
         // ── EEG settlement receipts (einsd) ──────────────────────────────────
-        // de.eeg.verguetung.berechnet   → EEG_GUTSCHRIFT
-        // de.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE
+        // de.mako.eeg.verguetung.berechnet   → EEG_GUTSCHRIFT
+        // de.mako.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE
         // Each is paid out when [eeg] auto_payout = true.
         // Both book what the receipt changes its chain by, never a correction's
         // whole amount again — see `crate::eeg_auszahlung`.
@@ -1099,7 +1099,7 @@ fn sect52_aufgerechnet_ct(data: &serde_json::Value) -> Result<i64, String> {
         .ok_or_else(|| "data.sect52.aufgerechnet_eur is out of range".to_owned())
 }
 
-/// `de.eeg.verguetung.berechnet` / `de.eeg.marktpraemie.berechnet`: record the
+/// `de.mako.eeg.verguetung.berechnet` / `de.mako.eeg.marktpraemie.berechnet`: record the
 /// receipt in its chain, book what it changes the chain by, and — under
 /// `[eeg] auto_payout` — pay what the chain has outstanding.
 ///
@@ -1470,7 +1470,7 @@ pub async fn import_payments(
                     Some(entry.description().as_str()),
                     None,
                 );
-                // Announce the booking. `de.accounting.bankruecklast` is what
+                // Announce the booking. `de.mako.accounting.bankruecklast` is what
                 // drives agentd's payment-reconciliation agent, and a returned
                 // direct debit is what that exists for.
                 let ce_type = if is_return {
@@ -2935,7 +2935,7 @@ pub async fn resolve_dunning(
 /// `POST /api/v1/dunning/{id}/abwendung/angebot` — § 41g Abs. 1 S. 2 EnWG.
 ///
 /// Records that the Grundversorger's **offer** went out, and emits
-/// `de.accounting.abwendung.angeboten` with the interest-free instalment terms.
+/// `de.mako.accounting.abwendung.angeboten` with the interest-free instalment terms.
 ///
 /// Owed within **one week** of the customer demanding it after the Androhung, and
 /// no later than the Ankündigung. Recorded separately from acceptance because it
@@ -4286,7 +4286,7 @@ pub struct JahresabschlussQuery {
 ///
 /// Announces the settlement on
 /// [`mako_events::accounting::JAHRESABSCHLUSS_ABGESCHLOSSEN`]
-/// (`de.accounting.jahresabschluss.abgeschlossen`) — **every** time, whatever
+/// (`de.mako.accounting.jahresabschluss.abgeschlossen`) — **every** time, whatever
 /// the year came to — in the same transaction as the settlement it reports.
 /// [`mako_events::accounting::ERSTATTUNG_FAELLIG`] rides alongside it when the
 /// year produced a refund *and* an ERP webhook is configured, because that one
@@ -5760,7 +5760,7 @@ pub async fn post_discard(
 
 // ── §25 EEG 2023 — SEPA Credit Transfer payout pipeline ──────────────────────
 //
-// When `de.eeg.verguetung.berechnet` is ingested by the webhook handler
+// When `de.mako.eeg.verguetung.berechnet` is ingested by the webhook handler
 // (`ingest_eeg_beleg`, rules in `crate::eeg_auszahlung`):
 //  1. the receipt is recorded in its chain (`eeg_belege`) and the ledger books
 //     what it changes the chain by (`EEG_GUTSCHRIFT`);
@@ -6226,7 +6226,7 @@ pub struct Pain002StatusUpdate {
 /// `ACCP` / `ACSC` → sets `settled_at = now()`; `ACSC` — the funds moved — also
 /// books the payment on the plant's Kontokorrent (`EEG_AUSZAHLUNG`), once.
 /// `RJCT` / `CANC` → sets `pain002_reason` for audit; emits
-/// `de.accounting.eeg.payout.rejected` CloudEvent if ERP webhook is configured.
+/// `de.mako.accounting.eeg.payout.rejected` CloudEvent if ERP webhook is configured.
 /// A settled order stays settled: a later status is `409` — money returned
 /// after settlement arrives as a camt return, not as a pain.002.
 #[utoipa::path(
@@ -6401,7 +6401,7 @@ pub async fn put_eeg_payout_status(
 /// booking confirms the money arrived, so posting a compensating
 /// `BANKRUECKLAST` here would credit a payment that was never received and then
 /// debit it back. The receivable simply stays open, the entry is marked
-/// `REJECTED`, and `de.accounting.sepa.collection-rejected` tells the ERP the
+/// `REJECTED`, and `de.mako.accounting.sepa.collection-rejected` tells the ERP the
 /// mandate needs attention. A collection that settled and was *then* returned
 /// arrives as a camt.054 R-transaction and is the other event.
 ///
@@ -6412,7 +6412,7 @@ pub async fn put_eeg_payout_status(
 /// acceptance: `RCVC` says a payee name matched, which is not a statement about
 /// whether the payment was taken. The outcome is stored in `vop_outcome` and
 /// leaves `pain002_status` alone; anything other than a match emits
-/// `de.accounting.payee.verification-mismatch`, because whether to execute
+/// `de.mako.accounting.payee.verification-mismatch`, because whether to execute
 /// after anything but a match is an operator's decision. The codes are the
 /// Deutsche Kreditwirtschaft's pain.002 conventions (DFÜ-Abkommen Anlage 3
 /// V3.9 Kap. 2.2.6); they report the check, not who is liable for executing.

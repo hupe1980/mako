@@ -214,7 +214,7 @@ graph TB
     ACCT --> OUTPUTD
     EINSD --> ACCT
     PORTALD --> BILLINGD
-    MARKTD -.->|"de.mako.*"| PROCESSD
+    MARKTD -.->|"de.mako.engine.*"| PROCESSD
     AGENTD -.->|"MCP reads"| MARKTD
     AGENTD -.->|"MCP reads"| PROCESSD
     </pre>

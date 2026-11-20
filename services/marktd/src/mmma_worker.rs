@@ -14,11 +14,11 @@
 //!
 //! ## CloudEvents
 //!
-//! On success: `de.markt.mmma.import.success`
-//! On failure: `de.markt.mmma.import.failed`
+//! On success: `de.mako.markt.mmma.import.success`
+//! On failure: `de.mako.markt.mmma.import.failed`
 //!
 //! Both are sent to the durable fan-out (all ERP webhooks subscribed to
-//! `de.markt.*` receive them automatically).
+//! `de.mako.markt.*` receive them automatically).
 //!
 //! ## Manual trigger
 //!

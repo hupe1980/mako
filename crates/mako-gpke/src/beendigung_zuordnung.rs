@@ -551,7 +551,7 @@ pub enum BeendigungZuordnungCommand {
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// The `SG4` facts the trees branch on, forwarded to `processd` on
-        /// the `de.mako.process.initiated` notification.
+        /// the `de.mako.engine.process.initiated` notification.
         vorgang: Box<crate::lf_antwort::LfVorgangsdaten>,
         /// `true` if validation returned no errors.
         validation_passed: bool,

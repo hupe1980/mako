@@ -614,7 +614,7 @@ struct Cli {
     /// When set and `--as4-signing-key-pem` is not configured, every outbound
     /// EDIFACT message (UTILMD 55003, APERAK, CONTRL, …) is POSTed to this
     /// URL as a CloudEvents 1.0 JSON object
-    /// (`type = "de.mako.edifact.outbound"`) instead of being queued for AS4
+    /// (`type = "de.mako.engine.edifact.outbound"`) instead of being queued for AS4
     /// delivery.  Rendered EDIFACT wire bytes are included in `data.edifact`.
     ///
     /// Intended for development, testing, and direct ERP-to-ERP integrations
@@ -629,7 +629,7 @@ struct Cli {
     ///
     /// No platform interface is published (§ 20b Abs. 3 EnWG leaves it to a
     /// BNetzA Festlegung, and none is issued). § 20b requests are delivered to
-    /// the ERP webhook as `de.mako.netzzugang.uebermittlungsbedarf`
+    /// the ERP webhook as `de.mako.engine.netzzugang.uebermittlungsbedarf`
     /// CloudEvents so the operator can submit them via the Netzbetreiber's
     /// Webportal.
     #[arg(long, value_name = "URL", env = "MAKOD_NETZZUGANG_ENDPOINT_URL")]
@@ -1327,7 +1327,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
 
     // ── MaLo cache ← marktd fan-out ───────────────────────────────────────────
     //
-    // marktd delivers `de.markt.malo.updated` to makod's endpoint in its
+    // marktd delivers `de.mako.markt.malo.updated` to makod's endpoint in its
     // `[[subscriptions.endpoints]]`; makod backfills the cache from marktd's
     // MaLo list and holds `/health/ready` at 503 until that is done.
     let malo_sync = cli.marktd_url.as_ref().map(|url| {

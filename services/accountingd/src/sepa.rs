@@ -713,7 +713,7 @@ pub fn sequence_type_of(stored: &str) -> SequenceType {
 /// ## Use cases in accountingd
 ///
 /// 1. **EEG Einspeisevergütung** — NB pays plant operator for monthly feed-in
-///    (triggered by `de.eeg.verguetung.berechnet` from `einsd`).
+///    (triggered by `de.mako.eeg.verguetung.berechnet` from `einsd`).
 /// 2. **Customer refund** — after Jahresabschluss, issue a `GUTSCHRIFT` ledger
 ///    entry AND a pain.001 to actually transfer funds back to the customer.
 /// 3. **§19 EEG Einspeisemanagement compensation** — NB pays for curtailed kWh.

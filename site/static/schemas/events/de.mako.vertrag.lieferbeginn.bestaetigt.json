@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LieferbeginnBestaetigt",
+  "description": "The `data` of `de.mako.vertrag.lieferbeginn.bestaetigt`.",
+  "type": "object",
+  "properties": {
+    "vertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "vertrags_nr": {
+      "type": "string"
+    },
+    "kunden_id": {
+      "description": "The Kunde the contract is with — the customer number of the portfolio\nroute.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "erp_contract_id": {
+      "description": "The caller's contract reference, where the contract was created with one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bestellreferenz": {
+      "description": "The front end's order reference, where the contract came from an order.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "komp_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sparte": {
+      "type": "string"
+    },
+    "malo_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lieferbeginn": {
+      "description": "The day supply begins, as the contract holds it.",
+      "type": "string",
+      "format": "date"
+    }
+  },
+  "required": [
+    "vertrag_id",
+    "vertrags_nr",
+    "kunden_id",
+    "komp_id",
+    "sparte",
+    "lieferbeginn"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.lieferbeginn.bestaetigt.json"
+}

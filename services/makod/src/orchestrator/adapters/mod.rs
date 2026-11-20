@@ -46,7 +46,7 @@ use rust_decimal::Decimal;
 /// The `SG4` facts every LF-answered Vorgang carries beyond its dates.
 ///
 /// One extractor for **both** Festlegungen. `mako_pruefung` branches on all of
-/// these, `processd` only ever sees what the `de.mako.process.initiated`
+/// these, `processd` only ever sees what the `de.mako.engine.process.initiated`
 /// notification carries, and the notification contract
 /// ([`mako_engine::lf_vorgang::LfVorgangsdaten`]) is Sparte-neutral — so an
 /// adapter that drops a field turns every decision into an escalation.

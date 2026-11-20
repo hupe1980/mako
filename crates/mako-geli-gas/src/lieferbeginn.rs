@@ -1487,7 +1487,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                             .map(|due| PendingDeadline::new(RESPONSE_WINDOW_LABEL, due));
                     Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,
-                        // Notify the GNB ERP via de.mako.process.initiated so it can
+                        // Notify the GNB ERP via de.mako.engine.process.initiated so it can
                         // decide to Bestätigen or Ablehnen the Anmeldung.
                         // Also carries bilanzierungsmethode + fallgruppe so marktd
                         // can update malo.bilanzierungsmethode / malo.fallgruppe.

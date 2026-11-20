@@ -1174,7 +1174,7 @@ impl SyncEngine {
 
     /// Mark a run failed and announce it, in one transaction.
     ///
-    /// The failure row and the `de.mabis.submission.failed` outbox record
+    /// The failure row and the `de.mako.mabis.submission.failed` outbox record
     /// commit together (persist-before-dispatch): a failure nothing announces
     /// reads as a submission still pending — which is exactly how this
     /// service's failures were invisible to the agent plane before the event
@@ -1216,7 +1216,7 @@ impl SyncEngine {
             warn!(
                 run_id = %run_id, error = %e,
                 "netzbilanzd mabis: could not record the run failure — the run stays in 'pending' \
-                 and no de.mabis.submission.failed event was enqueued"
+                 and no de.mako.mabis.submission.failed event was enqueued"
             );
         }
     }

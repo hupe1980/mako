@@ -12,7 +12,7 @@
 //! retry and dead-letter policy and stamps `iftsta_dispatched_at` in the
 //! transaction that marks it delivered ([`record_iftsta_delivered`]). An order
 //! whose command was dead-lettered, or that is past its Frist, is announced once
-//! as `de.sperr.iftsta.ausstehend` and left for a human.
+//! as `de.mako.sperr.iftsta.ausstehend` and left for a human.
 
 use anyhow::Context as _;
 use mako_markt::makod_client::ForwardCommand;
@@ -22,7 +22,7 @@ use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::config::MsbVorlaufLesart;
-use crate::sperr::model::{Arbeitszeit, OrderStatus, OrderType};
+use crate::sperr::model::{Arbeitszeit, OrderStatus, OrderType, Responsible};
 
 /// The window GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 gives the NB for the physical act:
 /// „Die Sperrung der Marktlokation ist durch den NB spätestens innerhalb von
@@ -244,10 +244,42 @@ pub struct CreateOrderRequest {
     pub treffpunkt: Treffpunkt,
     /// `SG29 FTX+ACB` free text from the LF.
     pub hinweis: Option<String>,
+    /// The executing system's own reference for this order — a workforce
+    /// tool's job id, an ERP order number. Opaque and unique per tenant;
+    /// echoed on every `de.mako.sperr.*` event.
+    pub external_ref: Option<String>,
+}
+
+/// An `external_ref` is 1–200 characters with no control character.
+///
+/// # Errors
+///
+/// What is wrong with it.
+pub fn validate_external_ref(external_ref: &str) -> Result<(), String> {
+    let chars = external_ref.chars().count();
+    if !(1..=200).contains(&chars) || external_ref.trim().is_empty() {
+        return Err("external_ref must be 1–200 characters and not blank".to_owned());
+    }
+    if external_ref.chars().any(char::is_control) {
+        return Err("external_ref must not contain a control character".to_owned());
+    }
+    Ok(())
+}
+
+/// Another order of this tenant already carries the `external_ref`.
+#[derive(Debug, thiserror::Error)]
+#[error("another order already carries this external_ref")]
+pub struct ExternalRefTaken;
+
+/// Whether `e` is the unique index on `(tenant, external_ref)` refusing a write.
+fn external_ref_taken(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(sqlx::error::DatabaseError::constraint)
+        == Some("so_external_ref")
 }
 
 /// `SG2 NAD+Z24` — the meeting point for the field visit.
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Treffpunkt {
     /// `NAD 3124` Zusatzinformation zur Identifizierung ("Keller links",
@@ -283,6 +315,9 @@ impl CreateOrderRequest {
                 "treffpunkt.land must be an ISO 3166 alpha-2 code, got {land:?}"
             ));
         }
+        if let Some(external_ref) = self.external_ref.as_deref() {
+            validate_external_ref(external_ref)?;
+        }
         Ok(())
     }
 }
@@ -307,6 +342,8 @@ pub struct SperrOrderRow {
     pub treffpunkt_ort: Option<String>,
     pub treffpunkt_land: Option<String>,
     pub hinweis: Option<String>,
+    /// The executing system's own reference for this order.
+    pub external_ref: Option<String>,
     /// The Kap. 3.5.1.2 Nr. 1 deadline for the physical act.
     pub ausfuehrung_faellig_am: Option<Date>,
     pub status: OrderStatus,
@@ -315,6 +352,11 @@ pub struct SperrOrderRow {
     #[serde(with = "time::serde::rfc3339::option")]
     pub letzter_versuch_am: Option<OffsetDateTime>,
     pub letzter_versuch_grund: Option<String>,
+    /// Whom the last unsuccessful visit is put down to.
+    pub responsible: Option<Responsible>,
+    /// When the order was withdrawn.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub cancelled_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub executed_at: Option<OffsetDateTime>,
     pub execution_note: Option<String>,
@@ -345,7 +387,13 @@ pub struct SperrOrderView {
     pub order: SperrOrderRow,
     /// `None` for an order that names no date.
     pub msb_fenster: Option<MsbFenster>,
+    /// `executed_after_cancel` when an execution was reported for this order
+    /// after it was withdrawn; a person resolves it.
+    pub conflict: Option<&'static str>,
 }
+
+/// The `conflict` of an order withdrawn and then reported as carried out.
+pub const EXECUTED_AFTER_CANCEL: &str = "executed_after_cancel";
 
 impl SperrOrderView {
     /// The view of `order` under `lesart`, counting from the day it arrived.
@@ -363,7 +411,13 @@ impl SperrOrderView {
             ),
             OrderType::Entsperrung => None,
         };
-        Self { order, msb_fenster }
+        let conflict = (order.status == OrderStatus::Cancelled && order.executed_at.is_some())
+            .then_some(EXECUTED_AFTER_CANCEL);
+        Self {
+            order,
+            msb_fenster,
+            conflict,
+        }
     }
 }
 
@@ -373,11 +427,18 @@ impl SperrOrderView {
 const ORDER_COLUMNS: &str = "s.id::TEXT AS id, s.tenant, s.malo_id, s.lf_mp_id, s.order_type, \
      s.pruefidentifikator, s.process_id, s.ausfuehrung_am, s.fruehestens_am, s.arbeitszeit, \
      s.treffpunkt_hinweis, s.treffpunkt_strasse, s.treffpunkt_plz, s.treffpunkt_ort, \
-     s.treffpunkt_land, s.hinweis, s.ausfuehrung_faellig_am, s.status, s.sperrversuche, \
-     s.letzter_versuch_am, s.letzter_versuch_grund, s.executed_at, s.execution_note, \
+     s.treffpunkt_land, s.hinweis, s.external_ref, s.ausfuehrung_faellig_am, s.status, \
+     s.sperrversuche, s.letzter_versuch_am, s.letzter_versuch_grund, s.responsible, \
+     s.cancelled_at, s.executed_at, s.execution_note, \
      s.fail_reason, s.pruefschritt_code, s.iftsta_faellig_am, s.iftsta_ref, \
      s.iftsta_dispatched_at, COALESCE(o.attempts, 0)::INTEGER AS iftsta_attempts, \
      o.last_error AS iftsta_last_error, s.created_at, s.updated_at";
+
+/// An order `s` whose day has come: its requested date has arrived, or it names
+/// none. An Entsperrauftrag carries neither `DTM+203` nor `DTM+469` and is owed
+/// „unverzüglich" (§ 41f Abs. 7 EnWG), so no date is due at once — not never.
+const DUE: &str = "(COALESCE(s.ausfuehrung_am, s.fruehestens_am) IS NULL \
+     OR COALESCE(s.ausfuehrung_am, s.fruehestens_am) <= heute())";
 
 /// Aggregate counters for the compliance sweep.
 #[derive(Debug, Serialize)]
@@ -425,7 +486,8 @@ pub struct SperrStats {
 ///
 /// # Errors
 ///
-/// Propagates database errors.
+/// [`ExternalRefTaken`] when another order carries the `external_ref`;
+/// otherwise database errors.
 pub async fn create_order_pg(
     pool: &PgPool,
     tenant: &str,
@@ -453,9 +515,9 @@ pub async fn create_order_pg(
                ausfuehrung_am, fruehestens_am, arbeitszeit,
                treffpunkt_hinweis, treffpunkt_strasse, treffpunkt_plz,
                treffpunkt_ort, treffpunkt_land, hinweis, ausfuehrung_faellig_am,
-               vorlauffrist_eingehalten, vorlauffrist_spaetester_ut)
+               vorlauffrist_eingehalten, vorlauffrist_spaetester_ut, external_ref)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                  $17, $18)
+                  $17, $18, $19)
           ON CONFLICT (tenant, process_id) DO NOTHING
           RETURNING id::TEXT",
     )
@@ -483,9 +545,16 @@ pub async fn create_order_pg(
     // does not invent one.
     .bind(befund.map(|b| b.eingehalten))
     .bind(befund.map(|b| b.spaetester_ut))
+    .bind(&req.external_ref)
     .fetch_optional(&mut *tx)
     .await
-    .context("insert sperr_order")?;
+    .map_err(|e| {
+        if external_ref_taken(&e) {
+            anyhow::Error::new(ExternalRefTaken)
+        } else {
+            anyhow::Error::new(e).context("insert sperr_order")
+        }
+    })?;
 
     let Some(row) = row else { return Ok(None) };
     let id: String = row.try_get("id")?;
@@ -497,7 +566,7 @@ pub async fn create_order_pg(
         &crate::sperr::events::auftrag_eingegangen(tenant, id, req),
     )
     .await
-    .context("enqueue de.sperr.auftrag.eingegangen")?;
+    .context("enqueue de.mako.sperr.auftrag.eingegangen")?;
     tx.commit().await.context("commit sperr_order")?;
     Ok(Some(id))
 }
@@ -509,6 +578,7 @@ pub async fn list_orders_pg(
     tenant: &str,
     status: Option<OrderStatus>,
     malo_id: Option<&str>,
+    external_ref: Option<&str>,
     only_due: bool,
     limit: i64,
 ) -> anyhow::Result<Vec<SperrOrderRow>> {
@@ -519,7 +589,8 @@ pub async fn list_orders_pg(
           WHERE s.tenant = $1
             AND ($2::TEXT IS NULL OR s.status = $2)
             AND ($3::TEXT IS NULL OR s.malo_id = $3)
-            AND (NOT $4 OR COALESCE(s.ausfuehrung_am, s.fruehestens_am) <= heute())
+            AND (NOT $4 OR {DUE})
+            AND ($6::TEXT IS NULL OR s.external_ref = $6)
           ORDER BY COALESCE(s.ausfuehrung_am, s.fruehestens_am) NULLS LAST, s.created_at DESC
           LIMIT $5"
     )))
@@ -528,6 +599,7 @@ pub async fn list_orders_pg(
     .bind(malo_id)
     .bind(only_due)
     .bind(limit)
+    .bind(external_ref)
     .fetch_all(pool)
     .await
     .context("list_orders_pg")
@@ -575,6 +647,8 @@ pub enum Outcome<'a> {
         /// Sperrauftrag, and reporting `Z13 gescheitert` after the first ends a
         /// process that still owes a second visit.
         endgueltig: bool,
+        /// Whom the visit is put down to, where the report says.
+        responsible: Option<Responsible>,
     },
 }
 
@@ -601,8 +675,27 @@ pub enum Reported {
         /// How many of the two allowed attempts have been made.
         sperrversuche: i32,
     },
-    /// No pending order with that id in this tenant.
+    /// An execution reported for an order withdrawn beforehand. The report is
+    /// kept on the order and announced; no IFTSTA goes out.
+    NachStorno {
+        cancelled_at: Option<OffsetDateTime>,
+    },
+    /// The order is not pending, and the report changes nothing: it is
+    /// already terminal, or withdrawn and the report is not an execution.
+    NichtOffen {
+        status: OrderStatus,
+        executed_at: Option<OffsetDateTime>,
+    },
+    /// No order with that id in this tenant.
     NotFound,
+}
+
+/// The parties and the reference an order's event names.
+#[derive(Debug, Clone)]
+pub struct Betroffen {
+    pub malo_id: String,
+    pub lf_mp_id: String,
+    pub external_ref: Option<String>,
 }
 
 /// Record a field outcome and report it to the Lieferant with IFTSTA 21039.
@@ -647,6 +740,7 @@ pub async fn report_outcome(
     if let Outcome::Failed {
         reason,
         endgueltig: false,
+        responsible,
         ..
     } = outcome
     {
@@ -656,33 +750,40 @@ pub async fn report_outcome(
               SET sperrversuche = sperrversuche + 1,
                   letzter_versuch_am = now(),
                   letzter_versuch_grund = $3,
+                  responsible = $5,
                   updated_at = now()
               WHERE id = $1 AND tenant = $2 AND status = 'pending'
                 AND sperrversuche + 1 < $4
-              RETURNING sperrversuche, malo_id",
+              RETURNING sperrversuche, malo_id, lf_mp_id, external_ref",
         )
         .bind(id)
         .bind(tenant)
         .bind(*reason)
         .bind(MAX_SPERRVERSUCHE)
+        .bind(*responsible)
         .fetch_optional(&mut *tx)
         .await
         .context("record Sperrversuch")?;
         if let Some(row) = recorded {
             let sperrversuche: i32 = row.try_get("sperrversuche")?;
-            let malo_id: String = row.try_get("malo_id")?;
+            let order = Betroffen {
+                malo_id: row.try_get("malo_id")?,
+                lf_mp_id: row.try_get("lf_mp_id")?,
+                external_ref: row.try_get("external_ref")?,
+            };
             mako_service::outbox::enqueue(
                 &mut tx,
                 &crate::sperr::events::versuch_gescheitert(
                     tenant,
                     id,
-                    &malo_id,
+                    &order,
                     reason,
+                    *responsible,
                     sperrversuche,
                 ),
             )
             .await
-            .context("enqueue de.sperr.versuch.gescheitert")?;
+            .context("enqueue de.mako.sperr.versuch.gescheitert")?;
             tx.commit().await.context("commit Sperrversuch")?;
             return Ok(Reported::VersuchNotiert { sperrversuche });
         }
@@ -703,9 +804,10 @@ pub async fn report_outcome(
           SET status = $3, executed_at = $4, execution_note = $5, fail_reason = $6,
               pruefschritt_code = $7, iftsta_faellig_am = $8,
               sperrversuche = LEAST(sperrversuche + $9, $10),
+              responsible = COALESCE($11, responsible),
               updated_at = now()
           WHERE id = $1 AND tenant = $2 AND status = 'pending'
-          RETURNING malo_id, lf_mp_id, order_type, process_id",
+          RETURNING malo_id, lf_mp_id, order_type, process_id, external_ref",
     )
     .bind(id)
     .bind(tenant)
@@ -717,13 +819,19 @@ pub async fn report_outcome(
     .bind(iftsta_faellig_am(abschluss))
     .bind(i32::from(matches!(outcome, Outcome::Failed { .. })))
     .bind(MAX_SPERRVERSUCHE)
+    .bind(match outcome {
+        Outcome::Failed { responsible, .. } => *responsible,
+        Outcome::Executed { .. } => None,
+    })
     .fetch_optional(&mut *tx)
     .await
     .context("claim order")?;
 
     let Some(row) = claimed else {
-        return Ok(Reported::NotFound);
+        drop(tx);
+        return report_on_closed_order(pool, id, tenant, outcome).await;
     };
+    let external_ref: Option<String> = row.try_get("external_ref")?;
 
     let order = DispatchTarget {
         id,
@@ -764,7 +872,7 @@ pub async fn report_outcome(
     // The outcome, its IFTSTA command and its announcement commit together.
     mako_service::outbox::enqueue(
         &mut tx,
-        &crate::sperr::events::outcome(tenant, id, outcome, queued),
+        &crate::sperr::events::outcome(tenant, id, external_ref.as_deref(), outcome, queued),
     )
     .await
     .context("enqueue the outcome's announcement")?;
@@ -772,6 +880,82 @@ pub async fn report_outcome(
     Ok(Reported::Recorded {
         iftsta_queued: queued,
     })
+}
+
+/// A report for an order that is no longer pending.
+///
+/// An execution reported for a withdrawn order is the one such report that is
+/// kept: the supply was interrupted whatever the queue says. It is stored
+/// beside the withdrawal and announced, and no IFTSTA goes out — which
+/// Auftragsstatus a withdrawn order owes is a person's decision, not a default.
+async fn report_on_closed_order(
+    pool: &PgPool,
+    id: Uuid,
+    tenant: &str,
+    outcome: &Outcome<'_>,
+) -> anyhow::Result<Reported> {
+    if let Outcome::Executed {
+        at,
+        note,
+        pruefschritt_code,
+    } = outcome
+    {
+        let mut tx = pool.begin().await?;
+        let kept = sqlx::query(
+            r"UPDATE sperr_orders
+              SET executed_at = $3, execution_note = $4, pruefschritt_code = $5,
+                  updated_at = now()
+              WHERE id = $1 AND tenant = $2 AND status = 'cancelled'
+                AND executed_at IS NULL
+              RETURNING malo_id, lf_mp_id, external_ref, order_type, cancelled_at",
+        )
+        .bind(id)
+        .bind(tenant)
+        .bind(*at)
+        .bind(*note)
+        .bind(*pruefschritt_code)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("keep an execution reported after the withdrawal")?;
+        if let Some(row) = kept {
+            let order = Betroffen {
+                malo_id: row.try_get("malo_id")?,
+                lf_mp_id: row.try_get("lf_mp_id")?,
+                external_ref: row.try_get("external_ref")?,
+            };
+            let cancelled_at: Option<OffsetDateTime> = row.try_get("cancelled_at")?;
+            mako_service::outbox::enqueue(
+                &mut tx,
+                &crate::sperr::events::ausfuehrung_nach_storno(
+                    tenant,
+                    id,
+                    &order,
+                    row.try_get("order_type")?,
+                    *at,
+                    cancelled_at,
+                    *note,
+                ),
+            )
+            .await
+            .context("enqueue de.mako.sperr.ausfuehrung.nach-storno")?;
+            tx.commit().await.context("commit the kept execution")?;
+            return Ok(Reported::NachStorno { cancelled_at });
+        }
+    }
+    let row =
+        sqlx::query("SELECT status, executed_at FROM sperr_orders WHERE id = $1 AND tenant = $2")
+            .bind(id)
+            .bind(tenant)
+            .fetch_optional(pool)
+            .await
+            .context("read the closed order")?;
+    match row {
+        Some(r) => Ok(Reported::NichtOffen {
+            status: r.try_get("status")?,
+            executed_at: r.try_get("executed_at")?,
+        }),
+        None => Ok(Reported::NotFound),
+    }
 }
 
 /// Everything the IFTSTA 21039 dispatch needs about an order.
@@ -907,7 +1091,8 @@ pub async fn record_iftsta_delivered(
 /// Propagates database errors.
 pub async fn list_stuck_iftsta(pool: &PgPool, tenant: &str) -> anyhow::Result<Vec<StuckIftsta>> {
     let rows = sqlx::query(mako_service::sql::dynamic(format!(
-        r"SELECT s.id, s.malo_id, s.lf_mp_id, COALESCE(o.last_error, '') AS err,
+        r"SELECT s.id, s.malo_id, s.lf_mp_id, s.external_ref,
+                 COALESCE(o.last_error, '') AS err,
                  COALESCE(o.attempts, 0)::INTEGER AS attempts
           FROM sperr_orders s
           {IFTSTA_OUTBOX_JOIN}
@@ -928,6 +1113,7 @@ pub async fn list_stuck_iftsta(pool: &PgPool, tenant: &str) -> anyhow::Result<Ve
                 id: r.try_get("id")?,
                 malo_id: r.try_get("malo_id")?,
                 lf_mp_id: r.try_get("lf_mp_id")?,
+                external_ref: r.try_get("external_ref")?,
                 last_error: r.try_get("err")?,
                 attempts: r.try_get("attempts")?,
             })
@@ -946,6 +1132,7 @@ pub struct StuckIftsta {
     pub id: Uuid,
     pub malo_id: String,
     pub lf_mp_id: String,
+    pub external_ref: Option<String>,
     pub last_error: String,
     pub attempts: i32,
 }
@@ -979,33 +1166,171 @@ pub async fn mark_iftsta_escalated(
 
 // ── Cancel ────────────────────────────────────────────────────────────────────
 
+/// What [`cancel_order_pg`] found.
+#[derive(Debug)]
+pub enum Cancelled {
+    /// The pending order was withdrawn.
+    Done(Betroffen),
+    /// The order was not pending: the act, or an earlier withdrawal, came
+    /// first. `executed_at` says when the act happened, where it did.
+    NichtOffen {
+        status: OrderStatus,
+        executed_at: Option<OffsetDateTime>,
+    },
+    /// No order with that id in this tenant.
+    NotFound,
+}
+
 /// Withdraw a pending order. Terminal orders cannot be cancelled.
-///
-/// Returns the `(malo_id, lf_mp_id)` of the cancelled order, or `None`.
 ///
 /// # Errors
 ///
 /// Propagates database errors.
 pub async fn cancel_order_pg(
-    exec: impl sqlx::PgExecutor<'_>,
+    conn: &mut sqlx::PgConnection,
     id: Uuid,
     tenant: &str,
-) -> anyhow::Result<Option<(String, String)>> {
+) -> anyhow::Result<Cancelled> {
     let row = sqlx::query(
         r"UPDATE sperr_orders
-          SET status = 'cancelled', updated_at = now()
+          SET status = 'cancelled', cancelled_at = now(), updated_at = now()
           WHERE id = $1 AND tenant = $2 AND status = 'pending'
-          RETURNING malo_id, lf_mp_id",
+          RETURNING malo_id, lf_mp_id, external_ref",
     )
     .bind(id)
     .bind(tenant)
-    .fetch_optional(exec)
+    .fetch_optional(&mut *conn)
     .await
     .context("cancel_order_pg")?;
-    match row {
-        Some(r) => Ok(Some((r.try_get("malo_id")?, r.try_get("lf_mp_id")?))),
-        None => Ok(None),
+    if let Some(r) = row {
+        return Ok(Cancelled::Done(Betroffen {
+            malo_id: r.try_get("malo_id")?,
+            lf_mp_id: r.try_get("lf_mp_id")?,
+            external_ref: r.try_get("external_ref")?,
+        }));
     }
+    let closed =
+        sqlx::query("SELECT status, executed_at FROM sperr_orders WHERE id = $1 AND tenant = $2")
+            .bind(id)
+            .bind(tenant)
+            .fetch_optional(&mut *conn)
+            .await
+            .context("read the order a cancel did not reach")?;
+    match closed {
+        Some(r) => Ok(Cancelled::NichtOffen {
+            status: r.try_get("status")?,
+            executed_at: r.try_get("executed_at")?,
+        }),
+        None => Ok(Cancelled::NotFound),
+    }
+}
+
+/// What [`set_external_ref`] found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RefSet {
+    Done,
+    /// Another order of this tenant carries the reference.
+    Taken,
+    NotFound,
+}
+
+/// Attach the executing system's reference to an order — the way an order that
+/// arrived from the market gets one.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn set_external_ref(
+    pool: &PgPool,
+    id: Uuid,
+    tenant: &str,
+    external_ref: &str,
+) -> anyhow::Result<RefSet> {
+    let done = sqlx::query(
+        "UPDATE sperr_orders SET external_ref = $3, updated_at = now() \
+         WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(tenant)
+    .bind(external_ref)
+    .execute(pool)
+    .await;
+    match done {
+        Ok(r) if r.rows_affected() == 1 => Ok(RefSet::Done),
+        Ok(_) => Ok(RefSet::NotFound),
+        Err(e) if external_ref_taken(&e) => Ok(RefSet::Taken),
+        Err(e) => Err(anyhow::Error::new(e).context("set external_ref")),
+    }
+}
+
+/// An order whose day has come, as [`claim_due`] hands it to its announcement.
+#[derive(Debug)]
+pub struct DueOrder {
+    pub id: Uuid,
+    pub malo_id: String,
+    pub lf_mp_id: String,
+    pub external_ref: Option<String>,
+    pub order_type: OrderType,
+    pub ausfuehrung_am: Option<Date>,
+    pub fruehestens_am: Option<Date>,
+    pub ausfuehrung_faellig_am: Option<Date>,
+    pub arbeitszeit: Option<Arbeitszeit>,
+    pub treffpunkt: Treffpunkt,
+    pub hinweis: Option<String>,
+}
+
+/// Claim every pending order whose day has come and that was not announced
+/// yet, on the caller's transaction — the stamp and the announcement commit
+/// together, so two replicas cannot both announce one order.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn claim_due(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+) -> anyhow::Result<Vec<DueOrder>> {
+    let rows = sqlx::query(mako_service::sql::dynamic(format!(
+        r"UPDATE sperr_orders s SET due_announced_at = now()
+          WHERE s.id IN (
+              SELECT s.id FROM sperr_orders s
+              WHERE s.tenant = $1 AND s.status = 'pending'
+                AND s.due_announced_at IS NULL AND {DUE}
+              ORDER BY s.created_at
+              LIMIT 100
+              FOR UPDATE SKIP LOCKED)
+          RETURNING s.id, s.malo_id, s.lf_mp_id, s.external_ref, s.order_type,
+                    s.ausfuehrung_am, s.fruehestens_am, s.ausfuehrung_faellig_am,
+                    s.arbeitszeit, s.treffpunkt_hinweis, s.treffpunkt_strasse,
+                    s.treffpunkt_plz, s.treffpunkt_ort, s.treffpunkt_land, s.hinweis"
+    )))
+    .bind(tenant)
+    .fetch_all(&mut *conn)
+    .await
+    .context("claim due orders")?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(DueOrder {
+                id: r.try_get("id")?,
+                malo_id: r.try_get("malo_id")?,
+                lf_mp_id: r.try_get("lf_mp_id")?,
+                external_ref: r.try_get("external_ref")?,
+                order_type: r.try_get("order_type")?,
+                ausfuehrung_am: r.try_get("ausfuehrung_am")?,
+                fruehestens_am: r.try_get("fruehestens_am")?,
+                ausfuehrung_faellig_am: r.try_get("ausfuehrung_faellig_am")?,
+                arbeitszeit: r.try_get("arbeitszeit")?,
+                treffpunkt: Treffpunkt {
+                    hinweis: r.try_get("treffpunkt_hinweis")?,
+                    strasse: r.try_get("treffpunkt_strasse")?,
+                    plz: r.try_get("treffpunkt_plz")?,
+                    ort: r.try_get("treffpunkt_ort")?,
+                    land: r.try_get("treffpunkt_land")?,
+                },
+                hinweis: r.try_get("hinweis")?,
+            })
+        })
+        .collect()
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
@@ -1077,7 +1402,7 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
 /// Pending orders past their 6-Werktage execution window that have not been
 /// announced yet.
 ///
-/// Returns `(id, malo_id, lf_mp_id, faellig_am)`. The announcement is marked on
+/// Returns each order's id, parties and `faellig_am`. The announcement is marked on
 /// the row by [`mark_ausfuehrung_escalated`], so a missed Frist is reported once
 /// rather than on every sweep.
 ///
@@ -1087,9 +1412,9 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
 pub async fn list_ausfuehrung_ueberfaellig(
     pool: &PgPool,
     tenant: &str,
-) -> anyhow::Result<Vec<(Uuid, String, String, Date)>> {
+) -> anyhow::Result<Vec<(Uuid, Betroffen, Date)>> {
     let rows = sqlx::query(
-        r"SELECT id, malo_id, lf_mp_id, ausfuehrung_faellig_am
+        r"SELECT id, malo_id, lf_mp_id, external_ref, ausfuehrung_faellig_am
           FROM sperr_orders
           WHERE tenant = $1
             AND status = 'pending'
@@ -1107,8 +1432,11 @@ pub async fn list_ausfuehrung_ueberfaellig(
         .map(|r| {
             Ok((
                 r.try_get("id")?,
-                r.try_get("malo_id")?,
-                r.try_get("lf_mp_id")?,
+                Betroffen {
+                    malo_id: r.try_get("malo_id")?,
+                    lf_mp_id: r.try_get("lf_mp_id")?,
+                    external_ref: r.try_get("external_ref")?,
+                },
                 r.try_get("ausfuehrung_faellig_am")?,
             ))
         })
@@ -1153,6 +1481,7 @@ mod tests {
             arbeitszeit: None,
             treffpunkt: Treffpunkt::default(),
             hinweis: None,
+            external_ref: None,
         }
     }
 

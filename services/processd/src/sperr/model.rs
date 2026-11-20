@@ -8,7 +8,9 @@
 use serde::{Deserialize, Serialize};
 
 /// What the Netzbetreiber was asked to do — BGM 1001 on the ORDERS.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, schemars::JsonSchema,
+)]
 #[sqlx(type_name = "TEXT", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum OrderType {
@@ -64,7 +66,9 @@ impl OrderType {
 }
 
 /// Where the order stands in this service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, schemars::JsonSchema,
+)]
 #[sqlx(type_name = "TEXT", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum OrderStatus {
@@ -132,7 +136,9 @@ impl std::str::FromStr for OrderStatus {
 /// The ORDERS AHB makes this a **Muss** on 17117: § 41f Abs. 7 EnWG requires the
 /// restoration to be *unverzüglich*, and out-of-hours execution is what the
 /// Lieferant asks for (and pays for) when the customer paid on a Friday evening.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, schemars::JsonSchema,
+)]
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum Arbeitszeit {
@@ -151,6 +157,35 @@ impl Arbeitszeit {
             Self::AuchAusserhalb => "Z54",
         }
     }
+}
+
+/// Whom an unsuccessful visit is put down to.
+///
+/// The Lieferant asks why a Sperrung did not happen, and „niemand angetroffen"
+/// and „der Monteur kam nicht" are different answers with different costs.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
+    schemars::JsonSchema,
+    utoipa::ToSchema,
+)]
+#[sqlx(type_name = "TEXT", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum Responsible {
+    /// The Anschlussnutzer: refused access, or prevented the work.
+    Customer,
+    /// The firm or team sent to do the work: did not come, came unequipped.
+    Contractor,
+    /// The Netzbetreiber itself: a wrong address, a withdrawn or faulty order.
+    Operator,
+    /// Nobody: nobody was there, the device could not be reached.
+    Nobody,
 }
 
 #[cfg(test)]

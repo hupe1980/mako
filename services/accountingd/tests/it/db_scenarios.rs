@@ -1998,7 +1998,7 @@ async fn pg_container() -> Option<(String, PgContainer)> {
 
 // ── Event announcements ───────────────────────────────────────────────────────
 
-/// Opening a Mahnstufe case must announce `de.accounting.mahnung.issued`.
+/// Opening a Mahnstufe case must announce `de.mako.accounting.mahnung.issued`.
 ///
 /// The event was declared in the catalog, documented as emitted, and subscribed
 /// to by `agentd`'s payment-reconciliation agent — but nothing produced it.
@@ -2040,10 +2040,10 @@ async fn opening_a_dunning_case_announces_the_mahnstufe() {
     .expect("outbox query");
 
     let (ce_type, envelope) = row.expect(
-        "opening a dunning case must enqueue de.accounting.mahnung.issued — \
+        "opening a dunning case must enqueue de.mako.accounting.mahnung.issued — \
          agentd triggers on it",
     );
-    assert_eq!(ce_type, "de.accounting.mahnung.issued");
+    assert_eq!(ce_type, "de.mako.accounting.mahnung.issued");
     let data = &envelope["data"];
     assert_eq!(data["mahnstufe"], 2);
     assert_eq!(data["amount_due_ct"], 4_500);
@@ -3420,7 +3420,7 @@ async fn the_annual_sweep_settles_each_account_once() {
 /// The settlement runs end to end against a real ledger: a balanced year books
 /// no entry, records its run, and announces itself — whatever the outcome.
 ///
-/// The announcement is the point. `de.accounting.erstattung.faellig` fires only
+/// The announcement is the point. `de.mako.accounting.erstattung.faellig` fires only
 /// on a refund *and* only with an ERP webhook, so anything downstream of the
 /// annual cycle had to poll `jahresabschluss_runs` to notice a Nachzahlung or a
 /// balanced year had happened at all.

@@ -489,9 +489,9 @@ impl Workflow for GaBiGasAllocationWorkflow {
                     })?;
                 // No outbox entry on any version, including the binding final
                 // one — so a settled gas day leaves nothing on the ERP bus while
-                // a missed § 47 deadline does. `de.gabi.allocation.completed`
+                // a missed § 47 deadline does. `de.mako.gabi.allocation.completed`
                 // (this arm with `AllocationVersion::Final`) and
-                // `de.gabi.correction.created` (with `Correction(n)`) are
+                // `de.mako.gabi.correction.created` (with `Correction(n)`) are
                 // declared in `mako_events::gabi` for exactly that, and the
                 // module there records what wiring each still needs.
                 Ok(vec![AllocationEvent::AllocationReceived {
@@ -520,7 +520,7 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 // The missed obligation is the FNB's/MGV's, so nothing is sent
                 // back on the wire — but the operator has to open a Clearingfall,
                 // and that is a decision a human or an agent makes off-platform.
-                // The outbox entry carries it out as `de.gabi.alocat.missing`
+                // The outbox entry carries it out as `de.mako.gabi.alocat.missing`
                 // through the same ERP path every other notification uses.
                 let notice = PendingOutbox::new(
                     "GabiFinalAllocationOverdue",

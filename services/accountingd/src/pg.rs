@@ -2922,7 +2922,7 @@ async fn phase_candidates(
 /// Record that the Sperrandrohung was issued (opens the 4-Wochen-Frist).
 ///
 /// Takes an executor so the caller can commit it in the **same transaction** as
-/// the `de.accounting.sperrandrohung` outbox row — the Androhung is a legal act
+/// the `de.mako.accounting.sperrandrohung` outbox row — the Androhung is a legal act
 /// (a letter the ERP must send), so state and dispatch must be atomic.
 pub async fn mark_sperrandrohung(
     exec: impl sqlx::PgExecutor<'_>,
@@ -2965,7 +2965,7 @@ pub async fn list_ankuendigung_candidates(
 /// (`geplantes_sperrdatum` = today + 8 Werktage, computed by the caller).
 ///
 /// Takes an executor so the caller can commit it in the **same transaction** as
-/// the `de.accounting.sperrankuendigung` outbox row (persist-before-dispatch).
+/// the `de.mako.accounting.sperrankuendigung` outbox row (persist-before-dispatch).
 pub async fn mark_sperrankuendigung(
     exec: impl sqlx::PgExecutor<'_>,
     case_id: Uuid,
@@ -3080,7 +3080,7 @@ pub async fn mark_entsperrauftrag_dispatched(
 /// The Grundversorger owes the offer within one week of a demand made after the
 /// Androhung, and in any case no later than the Ankündigung. Recording it is what
 /// makes the obligation auditable; the offer itself travels on
-/// `de.accounting.abwendung.angeboten`.
+/// `de.mako.accounting.abwendung.angeboten`.
 ///
 /// Returns `false` when the case does not exist or an offer was already recorded.
 ///
@@ -3704,7 +3704,7 @@ pub async fn escalate_dunning_case_announced(
     .await
 }
 
-/// Open a Mahnstufe case and announce it as `de.accounting.mahnung.issued`.
+/// Open a Mahnstufe case and announce it as `de.mako.accounting.mahnung.issued`.
 ///
 /// The event was declared in the catalog and documented as emitted, and
 /// `agentd`'s payment-reconciliation agent triggers on it — but nothing ever
@@ -5432,7 +5432,7 @@ async fn settle_plan(
 /// § 41g Abs. 1 S. 11 EnWG — the customer did not keep the
 /// Abwendungsvereinbarung: lift its lock with `vereinbarung_gebrochen`, clear
 /// the Ankündigung on the account's open cases and announce
-/// `de.accounting.abwendung.gebrochen`, all in the caller's transaction.
+/// `de.mako.accounting.abwendung.gebrochen`, all in the caller's transaction.
 ///
 /// The supplier may interrupt again, „unter Beachtung des § 41f Absatz 1 Satz 2
 /// und Absatz 5" — so the earlier Ankündigung does not carry over and the case

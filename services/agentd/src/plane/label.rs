@@ -109,7 +109,7 @@ const PROMOTABLE: &[(&str, Shape)] = &[
     ("bilanzkreis_id", Shape::Eic),
     ("sender_eic", Shape::Eic),
     ("receiver_eic", Shape::Eic),
-    // ── Bilanzierungsgebiet EIC (LOC+107), carried by de.mabis.* events ──
+    // ── Bilanzierungsgebiet EIC (LOC+107), carried by de.mako.mabis.* events ──
     ("bilanzierungsgebiet_id", Shape::Eic),
     // ── mako-generated keys ──
     ("record_id", Shape::Uuid),
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn identifiers_are_trusted_and_prose_is_not() {
         let labelled = admit(
-            "de.billing.rechnung.erstellt",
+            "de.mako.billing.rechnung.erstellt",
             json!({
                 "malo_id": "51238696012",
                 "lf_mp_id": "9900357000003",
@@ -370,7 +370,7 @@ mod tests {
                 .contains_key("bilanzkreis")
         );
 
-        // The Bilanzierungsgebiet EIC on `de.mabis.*` events takes the same shape.
+        // The Bilanzierungsgebiet EIC on `de.mako.mabis.*` events takes the same shape.
         let gebiet = "11YN00000000TH2M";
         assert_eq!(gebiet.len(), EIC_LEN);
         assert!(routing_envelope(&json!({ "bilanzierungsgebiet_id": gebiet })).is_some());
@@ -415,7 +415,7 @@ mod tests {
     /// A non-object payload takes the cautious label whole.
     #[test]
     fn a_non_object_payload_is_untrusted_entirely() {
-        let labelled = admit("de.mako.process.failed", json!("free-form text"));
+        let labelled = admit("de.mako.engine.process.failed", json!("free-form text"));
         assert!(labelled.label().is_untrusted());
     }
 

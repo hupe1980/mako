@@ -1,4 +1,4 @@
-//! The MSCONS `de.mako.process.completed` door: decode the whole delivery,
+//! The MSCONS `de.mako.engine.process.completed` door: decode the whole delivery,
 //! then write it.
 //!
 //! Every refusal — an absent or unknown Sparte, an unknown origin label, a

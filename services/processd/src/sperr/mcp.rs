@@ -91,6 +91,7 @@ impl ProcessdMcpHandler {
             &self.state.tenant,
             status,
             p.malo_id.as_deref(),
+            None,
             p.due,
             p.limit.unwrap_or(50).clamp(1, 1000),
         )

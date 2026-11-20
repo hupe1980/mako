@@ -276,6 +276,11 @@ export interface Endpoint {
    */
   event_types: string[];
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * CloudEvent extensions an event must carry with these values
    * (`marktsparte`, `marktrole`).
    */
@@ -317,4 +322,4 @@ export interface Endpoint {
 export const invoicdUntyped = ["get_check_result","get_policy","get_receipt","get_zahlungsstatus","list_exceptions","list_overdue_remadv","summarize_billing_month"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const invoicdOberflaeche: Record<string, string> = {"list_disputes":"105b60ac","list_held_receipts":"f0f76dbd","list_webhook_deliveries":"599f671b","list_webhook_endpoints":"aa9442dc"};
+export const invoicdOberflaeche: Record<string, string> = {"list_disputes":"105b60ac","list_held_receipts":"f0f76dbd","list_webhook_deliveries":"599f671b","list_webhook_endpoints":"532802a1"};

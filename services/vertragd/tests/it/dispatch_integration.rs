@@ -1231,7 +1231,7 @@ async fn supply_that_has_run_out_closes_its_contract() {
     );
 }
 
-/// A contract closes together with its `de.vertrag.abgeschlossen` row, or not
+/// A contract closes together with its `de.mako.vertrag.abgeschlossen` row, or not
 /// at all: closed alone, it is no longer due on the next run, so nothing would
 /// ever announce it.
 #[tokio::test]

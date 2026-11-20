@@ -112,6 +112,9 @@ pub struct Endpoint {
     pub url: String,
     /// `mako_events::matches` patterns; empty matches every type.
     pub event_types: Vec<String>,
+    /// The patterns of `event_types` that match no event type mako emits.
+    /// They deliver nothing; replace them.
+    pub patterns_matching_nothing: Vec<String>,
     /// CloudEvent extensions an event must carry with these values
     /// (`marktsparte`, `marktrole`).
     pub extensions: BTreeMap<String, String>,
@@ -200,6 +203,7 @@ impl EndpointRow {
             id: self.id.to_string(),
             name: self.name,
             url: self.url,
+            patterns_matching_nothing: super::silent_patterns(&self.event_types),
             event_types: self.event_types,
             extensions,
             owner,

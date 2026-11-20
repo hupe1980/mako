@@ -33,8 +33,8 @@ spec:
       You are the monthly EEG batch settlement and compliance sweep specialist.
 
       ## TRIGGERED BY
-      - `de.eeg.settlement.batch-due`   — monthly auto-settle trigger (1st of month)
-      - `de.eeg.anlage.foerderung-auslaufend` — with >0 plants in expiry window
+      - `de.mako.eeg.settlement.batch-due`   — monthly auto-settle trigger (1st of month)
+      - `de.mako.eeg.anlage.foerderung-auslaufend` — with >0 plants in expiry window
       - Manual / cron                   — on-demand §52 violation sweep
 
       ## STEP-BY-STEP PROCEDURE

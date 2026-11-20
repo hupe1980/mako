@@ -615,7 +615,7 @@ no `traceparent` header goes to the partner.
 
 **Webhook transport substitute.** With `[erp] edifact_outbox_webhook_url` set,
 outbound interchanges are POSTed as CloudEvents of type
-`de.mako.edifact.outbound` (`message_type`, `recipient`, `edifact`), the outbox
+`de.mako.engine.edifact.outbound` (`message_type`, `recipient`, `edifact`), the outbox
 id as CloudEvent `id` and `X-Idempotency-Key`, signed with Standard Webhooks
 under `[erp] webhook_secret` — which is then required.
 
@@ -726,7 +726,7 @@ optional `details`. Each command records an `erfasst` entry in marktd's
 `netzzugang_antraege` and enqueues a `NetzzugangAntrag` outbox message, which is
 delivered:
 
-1. to the ERP webhook as `de.mako.netzzugang.uebermittlungsbedarf`, for
+1. to the ERP webhook as `de.mako.engine.netzzugang.uebermittlungsbedarf`, for
    submission via the NB's Webportal (signed when `--erp-webhook-secret` is set);
 2. else, or on an undeserialisable payload, marked `fehlgeschlagen` and acked.
 
@@ -736,7 +736,7 @@ Festlegung — so `--netzzugang-endpoint-url` (`MAKOD_NETZZUGANG_ENDPOINT_URL`,
 
 The answer is recorded via marktd
 `PATCH /api/v1/netzzugang/antraege/{id}/status`, which emits
-`de.markt.netzzugang.antrag.updated`.
+`de.mako.markt.netzzugang.antrag.updated`.
 
 ---
 
@@ -903,7 +903,7 @@ durable channel — the SlateDB outbox the `OutboxErpWorker` drains, signed
 with Standard Webhooks under `[erp] webhook_secret`. In a deployment
 `[erp] webhook_url` names marktd's `[webhook] inbound_path`; marktd's ingest
 enqueues each event on its `event_outbox`, and an integrator subscribes to
-makod's `de.mako.*` events at marktd's `/api/v1/webhooks/endpoints`.
+makod's `de.mako.engine.*` events at marktd's `/api/v1/webhooks/endpoints`.
 
 ### `POST /edifact`
 
@@ -1695,7 +1695,7 @@ sequenceDiagram
 | **Ausführungsdatum** | ORDERS `DTM+203` = `max(Wunschtermin, DTM+469)` |
 | **Subscription** | The (Meldepunkt, Messprodukt) pair; a second product at one location is a new subscription. Follow-up commands take `messprodukt`, optional while only one exists |
 | **Answers** | `SG2 AJT` is Muss on all four ORDRSP PIDs; the code is resolved against `mako_pruefung`'s catalogue into `mako_wim::esa::Antwort`, and a code whose Cluster contradicts its PID is resolved by the PID |
-| **Notification** | An MSB deployment emits `de.mako.process.initiated` on 35003/17007/39002/17008 — the input to `processd`'s ESA module |
+| **Notification** | An MSB deployment emits `de.mako.engine.process.initiated` on 35003/17007/39002/17008 — the input to `processd`'s ESA module |
 
 **Correlation.** Only the REQOTE carries a location; every later message is
 matched by the Belegnummer it echoes, per the Zuordnungsschlüssel of the
@@ -1866,7 +1866,7 @@ of its `[[subscriptions.endpoints]]` (see
 
 | Step | What happens |
 |---|---|
-| Endpoint | marktd's `makod` entry: `url` `http://makod:8080/webhooks/marktd`, `event_types` `de.markt.malo.updated`, `secret` makod's `[marktd] webhook_secret`. The HTTP port must be open |
+| Endpoint | marktd's `makod` entry: `url` `http://makod:8080/webhooks/marktd`, `event_types` `de.mako.markt.malo.updated`, `secret` makod's `[marktd] webhook_secret`. The HTTP port must be open |
 | Backfill | makod reads marktd's whole MaLo list (`GET /api/v1/malos`, pages of 500) into the cache. `/health/ready` answers `503 not_ready:malo_backfill` until the backfill has succeeded; it retries with backoff up to 60 s |
 | Delivery | `POST /webhooks/marktd`, verified against `[marktd] webhook_secret` (Standard Webhooks; unsigned accepted only without a secret). makod reads the record back with `GET /api/v1/malos/{malo_id}` and upserts it; a `404` drops the entry |
 | Failure | A read or cache write that fails answers `503`, so marktd redelivers with backoff and dead-letters after its budget — listed on marktd's `GET /api/v1/webhooks/endpoints/{id}/deliveries?status=failed` and replayable there |
@@ -2046,7 +2046,7 @@ queues it to the MSBN, the MSBA and the LF and ends the process with the MSBA
 assigned. After the Bestätigung makod records the MSBA (the Messlokation's MSB
 in marktd on the confirmed Zuordnungsbeginn) and the LF (of its one
 Marktlokation); a party marktd could not name is escalated as
-`de.mako.process.failed` instead of being skipped.
+`de.mako.engine.process.failed` instead of being skipped.
 
 ### Dates on the wire
 
@@ -2365,13 +2365,13 @@ outcomes.
 | A delivery window (APERAK, CONTRL) | No workflow is consulted; the outbox worker discharges it on delivery, so firing means a miss | `ERROR REGULATORY ALERT: delivery window expired …`, `makod_delivery_window_missed_total` |
 | A label not in the workflow's `DEADLINE_LABELS`, or a workflow with no driver in this build | Nothing acts | `ERROR deadline fired under a label its workflow does not own` |
 | An owned label whose window is closed (the answer went out or came in) | Nothing acts | nothing |
-| An owned label whose window is open | The Festlegung's outcome for the silence, or `FristAbgelaufen` where it gives none | `WARN Frist lapsed with its window still open`; for a label in the workflow's `FRIST_LABELS`, `de.mako.antwortfrist.abgelaufen` in the same write (the workflow's own notice where it builds one) — a label in `SCHEDULE_LABELS` announces nothing |
+| An owned label whose window is open | The Festlegung's outcome for the silence, or `FristAbgelaufen` where it gives none | `WARN Frist lapsed with its window still open`; for a label in the workflow's `FRIST_LABELS`, `de.mako.engine.antwortfrist.abgelaufen` in the same write (the workflow's own notice where it builds one) — a label in `SCHEDULE_LABELS` announces nothing |
 
 Each owned label is a Frist (`Workflow::FRIST_LABELS`) or a schedule
 (`Workflow::SCHEDULE_LABELS`); `tests/it/deadline_labels.rs` refuses a label in
 neither, with a ratchet over the workflows not yet classified. A lapse is not a
 completion: `makod_process_completed_total` counts the process when it ends.
-Every `de.mako.process.completed` carries the Antwortcode its write recorded
+Every `de.mako.engine.process.completed` carries the Antwortcode its write recorded
 (`antwortcode`, `codeliste`, from the event envelope) unless the payload names
 its own — processd opens a refusal Klärfall from it.
 
@@ -2568,7 +2568,7 @@ curl -s http://localhost:8080/admin/partners \
 
 `wim.steuerungsauftrag.bestaetigen` on a Konfiguration (PID 55168 positive
 Endantwort) enqueues a `DispatchConfirmed` outbox message, delivered as
-`de.vpp.dispatch.confirmed`:
+`de.mako.vpp.dispatch.confirmed`:
 
 ```json
 {

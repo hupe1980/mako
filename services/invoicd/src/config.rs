@@ -341,8 +341,8 @@ pub use mako_service::oidc::OidcConfig;
 
 /// ERP integration config — outbound payment CloudEvents.
 ///
-/// When `webhook_url` is set, `invoicd` POSTs a `de.invoic.receipt.settled`
-/// or `de.invoic.receipt.disputed` CloudEvent after each validated INVOIC.
+/// When `webhook_url` is set, `invoicd` POSTs a `de.mako.invoic.receipt.settled`
+/// or `de.mako.invoic.receipt.disputed` CloudEvent after each validated INVOIC.
 ///
 /// Example TOML:
 /// ```toml
@@ -354,7 +354,7 @@ pub use mako_service::oidc::OidcConfig;
 #[serde(deny_unknown_fields)]
 pub struct ErpConfig {
     /// ERP webhook URL — the endpoint `default`, receiving every CloudEvent
-    /// invoicd emits (`de.invoic.receipt.*`, `de.invoic.payment.overdue`).
+    /// invoicd emits (`de.mako.invoic.receipt.*`, `de.mako.invoic.payment.overdue`).
     pub webhook_url: Option<String>,
     /// Optional secret for Standard Webhooks signing on outbound requests.
     /// Use `"env:INVOICD_ERP_HMAC_SECRET"` to load from environment.

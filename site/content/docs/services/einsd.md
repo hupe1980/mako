@@ -33,9 +33,9 @@ graph TB
     einsd --> eeg_billing
     einsd <-->|"GET /api/v1/energy/{malo_id}?direction=EINSPEISUNG"| edmd
     einsd --> db
-    einsd -->|"de.eeg.*"| erp
-    einsd -->|"de.eeg.verguetung.berechnet · de.eeg.marktpraemie.berechnet"| accountingd
-    einsd -->|"de.eeg.*"| agentd
+    einsd -->|"de.mako.eeg.*"| erp
+    einsd -->|"de.mako.eeg.verguetung.berechnet · de.mako.eeg.marktpraemie.berechnet"| accountingd
+    einsd -->|"de.mako.eeg.*"| agentd
 ```
 
 ---
@@ -127,18 +127,18 @@ schema `CHECK` and `einsd::models::ALL` are pinned equal by
 
 | `settlement_model` | Regulation | Formula | CloudEvent |
 |---|---|---|---|
-| `VERGUETUNG` | § 21 Abs. 1 EEG 2023 | `kwh × verguetungssatz_ct / 100` | `de.eeg.verguetung.berechnet` |
-| `AUSFALLVERGUETUNG` | § 21 Abs. 1 Satz 1 Nr. 3 | same, reduced 20 % (§ 53 Abs. 3) | `de.eeg.verguetung.berechnet` |
-| `MIETERSTROM` | § 21 Abs. 3 | `kwh × (verguetung + mieter_zuschlag) / 100` | `de.eeg.verguetung.berechnet` |
-| `GGV` | § 42b EnWG | § 21 rate on the grid feed-in at the GGV MaLo | `de.eeg.verguetung.berechnet` |
-| `DIREKTVERMARKTUNG` | § 20 | Anlage 1 gleitende Marktprämie | `de.eeg.marktpraemie.berechnet` |
-| `AUSSCHREIBUNG` | § 22 | the same, AW from the BNetzA tender | `de.eeg.marktpraemie.berechnet` |
+| `VERGUETUNG` | § 21 Abs. 1 EEG 2023 | `kwh × verguetungssatz_ct / 100` | `de.mako.eeg.verguetung.berechnet` |
+| `AUSFALLVERGUETUNG` | § 21 Abs. 1 Satz 1 Nr. 3 | same, reduced 20 % (§ 53 Abs. 3) | `de.mako.eeg.verguetung.berechnet` |
+| `MIETERSTROM` | § 21 Abs. 3 | `kwh × (verguetung + mieter_zuschlag) / 100` | `de.mako.eeg.verguetung.berechnet` |
+| `GGV` | § 42b EnWG | § 21 rate on the grid feed-in at the GGV MaLo | `de.mako.eeg.verguetung.berechnet` |
+| `DIREKTVERMARKTUNG` | § 20 | Anlage 1 gleitende Marktprämie | `de.mako.eeg.marktpraemie.berechnet` |
+| `AUSSCHREIBUNG` | § 22 | the same, AW from the BNetzA tender | `de.mako.eeg.marktpraemie.berechnet` |
 | `SONSTIGE_DIREKTVERMARKTUNG` | § 21a | EUR 0 | — |
-| `POST_EEG_SPOT` | after the Förderdauer | `kwh × Marktwert_ct / 100` (configurable floor) | `de.eeg.verguetung.berechnet` |
+| `POST_EEG_SPOT` | after the Förderdauer | `kwh × Marktwert_ct / 100` (configurable floor) | `de.mako.eeg.verguetung.berechnet` |
 | `EIGENVERBRAUCH` | no grid feed-in | EUR 0 | — |
-| `KWKG_ZUSCHLAG` | § 7 KWKG | `eligible_kwh × rate / 100`, hour-capped | `de.eeg.verguetung.berechnet` |
-| `FLEXIBILITAET` | § 50b | `kwh × (verguetung + flex_praemie) / 100` | `de.eeg.verguetung.berechnet` |
-| `FLEXIBILITAET_ZUSCHLAG` | § 50a | `kw × rate_eur_per_kw / 12` | `de.eeg.verguetung.berechnet` |
+| `KWKG_ZUSCHLAG` | § 7 KWKG | `eligible_kwh × rate / 100`, hour-capped | `de.mako.eeg.verguetung.berechnet` |
+| `FLEXIBILITAET` | § 50b | `kwh × (verguetung + flex_praemie) / 100` | `de.mako.eeg.verguetung.berechnet` |
+| `FLEXIBILITAET_ZUSCHLAG` | § 50a | `kw × rate_eur_per_kw / 12` | `de.mako.eeg.verguetung.berechnet` |
 
 Every result carries `positions` with `Σ positions[*].eur = settlement_eur`;
 rounding follows
@@ -390,7 +390,7 @@ POST /api/v1/anlagen/{tr_id}/mastr-registrierung
 ```
 
 This clears the § 52 Abs. 1 Nr. 11 clock and emits
-`de.eeg.anlage.mastr-registriert`.
+`de.mako.eeg.anlage.mastr-registriert`.
 
 **Validation** (`validate::check`) refuses, naming the field:
 
@@ -707,7 +707,7 @@ Content-Type: application/json
 
 The § 21c Abs. 1 Satz 2 fünftletzter-Werktag variant is not applied. A success
 updates `last_veraeusserungsform_switch` and emits
-`de.eeg.veraeusserungsform.gewechselt` in the same transaction.
+`de.mako.eeg.veraeusserungsform.gewechselt` in the same transaction.
 `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` gives processd the
 form in force as its `SG10 CCI+Z22` DE 7037 code, an `ausfallverguetung` flag
 (`Z90` covers both the Einspeisevergütung and the Ausfallvergütung) and the `E_0623`
@@ -1216,12 +1216,12 @@ nothing sets it from capacity.
 
 | Type | When | Payload |
 |---|---|---|
-| `de.eeg.verguetung.berechnet` | Einspeisevergütung, KWKG or post-EEG period decided | `receipt_id`, `ketten_folge`, `korrektur_von` (the receipt a correction supersedes, else null), `tr_id`, `malo_id`, `billing_year/month`, `settlement_model`, `einspeisemenge_kwh`, `settlement_eur` (net), `status`, `pflichtzahlung_kumuliert_eur` (the running § 52 claim), `gutschrift_nummer`, `gutschrift_steuer_eur`, `gutschrift_brutto_eur`, `bank_iban`, `bank_bic`, `zahlungsempfaenger` |
-| `de.eeg.marktpraemie.berechnet` | Marktprämie period decided | the same payload |
-| `de.eeg.anlage.mastr-registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
-| `de.eeg.anlage.foerderung-auslaufend` | EEG Förderende within 180 days, once per plant (worker every 6 h; never for KWKG); enqueued with the mark that it was sent | `tr_id`, `foerderendedatum`, `days_remaining` |
-| `de.eeg.veraeusserungsform.gewechselt` | § 21b switch accepted | `tr_id`, new model, effective date |
-| `de.eeg.settlement.batch-due` | Monthly batch due | `billing_year`, `billing_month` |
+| `de.mako.eeg.verguetung.berechnet` | Einspeisevergütung, KWKG or post-EEG period decided | `receipt_id`, `ketten_folge`, `korrektur_von` (the receipt a correction supersedes, else null), `tr_id`, `malo_id`, `billing_year/month`, `settlement_model`, `einspeisemenge_kwh`, `settlement_eur` (net), `status`, `pflichtzahlung_kumuliert_eur` (the running § 52 claim), `gutschrift_nummer`, `gutschrift_steuer_eur`, `gutschrift_brutto_eur`, `bank_iban`, `bank_bic`, `zahlungsempfaenger` |
+| `de.mako.eeg.marktpraemie.berechnet` | Marktprämie period decided | the same payload |
+| `de.mako.eeg.anlage.mastr-registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
+| `de.mako.eeg.anlage.foerderung-auslaufend` | EEG Förderende within 180 days, once per plant (worker every 6 h; never for KWKG); enqueued with the mark that it was sent | `tr_id`, `foerderendedatum`, `days_remaining` |
+| `de.mako.eeg.veraeusserungsform.gewechselt` | § 21b switch accepted | `tr_id`, new model, effective date |
+| `de.mako.eeg.settlement.batch-due` | Monthly batch due | `billing_year`, `billing_month` |
 
 The period — `tr_id`, `billing_year`, `billing_month` — is the receipt chain:
 the initial receipt and each correction state the period's whole amount.
@@ -1246,7 +1246,7 @@ they are null for `EIGENVERBRAUCH`. Deliveries are
 ```json
 {
   "specversion": "1.0",
-  "type":        "de.eeg.verguetung.berechnet",
+  "type":        "de.mako.eeg.verguetung.berechnet",
   "source":      "urn:mako:einsd:tenant:9910000000002",
   "id":          "a1b2c3d4-...",
   "subject":     "TR-SOLAR-001",
@@ -1320,8 +1320,8 @@ critical at 90 % (plants > 100 kW).
 `register-eeg-plant` · `settle-monthly` · `check-foerderung-expiry` ·
 `ausschreibung-workflow` · `post-eeg-transition` · `anlagenerweiterung`
 
-In agentd, `eeg-agent` handles `de.eeg.*` and
-`de.messwert.reading.direct.stored` (an iMSys push lifts the < 100 kW § 51
+In agentd, `eeg-agent` handles `de.mako.eeg.*` and
+`de.mako.messwert.reading.direct.stored` (an iMSys push lifts the < 100 kW § 51
 exemption); `eeg-compliance-agent` runs the § 52 / § 44b / § 21 checks;
 `einsd-batch-agent` drives the monthly batch. See the
 [agentd guide](@/docs/services/agentd.md).

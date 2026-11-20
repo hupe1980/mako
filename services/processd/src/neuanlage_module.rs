@@ -359,7 +359,7 @@ fn to_anfrage(fall: &NeuanlageFall) -> NeuanlageAnfrage {
 
 // ── Payload ───────────────────────────────────────────────────────────────────
 
-/// Fields of a `de.mako.process.initiated` for a Neuanlage PID.
+/// Fields of a `de.mako.engine.process.initiated` for a Neuanlage PID.
 #[derive(Debug, Clone)]
 struct NeuanlagePayload {
     pid: u32,

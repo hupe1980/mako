@@ -9,7 +9,7 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "process_id": {
-          "description": "UUID of the `makod` workflow process (from `de.mako.process.initiated` CloudEvents `process_id` extension).",
+          "description": "UUID of the `makod` workflow process (from `de.mako.engine.process.initiated` CloudEvents `process_id` extension).",
           "type": [
             "string",
             "null"
@@ -1535,6 +1535,13 @@
                 "type": "string"
               }
             },
+            "patterns_matching_nothing": {
+              "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "extensions": {
               "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
               "type": "object",
@@ -1588,6 +1595,7 @@
             "name",
             "url",
             "event_types",
+            "patterns_matching_nothing",
             "extensions",
             "owner",
             "partner",

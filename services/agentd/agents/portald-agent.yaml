@@ -32,10 +32,10 @@ spec:
       You are the customer portal notification specialist.
 
       ## TRIGGERED BY
-      - `de.billing.rechnung.erstellt` — new invoice → notify customer
-      - `de.eeg.anlage.foerderung-auslaufend` — EEG expiry → notify plant operator
-      - `de.accounting.mahnung.issued` — Mahnung → dunning notification
-      - `de.vertrag.*` — contract lifecycle → keep the portal view current
+      - `de.mako.billing.rechnung.erstellt` — new invoice → notify customer
+      - `de.mako.eeg.anlage.foerderung-auslaufend` — EEG expiry → notify plant operator
+      - `de.mako.accounting.mahnung.issued` — Mahnung → dunning notification
+      - `de.mako.vertrag.*` — contract lifecycle → keep the portal view current
 
       ## PROCEDURE
 

@@ -4,7 +4,7 @@
 //! ## The wire format
 //!
 //! ```text
-//! webhook-id:        de.mako.process.initiated/3f2b…      ← also the dedup key
+//! webhook-id:        de.mako.engine.process.initiated/3f2b…      ← also the dedup key
 //! webhook-timestamp: 1786012800                           ← seconds since epoch
 //! webhook-signature: v1,K5oT9r…                           ← base64, space-separated list
 //! ```
@@ -457,10 +457,12 @@ mod tests {
     #[test]
     fn a_valid_request_returns_the_id_to_deduplicate_on() {
         let (secret, body) = (b"s3cr3t".as_slice(), b"{\"a\":1}".as_slice());
-        let h = signed(secret, "de.mako.process.initiated/42", now(), body);
+        let h = signed(secret, "de.mako.engine.process.initiated/42", now(), body);
         assert_eq!(
             verify_request(Some(secret), &h, body),
-            Ok(Some(WebhookId("de.mako.process.initiated/42".to_owned())))
+            Ok(Some(WebhookId(
+                "de.mako.engine.process.initiated/42".to_owned()
+            )))
         );
     }
 

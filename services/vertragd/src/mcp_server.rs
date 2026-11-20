@@ -238,7 +238,7 @@ impl VertragdMcpHandler {
 
     /// The agent twin of `GET /api/v1/webhooks/endpoints`.
     #[tool(
-        description = "List the webhook endpoints vertragd delivers its de.vertrag.* CloudEvents to, a page ordered by name: url, event-type patterns, extension filters, owner (`config` for the endpoint `default`, the configured erp_webhook_url; `api` for one registered through REST), whether it is active and the last delivery status. Secrets are never listed. Page on `next_cursor`.",
+        description = "List the webhook endpoints vertragd delivers its de.mako.vertrag.* CloudEvents to, a page ordered by name: url, event-type patterns, extension filters, owner (`config` for the endpoint `default`, the configured erp_webhook_url; `api` for one registered through REST), whether it is active and the last delivery status. Secrets are never listed. Page on `next_cursor`.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_output::<mako_service::page::Page<mako_service::subscriptions::Endpoint>>()
     )]
@@ -1150,7 +1150,7 @@ impl ServerHandler for VertragdMcpHandler {
              - `list_auto_renewal_due` — auto-renewal contracts within N days (§ 309 Nr. 9 lit. b BGB)\n\
              - `list_alle_kunden` — all customers for CRM/ERP sync\n\
              - `compute_kuendigungsfrist` — earliest valid Kündigung date (§ 20 Abs. 1 StromGVV / GasGVV)\n\
-             - `list_webhook_endpoints` — the webhook endpoints the de.vertrag.* events go to\n\
+             - `list_webhook_endpoints` — the webhook endpoints the de.mako.vertrag.* events go to\n\
              - `list_webhook_deliveries` — one endpoint's deliveries, failed ones included\n\n\
              ## Prompts (4)\n\
              - `o2c_review` — full O2C pipeline review + stuck/expiring detection\n\

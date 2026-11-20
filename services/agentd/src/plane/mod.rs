@@ -1320,7 +1320,7 @@ mod tests {
         let identity = m.spec.identity.as_ref().expect("identity declared");
         let prompt = agentplane::manifest::Identity::system_prompt(identity);
         assert!(
-            prompt.contains("de.gabi.alocat.missing")
+            prompt.contains("de.mako.gabi.alocat.missing")
                 && prompt.contains("does not ask a model")
                 && prompt.contains("cannot dispatch"),
             "the declaration must describe the emitted event and deterministic hard cut"

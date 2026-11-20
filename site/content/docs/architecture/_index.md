@@ -165,9 +165,9 @@ HTTP client or serialisation — `mako_service::CloudEvent` is the envelope,
 `mako_service::outbox` the transport.
 
 - Every type is lowercase reverse-DNS starting `de.`; a multi-word segment joins
-  with `-`. `de.vertrag.*` uses German participles (`de.vertrag.gekuendigt`).
+  with `-`. `de.mako.vertrag.*` uses German participles (`de.mako.vertrag.gekuendigt`).
 - A constant's doc comment carries its delivery status: `⚠ phantom:` is
-  subscribed with no emitter (ten of the fourteen `de.gabi.*` types), `orphan
+  subscribed with no emitter (ten of the fourteen `de.mako.gabi.*` types), `orphan
   emit:` the reverse.
 - `matches()` is the one glob matcher every subscription uses: `*` matches any
   (possibly empty) sequence, `?` exactly one character.
@@ -482,9 +482,9 @@ sequenceDiagram
     LF->>makod: POST /edifact  (UTILMD PID 55001, AS4 or REST)
     Note over makod: edi-energy: parse + validate<br/>PidRouter → gpke-supplier-change<br/>WorkflowOutput → events + APERAK outbox
     makod-->>LF: APERAK BGM+312 (within 45 min — auto)
-    makod->>marktd: POST /api/v1/events  de.mako.process.initiated  (CloudEvents 1.0)
-    marktd->>processd: POST /webhook  de.mako.process.initiated  (durable fan-out)
-    marktd->>erp: POST <webhook_url>  de.mako.process.initiated  (ERP subscription)
+    makod->>marktd: POST /api/v1/events  de.mako.engine.process.initiated  (CloudEvents 1.0)
+    marktd->>processd: POST /webhook  de.mako.engine.process.initiated  (durable fan-out)
+    marktd->>erp: POST <webhook_url>  de.mako.engine.process.initiated  (ERP subscription)
 
     Note over processd: receive AnmeldungAnfrage from event payload
     processd->>marktd: GET /api/v1/versorgung/{malo_id}  (VersorgungsStatus)
@@ -494,8 +494,8 @@ sequenceDiagram
     processd->>makod: POST /api/v1/commands  gpke.lieferbeginn.bestaetigen
     Note over makod: Process::run → events + UTILMD 55002 outbox<br/>AtomicAppend::append (single WriteBatch)
     makod-->>LF: UTILMD PID 55002 Bestätigung Anmeldung (via AS4/REST)
-    makod->>marktd: POST /api/v1/events  de.mako.process.completed  (CloudEvents 1.0)
-    marktd->>erp: POST <webhook_url>  de.mako.process.completed  (ERP subscription)
+    makod->>marktd: POST /api/v1/events  de.mako.engine.process.completed  (CloudEvents 1.0)
+    marktd->>erp: POST <webhook_url>  de.mako.engine.process.completed  (ERP subscription)
 ```
 
 The APERAK goes out within 45 minutes (APERAK AHB 1.1 Kap. 2.4.1).
@@ -543,7 +543,7 @@ acknowledges; `429`/`5xx` back off; any other `4xx` dead-letters. See
 3. If it is, the workflow records the lapse — the outcome its Festlegung gives
    the silence, or `FristAbgelaufen` where it gives none — in one write, with an
    `AntwortfristAbgelaufen` outbox entry where it carries one.
-4. That entry reaches the ERP as `de.mako.antwortfrist.abgelaufen` through
+4. That entry reaches the ERP as `de.mako.engine.antwortfrist.abgelaufen` through
    `OutboxErpWorker`.
 
 See [Compensation](@/docs/architecture/compensation.md).

@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.38.3"
+    "version": "0.39.0"
   },
   "paths": {
     "/api/v1/audit/gleichbehandlung": {
@@ -19,7 +19,7 @@
           "obs"
         ],
         "summary": "`GET /api/v1/audit/gleichbehandlung?year=YYYY[&format=csv|json]`",
-        "description": "Per-PID evidence for the **Gleichbehandlungsbericht** a vertically\nintegrated undertaking's Gleichbehandlungsbeauftragte files with the\nBundesnetzagentur by **31 March** for the preceding calendar year\n(§ 7a Abs. 5 EnWG), and publishes in non-personalised form.\nLieferantenwechsel is one of the areas those reports examine.\n\nIt compares how the operator's network arm treated Lieferanten inside its\nown undertaking against third-party Lieferanten, over the processes the\nnetwork arm actually answers (`handler::is_nb_answered_lieferanten_process`).\nThe underlying duties are § 6a EnWG (informatorische Entflechtung) and\n§ 20 Abs. 1 Satz 1 EnWG (diskriminierungsfreier Netzzugang).\n\n**`gap_pp` is `affiliate − third_party`, in percentage points.** A positive\ngap means the affiliate fared better, which is the concern. This convention\nis `ParityComparison`'s and is shared with the `de.obs.stp.parity.alert`\nCloudEvent and the MCP tool: three surfaces read one sign, because a sign\ncomputed per surface is a sign that can disagree about which side was\nfavoured.\n\n**No threshold is asserted.** The Bundesnetzagentur publishes no numeric\nparity limit for this figure; what counts as a gap worth explaining is the\noperator's judgement, and the escalation threshold lives in\n`[obs] parity_threshold_pp`. A gap over a group smaller than\n`PARITY_MIN_SAMPLE` is reported as `null`, not as a large number.",
+        "description": "Per-PID evidence for the **Gleichbehandlungsbericht** a vertically\nintegrated undertaking's Gleichbehandlungsbeauftragte files with the\nBundesnetzagentur by **31 March** for the preceding calendar year\n(§ 7a Abs. 5 EnWG), and publishes in non-personalised form.\nLieferantenwechsel is one of the areas those reports examine.\n\nIt compares how the operator's network arm treated Lieferanten inside its\nown undertaking against third-party Lieferanten, over the processes the\nnetwork arm actually answers (`handler::is_nb_answered_lieferanten_process`).\nThe underlying duties are § 6a EnWG (informatorische Entflechtung) and\n§ 20 Abs. 1 Satz 1 EnWG (diskriminierungsfreier Netzzugang).\n\n**`gap_pp` is `affiliate − third_party`, in percentage points.** A positive\ngap means the affiliate fared better, which is the concern. This convention\nis `ParityComparison`'s and is shared with the `de.mako.obs.stp.parity.alert`\nCloudEvent and the MCP tool: three surfaces read one sign, because a sign\ncomputed per surface is a sign that can disagree about which side was\nfavoured.\n\n**No threshold is asserted.** The Bundesnetzagentur publishes no numeric\nparity limit for this figure; what counts as a gap worth explaining is the\noperator's judgement, and the escalation threshold lives in\n`[obs] parity_threshold_pp`. A gap over a group smaller than\n`PARITY_MIN_SAMPLE` is reported as `null`, not as a large number.",
         "operationId": "get_gleichbehandlung_report",
         "parameters": [
           {
@@ -438,7 +438,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1218,6 +1218,15 @@
             }
           },
           {
+            "name": "external_ref",
+            "in": "query",
+            "description": "The order that carries this reference of the executing system",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "description": "1–1000; 100 when absent",
@@ -1230,7 +1239,7 @@
           {
             "name": "due",
             "in": "query",
-            "description": "Only orders whose requested execution date has arrived",
+            "description": "Only orders whose day has come: the requested date has arrived, or the order names none",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -1302,7 +1311,7 @@
             }
           },
           "409": {
-            "description": "An order for this process already exists",
+            "description": "An order for this process already exists, or `external_ref_taken`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1410,7 +1419,7 @@
           "sperr"
         ],
         "summary": "`PUT /api/v1/sperr-orders/{id}/cancel`",
-        "description": "Withdraw a pending order. No IFTSTA is dispatched — nothing happened.",
+        "description": "Withdraw a pending order. No IFTSTA is dispatched — nothing happened.\n\nA cancel that reaches an order already carried out answers `409` with the\ninstant of the act, so the caller knows which came first.",
         "operationId": "cancel_order",
         "parameters": [
           {
@@ -1439,7 +1448,17 @@
             }
           },
           "404": {
-            "description": "No pending order with that id",
+            "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`order_not_pending`: the act or an earlier withdrawal came first; carries `status` and `executed_at`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1483,7 +1502,7 @@
         },
         "responses": {
           "202": {
-            "description": "Recorded; its IFTSTA 21039 is queued",
+            "description": "Recorded; its IFTSTA 21039 is queued. With `conflict: executed_after_cancel` the order was withdrawn before the report arrived: the report is kept and announced, and no IFTSTA is queued",
             "content": {
               "application/json": {
                 "schema": {}
@@ -1513,8 +1532,95 @@
               }
             }
           },
+          "409": {
+            "description": "`order_not_pending`: already executed or failed; carries `status` and `executed_at`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "`executed_at` is not RFC 3339 or lies in the future",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sperr-orders/{id}/external-ref": {
+      "put": {
+        "tags": [
+          "sperr"
+        ],
+        "summary": "`PUT /api/v1/sperr-orders/{id}/external-ref`",
+        "description": "Attach the executing system's reference to an order — the way an order\nthat arrived from the market gets one. Every later `de.mako.sperr.*` event of\nthe order echoes it, and `GET /api/v1/sperr-orders?external_ref=` finds it.",
+        "operationId": "put_external_ref",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalRefRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Attached"
+          },
+          "403": {
+            "description": "Cedar `execute-sperr-order` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`external_ref_taken`: another order carries it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blank, longer than 200 characters, or with a control character",
             "content": {
               "application/json": {
                 "schema": {
@@ -1580,6 +1686,16 @@
           },
           "404": {
             "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`order_not_pending`: executed, failed or withdrawn; carries `status` and `executed_at`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2490,6 +2606,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -2550,6 +2667,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -2582,7 +2706,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -2686,6 +2810,19 @@
         },
         "additionalProperties": false
       },
+      "ExternalRefRequest": {
+        "type": "object",
+        "required": [
+          "external_ref"
+        ],
+        "properties": {
+          "external_ref": {
+            "type": "string",
+            "description": "The executing system's own reference: 1–200 characters, opaque, unique\nper tenant."
+          }
+        },
+        "additionalProperties": false
+      },
       "FailRequest": {
         "type": "object",
         "required": [
@@ -2706,6 +2843,17 @@
           "reason": {
             "type": "string",
             "description": "`SG25 FTX+ACB` — why it could not be carried out."
+          },
+          "responsible": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Responsible",
+                "description": "Whom the visit is put down to: `customer`, `contractor`, `operator` or\n`nobody`. Kept on the order and in its events; the Lieferant asks why."
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -2864,6 +3012,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -2923,6 +3072,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [
@@ -3045,6 +3201,16 @@
           }
         },
         "additionalProperties": false
+      },
+      "Responsible": {
+        "type": "string",
+        "description": "Whom an unsuccessful visit is put down to.\n\nThe Lieferant asks why a Sperrung did not happen, and „niemand angetroffen\"\nand „der Monteur kam nicht\" are different answers with different costs.",
+        "enum": [
+          "customer",
+          "contractor",
+          "operator",
+          "nobody"
+        ]
       },
       "RotateSecret": {
         "type": "object",

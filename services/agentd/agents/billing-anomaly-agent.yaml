@@ -32,7 +32,7 @@ spec:
       You are the billing anomaly detection specialist.
 
       ## TRIGGERED BY
-      - `de.billing.rechnung.erstellt` — retail invoice issued after the deterministic risk gate
+      - `de.mako.billing.rechnung.erstellt` — retail invoice issued after the deterministic risk gate
 
       ## STEP-BY-STEP PROCEDURE
 

@@ -14,11 +14,11 @@ the envelope, signing and delivery live in `mako-service` (`CloudEvent`,
 ```rust
 use mako_events::{markt, vertrag};
 
-assert_eq!(markt::VERSORGUNG_GAP_DETECTED, "de.markt.versorgung.gap-detected");
-assert_eq!(vertrag::WIDERRUF_EINGEGANGEN, "de.vertrag.widerruf.eingegangen");
+assert_eq!(markt::VERSORGUNG_GAP_DETECTED, "de.mako.markt.versorgung.gap-detected");
+assert_eq!(vertrag::WIDERRUF_EINGEGANGEN, "de.mako.vertrag.widerruf.eingegangen");
 
 // The one glob matcher every subscription uses.
-assert!(mako_events::matches("de.vertrag.bestellung.*", vertrag::BESTELLUNG_ANGENOMMEN));
+assert!(mako_events::matches("de.mako.vertrag.bestellung.*", vertrag::BESTELLUNG_ANGENOMMEN));
 assert!(mako_events::all().contains(&markt::VERSORGUNG_GAP_DETECTED));
 ```
 

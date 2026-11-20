@@ -29,7 +29,7 @@ impl Daemon for Edmd {
             .context("run edmd migrations")?;
         // Transactional outbox for the CloudEvents edmd publishes.
         //
-        // A metering event is not an optimisation: `de.messwert.reading.direct.stored`
+        // A metering event is not an optimisation: `de.mako.messwert.reading.direct.stored`
         // is what tells `billingd` to recompute, so an RLM push that is stored and
         // never announced is consumption that is never billed. Three attempts
         // inside the emitting request survive a network blip and not a receiver

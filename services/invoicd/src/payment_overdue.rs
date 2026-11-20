@@ -1,4 +1,4 @@
-//! Background worker that emits `de.invoic.payment.overdue`.
+//! Background worker that emits `de.mako.invoic.payment.overdue`.
 //!
 //! # Why it exists
 //!
@@ -14,7 +14,7 @@
 //! - Selects receipts past `pay_by` with no `payment_confirmed_at`, whose
 //!   answer *did* go out, and whose outcome accepted the invoice. A disputed
 //!   invoice is not overdue — it is disputed.
-//! - Enqueues one `de.invoic.payment.overdue` per receipt and stamps
+//! - Enqueues one `de.mako.invoic.payment.overdue` per receipt and stamps
 //!   `overdue_notified_at` in the same transaction, so a receipt is announced
 //!   once rather than every six hours until someone acts on it, and an
 //!   announcement is never stamped without its event. The webhook module
@@ -49,14 +49,17 @@ async fn run(pool: sqlx::PgPool, tenant: String, shutdown: CancellationToken) {
             }
         }
         match check_and_enqueue(&pool, &tenant).await {
-            Ok(n) if n > 0 => info!(count = n, "invoicd: enqueued de.invoic.payment.overdue"),
+            Ok(n) if n > 0 => info!(
+                count = n,
+                "invoicd: enqueued de.mako.invoic.payment.overdue"
+            ),
             Ok(_) => {}
             Err(e) => warn!(error = %e, "invoicd: payment_overdue check failed"),
         }
     }
 }
 
-/// Enqueue a `de.invoic.payment.overdue` for every receipt past its
+/// Enqueue a `de.mako.invoic.payment.overdue` for every receipt past its
 /// Zahlungsziel not yet announced, stamping each in the same transaction.
 ///
 /// # Errors

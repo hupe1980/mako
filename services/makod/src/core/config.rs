@@ -802,7 +802,7 @@ pub fn load(path: &Path) -> anyhow::Result<ConfigFile> {
 /// and so has to ask for it explicitly — and it is not cosmetic: an unresolved
 /// `webhook_secret = "env:MAKOD_ERP_WEBHOOK_SECRET"` becomes the literal HMAC
 /// key, and that literal is a constant published in this repository, so anyone
-/// can forge a signed `de.mako.process.*` event. A referenced-but-unset
+/// can forge a signed `de.mako.engine.process.*` event. A referenced-but-unset
 /// variable fails here, at startup, rather than on the first request.
 ///
 /// The `*_file` companion is read verbatim: a secret file's contents are the

@@ -1,4 +1,4 @@
-//! Real-PostgreSQL integration tests for the `de.obs.*` sweep producers.
+//! Real-PostgreSQL integration tests for the `de.mako.obs.*` sweep producers.
 //!
 //! Uses testcontainers (self-managing Docker) — runs under `cargo test` when a
 //! Docker daemon is available, skipped gracefully otherwise.

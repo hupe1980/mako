@@ -114,9 +114,9 @@ flowchart LR
     BILLINGD --> ACCOUNTINGD
     BILLINGD & VERTRAGD --> OUTPUTD
     EDMD & VERTRAGD --> PORTALD
-    MARKTD -.->|"de.mako.*"| PROCESSD
+    MARKTD -.->|"de.mako.engine.*"| PROCESSD
     MAKOD & BILLINGD & EDMD -.->|"CloudEvents"| AGENTD
-    AGENTD -.->|"de.agent.decision.made"| ERP
+    AGENTD -.->|"de.mako.agent.decision.made"| ERP
     ACCOUNTINGD --> ERP
 ```
 

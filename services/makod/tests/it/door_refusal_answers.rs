@@ -128,7 +128,7 @@ async fn an_unprocessed_pid_is_answered_z31() {
 
 /// A dead letter is a record someone sees: the refused 55001 yields one
 /// `DeadLetterRecorded` notice beside its record, in the outbox the ERP
-/// worker drains, mapped to `de.mako.dead-letter.recorded` and naming the PID
+/// worker drains, mapped to `de.mako.engine.dead-letter.recorded` and naming the PID
 /// and the message.
 #[tokio::test]
 async fn a_dead_lettered_message_yields_one_event() {

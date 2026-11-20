@@ -52,7 +52,7 @@ impl Daemon for Processd {
             .run(pool)
             .await
             .context("run processd migrations")?;
-        // Transactional outbox for the de.sperr.* notices, and the webhook
+        // Transactional outbox for the de.mako.sperr.* notices, and the webhook
         // endpoints and deliveries it fans out to.
         mako_service::outbox::ensure_schema(pool)
             .await

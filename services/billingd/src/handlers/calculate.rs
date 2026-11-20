@@ -112,7 +112,7 @@ pub struct CalculateRequest {
 /// 4. Take grid pass-through from the request's `grid` (nothing fetches it from `marktd`)
 /// 5. Dispatch to category-specific pure calculator
 /// 6. Persist `billing_records` (idempotent on same malo+period+product)
-/// 7. Emit `de.billing.rechnung.erstellt` CloudEvent
+/// 7. Emit `de.mako.billing.rechnung.erstellt` CloudEvent
 #[utoipa::path(
     post,
     path = "/api/v1/billing/{malo_id}/calculate",
@@ -265,7 +265,7 @@ pub async fn post_calculate(
         .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
 
     // Business write + dispatch event commit atomically: the invoice row and its
-    // `de.billing.rechnung.erstellt` outbox row live in one transaction, so a
+    // `de.mako.billing.rechnung.erstellt` outbox row live in one transaction, so a
     // crash can never leave a billed period without its ERP event. A HELD invoice
     // commits without the event (issuance waits for POST …/release).
     let rechnung_json = result.to_rechnung_json();
@@ -721,7 +721,7 @@ pub async fn post_release(
     let cfg = &deps.cfg;
     authorize(&cedar, &claims, "release-billing", &cfg.tenant)?;
     // Release stamp + withheld dispatch event commit atomically: the record is
-    // marked released and its `de.billing.rechnung.erstellt` outbox row is
+    // marked released and its `de.mako.billing.rechnung.erstellt` outbox row is
     // written in one transaction, so a crash cannot release a record without
     // (eventually) issuing the invoice the risk gate had held back.
     let mut tx = pool.begin().await?;

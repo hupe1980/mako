@@ -199,7 +199,7 @@ mod tests {
             "mutates": true,
             "args": { "server": "makod", "tool": "submit_command", "arguments": {} },
             "label": {
-                "provenance": ["cloudevent:de.mako.process.failed"],
+                "provenance": ["cloudevent:de.mako.engine.process.failed"],
                 "trust": "untrusted",
                 "sensitivity": "internal",
             },

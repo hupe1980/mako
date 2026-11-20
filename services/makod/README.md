@@ -13,8 +13,8 @@ ones run is decided by `[deployment] rollen`.
 | **Port** | 8080 REST (`deploy/ports.toml`); 4080 AS4 inbound and 8090 API-Webdienste when enabled |
 | **Database** | none — SlateDB on local disk or S3/GCS/Azure (`[storage]`) |
 | **MCP** | 18 tools, 6 prompts at `/mcp` |
-| **Emits** | `de.mako.*` to `[erp] webhook_url` — `process.*`, `aperak.*`, `antwortfrist.abgelaufen`, `edifact.outbound` |
-| **Consumes** | EDIFACT and Redispatch XML over AS4; `de.markt.malo.updated` at `POST /webhooks/marktd` |
+| **Emits** | `de.mako.engine.*` to `[erp] webhook_url` — `process.*`, `aperak.*`, `antwortfrist.abgelaufen`, `edifact.outbound` |
+| **Consumes** | EDIFACT and Redispatch XML over AS4; `de.mako.markt.malo.updated` at `POST /webhooks/marktd` |
 | **Depends on** | marktd (optional: MaLo cache, ESA consent gate) |
 
 ## Run

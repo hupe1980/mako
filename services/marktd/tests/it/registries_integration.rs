@@ -773,7 +773,7 @@ async fn an_energiemix_is_scoped_to_its_tenant() {
     assert!(history.iter().all(|r| r.tenant == TENANT));
 }
 
-/// The `PUT` stores the contract and its `de.markt.msb-rahmenvertrag.updated`
+/// The `PUT` stores the contract and its `de.mako.markt.msb-rahmenvertrag.updated`
 /// in one transaction: when the event cannot be enqueued, the request fails
 /// and **no contract is stored** — a row without its event would leave every
 /// ERP subscriber on the previous contract state with nothing to replay.
@@ -827,7 +827,7 @@ async fn the_put_commits_the_contract_and_its_event_together() {
 
     assert_eq!(put(body.clone()).await, StatusCode::OK);
     let events: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM event_outbox WHERE ce_type = 'de.markt.msb-rahmenvertrag.updated' \
+        "SELECT count(*) FROM event_outbox WHERE ce_type = 'de.mako.markt.msb-rahmenvertrag.updated' \
            AND envelope ->> 'marktsparte' = 'STROM'",
     )
     .fetch_one(&pool)

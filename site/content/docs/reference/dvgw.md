@@ -476,7 +476,7 @@ Four properties of the dispatch:
 `Final`: DVGW publishes `X6G`/`X7G` corrections that follow the endgültige one,
 while the workflow treats `Final` as settled and refuses any later correction.
 `Endgueltig` discharges the § 47 Ziffer 1 KoV XV final-allocation window — a
-stream with its `X5G` on file raises no `de.gabi.alocat.missing` when the window
+stream with its `X5G` on file raises no `de.mako.gabi.alocat.missing` when the window
 closes, and a correction after it still applies and keeps that record.
 
 ### 9.2 INVOIC billing

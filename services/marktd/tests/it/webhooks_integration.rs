@@ -124,7 +124,7 @@ fn event(got: &Got) -> serde_json::Value {
     serde_json::from_slice(&got.1).expect("a JSON CloudEvent")
 }
 
-/// A MaLo change reaches makod's endpoint as `de.markt.malo.updated`, signed
+/// A MaLo change reaches makod's endpoint as `de.mako.markt.malo.updated`, signed
 /// with the endpoint's secret and carrying `marktmaloid` — what makod's
 /// `/webhooks/marktd` verifies, then reads the record back by.
 #[tokio::test]
@@ -137,7 +137,7 @@ async fn makods_malo_cache_follows_a_change_through_the_shared_fanout() {
         name = "makod"
         url = "{url}"
         secret = "{SECRET}"
-        event_types = ["de.markt.malo.updated"]
+        event_types = ["de.mako.markt.malo.updated"]
         "#
     ))
     .await;
@@ -180,7 +180,7 @@ async fn a_sparte_filter_drops_the_other_sparte() {
         [[endpoints]]
         name = "gas-only"
         url = "{url}"
-        event_types = ["de.markt.malo.*"]
+        event_types = ["de.mako.markt.malo.*"]
         extensions = {{ marktsparte = "GAS" }}
         "#
     ))

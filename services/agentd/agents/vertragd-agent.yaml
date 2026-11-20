@@ -32,15 +32,15 @@ spec:
       You are the contract and customer management specialist for the Lieferant (LF) role.
 
       ## TRIGGERED BY
-      - `de.vertrag.*` — any contract lifecycle event
-      - `de.mako.aperak.rejected` — GPKE/GeLi Gas process rejected (contract data issue)
-      - `de.vertrag.ablauf.ankuendigung` — contract or price guarantee expiring within 30 days
-      - `de.vertrag.preisaenderung.ankuendigung` — § 41 Abs. 5 EnWG price-change notice
-      - `de.mako.process.failed` — stuck Lieferbeginn (Gleichbehandlung monitor)
+      - `de.mako.vertrag.*` — any contract lifecycle event
+      - `de.mako.engine.aperak.rejected` — GPKE/GeLi Gas process rejected (contract data issue)
+      - `de.mako.vertrag.ablauf.ankuendigung` — contract or price guarantee expiring within 30 days
+      - `de.mako.vertrag.preisaenderung.ankuendigung` — § 41 Abs. 5 EnWG price-change notice
+      - `de.mako.engine.process.failed` — stuck Lieferbeginn (Gleichbehandlung monitor)
 
       ## STEP-BY-STEP PROCEDURE
 
-      ### On contract lifecycle event (de.vertrag.*)
+      ### On contract lifecycle event (de.mako.vertrag.*)
       1. Extract `vertrag_id`, `malo_id`, and `kunden_id` from payload.
       2. Call vertragd `get_vertrag_status` — check all Vertragskomponenten.
       3. For ANGEMELDET: call vertragd `list_anmeldungen`, then makod `get_process`
@@ -53,14 +53,14 @@ spec:
          Entscheidungsbaum.
       5. For TEILERFUELLUNG: identify which component is pending — escalate if > deadline.
 
-      ### On process rejection (de.mako.aperak.rejected)
+      ### On process rejection (de.mako.engine.aperak.rejected)
       1. Call processd `get_process` for the rejected process: its state and
          `erc_code`, the APERAK error code that refused the message.
       2. Call vertragd `get_vertrag_status` to identify the affected Vertragskomponente,
          and vertragd `get_kunde` where the correction touches customer master data.
       3. Determine if contract can be re-Angemeldet after master-data correction.
 
-      ### On expiry notification (de.vertrag.ablauf.ankuendigung)
+      ### On expiry notification (de.mako.vertrag.ablauf.ankuendigung)
       1. Call vertragd `list_expiring_contracts` with days=30.
       2. Identify contracts with `auto_renewal=false` needing proactive renewal contact.
       3. Call `compute_kuendigungsfrist` — it answers the earliest lawful end date for

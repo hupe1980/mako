@@ -382,6 +382,11 @@ export interface Endpoint {
    */
   event_types: string[];
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * CloudEvent extensions an event must carry with these values
    * (`marktsparte`, `marktrole`).
    */
@@ -557,4 +562,4 @@ export interface DeadlineSummaryRow {
 export const billingdUntyped = ["check_billing_anomaly","explain_invoice_position","get_billing_record","get_billing_summary","get_policy","get_xrechnung","list_billing_records","list_corrections","list_product_categories","list_vpp_settlements","preview_billing","validate_tariff_config"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const billingdOberflaeche: Record<string, string> = {"list_review_queue":"e071e211","list_unbilled_periods":"52072d02","list_webhook_deliveries":"599f671b","list_webhook_endpoints":"aa9442dc","recompute_invoice":"01267f16","summarize_billing_deadlines":"5f711cce"};
+export const billingdOberflaeche: Record<string, string> = {"list_review_queue":"e071e211","list_unbilled_periods":"52072d02","list_webhook_deliveries":"599f671b","list_webhook_endpoints":"532802a1","recompute_invoice":"01267f16","summarize_billing_deadlines":"5f711cce"};

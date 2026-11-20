@@ -1087,7 +1087,7 @@ fn process_completed(
     // Carry malo_id so marktd's event_ingest can derive
     // VersorgungsStatus without relying on the CE subject (a process
     // UUID). Mirrors the GeLi Gas LFN workflow — without this outbox
-    // entry no `de.mako.process.completed` is ever emitted for a
+    // entry no `de.mako.engine.process.completed` is ever emitted for a
     // Strom supplier change, so `lf_mp_id_next` stays announced and
     // never gets promoted to the active Lieferant.
     let malo_id_str = match (marktlokation, state) {
@@ -1097,7 +1097,7 @@ fn process_completed(
     };
     // `accepted`/`outcome` are the verdict, and they are the only
     // thing that distinguishes a Bestätigung from an Ablehnung
-    // downstream: both leave through `de.mako.process.completed`,
+    // downstream: both leave through `de.mako.engine.process.completed`,
     // whose type says only that the process is terminal. A consumer
     // keying on the type alone activates supply for a Marktlokation
     // the NB refused.
@@ -1419,7 +1419,7 @@ mod tests {
     /// `HandleAntwort` must enqueue the `ProcessCompleted` outbox entry that
     /// drives marktd's `VersorgungsStatus` transition.
     ///
-    /// Without it no `de.mako.process.completed` is emitted for a Strom
+    /// Without it no `de.mako.engine.process.completed` is emitted for a Strom
     /// supplier change, so `lf_mp_id_next` is announced and never promoted —
     /// the MaLo stays `Unbeliefert` forever. The Gas twin
     /// (`geli-gas-lf-anmeldung`) always emitted this; GPKE did not.

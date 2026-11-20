@@ -383,7 +383,7 @@ CREATE INDEX nb_contracts_selbstzahler
 
 -- ── VersorgungsStatus per MaLo ────────────────────────────────────────────────
 --
--- One row per (malo_id, tenant). Derived from de.mako.process.completed events
+-- One row per (malo_id, tenant). Derived from de.mako.engine.process.completed events
 -- by the event_ingest handler. Used by processd to drive automated LFA
 -- E_0624 responses without ERP involvement.
 --
@@ -785,7 +785,7 @@ CREATE INDEX preisblaetter_hw_gin ON preisblaetter_hardware USING GIN (data json
 -- Dispatch pipeline:
 --   1. PUT /api/v1/preisblaetter/{nb_mp_id} → writes preisblaetter + pricat_versions
 --   2. Background task dispatches PRICAT 27003 per active LF GLN via MakodClient
---   3. On de.markt.partner.activated { role: "LF" }, latest pricat_version for
+--   3. On de.mako.markt.partner.activated { role: "LF" }, latest pricat_version for
 --      the NB is dispatched to the new partner only.
 
 -- ── PRICAT 27003 dispatch ledger ──────────────────────────────────────────────
@@ -807,7 +807,7 @@ CREATE INDEX preisblaetter_hw_gin ON preisblaetter_hardware USING GIN (data json
 --                      pointing at the live sheet instead would let a later
 --                      correction retroactively rewrite what was sent.
 --
--- Both are written in the same transaction as the `de.markt.pricat.published`
+-- Both are written in the same transaction as the `de.mako.markt.pricat.published`
 -- outbox row (handlers/preisblatt.rs), so the sheet, the snapshot and the
 -- dispatch trigger cannot diverge.
 --

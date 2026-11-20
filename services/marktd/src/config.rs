@@ -42,7 +42,7 @@
 //! name        = "makod"
 //! url         = "http://makod:8080/webhooks/marktd"
 //! secret      = "env:MAKOD_MARKTD_WEBHOOK_SECRET"
-//! event_types = ["de.markt.malo.updated"]
+//! event_types = ["de.mako.markt.malo.updated"]
 //!
 //! [mcp]
 //! path = "/mcp"
@@ -200,7 +200,7 @@ pub use mako_service::mcp_auth::McpAuthConfig as McpConfig;
 /// { "mehr_ct_kwh": "1.23", "minder_ct_kwh": "0.87", "marktgebiet": "THE" }
 /// ```
 ///
-/// A CloudEvent `de.markt.mmma.import.success` or `de.markt.mmma.import.failed`
+/// A CloudEvent `de.mako.markt.mmma.import.success` or `de.mako.markt.mmma.import.failed`
 /// is emitted to the durable fan-out on each run.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

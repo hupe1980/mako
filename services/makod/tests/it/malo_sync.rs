@@ -142,7 +142,7 @@ impl Harness {
         self.marktd.lock().expect("mock lock").record = rec;
     }
 
-    /// One fan-out delivery of `de.markt.malo.updated`, signed with `secret`.
+    /// One fan-out delivery of `de.mako.markt.malo.updated`, signed with `secret`.
     async fn deliver(&self, secret: &str) -> StatusCode {
         let body = serde_json::to_vec(&json!({
             "specversion": "1.0",

@@ -487,7 +487,7 @@ pub async fn post_submit_b2g(
             "billing_record_id": id,
             "portal": portal,
             "status": "queued",
-            "message": "de.billing.xrechnung.b2g.ready enqueued in the outbox for the ERP webhook",
+            "message": "de.mako.billing.xrechnung.b2g.ready enqueued in the outbox for the ERP webhook",
             "note": "ERP PEPPOL AS4 gateway is responsible for actual transmission to ZRE/OZG-RE",
             "regulatory": "§4a EGovG i.V.m. ERechV: B2G e-invoicing mandatory since 27.11.2020",
             "conformance": "XRechnung 3.0 (validated before dispatch)",

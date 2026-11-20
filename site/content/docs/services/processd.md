@@ -25,14 +25,14 @@ graph TB
     makod["makod :8080"]
     pg["PostgreSQL<br/>anmeldung_decisions · abmeldeanfragen<br/>approval_queue · eog_activations<br/>neuanlage_faelle · process_projections<br/>sperr_orders"]
 
-    marktd -->|"de.mako.* · de.markt.versorgung.*<br/>HMAC POST /webhook"| processd
+    marktd -->|"de.mako.engine.* · de.mako.markt.versorgung.*<br/>HMAC POST /webhook"| processd
 
     subgraph OBS ["process read model (every build)"]
         PROJ["obs::project<br/>process_projections · KPIs<br/>§ 7a Abs. 5 EnWG evidence"]
         PROJ --> pg
     end
     processd --> OBS
-    OBS -->|"de.obs.deadline.approaching<br/>de.obs.stp.parity.alert"| marktd
+    OBS -->|"de.mako.obs.deadline.approaching<br/>de.mako.obs.stp.parity.alert"| marktd
 
     subgraph NB ["NB module (--features nb-only)"]
         NC["mako-pruefung<br/>NB: E_0622 · E_0623 · E_0607 · E_0608 · G_0011 · G_0007<br/>LF: E_0609 · E_0624 · E_0614 · E_0615<br/>STP target ≥ 95%"]
@@ -122,7 +122,7 @@ and policy to each other in both directions.
 | `GET /obs/metrics` | — (restrict at the ingress) | scraper |
 | `GET /api/v1/sperr-orders` · `/{id}` · `/stats` | `read-sperr-order` | `NB` |
 | `POST /api/v1/sperr-orders` | `create-sperr-order` | `NB` |
-| `PUT /api/v1/sperr-orders/{id}/execute` · `/fail` | `execute-sperr-order` | `NB` |
+| `PUT /api/v1/sperr-orders/{id}/execute` · `/fail` · `/external-ref` | `execute-sperr-order` | `NB` |
 | `PUT /api/v1/sperr-orders/{id}/cancel` | `cancel-sperr-order` | `NB` |
 | `/api/v1/webhooks/**` | `manage-subscription` | `ADMIN` |
 | `GET /api/v1/events` | `read-events` | `ADMIN` |
@@ -148,7 +148,7 @@ true` accepts both, for local development (`just dev` runs processd on
 ### Decision pipeline (`nb_module.rs`)
 
 ```text
-de.mako.process.initiated
+de.mako.engine.process.initiated
   ├─ Anmeldung (55001 verb. MaLo / 55077 erz. MaLo / 44001 Gas)
   │    → GET marktd /api/v1/versorgung/{malo_id}       → VersorgungsStatus
   │    → GET marktd /api/v1/malos/{malo_id}/grid       → MaloGridRecord
@@ -171,7 +171,7 @@ de.mako.process.initiated
              …09:00 Uhr des 1. WT, or the LFA answers 55011/55012…
            → Gas: makod geli.beendigung-zuordnung.anfragen → UTILMD 44010
              …Ablauf des 3. WT, or the LFA answers 44011/44012…
-de.mako.abmeldeanfrage.beantwortet
+de.mako.engine.abmeldeanfrage.beantwortet
            → take abmeldeanfragen → mako_pruefung::evaluate_lieferbeginn(…)
            → the Accept / Reject / Escalate paths above
 ```
@@ -374,7 +374,7 @@ Every consuming Marktlokation must be assigned to a Bilanzkreis at all times
 (GPKE Teil 2 Kap. 2.3). The EoG module closes supply gaps:
 
 ```
-de.markt.versorgung.gap-detected           (marktd: an interval no supplier
+de.mako.markt.versorgung.gap-detected           (marktd: an interval no supplier
   │                                         covers — a Lieferende the successor
   │                                         does not follow on, or a Fall-b
   │                                         Bestätigung 55002/55078/44002)
@@ -389,7 +389,7 @@ de.markt.versorgung.gap-detected           (marktd: an interval no supplier
   │        Gas Bilanzierungsbeginn = Zuordnungsbeginn, GeLi Gas 3.0 Kap. 3.3.1)
   │    └─ missing → case stays `detected`; operator provisions the
   │       §36 Abs. 2 Feststellung and re-triggers
-  └─ de.markt.versorgung.eog-begonnen → case `active`
+  └─ de.mako.markt.versorgung.eog-begonnen → case `active`
        (eog_art = Ersatz-/Grundversorgung as classified by the E/G in 55014;
         eog_seit = Zuordnungsbeginn)
 ```
@@ -410,7 +410,7 @@ stateDiagram-v2
 A daily worker enforces the three-month maximum (§38 Abs. 4 S. 1 EnWG, calendar
 months from `eog_seit`): `warn_days_before_expiry` ahead the case turns
 `expiring`, at expiry `expired`; both enqueue
-`de.markt.versorgung.ersatz-auslaufend` in the transaction that moves the case,
+`de.mako.markt.versorgung.ersatz-auslaufend` in the transaction that moves the case,
 delivered to `[eog] notify_webhook_url` with retry. After
 expiry, Haushaltskunden pass into Grundversorgung without a market message;
 otherwise the NB secures the Bilanzkreis (vertragliche Ersatzbelieferung, STS
@@ -446,7 +446,7 @@ The same process carries the same command name in both Sparten —
 ### How a decision is made
 
 ```
-de.mako.process.initiated (an answerable PID)
+de.mako.engine.process.initiated (an answerable PID)
   → LfAnfrage from the CloudEvent — Transaktionsgrund and its Ergänzung
     (ZW3/ZW4/ZW5/ZAP, which selects the tree's branch), Termin, ÜT
   → LfVertragslage from marktd (supply state) + vertragd (contract state)
@@ -784,7 +784,7 @@ The answer is MSCONS 13007 or ORDRSP 19103; a delivery updates `edmd`
 
 ## Process read model
 
-The read model is a module of every role build. Every `de.mako.*` lifecycle
+The read model is a module of every role build. Every `de.mako.engine.*` lifecycle
 event the one `POST /webhook` receives is projected into one
 `process_projections` row per business process **before** any decision module
 sees it: the Antwortfrist at risk, the per-PID KPIs and the affiliate parity
@@ -802,7 +802,7 @@ measures the second; the first never reaches it.
 | **APERAK Frist** | Strom UTILMD/ORDERS 45 min (Samstag: Sonntag 12:00), other Strom next Werktag 12:00; Gas Folgeprozess next Werktag 12:00, Initialprozess end of the 3. Werktag (APERAK AHB 1.1 Kap. 2.3.1 / 2.4.1) | the counterparty's acknowledgement did not arrive — a transport or validation fault | not in the read model: makod raises the delivery-window alert and keeps the message in its outbox |
 | **Antwortfrist** | per PID — see below | the *business answer* is owed and has not been sent | `deadline_at`, computed on `process.initiated` |
 
-`state = antwortfrist_abgelaufen` is set by `de.mako.antwortfrist.abgelaufen`, which
+`state = antwortfrist_abgelaufen` is set by `de.mako.engine.antwortfrist.abgelaufen`, which
 `gpke-supplier-change` and `geli-gas-supplier-change` emit when **their
 Antwortfrist** lapses unanswered — an Antwortfrist signal raised by the
 workflow. `total_antwortfrist_abgelaufen` and `total_frist_breached` are separate fields
@@ -817,7 +817,7 @@ Antwortfrist sweep.
 | `pid` | BDEW Prüfidentifikator (e.g. 55001) |
 | `family` | `gpke`, `wim`, `geli-gas`, `wim-gas`, `gabi-gas`, `mabis`, `emob`, `redispatch`, `invoic-storno`, `unknown` — the Festlegung of the PID's Antwortfrist; a two-Sparten WiM PID by `data.sparte`, else the counterparty's coding authority (`293` / `332`) |
 | `workflow_name` | From the `makoworkflow` CE extension |
-| `state` | `initiated` \| `running` \| `antwortfrist_abgelaufen` \| `completed` \| `rejected` \| `failed`. A `de.mako.process.completed` is `rejected` when its `data.accepted` is `false` or `data.outcome` is `"rejected"` — the type carries the Bestätigung and the Ablehnung alike — and `completed` otherwise; `de.mako.aperak.rejected` is `rejected` too |
+| `state` | `initiated` \| `running` \| `antwortfrist_abgelaufen` \| `completed` \| `rejected` \| `failed`. A `de.mako.engine.process.completed` is `rejected` when its `data.accepted` is `false` or `data.outcome` is `"rejected"` — the type carries the Bestätigung and the Ablehnung alike — and `completed` otherwise; `de.mako.engine.aperak.rejected` is `rejected` too |
 | `malo_id` | 11-digit Marktlokations-ID |
 | `partner_mp_id` | MP-ID of the counterparty |
 | `mdm_role` | The operator's own Marktrolle in the process (`LF`, `NB`, `MSB`, `BIKO`), the `marktrole` marktd derives from the workflow name — not the counterparty's |
@@ -832,7 +832,7 @@ Antwortfrist sweep.
 | `initiator_is_affiliate` | The Lieferant belongs to this operator's own undertaking |
 
 `antwort_code` and `antwort_codeliste` are read from `data.antwortcode` /
-`data.codeliste`. makod states them on the `de.mako.process.completed` of an
+`data.codeliste`. makod states them on the `de.mako.engine.process.completed` of an
 answered Lieferbeginn (55002/55003, 44002/44003 and the other answers the LF
 Anmeldung receives); every other event leaves them unchanged.
 
@@ -949,7 +949,7 @@ curl -s "http://processd:8580/api/v1/counterparties/9800468000003/NB?von=2026-08
 
 The projection is a function of the events `marktd` fanned out, and `marktd`
 serves its outbox as a feed, in commit order. `POST /api/v1/obs/rebuild` (Cedar
-`rebuild-projection`, `ADMIN`) pages `marktd` `GET /api/v1/events?type=de.mako.*`
+`rebuild-projection`, `ADMIN`) pages `marktd` `GET /api/v1/events?type=de.mako.engine.*`
 by its cursor and hands each envelope to the projection function the webhook
 calls — a truncated table rebuilt this way equals the original row for row. The
 projection upserts on `process_id`, so a rebuild over a populated table repairs
@@ -963,13 +963,13 @@ so the `[marktd] api_key` processd uses must belong to one.
 
 ### Events produced
 
-Two sweeps produce `de.obs.*` CloudEvents when `[obs] outbound_url` is set (in
+Two sweeps produce `de.mako.obs.*` CloudEvents when `[obs] outbound_url` is set (in
 production `marktd`'s event ingest), HMAC-signed with `[obs] outbound_secret`:
 
 | Event | When | Consumed by |
 |-------|------|-------------|
-| `de.obs.deadline.approaching` | an open process has `deadline_at` within `deadline_warn_hours`, or already past it, and has not been alerted (`deadline_alerted_at`) | agentd `deadline-alert-agent` |
-| `de.obs.stp.parity.alert` | **either** gap — completion rate or Frist compliance — passes `parity_threshold_pp`, with both groups ≥ 10 processes | agentd `compliance-agent` |
+| `de.mako.obs.deadline.approaching` | an open process has `deadline_at` within `deadline_warn_hours`, or already past it, and has not been alerted (`deadline_alerted_at`) | agentd `deadline-alert-agent` |
+| `de.mako.obs.stp.parity.alert` | **either** gap — completion rate or Frist compliance — passes `parity_threshold_pp`, with both groups ≥ 10 processes | agentd `compliance-agent` |
 
 Only a **delivered** alert is stamped, so a downed target cannot consume a
 warning; a sweep returning a full batch reports `saturated`.
@@ -989,7 +989,7 @@ dispatch.
 ```mermaid
 flowchart LR
     LF["Lieferant"] -->|"ORDERS 17115 / 17117"| MAKOD["makod<br/>gpke-sperrung"]
-    MAKOD -->|"de.mako.process.initiated"| WH["processd<br/>POST /webhook"]
+    MAKOD -->|"de.mako.engine.process.initiated"| WH["processd<br/>POST /webhook"]
     WH --> Q[("sperr_orders<br/>pending")]
     OP["Operator"] -->|"POST /api/v1/sperr-orders"| Q
     Q --> FIELD["Field team"]
@@ -1028,7 +1028,7 @@ Werktagen on the BDEW-MaKo calendar:
 
 `/stats` reports `overdue_pending` for the Lieferant's own `DTM+203` / `DTM+469`
 and `frist_ueberschritten` for the regulatory window; a pending order past its
-6 WT is announced once as `de.sperr.ausfuehrung.ueberfaellig`. The
+6 WT is announced once as `de.mako.sperr.ausfuehrung.ueberfaellig`. The
 Vorlauffristen the *Lieferant* owes — 6 WT before the frühestmöglicher
 Sperrtermin, **12 WT** before a termingebundener one (Prozessschritt 1) — are
 recorded as `vorlauffrist_eingehalten` and counted as `vorlauffrist_verletzt`,
@@ -1055,7 +1055,34 @@ field is stated, not enforced.
 „Der NB führt bis zu zwei Sperrversuche innerhalb eines Sperrauftrags durch"
 (Prozessschritt 5): `PUT .../fail` records the first unsuccessful visit and
 leaves the order `pending`; the second closes it, as does `endgueltig: true` for a
-legal or factual impossibility.
+legal or factual impossibility. A report may name whom the visit is put down
+to — `responsible`: `customer`, `contractor`, `operator` or `nobody` — and the
+order shows it with `letzter_versuch_grund` while it is still open.
+
+### Carried out by another system
+
+A workforce tool, an ERP or a contractor's portal works the queue over the
+same routes and events; nothing here knows which.
+
+- **Its reference.** `external_ref` is one opaque string, unique per tenant:
+  given on `POST /api/v1/sperr-orders`, or attached to an order that came from
+  the market with `PUT /api/v1/sperr-orders/{id}/external-ref`. Every
+  `de.mako.sperr.*` event of the order echoes it, and
+  `GET /api/v1/sperr-orders?external_ref=` finds the order.
+- **When to go.** `de.mako.sperr.auftrag.faellig` is announced once on the day an
+  order may be carried out: its requested date, or at once for an order that
+  names none — an Entsperrauftrag is owed „unverzüglich" (§ 41f Abs. 7 EnWG).
+  It carries the Treffpunkt, both dates, `ausfuehrung_faellig_am` and the
+  Arbeitszeit, so the visit is planned from the event alone. `?due=true` lists
+  the same orders.
+- **Which came first.** A cancel, or a report, that reaches an order no longer
+  pending answers `409 order_not_pending` with `status` and `executed_at`.
+- **An execution after the withdrawal** is accepted, not refused: the supply
+  was interrupted whatever the queue says. `execute` answers `202` with
+  `conflict: "executed_after_cancel"`, the order stays `cancelled` and shows
+  the report and the `conflict`, `de.mako.sperr.ausfuehrung.nach-storno` announces
+  it, and no IFTSTA is queued — which Auftragsstatus a withdrawn order owes is
+  a person's decision.
 
 ### Reporting the outcome
 
@@ -1075,7 +1102,7 @@ once the outbox worker delivers it, which stamps `iftsta_dispatched_at` and
 A terminal order with `iftsta_dispatched_at IS NULL` has an uninformed
 Lieferant. The command follows the shared outbox policy — retries with backoff,
 then the dead letter; `iftsta_attempts` and `iftsta_last_error` on the order are
-read off it. A sweep announces `de.sperr.iftsta.ausstehend` once when the
+read off it. A sweep announces `de.mako.sperr.iftsta.ausstehend` once when the
 command is dead-lettered or `iftsta_faellig_am` has passed. `/stats` reports
 `iftsta_outstanding` (in flight), `iftsta_ueberfaellig` (past the 1-WT window)
 and `iftsta_stuck` (dead-lettered — **the number that needs a human**). A stuck
@@ -1094,15 +1121,19 @@ notices then reach only the registered endpoints.
 
 | CloudEvent | Emitted when |
 |---|---|
-| `de.sperr.auftrag.eingegangen` | An order entered the queue, from ORDERS or an operator |
-| `de.sperr.ausgefuehrt` | Carried out — IFTSTA `Z14` |
-| `de.sperr.versuch.gescheitert` | The **first** Sperrversuch failed and the order stayed `pending` |
-| `de.sperr.fehlgeschlagen` | Not carried out — IFTSTA `Z13`, with the Prüfschritt code |
-| `de.sperr.storniert` | A pending order was withdrawn; no IFTSTA |
-| `de.sperr.ausfuehrung.ueberfaellig` | The 6-WT execution window closed with the order still open |
-| `de.sperr.iftsta.ausstehend` | The IFTSTA command was dead-lettered **or** the Kap. 3.5.1.2 Nr. 5 Frist has passed, and the LF is still uninformed |
+| `de.mako.sperr.auftrag.eingegangen` | An order entered the queue, from ORDERS or an operator |
+| `de.mako.sperr.auftrag.faellig` | The day a pending order may be carried out has come; once per order |
+| `de.mako.sperr.ausgefuehrt` | Carried out — IFTSTA `Z14` |
+| `de.mako.sperr.versuch.gescheitert` | The **first** Sperrversuch failed and the order stayed `pending` |
+| `de.mako.sperr.fehlgeschlagen` | Not carried out — IFTSTA `Z13`, with the Prüfschritt code |
+| `de.mako.sperr.storniert` | A pending order was withdrawn; no IFTSTA |
+| `de.mako.sperr.ausfuehrung.ueberfaellig` | The 6-WT execution window closed with the order still open |
+| `de.mako.sperr.ausfuehrung.nach-storno` | An execution was reported for an order withdrawn beforehand |
+| `de.mako.sperr.iftsta.ausstehend` | The IFTSTA command was dead-lettered **or** the Kap. 3.5.1.2 Nr. 5 Frist has passed, and the LF is still uninformed |
 
-`agentd`'s `sperrd-agent` subscribes to the `de.sperr.*` glob. All four
+Each type's `data` has a published schema, linked from the
+[event catalog](@/docs/reference/events.md). `agentd`'s `sperrd-agent`
+subscribes to the `de.mako.sperr.*` glob. All four
 Sperrauftrag Cedar actions require the `NB` role and a tenant match;
 `tests/it/sperr/authorization_guard.rs` fails the build if a handler loses its
 `Claims` extractor or Cedar check.
@@ -1204,8 +1235,8 @@ warn_days_before_expiry   = 14            # §38 Abs. 4 3-month warning lead
 # notify_webhook_url      = "https://erp.example/hooks/eog"   # ersatz-auslaufend CloudEvents
 # notify_webhook_secret   = "env:EOG_WEBHOOK_SECRET"
 
-[obs]                               # the process read model's de.obs.* producers
-# Target for de.obs.deadline.approaching and de.obs.stp.parity.alert, in
+[obs]                               # the process read model's de.mako.obs.* producers
+# Target for de.mako.obs.deadline.approaching and de.mako.obs.stp.parity.alert, in
 # production marktd's event ingest; omit to disable both sweeps.
 outbound_url        = "http://marktd:8180/api/v1/mako/events"
 outbound_secret     = "env:PROCESSD_OBS_OUTBOUND_SECRET"  # HMAC; the target's inbound secret
@@ -1215,7 +1246,7 @@ parity_sweep_secs   = 86400   # default
 parity_threshold_pp = 5.0     # the operator's own escalation threshold, not a regulatory one
 parity_window_days  = 90      # parity look-back window
 
-[sperr]                             # NB Sperrauftrag queue — de.sperr.* to the ERP
+[sperr]                             # NB Sperrauftrag queue — de.mako.sperr.* to the ERP
 # erp_webhook_url = "https://erp.internal/hooks/sperr"     # the webhook endpoint `default`
 # erp_hmac_secret = "env:PROCESSD_SPERR_ERP_HMAC_SECRET"   # required with erp_webhook_url
 
@@ -1255,10 +1286,10 @@ and a due date from code tables — never from a model (`src/klaerfall.rs`):
 
 | Origin | Signal | Cause (code table) | Key |
 |---|---|---|---|
-| `aperak` | `de.mako.aperak.rejected` | ERC code → `mako_engine::erc::recommended_action` | the rejected message |
-| `dead_letter` | `de.mako.dead-letter.recorded` | reason → `mako_engine::dead_letter::action_for_label` | the message, else `dead-letter:<reason>` |
-| `refusal` | `de.mako.process.completed` whose Antwortcode refuses (`outcome = rejected`, or the code's cluster in its list) | the code in its tree, worded by `mako_pruefung::codes::lies` | the process |
-| `frist_missed` | `de.mako.antwortfrist.abgelaufen` | the lapse | the process |
+| `aperak` | `de.mako.engine.aperak.rejected` | ERC code → `mako_engine::erc::recommended_action` | the rejected message |
+| `dead_letter` | `de.mako.engine.dead-letter.recorded` | reason → `mako_engine::dead_letter::action_for_label` | the message, else `dead-letter:<reason>` |
+| `refusal` | `de.mako.engine.process.completed` whose Antwortcode refuses (`outcome = rejected`, or the code's cluster in its list) | the code in its tree, worded by `mako_pruefung::codes::lies` | the process |
+| `frist_missed` | `de.mako.engine.antwortfrist.abgelaufen` | the lapse | the process |
 | `operator_decision` | an `approval_queue` row, opened in the enqueue's transaction | the Freigabe | the process |
 
 The key is the message and the MP-ID that sent the signal (`partner_mp_id`):
@@ -1409,7 +1440,7 @@ because AWH WiM Gas 2.0 restates WiM Strom Teil 1 use-case for use-case. STP
 target: **≥ 80 %**. The Prüfschritte are `mako_pruefung::msb`.
 
 ```
-de.mako.process.initiated (PID 55039 / 55042 / 55051 / 55168)
+de.mako.engine.process.initiated (PID 55039 / 55042 / 55051 / 55168)
   → GET marktd /api/v1/melos/{melo_id}          ← MeLo known?
   → GET marktd /api/v1/msb-rahmenvertraege/check ← Rahmenvertrag § 9 Abs. 1 Nr. 3 MsbG?
       (55042/44042: Sparte, NB, MSBN, Zuordnungsbeginn)
@@ -1473,7 +1504,7 @@ For PIDs 35001, 35002, 35004 and 35005 (REQOTE Preisanfrage) `processd` answers
 from the active `PreisblattMessung` in `marktd`:
 
 ```
-de.mako.process.initiated (PIDs 35001/35002/35004/35005, REQOTE)
+de.mako.engine.process.initiated (PIDs 35001/35002/35004/35005, REQOTE)
   → GET marktd /api/v1/preisblaetter-messung/{own_mp_id}  ← PreisblattMessung current?
       Found   → wim.preisanfrage.angebot-senden
                  (includes preisblatt_gueltigkeit in payload for makod QUOTES build)
@@ -1498,7 +1529,7 @@ S. 2 Nr. 10 MsbG), so `role-msb` always carries:
 | **17008** | Abbestellung von Werten | ORDRSP 19011/19012 | 2 WT | `E_0254` |
 
 ```
-de.mako.process.initiated (PID 35003 / 17007 / 17008 / 39002)
+de.mako.engine.process.initiated (PID 35003 / 17007 / 17008 / 39002)
   → GET marktd /api/v1/esa/framework/{msb}/{esa}   ← Rahmenvertrag established?   (E_0256 Nr. 6)
   → GET marktd /api/v1/esa/consent-check           ← Einwilligung still valid?    (E_0256 Nr. 8)
   → GET marktd /api/v1/melos/{melo}/msb?at=        ← MSB assigned for the period? (E_0256 Nr. 7)
@@ -1557,7 +1588,7 @@ Kap. 1.3); an uncontracted `produktcode` is refused
 (`wim.steuerungsauftrag.ablehnen`).
 
 ```
-de.mako.process.initiated (wim-steuerungsauftrag)
+de.mako.engine.process.initiated (wim-steuerungsauftrag)
   → [parallel]
       GET marktd /api/v1/steuerbare-ressourcen/{sr_id}                 ← istFernschaltbar?
       GET marktd /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte  ← contracted?

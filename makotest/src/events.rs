@@ -41,7 +41,7 @@ pub fn event_type_exists(event_type: &str) -> bool {
 /// `True` when a subscription `pattern` selects `event_type`.
 ///
 /// `*` matches any sequence, `?` exactly one character, everything else is
-/// literal — so `de.mako.*` behaves like a prefix and `de.*.rechnung.*` works
+/// literal — so `de.mako.engine.*` behaves like a prefix and `de.*.rechnung.*` works
 /// too. Bound rather than reimplemented because there is deliberately **one**
 /// matcher in the workspace: a harness with its own would disagree with the
 /// routing it is testing.
@@ -168,16 +168,16 @@ mod tests {
     /// missing event, and the two must not be confusable.
     #[test]
     fn a_retired_prefix_is_not_a_declared_type() {
-        assert!(event_type_exists("de.mako.process.completed"));
+        assert!(event_type_exists("de.mako.engine.process.completed"));
         assert!(!event_type_exists("de.edmd.reading.stored"));
-        assert!(!event_type_exists("de.mako.process.complete"));
+        assert!(!event_type_exists("de.mako.engine.process.complete"));
     }
 
     #[test]
     fn a_pattern_resolves_to_the_types_it_would_deliver() {
-        let mako = event_types_matching("de.mako.*");
-        assert!(mako.contains(&"de.mako.process.initiated".to_owned()));
-        assert!(!mako.iter().any(|t| t.starts_with("de.markt.")));
+        let mako = event_types_matching("de.mako.engine.*");
+        assert!(mako.contains(&"de.mako.engine.process.initiated".to_owned()));
+        assert!(!mako.iter().any(|t| t.starts_with("de.mako.markt.")));
         assert_eq!(event_types_matching("*").len(), event_types().len());
         assert!(
             event_types_matching("de.nosuch.*").is_empty(),

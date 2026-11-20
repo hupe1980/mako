@@ -11,8 +11,8 @@ no grid topology, no EDIFACT and no customer master data.
 | **Port** | 9280 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — `billing_records`, `steuerzeilen`, `unbilled_periods`, `invoice_number_series`, `event_outbox` |
 | **MCP** | 18 tools, 6 prompts at `/mcp` |
-| **Emits** | `de.billing.rechnung.erstellt`, `de.billing.xrechnung.b2g.ready`, `de.billing.abrechnungsinformation.monatlich`, `de.vpp.settlement.berechnet` |
-| **Consumes** | `de.vpp.dispatch.confirmed` at `POST /api/v1/webhooks/vpp-dispatch` |
+| **Emits** | `de.mako.billing.rechnung.erstellt`, `de.mako.billing.xrechnung.b2g.ready`, `de.mako.billing.abrechnungsinformation.monatlich`, `de.mako.vpp.settlement.berechnet` |
+| **Consumes** | `de.mako.vpp.dispatch.confirmed` at `POST /api/v1/webhooks/vpp-dispatch` |
 | **Depends on** | `productd`, `edmd`, `marktd`, `vertragd`, `outputd`, `accountingd` |
 
 ## Run

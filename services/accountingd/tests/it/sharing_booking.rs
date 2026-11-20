@@ -3,7 +3,7 @@
 //!
 //! billingd's `the_allocated_share_is_the_credit_accountingd_books` bills a
 //! SHARING period from edmd's allocation and pins the
-//! `de.billing.rechnung.erstellt` fields accountingd reads in
+//! `de.mako.billing.rechnung.erstellt` fields accountingd reads in
 //! `services/billingd/tests/fixtures/sharing_rechnung_erstellt.json`. This
 //! books that fixture through the webhook, the way the event arrives, so a
 //! credit lost on either side of the seam fails one of the two tests.
@@ -65,7 +65,7 @@ async fn the_sharing_invoice_is_booked_at_its_gross() {
         "specversion": "1.0",
         "id": "ce-sharing-1",
         "source": format!("urn:mako:billingd:{TENANT}"),
-        "type": "de.billing.rechnung.erstellt",
+        "type": "de.mako.billing.rechnung.erstellt",
         "time": "2026-08-03T08:00:00Z",
         "subject": malo,
         "datacontenttype": "application/json",

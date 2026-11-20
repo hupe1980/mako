@@ -416,9 +416,9 @@ impl Negativpreis {
 /// the caller skips the enqueue entirely.
 ///
 /// CE types emitted:
-/// - `de.eeg.verguetung.berechnet` — VERGUETUNG, MIETERSTROM, POST_EEG_SPOT,
+/// - `de.mako.eeg.verguetung.berechnet` — VERGUETUNG, MIETERSTROM, POST_EEG_SPOT,
 ///   EIGENVERBRAUCH, KWKG_ZUSCHLAG, FLEXIBILITAET
-/// - `de.eeg.marktpraemie.berechnet` — DIREKTVERMARKTUNG, AUSSCHREIBUNG
+/// - `de.mako.eeg.marktpraemie.berechnet` — DIREKTVERMARKTUNG, AUSSCHREIBUNG
 ///
 /// `bank_iban` and `bank_bic` are included when present so `accountingd` can
 /// generate a SEPA Credit Transfer pain.001 without a secondary DB lookup.
@@ -503,8 +503,8 @@ pub fn build_settlement_ce(
 /// place that decides the event **type** and the emission **gate**.
 ///
 /// accountingd dispatches on the exact CE type, crediting the Massenkontokorrent
-/// and issuing the pain.001 payout for `de.eeg.verguetung.berechnet` and
-/// `de.eeg.marktpraemie.berechnet`. The REST and MCP settle paths both call this
+/// and issuing the pain.001 payout for `de.mako.eeg.verguetung.berechnet` and
+/// `de.mako.eeg.marktpraemie.berechnet`. The REST and MCP settle paths both call this
 /// so neither can drift to a type accountingd ignores (a dead-letter payout).
 ///
 /// The gate is a **decided** period ([`crate::pg::SETTLED_STATUSES`]), not a
@@ -540,8 +540,8 @@ pub async fn enqueue_settlement_ce(
             result.status
         );
     }
-    // de.eeg.marktpraemie.berechnet — the gleitende/wettbewerbliche Marktprämie
-    // de.eeg.verguetung.berechnet   — everything else (FiT, Mieterstrom, Post-EEG, Flex, KWKG)
+    // de.mako.eeg.marktpraemie.berechnet — the gleitende/wettbewerbliche Marktprämie
+    // de.mako.eeg.verguetung.berechnet   — everything else (FiT, Mieterstrom, Post-EEG, Flex, KWKG)
     let ce_type = if crate::models::ist_marktpraemie(&anlage.settlement_model) {
         mako_events::eeg::MARKTPRAEMIE_BERECHNET
     } else {
@@ -564,7 +564,7 @@ pub async fn enqueue_settlement_ce(
     Ok(())
 }
 
-/// Enqueue `de.eeg.anlage.foerderung-auslaufend` for a plant about to expire,
+/// Enqueue `de.mako.eeg.anlage.foerderung-auslaufend` for a plant about to expire,
 /// on the caller's transaction — the one that records the alert as sent, so
 /// the mark and the event commit together.
 ///
@@ -593,7 +593,7 @@ pub async fn enqueue_foerderung_alert_ce(
     mako_service::outbox::enqueue(conn, &ce).await
 }
 
-/// Enqueue `de.eeg.settlement.batch-due` when a monthly settlement batch is due.
+/// Enqueue `de.mako.eeg.settlement.batch-due` when a monthly settlement batch is due.
 ///
 /// The auto-settle worker enqueues this at the start of its monthly run so the
 /// `einsd-batch-agent` in `agentd` can run its §52 sweep / review over the same
@@ -1664,7 +1664,7 @@ pub struct MastrRegistrierungRequest {
 ///
 /// ## CloudEvent emitted
 ///
-/// `de.eeg.anlage.mastr-registriert` — signals ERP to release pending Vergütung.
+/// `de.mako.eeg.anlage.mastr-registriert` — signals ERP to release pending Vergütung.
 #[utoipa::path(
     post,
     path = "/api/v1/anlagen/{tr_id}/mastr-registrierung",
@@ -2290,7 +2290,7 @@ pub async fn post_switch_veraeusserungsform(
     match updated {
         Ok(r) if r.rows_affected() > 0 => {
             // ── §21c EEG 2023: notify the NB of the switch by end of the calendar
-            // month. de.eeg.veraeusserungsform.gewechselt is enqueued in this tx and
+            // month. de.mako.eeg.veraeusserungsform.gewechselt is enqueued in this tx and
             // the OutboxWorker forwards it to the GPKE handler (makod PID 55022/55023).
             let ce = build_veraeusserungsform_ce(&cfg, &tr_id, new_model, &req.effective_date);
             let notification_sent = ce.is_some();
@@ -2389,7 +2389,7 @@ pub fn fruehester_wechseltermin(heute: time::Date) -> Option<time::Date> {
     Some(d)
 }
 
-/// Build the `de.eeg.veraeusserungsform.gewechselt` CloudEvent for §21c EEG 2023.
+/// Build the `de.mako.eeg.veraeusserungsform.gewechselt` CloudEvent for §21c EEG 2023.
 ///
 /// Returns `Some(CloudEvent)` when the ERP webhook is configured — the caller must
 /// `enqueue` it in the same transaction as the `eeg_anlagen` update, so the switch

@@ -3,7 +3,7 @@
 //! Pure calculation service.  Pulls product definitions from `productd`,
 //! consumption from `edmd`; grid pass-through arrives with the request.
 //! Outputs canonical BO4E `Rechnung` objects and emits
-//! `de.billing.rechnung.erstellt` CloudEvents consumed by `accountingd`.
+//! `de.mako.billing.rechnung.erstellt` CloudEvents consumed by `accountingd`.
 //!
 //! ## Errors
 //!
@@ -59,7 +59,7 @@
 //! | `GET` | `/api/v1/billing/review-queue` | Analyst work list (REVIEW + HELD) |
 //! | `POST` | `/api/v1/billing/{id}/release` | Release a HELD record for dispatch |
 //! | `POST` | `/api/v1/billing/{id}/reviewed` | Record the review of a REVIEW record (sends nothing) |
-//! | `POST` | `/api/v1/webhooks/vpp-dispatch` | `de.vpp.dispatch.confirmed` auto-settlement |
+//! | `POST` | `/api/v1/webhooks/vpp-dispatch` | `de.mako.vpp.dispatch.confirmed` auto-settlement |
 //! | `GET` | `/health/live` | Liveness |
 //! | `GET` | `/health/ready` | Readiness |
 

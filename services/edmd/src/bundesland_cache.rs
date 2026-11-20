@@ -4,7 +4,7 @@
 //! the Land that keeps it. edmd holds no address, so `marktd` derives the Land
 //! from the PLZ of the MaLo's address and edmd keeps the answer per MaLo: the
 //! substitution reads this table and never calls `marktd`. The row is
-//! refreshed whenever `marktd` announces the MaLo (`de.markt.malo.updated`,
+//! refreshed whenever `marktd` announces the MaLo (`de.mako.markt.malo.updated`,
 //! raised on every write of its master data, the address among it).
 
 use sqlx::PgPool;

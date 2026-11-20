@@ -1,5 +1,5 @@
 //! Behaviour that spans modules: how a MaKo outcome is read off the wire, what
-//! a `de.vertrag.*` event looks like on it, and how the statutory rules of
+//! a `de.mako.vertrag.*` event looks like on it, and how the statutory rules of
 //! [`vertragd::domain`] resolve for whole, realistic contracts.
 //!
 //! The rules themselves are unit-tested beside their definitions; what is
@@ -28,7 +28,7 @@ fn ce(ce_type: &str, data: serde_json::Value) -> serde_json::Value {
 #[test]
 fn a_confirmation_carries_the_process_and_the_confirmed_malo() {
     let outcome = parse_mako_outcome(&ce(
-        "de.mako.process.bestaetigt",
+        "de.mako.engine.process.bestaetigt",
         serde_json::json!({ "process_id": "P-1", "malo_id": "51238696012" }),
     ))
     .expect("a .bestaetigt event is an outcome");
@@ -44,9 +44,9 @@ fn a_confirmation_carries_the_process_and_the_confirmed_malo() {
 #[test]
 fn every_confirmation_spelling_is_recognised() {
     for t in [
-        "de.mako.process.bestaetigt",
+        "de.mako.engine.process.bestaetigt",
         "de.mako.lieferbeginn.confirmed",
-        "de.mako.process.completed",
+        "de.mako.engine.process.completed",
     ] {
         let outcome = parse_mako_outcome(&ce(t, serde_json::json!({ "process_id": "P" })))
             .unwrap_or_else(|| panic!("{t} must parse"));
@@ -57,7 +57,7 @@ fn every_confirmation_spelling_is_recognised() {
 #[test]
 fn a_rejection_keeps_the_erc_code_the_customer_is_told() {
     let outcome = parse_mako_outcome(&ce(
-        "de.mako.process.abgelehnt",
+        "de.mako.engine.process.abgelehnt",
         serde_json::json!({
             "process_id": "P-2",
             "erc_code": "A02",
@@ -73,7 +73,7 @@ fn a_rejection_keeps_the_erc_code_the_customer_is_told() {
 /// The refusal `mako-gpke` actually emits, in the envelope it actually uses.
 ///
 /// A GPKE Ablehnung (PID 55003/55080) leaves `mako-gpke` as an outbox entry of
-/// type `ProcessCompleted`, which `makod` maps to `de.mako.process.completed` —
+/// type `ProcessCompleted`, which `makod` maps to `de.mako.engine.process.completed` —
 /// the same CloudEvent type a Bestätigung uses. Only `accepted`/`outcome` in
 /// `data` tell them apart. Reading the suffix alone sets the contract
 /// `BESTAETIGT`, enqueues the Beginnablesung and the Abrechnungskonto, and bills
@@ -81,7 +81,7 @@ fn a_rejection_keeps_the_erc_code_the_customer_is_told() {
 #[test]
 fn a_refusal_wearing_the_completed_type_is_not_a_confirmation() {
     let outcome = parse_mako_outcome(&ce(
-        "de.mako.process.completed",
+        "de.mako.engine.process.completed",
         serde_json::json!({
             "pid": 55003,
             "process_id": "P-3",
@@ -103,7 +103,7 @@ fn a_refusal_wearing_the_completed_type_is_not_a_confirmation() {
 #[test]
 fn an_acceptance_wearing_the_completed_type_is_a_confirmation() {
     let outcome = parse_mako_outcome(&ce(
-        "de.mako.process.completed",
+        "de.mako.engine.process.completed",
         serde_json::json!({
             "pid": 55002,
             "process_id": "P-4",
@@ -119,7 +119,7 @@ fn an_acceptance_wearing_the_completed_type_is_a_confirmation() {
 #[test]
 fn the_outcome_string_decides_without_an_accepted_flag() {
     let rejected = parse_mako_outcome(&ce(
-        "de.mako.process.completed",
+        "de.mako.engine.process.completed",
         serde_json::json!({ "process_id": "P-5", "outcome": "rejected" }),
     ))
     .expect("an outcome");
@@ -131,7 +131,7 @@ fn the_outcome_string_decides_without_an_accepted_flag() {
 #[test]
 fn a_payload_without_a_verdict_falls_back_to_the_suffix() {
     let outcome = parse_mako_outcome(&ce(
-        "de.mako.process.completed",
+        "de.mako.engine.process.completed",
         serde_json::json!({ "process_id": "P-6" }),
     ))
     .expect("an outcome");
@@ -144,7 +144,7 @@ fn a_payload_without_a_verdict_falls_back_to_the_suffix() {
 fn a_foreign_events_accepted_flag_is_not_an_outcome() {
     assert!(
         parse_mako_outcome(&ce(
-            "de.markt.malo.updated",
+            "de.mako.markt.malo.updated",
             serde_json::json!({ "accepted": true }),
         ))
         .is_none(),
@@ -154,7 +154,7 @@ fn a_foreign_events_accepted_flag_is_not_an_outcome() {
 
 #[test]
 fn an_unrelated_event_is_not_an_outcome() {
-    assert!(parse_mako_outcome(&ce("de.markt.malo.updated", serde_json::json!({}))).is_none());
+    assert!(parse_mako_outcome(&ce("de.mako.markt.malo.updated", serde_json::json!({}))).is_none());
     assert!(parse_mako_outcome(&serde_json::json!({ "data": {} })).is_none());
 }
 

@@ -34,14 +34,14 @@ graph TB
     portald["portald :9480"]
     bank["Bank adapter"]
 
-    billingd -->|"de.billing.rechnung.erstellt → RECHNUNG / STORNO"| accountingd
-    einsd -->|"de.eeg.verguetung.berechnet → EEG_GUTSCHRIFT + pain.001"| accountingd
-    einsd -->|"de.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE + pain.001"| accountingd
-    invoicd -->|"de.invoic.receipt.settled → ZAHLUNG"| accountingd
+    billingd -->|"de.mako.billing.rechnung.erstellt → RECHNUNG / STORNO"| accountingd
+    einsd -->|"de.mako.eeg.verguetung.berechnet → EEG_GUTSCHRIFT + pain.001"| accountingd
+    einsd -->|"de.mako.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE + pain.001"| accountingd
+    invoicd -->|"de.mako.invoic.receipt.settled → ZAHLUNG"| accountingd
     vertragd -->|"recipient of a Mahnung"| accountingd
     accountingd -->|"MAHNUNG document"| outputd
     accountingd -->|"paid Abschläge"| billingd
-    accountingd -->|"de.accounting.*"| erp
+    accountingd -->|"de.mako.accounting.*"| erp
     accountingd -->|"ORDERS 17115 / 17117"| makod
     accountingd -->|"pain.001"| bank
     bank -->|"pain.002, camt"| accountingd
@@ -95,20 +95,20 @@ contra account. Money is `i64` cents throughout; no `f64` touches it.
 
 | `entry_type` | Kontokorrent | GL contra | Raised by |
 |---|---|---|---|
-| `RECHNUNG` | Debit | Erlöse (SKR 4000) | `de.billing.rechnung.erstellt`, `is_correction=false` |
+| `RECHNUNG` | Debit | Erlöse (SKR 4000) | `de.mako.billing.rechnung.erstellt`, `is_correction=false` |
 | `STORNO` | by sign | Erlöse | the same event, `is_correction=true` (a Gutschrift is a negated Rechnung) |
 | `GUTSCHRIFT` | Credit | Erlöse | operator `POST /buchen` only |
 | `KORREKTUR` | by sign | Erlöse | operator `POST /buchen` |
 | `ABSCHLAG` | Debit | Erhaltene Anzahlungen (SKR 03 1718 / SKR 04 3272) | the Abschlagslauf — a demand, not a receipt |
 | `ABSCHLAG_VERRECHNUNG` | Credit | Erhaltene Anzahlungen | the settling invoice discharges the advances it deducted |
-| `ZAHLUNG` | Credit | Bank (SKR 1200) | camt import, `de.invoic.receipt.settled` |
+| `ZAHLUNG` | Credit | Bank (SKR 1200) | camt import, `de.mako.invoic.receipt.settled` |
 | `BANKRUECKLAST` | Debit | Bank | a returned direct debit |
 | `SEPA_STORNO` | Debit | Bank | a pain.007 reversal |
 | `MAHNGEBUEHR` | Debit | Mahnerlöse (SKR 4003) | dunning fee per Mahnstufe |
 | `VERZUGSZINSEN` | Debit | Zinserträge (SKR 2650) | § 288 BGB interest |
 | `VERZUGSPAUSCHALE` | by sign | Verzugspauschalen | the § 288 Abs. 5 BGB Pauschale (debit) and its Satz-3 Anrechnung (credit) |
-| `EEG_GUTSCHRIFT` | by sign | EEG-Aufwand | `de.eeg.verguetung.berechnet` — what the receipt changes its chain by |
-| `EEG_MARKTPRAEMIE` | by sign | EEG-Aufwand | `de.eeg.marktpraemie.berechnet` — the same |
+| `EEG_GUTSCHRIFT` | by sign | EEG-Aufwand | `de.mako.eeg.verguetung.berechnet` — what the receipt changes its chain by |
+| `EEG_MARKTPRAEMIE` | by sign | EEG-Aufwand | `de.mako.eeg.marktpraemie.berechnet` — the same |
 | `EEG_AUSZAHLUNG` | Debit | Bank | an EEG payout the bank settled (pain.002 `ACSC`) |
 | `EEG_RUECKZAHLUNG` | Credit | Bank | a plant operator's repayment of an overpayment |
 | `JAHRESABSCHLUSS` | Debit (Erstattung) | Erstattungen | the annual settlement |
@@ -146,7 +146,7 @@ unabsorbed advances a settling invoice may deduct, oldest first, with their rate
 
 ### Guthaben aus Schlussrechnung (§ 40c Abs. 3 EnWG)
 
-A `de.billing.rechnung.erstellt` with `schlussrechnung: true` whose `zuZahlen` is
+A `de.mako.billing.rechnung.erstellt` with `schlussrechnung: true` whose `zuZahlen` is
 negative owes the customer a Guthaben, paid out „binnen zwei Wochen". accountingd
 raises one `credit_payouts` row for it, keyed on (tenant, Rechnungsnummer) so a
 redelivered event raises none, due by `mako_fristen::vorlauf::guthaben_faellig`
@@ -396,10 +396,10 @@ Mahnstufe-3 case one phase:
 
 | Phase | Trigger | Action | Basis |
 |---|---|---|---|
-| 1. Sperrandrohung | Mahnstufe 3, both thresholds cleared, no lock | `de.accounting.sperrandrohung`; sets `sperrandrohung_at` | § 41f Abs. 1 |
-| 2. Sperrankündigung | `sperrandrohung_frist_days` (default 28) after the Androhung | `de.accounting.sperrankuendigung`; `geplantes_sperrdatum` = today + `sperrankuendigung_frist_werktage` (default 8) Werktage | § 41f Abs. 5 |
-| 3. Sperrauftrag | `geplantes_sperrdatum` reached | `gpke.sperrung.beauftragen` → **ORDERS 17115** via makod; `de.accounting.sperrauftrag` | § 41f |
-| 4. Entsperrauftrag | arrears settled, an Abwendungsvereinbarung accepted, or Schutzbedürftigkeit found | `gpke.entsperrung.beauftragen` → **ORDERS 17117**; `de.accounting.entsperrauftrag` | § 41f Abs. 7 |
+| 1. Sperrandrohung | Mahnstufe 3, both thresholds cleared, no lock | `de.mako.accounting.sperrandrohung`; sets `sperrandrohung_at` | § 41f Abs. 1 |
+| 2. Sperrankündigung | `sperrandrohung_frist_days` (default 28) after the Androhung | `de.mako.accounting.sperrankuendigung`; `geplantes_sperrdatum` = today + `sperrankuendigung_frist_werktage` (default 8) Werktage | § 41f Abs. 5 |
+| 3. Sperrauftrag | `geplantes_sperrdatum` reached | `gpke.sperrung.beauftragen` → **ORDERS 17115** via makod; `de.mako.accounting.sperrauftrag` | § 41f |
+| 4. Entsperrauftrag | arrears settled, an Abwendungsvereinbarung accepted, or Schutzbedürftigkeit found | `gpke.entsperrung.beauftragen` → **ORDERS 17117**; `de.mako.accounting.entsperrauftrag` | § 41f Abs. 7 |
 
 Phases 1 and 2 commit the state and the event in one transaction. Phase 3 marks
 the case **before** enqueueing, so a lost announcement is replayable and a
@@ -436,7 +436,7 @@ letters, and nothing progresses to a Sperrauftrag (a warning every cycle).
 
 The § 41g Abs. 3–6 Sozialhilfeträger flow is the ERP's, off the emitted events;
 the Abwendungsvereinbarung terms (zinsfrei, 6–18 months, 12–24 above 300 EUR)
-ride on `de.accounting.abwendung.angeboten`.
+ride on `de.mako.accounting.abwendung.angeboten`.
 
 ### Mahnsperren
 
@@ -453,7 +453,7 @@ validity and the operator who set it:
 
 Lifting with **`vereinbarung_gebrochen`** applies § 41g Abs. 1 S. 11: the
 Ankündigung state is cleared, so the sequence resumes with a fresh 8-Werktage
-announcement, and `de.accounting.abwendung.gebrochen` is emitted.
+announcement, and `de.mako.accounting.abwendung.gebrochen` is emitted.
 Open-ended locks are allowed and listed by
 `GET /api/v1/dunning/locks/review?older_than_days=90`.
 
@@ -564,7 +564,7 @@ transaction per plan:
   booked. A linked
   Abwendungsvereinbarung lock is lifted with `vereinbarung_gebrochen` in the
   same transaction (§ 41g Abs. 1 S. 11 EnWG): the Ankündigung is cleared and
-  `de.accounting.abwendung.gebrochen` emitted, so the case resumes at a fresh
+  `de.mako.accounting.abwendung.gebrochen` emitted, so the case resumes at a fresh
   § 41f Abs. 5 Ankündigung with no operator call.
 
 `COMPLETED`, `CANCELLED` and `DEFAULTED` are final.
@@ -605,12 +605,12 @@ buckets partition it and `sonstige_ct` takes any kind they do not name.
 - **Nachzahlung** (> 0): no entry is written; the balance is the open
   receivable.
 - **Erstattung** (< 0): a clearing debit zeroes the credit and a **pain.001**
-  refund goes to the stored IBAN (`de.accounting.erstattung.faellig`); without
+  refund goes to the stored IBAN (`de.mako.accounting.erstattung.faellig`); without
   an IBAN the credit is carried forward.
 
 It is idempotent per `(tenant, malo_id, year)` (`jahresabschluss_runs`), resets
 `abschlag_ct` to the year's supply billing ÷ 12 (Verzugsschaden excluded), and
-emits `de.accounting.jahresabschluss.abgeschlossen` in the same transaction.
+emits `de.mako.accounting.jahresabschluss.abgeschlossen` in the same transaction.
 
 **Annual worker (§ 40b Abs. 1 EnWG).** `jahresabschluss_auto_enabled = true`
 settles the previous year for every account without a run row, through the same
@@ -728,7 +728,7 @@ date, Verwendungszweck, `EndToEndId`, the IBAN masked to `DE…3000`, the door).
 ones; `POST /api/v1/payments/match` proposes an account; `POST
 /api/v1/payments/{payment_id}/assign` books the line as `ZAHLUNG` or
 `BANKRUECKLAST` under the key `bank:{bank_transaction_id}`, writes its
-`bank_import_log` row and its `de.accounting.payment.imported` /
+`bank_import_log` row and its `de.mako.accounting.payment.imported` /
 `.bankruecklast` (`matched_by: "manual"`) and closes the line in one
 transaction. A later import that resolves the same line closes it in its own
 booking's transaction; an assigned line imported again is a duplicate.
@@ -823,7 +823,7 @@ scheduler holds an advisory lock so one replica builds the day's batch.
   mandate, is **`422`** naming it.
 - `Mandatsreferenz` is the `EndToEndId`, ≤ 35 characters (registration check and
   DB `CHECK`).
-- `Purp/Cd` follows the account's Sparte from `de.billing.rechnung.erstellt`:
+- `Purp/Cd` follows the account's Sparte from `de.mako.billing.rechnung.erstellt`:
   `ELEC`, `GASB`, `WTER`, `ENRG` (district heating); `STROM_UND_GAS` emits none.
 - `Ustrd` is `"Abschlag YYYY-MM"`; the 140-character limit binds after
   transliteration.
@@ -832,7 +832,7 @@ scheduler holds an advisory lock so one replica builds the day's batch.
 
 **Pre-notification.** A daily worker builds and dispatches the pain.008
 `sepa_pre_notification_days` (default **14** calendar days, clamped to 1–60)
-before each `billing_day` and emits `de.accounting.payment.due`, which the ERP
+before each `billing_day` and emits `de.mako.accounting.payment.due`, which the ERP
 turns into the debtor's pre-notification (EPC SDD Core Rulebook). This is not
 the bank submission lead time.
 
@@ -863,7 +863,7 @@ curl -X POST "http://accountingd:9380/api/v1/sepa/pain002" \
 | About | Matched on | Effect |
 |---|---|---|
 | an EEG payout (pain.001) | `eeg_payout_orders.end_to_end_ref` | status, reason, `settled_at`, VoP outcome |
-| a collection (pain.008) | `sepa_collection_entries.end_to_end_id` | `SETTLED` / `REJECTED` + `de.accounting.sepa.collection-rejected` |
+| a collection (pain.008) | `sepa_collection_entries.end_to_end_id` | `SETTLED` / `REJECTED` + `de.mako.accounting.sepa.collection-rejected` |
 
 `OrgnlEndToEndId` or `OrgnlInstrId` is the key; a report naming neither is
 `unmatched`. A missing `TxSts` falls back to the group status; no status is not
@@ -876,7 +876,7 @@ own text (`status_raw`, `count_raw`, `total_raw`); an unreadable count is
 
 **A rejected collection is not a Bankrücklastschrift**: no money moved, so no
 `BANKRUECKLAST` is booked and the receivable stays open. A settled-then-returned
-collection arrives as a camt R-transaction (`de.accounting.bankruecklast`).
+collection arrives as a camt R-transaction (`de.mako.accounting.bankruecklast`).
 
 **Verification of Payee** (mandatory for euro credit transfers since 9 October
 2025) arrives in the same pain.002 on a separate axis:
@@ -889,7 +889,7 @@ collection arrives as a camt R-transaction (`de.accounting.bankruecklast`).
 | `RVNA` | `NOT_APPLICABLE` | No answer, timeout (`AB11`) or PSP outside the scheme (`AG03`) |
 | `RVCM` | group level | The file contains mismatches |
 
-Anything but a match emits `de.accounting.payee.verification-mismatch`; whether
+Anything but a match emits `de.mako.accounting.payee.verification-mismatch`; whether
 to execute is the operator's decision. The codes are the Deutsche
 Kreditwirtschaft's pain.002 conventions (DFÜ-Abkommen Anlage 3 V3.9
 Kap. 2.2.6).
@@ -911,8 +911,8 @@ message is recalled (`GrpCxl`). Nothing changes until the bank answers;
 
 The camt.029 is matched on `RslvdCase/Id` (an unknown case is `404`): `CNCL` or
 all `ACCR` → `RECALLED`; `RJCR` leaves the collection; `PDCR` or an unknown
-outcome (a lower-case `cncl` included) leaves the case open. Events: `de.accounting.sepa.recall-requested`,
-`de.accounting.sepa.recall-resolved`.
+outcome (a lower-case `cncl` included) leaves the case open. Events: `de.mako.accounting.sepa.recall-requested`,
+`de.mako.accounting.sepa.recall-resolved`.
 
 A **reversal** gives back a `SETTLED` collection:
 
@@ -929,14 +929,14 @@ duplicate collection, `DUPL` duplicate payment, `CUST` customer request.
 `OrgnlTxRef` is restated from stored data (the DK subset requires it), one
 reversal per collection (unique index; a second is `409`), a `SEPA_STORNO`
 re-opens the receivable, and an erased mandate makes a reversal impossible. It
-emits `de.accounting.sepa.reversal-issued` and is deliberately not an MCP tool.
+emits `de.mako.accounting.sepa.reversal-issued` and is deliberately not an MCP tool.
 
 Revoke a mandate (§ 58 ZAG) with `DELETE /api/v1/sepa/mandates/{mandate_id}`.
 
 ### pain.001 — EEG payout (§ 25 EEG 2023)
 
-einsd announces every settlement receipt as `de.eeg.verguetung.berechnet` or
-`de.eeg.marktpraemie.berechnet` — a zero included — carrying `receipt_id`,
+einsd announces every settlement receipt as `de.mako.eeg.verguetung.berechnet` or
+`de.mako.eeg.marktpraemie.berechnet` — a zero included — carrying `receipt_id`,
 `korrektur_von` (the receipt a § 147 AO correction supersedes), the period and
 `ketten_folge`. A period — plant (`tr_id`), billing year and month — is one
 **receipt chain**, and every receipt in it states the period's *whole* amount;
@@ -999,7 +999,7 @@ created → pain001_xml stored
   └─ POST to bank_submit_url (if set) → pain002_status = PDNG
        ├─ ACCP → settled_at set
        ├─ ACSC → settled_at set, EEG_AUSZAHLUNG booked (terminal)
-       └─ RJCT (reason_code) → de.accounting.eeg.payout.rejected; fix the IBAN and run the payouts
+       └─ RJCT (reason_code) → de.mako.accounting.eeg.payout.rejected; fix the IBAN and run the payouts
 ```
 
 ```bash
@@ -1096,20 +1096,20 @@ Emitted through the outbox to `erp_webhook_url`:
 
 | Type | When |
 |---|---|
-| `de.accounting.abschlag.posted` | An Abschlagsforderung is raised |
-| `de.accounting.payment.due` | A pain.008 is scheduled — the ERP's pre-notification |
-| `de.accounting.payment.imported` · `de.accounting.bankruecklast` | A camt payment or R-transaction is booked |
-| `de.accounting.sepa.collection-rejected` | pain.002 `RJCT` on a collection |
-| `de.accounting.sepa.reversal-issued` | A pain.007 is built |
-| `de.accounting.sepa.recall-requested` · `.recall-resolved` | camt.055 recorded; camt.029 decided it |
-| `de.accounting.payee.verification-mismatch` | VoP other than a match |
-| `de.accounting.eeg.payout.rejected` | pain.002 `RJCT` on an EEG payout |
-| `de.accounting.erstattung.faellig` | A Jahresabschluss refund |
-| `de.accounting.jahresabschluss.abgeschlossen` | Every committed settlement |
-| `de.accounting.mahnung.issued` | A Mahnstufe is reached |
-| `de.accounting.interest.charged` | A § 288 BGB charge is booked |
-| `de.accounting.sperrandrohung` · `.sperrankuendigung` · `.sperrauftrag` · `.entsperrauftrag` | Sperr-Sequenz phases |
-| `de.accounting.abwendung.angeboten` · `.gebrochen` | Abwendungsvereinbarung offered; broken |
+| `de.mako.accounting.abschlag.posted` | An Abschlagsforderung is raised |
+| `de.mako.accounting.payment.due` | A pain.008 is scheduled — the ERP's pre-notification |
+| `de.mako.accounting.payment.imported` · `de.mako.accounting.bankruecklast` | A camt payment or R-transaction is booked |
+| `de.mako.accounting.sepa.collection-rejected` | pain.002 `RJCT` on a collection |
+| `de.mako.accounting.sepa.reversal-issued` | A pain.007 is built |
+| `de.mako.accounting.sepa.recall-requested` · `.recall-resolved` | camt.055 recorded; camt.029 decided it |
+| `de.mako.accounting.payee.verification-mismatch` | VoP other than a match |
+| `de.mako.accounting.eeg.payout.rejected` | pain.002 `RJCT` on an EEG payout |
+| `de.mako.accounting.erstattung.faellig` | A Jahresabschluss refund |
+| `de.mako.accounting.jahresabschluss.abgeschlossen` | Every committed settlement |
+| `de.mako.accounting.mahnung.issued` | A Mahnstufe is reached |
+| `de.mako.accounting.interest.charged` | A § 288 BGB charge is booked |
+| `de.mako.accounting.sperrandrohung` · `.sperrankuendigung` · `.sperrauftrag` · `.entsperrauftrag` | Sperr-Sequenz phases |
+| `de.mako.accounting.abwendung.angeboten` · `.gebrochen` | Abwendungsvereinbarung offered; broken |
 
 ---
 

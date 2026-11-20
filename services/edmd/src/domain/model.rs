@@ -355,7 +355,7 @@ pub mod messtyp_serde {
 
 /// A delivery receipt: confirms that MSCONS meter data was received for a MaLo.
 ///
-/// Stored by `edmd` when a `de.mako.process.completed` event arrives for an
+/// Stored by `edmd` when a `de.mako.engine.process.completed` event arrives for an
 /// MSCONS PID. The actual kWh values are stored separately as [`MeterRead`]
 /// records once the domain crates emit typed meter reads in the payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -370,7 +370,7 @@ pub struct MeterDataReceipt {
     pub sender_mp_id: String,
     /// EDIFACT message reference.
     pub message_ref: Option<String>,
-    /// UTC timestamp of the `de.mako.process.completed` event.
+    /// UTC timestamp of the `de.mako.engine.process.completed` event.
     #[serde(with = "time::serde::rfc3339")]
     pub received_at: OffsetDateTime,
     /// Data-isolation key — operator's BDEW/DVGW Codenummer or GLN.
@@ -812,7 +812,7 @@ pub struct MeterRead {
     /// Automated quality warnings produced at ingest time (Hampel filter, gap detection).
     ///
     /// Schema: `{ "gaps_detected": N, "zero_run_length": N, "outlier_factor": 0.0 }`.
-    /// `None` = no warnings. Triggers `de.messwert.reading.quality.warning` CloudEvent.
+    /// `None` = no warnings. Triggers `de.mako.messwert.reading.quality.warning` CloudEvent.
     #[serde(default)]
     pub quality_warnings: Option<serde_json::Value>,
 

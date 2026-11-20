@@ -383,7 +383,7 @@ impl PgMaloRepository {
     /// existing MaLo row **without** touching the JSONB payload or version.
     ///
     /// Called by `marktd` event_ingest when it receives
-    /// `de.mako.process.initiated` (PID 55001/44001) carrying
+    /// `de.mako.engine.process.initiated` (PID 55001/44001) carrying
     /// `bilanzierungsmethode` and/or `fallgruppe` extracted from the UTILMD
     /// `TM+EM` / `TM+Z10` segments by the `makod` adapter.
     ///

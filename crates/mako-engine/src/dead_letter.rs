@@ -483,7 +483,7 @@ impl std::fmt::Display for DeadLetterReason {
 // ── Dead-letter notice ───────────────────────────────────────────────────────
 
 /// The outbox `message_type` announcing a dead letter; the ERP worker
-/// delivers it as `de.mako.dead-letter.recorded`.
+/// delivers it as `de.mako.engine.dead-letter.recorded`.
 pub const DEAD_LETTER_RECORDED: &str = "DeadLetterRecorded";
 
 /// The [`DEAD_LETTER_RECORDED`] notice for the dead letter `dead_letter_id`,

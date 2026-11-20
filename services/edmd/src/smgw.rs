@@ -44,7 +44,7 @@
 //!         check_session_compliance()    upsert cls_compliance_issues
 //!                   │                      │
 //!                   ▼                      ▼
-//!       de.messwert.cls.compliance-issue   GET /api/v1/smgw/compliance
+//!       de.mako.messwert.cls.compliance-issue   GET /api/v1/smgw/compliance
 //!       CloudEvent (ERP webhook)       (on-demand status endpoint)
 //! ```
 //!
@@ -63,7 +63,7 @@
 //!
 //! Alongside the compliance sweep, a second daily worker
 //! ([`run_smgw_cert_expiry_sweep`]) emits a tiered
-//! `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before each
+//! `de.mako.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before each
 //! certificate's `valid_to` in the stored `SmgwSession`, once per tier per
 //! certificate (dedup in `smgw_cert_expiry_alerts`; a renewed cert with a new
 //! `valid_to` gets a fresh set). This is the *advance* warning — an
@@ -448,7 +448,7 @@ pub fn check_session_compliance(
 
 /// Run a full fleet compliance sweep: query all `smgw_sessions`, check each
 /// session, reconcile them against `cls_compliance_issues`, and emit
-/// `de.messwert.cls.compliance-issue` CloudEvents to the ERP webhook.
+/// `de.mako.messwert.cls.compliance-issue` CloudEvents to the ERP webhook.
 ///
 /// Called by the daily background worker and by
 /// `POST /api/v1/smgw/compliance/scan` (on-demand).
@@ -611,7 +611,7 @@ pub async fn run_cls_compliance_sweep(
             }
             newly_opened += 1;
 
-            // ── 3. Emit de.messwert.cls.compliance-issue CloudEvent ───────────────
+            // ── 3. Emit de.mako.messwert.cls.compliance-issue CloudEvent ───────────────
             {
                 let ce = mako_service::CloudEvent::new(
                     mako_service::source("edmd", tenant),
@@ -822,12 +822,12 @@ pub struct CertExpirySweepReport {
     pub sessions_scanned: usize,
     /// Non-revoked certificates examined.
     pub certs_scanned: usize,
-    /// `de.messwert.smgw.cert.expiry-warning` events emitted this sweep.
+    /// `de.mako.messwert.smgw.cert.expiry-warning` events emitted this sweep.
     pub warnings_emitted: usize,
 }
 
 /// Sweep every SMGW certificate and emit a tiered
-/// `de.messwert.smgw.cert.expiry-warning` at the 90 / 30 / 7-day marks
+/// `de.mako.messwert.smgw.cert.expiry-warning` at the 90 / 30 / 7-day marks
 /// (`SMGW_CERT_ABLAUFDATUM` = `GatewayCertificate::valid_to`).
 ///
 /// Idempotent: `smgw_cert_expiry_alerts` records one row per
@@ -1031,7 +1031,7 @@ pub fn spawn_smgw_cert_expiry_worker(
 /// misspelt field is refused rather than read as absent. The session is stored
 /// as JSONB in its own serialisation. The caller is the MSB's
 /// GWA (Gateway-Administrator) system after a BSI TR-03109-4 Admin session;
-/// edmd subscribes to no `de.markt.*` event, so a Gerätekonfiguration changed
+/// edmd subscribes to no `de.mako.markt.*` event, so a Gerätekonfiguration changed
 /// in marktd reaches this table only through such a call.
 ///
 /// Triggers a synchronous compliance check.  Detected issues are logged to
@@ -1508,7 +1508,7 @@ pub async fn get_smgw_compliance(
 /// Trigger an immediate, side-effecting compliance sweep:
 /// - Runs `run_cls_compliance_sweep()` synchronously
 /// - Reconciles all found issues against `cls_compliance_issues`
-/// - Emits `de.messwert.cls.compliance-issue` CloudEvents for each issue
+/// - Emits `de.mako.messwert.cls.compliance-issue` CloudEvents for each issue
 ///
 /// Use this endpoint for manual compliance audits or integration tests.
 /// The daily background worker calls the same logic automatically.

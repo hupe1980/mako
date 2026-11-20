@@ -18,7 +18,7 @@
 //! | [`domain`] | The statutory rules — notice periods, price-change notice, term limits — as pure functions |
 //! | [`config`] | Deployment configuration |
 //! | [`dsr_policy`] | `[policy.dsr]` — the DPO's Art. 15/20/22 DSGVO readings for a data-subject export |
-//! | [`events`] | `de.vertrag.*` CloudEvent construction and MaKo outcome parsing |
+//! | [`events`] | `de.mako.vertrag.*` CloudEvent construction and MaKo outcome parsing |
 //! | [`outbound`] | Durable queue for every call owed to processd / edmd / accountingd |
 //! | [`workers`] | Daily lifecycle workers (Tarifwechsel, Verlängerung, Ablauf) |
 //! | [`pg`] | PostgreSQL data access |

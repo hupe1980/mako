@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.38.3"
+    "version": "0.39.0"
   },
   "paths": {
     "/api/v1/anlagen": {
@@ -916,7 +916,7 @@
           "anlagen"
         ],
         "summary": "`POST /api/v1/anlagen/{tr_id}/mastr-registrierung`",
-        "description": "Confirm MaStR registration for a plant:\n- `mastr_registriert` → `true`\n- the §52 Abs. 1 Nr. 11 violation clock (`mastr_violation_start`) is cleared\n\nThe plant status is untouched. `eeg_anlagen.status` has no pre-activation\nvalue — a plant is `aktiv` from registration — so there is no transition to\nmake here.\n\n## Legal basis\n\n§52 Abs. 1 Nr. 11 EEG 2023: plant operators must register in MaStR.\n- EEG 2023 plants: until confirmed, €10/kW/month Pflichtzahlung accrues.\n- EEG ≤2021 plants: until confirmed, Vergütung = 0 (old §52/§47 via §100).\n\n## CloudEvent emitted\n\n`de.eeg.anlage.mastr-registriert` — signals ERP to release pending Vergütung.",
+        "description": "Confirm MaStR registration for a plant:\n- `mastr_registriert` → `true`\n- the §52 Abs. 1 Nr. 11 violation clock (`mastr_violation_start`) is cleared\n\nThe plant status is untouched. `eeg_anlagen.status` has no pre-activation\nvalue — a plant is `aktiv` from registration — so there is no transition to\nmake here.\n\n## Legal basis\n\n§52 Abs. 1 Nr. 11 EEG 2023: plant operators must register in MaStR.\n- EEG 2023 plants: until confirmed, €10/kW/month Pflichtzahlung accrues.\n- EEG ≤2021 plants: until confirmed, Vergütung = 0 (old §52/§47 via §100).\n\n## CloudEvent emitted\n\n`de.mako.eeg.anlage.mastr-registriert` — signals ERP to release pending Vergütung.",
         "operationId": "post_mastr_registrierung",
         "parameters": [
           {

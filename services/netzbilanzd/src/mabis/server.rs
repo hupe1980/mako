@@ -541,7 +541,7 @@ pub async fn post_pruefmitteilung(
     let positiv = target.positiv;
 
     // One transaction: the Prüfmitteilung record and — when it is negative —
-    // the `de.mabis.korrekturbedarf.opened` outbox row commit together, so a
+    // the `de.mako.mabis.korrekturbedarf.opened` outbox row commit together, so a
     // Korrekturbedarf cannot exist that nothing announced, and no announcement
     // can outlive a rolled-back record.
     let outcome = async {

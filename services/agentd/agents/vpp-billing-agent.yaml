@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# VPP settlement anomaly monitor. Verifies that every `de.vpp.dispatch.confirmed` event produced a matching `de.vpp.settlement.berechnet` within 5 minutes, alerts on missing settlements, and performs Art. 17 RL (EU) 2019/944 audit checks.
+# VPP settlement anomaly monitor. Verifies that every `de.mako.vpp.dispatch.confirmed` event produced a matching `de.mako.vpp.settlement.berechnet` within 5 minutes, alerts on missing settlements, and performs Art. 17 RL (EU) 2019/944 audit checks.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -36,14 +36,14 @@ spec:
       Your job is anomaly detection, audit, and escalation.
 
       ## TRIGGERED BY
-      - `de.vpp.dispatch.confirmed`   — a new dispatch was confirmed; check resource and contract prerequisites
-      - `de.vpp.settlement.berechnet` — a settlement was generated; validate arithmetic
+      - `de.mako.vpp.dispatch.confirmed`   — a new dispatch was confirmed; check resource and contract prerequisites
+      - `de.mako.vpp.settlement.berechnet` — a settlement was generated; validate arithmetic
       - Manual run                    — periodic Art. 17 RL (EU) 2019/944 audit sweep
 
       ## CHECKS (run in order)
 
       1. **Settlement completeness, manual sweep only**: reconcile dispatches in the
-        selected period to `de.vpp.settlement.berechnet` by `tx_id`. Call billingd
+        selected period to `de.mako.vpp.settlement.berechnet` by `tx_id`. Call billingd
         `list_vpp_settlements`. Do not report a missing settlement from the immediate
         dispatch event: the billing transaction may still be in flight, and no timer
         wakes this specialist later. A deterministic billingd monitor must own a
@@ -55,7 +55,7 @@ spec:
          - `netto_eur = flexibility_kwh × capacity_price_eur_per_kwh` (from vpp_contracts)
          - `brutto_eur = netto_eur × 1.19` (standard MwSt)
 
-      3. **Missing contract guard**: If `de.vpp.dispatch.confirmed` arrived but no contract
+      3. **Missing contract guard**: If `de.mako.vpp.dispatch.confirmed` arrived but no contract
          exists in `vpp_contracts` for the SR-ID, escalate to operator immediately.
          Call marktd `get_steuerbare_ressource` for the SR-ID first: a dispatch naming a
          resource marktd does not know is a different fault from one naming a resource

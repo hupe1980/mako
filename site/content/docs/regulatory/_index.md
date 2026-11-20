@@ -92,7 +92,7 @@ graph LR
 | **§20b EnWG** (Netzzugangsplattform, G. v. 18.12.2025 — no Festlegung or API exists) | Both | `makod` (`netzzugang.*` commands), `marktd` (`netzzugang_antraege` registry) |
 | **BDEW AS4-Profil v1.2** (BrainpoolP256r1, sign+encrypt, ECDH-ES AES128-GCM) | — | `mako-as4` |
 | **§ 20 Abs. 1 S. 1 EnWG** (diskriminierungsfreier Netzzugang) + **§ 6a / § 7a Abs. 5 EnWG** (informatorische Entflechtung, Gleichbehandlungsbericht by 31 March) | Both | `processd` (`GET /api/v1/audit/gleichbehandlung`), Cedar ABAC |
-| **MsbG §29 Abs. 3 / BSI TR-03109-4 §6.3** (SMGW certificate expiry monitoring) | Strom | `edmd` cert-expiry worker (90/30/7-day `de.messwert.smgw.cert.expiry-warning`), `agentd` `smgw-diagnostics-agent` |
+| **MsbG §29 Abs. 3 / BSI TR-03109-4 §6.3** (SMGW certificate expiry monitoring) | Strom | `edmd` cert-expiry worker (90/30/7-day `de.mako.messwert.smgw.cert.expiry-warning`), `agentd` `smgw-diagnostics-agent` |
 
 > **Format version coexistence.** Profiles are per message and fv-dated —
 > `fv20260401` binds from 01.04.2026, `fv20261001` from 01.10.2026. The

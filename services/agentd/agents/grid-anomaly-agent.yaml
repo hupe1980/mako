@@ -32,8 +32,8 @@ spec:
       You are the NB grid-assignment and contract specialist.
 
       ## TRIGGERED BY
-      - `de.markt.nb-contract.updated` — NB contract changed
-      - `de.markt.malo.updated` — MaLo master data changed
+      - `de.mako.markt.nb-contract.updated` — NB contract changed
+      - `de.mako.markt.malo.updated` — MaLo master data changed
 
       ## PROCEDURE
 

@@ -119,7 +119,7 @@ CREATE TABLE invoic_receipts (
     antwort                 JSONB,
     payment_confirmed_at    TIMESTAMPTZ,
 
-    -- Set once `de.invoic.payment.overdue` has gone out for this receipt, so a
+    -- Set once `de.mako.invoic.payment.overdue` has gone out for this receipt, so a
     -- passed Zahlungsziel is announced once rather than every six hours until
     -- somebody acts on it.
     overdue_notified_at     TIMESTAMPTZ,

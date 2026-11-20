@@ -2095,7 +2095,7 @@ async fn a_silent_typ2_subscription_is_resolved_only_on_a_later_interval() {
 ///
 /// An append-only compliance log — a row and a CloudEvent per open issue per
 /// daily sweep — gives a gateway on an expired certificate one
-/// `de.messwert.cls.compliance-issue` a day for as long as nobody fixes it: for
+/// `de.mako.messwert.cls.compliance-issue` a day for as long as nobody fixes it: for
 /// a fleet, an unbounded event stream saying the same thing forever.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
@@ -3555,7 +3555,7 @@ async fn an_overdue_confirmation_sweep_records_its_notice_in_the_same_transactio
 
 /// A stored direct-push batch announces itself durably.
 ///
-/// `de.messwert.reading.direct.stored` is what tells `billingd` to recompute, so
+/// `de.mako.messwert.reading.direct.stored` is what tells `billingd` to recompute, so
 /// a batch that is stored and never announced is consumption that is never
 /// billed — and nothing re-derives it. The announcement is enqueued whether or
 /// not a webhook is configured: gating the emission on the delivery target

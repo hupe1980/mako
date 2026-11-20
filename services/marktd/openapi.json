@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.38.3"
+    "version": "0.39.0"
   },
   "paths": {
     "/api/v1/bilanzierungsgebiete/{eic}/mabis-zp": {
@@ -708,7 +708,7 @@
           "einwilligung"
         ],
         "summary": "`DELETE /api/v1/esa/einwilligungen/:id` — revoke consent (Art. 7(3) GDPR).",
-        "description": "Commits the revocation with its `de.markt.einwilligung.widerrufen` event and\none ORDERS 17008 Abbestellung command per covered location; the outbox\nworker delivers those to makod with retry, so a makod outage delays the stop\nand never loses it.",
+        "description": "Commits the revocation with its `de.mako.markt.einwilligung.widerrufen` event and\none ORDERS 17008 Abbestellung command per covered location; the outbox\nworker delivers those to makod with retry, so a makod outage delays the stop\nand never loses it.",
         "operationId": "revoke_einwilligung",
         "parameters": [
           {
@@ -1247,7 +1247,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5921,7 +5921,7 @@
           "device"
         ],
         "summary": "`PUT /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`",
-        "description": "Atomically replace the contracted iMS control products\n(`Vec<Konfigurationsprodukt>`) for an existing `SteuerbareRessource`\n(Codeliste der Konfigurationen 1.4 Kap. 4.1–4.3, ordered under GPKE Teil 3\nKap. 1.3).\n\n## Validation\n\nThe body is a [`PutKonfigurationsprodukteRequest`]. Every element must:\n1. Cross the BO4E gate as a `Konfigurationsprodukt`, with no key BO4E does\n   not define\n2. Carry a non-empty `produktcode` — **mandatory** per BDEW AHB\n\n## Idempotency\n\nSupplying the same list twice is safe (version counter increments but\nthe JSONB payload is unchanged).  Pass `{\"konfigurationsprodukte\": []}` to\nclear all products.\n\n## CloudEvent\n\nEmits `de.markt.sr.konfigurationsprodukt.updated` to the durable fan-out\non every successful write so ERP subscribers and `processd` see the change.\n\nReturns `204 No Content` on success.",
+        "description": "Atomically replace the contracted iMS control products\n(`Vec<Konfigurationsprodukt>`) for an existing `SteuerbareRessource`\n(Codeliste der Konfigurationen 1.4 Kap. 4.1–4.3, ordered under GPKE Teil 3\nKap. 1.3).\n\n## Validation\n\nThe body is a [`PutKonfigurationsprodukteRequest`]. Every element must:\n1. Cross the BO4E gate as a `Konfigurationsprodukt`, with no key BO4E does\n   not define\n2. Carry a non-empty `produktcode` — **mandatory** per BDEW AHB\n\n## Idempotency\n\nSupplying the same list twice is safe (version counter increments but\nthe JSONB payload is unchanged).  Pass `{\"konfigurationsprodukte\": []}` to\nclear all products.\n\n## CloudEvent\n\nEmits `de.mako.markt.sr.konfigurationsprodukt.updated` to the durable fan-out\non every successful write so ERP subscribers and `processd` see the change.\n\nReturns `204 No Content` on success.",
         "operationId": "put_konfigurationsprodukte",
         "parameters": [
           {
@@ -7432,7 +7432,7 @@
           "device"
         ],
         "summary": "`PUT /api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen`",
-        "description": "**Atomically replace** all configuration entries for a `Geraet`.\n\n- Server-side deduplication: last entry wins for duplicate `parameter` values.\n- `updated_at` on each stored entry is set server-side (UTC now).\n- Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out. Its\n  subscribers are the ERP and `agentd`'s `smgw-diagnostics-agent`; neither\n  `edmd` nor `processd` consumes it.\n\n### `SmgwTlsCertFingerprint` and `SmgwCertAblaufdatum`\n\nBoth are master data here. `edmd`'s daily certificate-expiry worker sweeps\nthe `SmgwSession` each gateway registered with `edmd` itself and emits a\ntiered `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before\nexpiry (BSI TR-03109-4 §6.3), once per tier per certificate; it does not read\nthese entries.",
+        "description": "**Atomically replace** all configuration entries for a `Geraet`.\n\n- Server-side deduplication: last entry wins for duplicate `parameter` values.\n- `updated_at` on each stored entry is set server-side (UTC now).\n- Emits `de.mako.markt.geraet.konfiguration.updated` via the durable fan-out. Its\n  subscribers are the ERP and `agentd`'s `smgw-diagnostics-agent`; neither\n  `edmd` nor `processd` consumes it.\n\n### `SmgwTlsCertFingerprint` and `SmgwCertAblaufdatum`\n\nBoth are master data here. `edmd`'s daily certificate-expiry worker sweeps\nthe `SmgwSession` each gateway registered with `edmd` itself and emits a\ntiered `de.mako.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before\nexpiry (BSI TR-03109-4 §6.3), once per tier per certificate; it does not read\nthese entries.",
         "operationId": "put_geraet_konfigurationen",
         "parameters": [
           {
@@ -8128,6 +8128,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -8188,6 +8189,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -8220,7 +8228,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -9262,6 +9270,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -9321,6 +9330,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [

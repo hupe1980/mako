@@ -5,7 +5,7 @@
 //! attempts inside the request that produced it.
 //!
 //! The distinction matters most on the metering path.
-//! `de.messwert.reading.direct.stored` is what tells `billingd` to recompute, so
+//! `de.mako.messwert.reading.direct.stored` is what tells `billingd` to recompute, so
 //! a batch that is stored and never announced is consumption that is never
 //! billed — and nothing re-derives it: there is no watermark, no sweep and no
 //! reconciliation that would notice. A fleet-wide push during a `billingd`

@@ -17,7 +17,7 @@ pub struct EinsdConfig {
     /// Typically the operator’s BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
 
-    /// ERP webhook URL.  When set, `de.eeg.*` CloudEvents are POSTed here.
+    /// ERP webhook URL.  When set, `de.mako.eeg.*` CloudEvents are POSTed here.
     pub erp_webhook_url: Option<String>,
 
     /// HMAC-SHA256 secret for signing outbound CloudEvent POSTs.
@@ -264,7 +264,7 @@ impl EinsdConfig {
             );
         }
         // `OutboxWorker` signs only when it has a secret. With a webhook URL and
-        // none, every de.eeg.* CloudEvent — the settled amounts the ERP pays out
+        // none, every de.mako.eeg.* CloudEvent — the settled amounts the ERP pays out
         // on among them — reaches the receiver unsigned and indistinguishable
         // from a body anybody posted.
         if self.erp_webhook_url.is_some()
@@ -275,7 +275,7 @@ impl EinsdConfig {
                 Befund::blockiert(
                     "erp_hmac_secret",
                     "einsd: erp_webhook_url is set but erp_hmac_secret is not — the outbox \
-                     worker signs only when it has a secret, so every de.eeg.* CloudEvent, \
+                     worker signs only when it has a secret, so every de.mako.eeg.* CloudEvent, \
                      settlement amounts included, would reach the ERP unsigned. Configure \
                      erp_hmac_secret, or set allow_insecure_no_auth = true",
                 )

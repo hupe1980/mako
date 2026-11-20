@@ -10,21 +10,23 @@
 //!
 //! | Event type | When |
 //! |---|---|
-//! | `de.vertrag.aktiv` | All components NB-confirmed, billing may start |
-//! | `de.vertrag.gekuendigt` | Lieferende dispatched (Rahmenvertrag cascade, per child) |
-//! | `de.vertrag.kuendigung` | Kündigung accepted, Lieferende dispatched |
-//! | `de.vertrag.kuendigung-widerrufen` | Kündigung withdrawn before Lieferende |
-//! | `de.vertrag.tarifwechsel` | Product change applied immediately |
-//! | `de.vertrag.tarifwechsel-geplant` | Future-dated product change stored |
-//! | `de.vertrag.preisgarantie-hinterlegt` | Price guarantee stored/replaced |
-//! | `de.vertrag.preisaenderung.ankuendigung` | Notice worker, ≤ 42 days before Wirksamkeit |
-//! | `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal |
-//! | `de.vertrag.ablauf.ankuendigung` | 30 days before vertragsende / preisgarantie_bis |
-//! | `de.vertrag.abgeschlossen` | Every component's Lieferende has passed; supply is over and the contract is `ABGELAUFEN` (`workers::ablauf`) |
-//! | `de.vertrag.bestellung.eingegangen` | An online order and its Bestellnachweis are stored (`subject` = `bestellreferenz`) |
-//! | `de.vertrag.bestellung.angenommen` | The order became a contract — at the click (`mit_bestellung`) or at acceptance (`mit_annahme`) |
-//! | `de.vertrag.bestellung.abgelehnt` | The operator refused the order (`mit_annahme`) |
-//! | `de.vertrag.widerruf.eingegangen` | A consumer's Widerruf was recorded, with `rechtzeitig`, `wirkung` and `wertersatz_geschuldet` |
+//! | `de.mako.vertrag.aktiv` | All components NB-confirmed, billing may start |
+//! | `de.mako.vertrag.lieferbeginn.bestaetigt` | The grid operator confirmed one component's Anmeldung; with the Lieferbeginn and the caller's references |
+//! | `de.mako.vertrag.lieferbeginn.abgelehnt` | The grid operator refused one component's Anmeldung; with the Antwortcode and its Codeliste |
+//! | `de.mako.vertrag.gekuendigt` | Lieferende dispatched (Rahmenvertrag cascade, per child) |
+//! | `de.mako.vertrag.kuendigung` | Kündigung accepted, Lieferende dispatched |
+//! | `de.mako.vertrag.kuendigung-widerrufen` | Kündigung withdrawn before Lieferende |
+//! | `de.mako.vertrag.tarifwechsel` | Product change applied immediately |
+//! | `de.mako.vertrag.tarifwechsel-geplant` | Future-dated product change stored |
+//! | `de.mako.vertrag.preisgarantie-hinterlegt` | Price guarantee stored/replaced |
+//! | `de.mako.vertrag.preisaenderung.ankuendigung` | Notice worker, ≤ 42 days before Wirksamkeit |
+//! | `de.mako.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal |
+//! | `de.mako.vertrag.ablauf.ankuendigung` | 30 days before vertragsende / preisgarantie_bis |
+//! | `de.mako.vertrag.abgeschlossen` | Every component's Lieferende has passed; supply is over and the contract is `ABGELAUFEN` (`workers::ablauf`) |
+//! | `de.mako.vertrag.bestellung.eingegangen` | An online order and its Bestellnachweis are stored (`subject` = `bestellreferenz`) |
+//! | `de.mako.vertrag.bestellung.angenommen` | The order became a contract — at the click (`mit_bestellung`) or at acceptance (`mit_annahme`) |
+//! | `de.mako.vertrag.bestellung.abgelehnt` | The operator refused the order (`mit_annahme`) |
+//! | `de.mako.vertrag.widerruf.eingegangen` | A consumer's Widerruf was recorded, with `rechtzeitig`, `wirkung` and `wertersatz_geschuldet` |
 //!
 //! `abgeschlossen` is not `gekuendigt`. A Kündigung is *accepted* on the day it
 //! is filed and `gekuendigt` fires then — months before supply stops, with
@@ -36,7 +38,7 @@
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Build a `de.vertrag.*` CloudEvent.
+/// Build a `de.mako.vertrag.*` CloudEvent.
 ///
 /// `event_type` is a full CloudEvents type from the workspace catalog
 /// (`mako_events::vertrag::*`).
@@ -61,7 +63,7 @@ pub fn build_cloud_event(
     .extension("correlationid", vertrag_id.to_string())
 }
 
-/// Build a `de.vertrag.bestellung.*` / `de.vertrag.widerruf.*` CloudEvent.
+/// Build a `de.mako.vertrag.bestellung.*` / `de.mako.vertrag.widerruf.*` CloudEvent.
 ///
 /// `subject` is the partner's own `bestellreferenz` — the reference the front
 /// end that posted the order knows it by — and `correlationid` the
@@ -85,7 +87,7 @@ pub fn build_bestell_event(
 
 /// Read a MaKo process outcome off an inbound CloudEvent.
 ///
-/// **The verdict is in `data`, not in the type.** `de.mako.process.completed`
+/// **The verdict is in `data`, not in the type.** `de.mako.engine.process.completed`
 /// says a process reached a terminal state, not that it succeeded: `mako-gpke`
 /// emits it for both the NB's Bestätigung (PID 55002/55078) and its **Ablehnung**
 /// (55003/55080), and the two are told apart only by `data.accepted` /
@@ -108,8 +110,15 @@ pub fn parse_mako_outcome(ce: &Value) -> Option<MakoOutcome> {
         .get("malo_id")
         .and_then(|v| v.as_str())
         .map(str::to_owned);
+    // A process answer names its code as `antwortcode` beside the `codeliste`
+    // that defines it; an APERAK rejection as `erc_code`.
     let erc_code = data
-        .get("erc_code")
+        .get("antwortcode")
+        .or_else(|| data.get("erc_code"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let codeliste = data
+        .get("codeliste")
         .and_then(|v| v.as_str())
         .map(str::to_owned);
     let reason = data
@@ -154,6 +163,7 @@ pub fn parse_mako_outcome(ce: &Value) -> Option<MakoOutcome> {
         // leaving a stale one on it would put an ERC code beside an accepted
         // Marktlokation.
         erc_code: if confirmed { None } else { erc_code },
+        codeliste: if confirmed { None } else { codeliste },
         reason: if confirmed { None } else { reason },
     })
 }
@@ -162,13 +172,143 @@ pub struct MakoOutcome {
     pub process_id: Option<String>,
     pub malo_id: Option<String>,
     pub confirmed: bool,
+    /// The Antwortcode of a refusal.
     pub erc_code: Option<String>,
+    /// The Entscheidungsbaum or Codeliste that defines `erc_code`; a code
+    /// means nothing without it.
+    pub codeliste: Option<String>,
     pub reason: Option<String>,
+}
+
+/// The contract a component belongs to, as its events name it: mako's ids and
+/// the references the system that handed the contract over knows it by.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema, sqlx::FromRow)]
+pub struct Vertragsbezug {
+    #[schemars(with = "String", extend("format" = "uuid"))]
+    pub vertrag_id: Uuid,
+    pub vertrags_nr: String,
+    /// The Kunde the contract is with — the customer number of the portfolio
+    /// route.
+    #[schemars(with = "String", extend("format" = "uuid"))]
+    pub kunden_id: Uuid,
+    /// The caller's contract reference, where the contract was created with one.
+    pub erp_contract_id: Option<String>,
+    /// The front end's order reference, where the contract came from an order.
+    pub bestellreferenz: Option<String>,
+}
+
+/// One component of a contract.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct Komponentenbezug {
+    #[schemars(with = "String", extend("format" = "uuid"))]
+    pub komp_id: Uuid,
+    pub sparte: String,
+    pub malo_id: Option<String>,
+    /// The day supply begins, as the contract holds it.
+    #[schemars(extend("format" = "date"))]
+    pub lieferbeginn: String,
+}
+
+/// The `data` of `de.mako.vertrag.lieferbeginn.bestaetigt`.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct LieferbeginnBestaetigt {
+    #[serde(flatten)]
+    pub vertrag: Vertragsbezug,
+    #[serde(flatten)]
+    pub komponente: Komponentenbezug,
+}
+
+impl mako_service::EventPayload for LieferbeginnBestaetigt {
+    const TYPE: &'static str = mako_events::vertrag::LIEFERBEGINN_BESTAETIGT;
+}
+
+/// The `data` of `de.mako.vertrag.lieferbeginn.abgelehnt`.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct LieferbeginnAbgelehnt {
+    #[serde(flatten)]
+    pub vertrag: Vertragsbezug,
+    #[serde(flatten)]
+    pub komponente: Komponentenbezug,
+    /// The grid operator's Antwortcode, where its answer carried one.
+    pub antwortcode: Option<String>,
+    /// The Entscheidungsbaum or Codeliste that defines `antwortcode`.
+    pub codeliste: Option<String>,
+    /// The answer's text, where it carried one.
+    pub reason: Option<String>,
+}
+
+impl mako_service::EventPayload for LieferbeginnAbgelehnt {
+    const TYPE: &'static str = mako_events::vertrag::LIEFERBEGINN_ABGELEHNT;
+}
+
+/// A typed `de.mako.vertrag.*` event of one contract: subject and `correlationid`
+/// the Vertrag, like [`build_cloud_event`].
+///
+/// # Errors
+///
+/// The `serde_json` error if the payload cannot be encoded.
+pub fn typed_event<P: mako_service::EventPayload>(
+    vertrag_id: Uuid,
+    tenant: &str,
+    payload: &P,
+) -> Result<mako_service::CloudEvent, serde_json::Error> {
+    Ok(mako_service::CloudEvent::typed(
+        mako_service::source("vertragd", tenant),
+        vertrag_id.to_string(),
+        payload,
+    )?
+    .extension("tenantid", tenant)
+    .extension("correlationid", vertrag_id.to_string()))
+}
+
+/// The schema of every payload vertragd emits through a binding.
+#[cfg(test)]
+fn event_schemas() -> Vec<(&'static str, Value)> {
+    vec![
+        mako_service::cloudevent::event_schema::<LieferbeginnBestaetigt>(),
+        mako_service::cloudevent::event_schema::<LieferbeginnAbgelehnt>(),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
-    /// The emitted-event table names every `de.vertrag.*` type vertragd emits.
+    /// `events/` holds the schema of every bound payload (`BLESS_MCP_SNAPSHOT=1`
+    /// rewrites it).
+    #[test]
+    fn the_committed_event_schemas_are_current() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("events");
+        if let Err(e) =
+            mako_service::cloudevent::compare_event_schemas(&dir, &super::event_schemas())
+        {
+            panic!("{e}");
+        }
+    }
+
+    /// A process answer names its code as `antwortcode` with its `codeliste`;
+    /// reading only `erc_code` leaves a refused Anmeldung without the reason
+    /// the grid operator gave.
+    #[test]
+    fn a_refusals_antwortcode_and_codeliste_are_read() {
+        let ce = serde_json::json!({
+            "type": "de.mako.engine.process.completed",
+            "data": { "process_id": "p", "accepted": false, "outcome": "rejected",
+                      "antwortcode": "A02", "codeliste": "E_0622", "reason": "x" }
+        });
+        let outcome = super::parse_mako_outcome(&ce).expect("an outcome");
+        assert!(!outcome.confirmed);
+        assert_eq!(outcome.erc_code.as_deref(), Some("A02"));
+        assert_eq!(outcome.codeliste.as_deref(), Some("E_0622"));
+
+        let ok = serde_json::json!({
+            "type": "de.mako.engine.process.completed",
+            "data": { "process_id": "p", "accepted": true, "antwortcode": "A01",
+                      "codeliste": "E_0622" }
+        });
+        let outcome = super::parse_mako_outcome(&ok).expect("an outcome");
+        assert!(outcome.erc_code.is_none() && outcome.codeliste.is_none());
+    }
+
+    /// The emitted-event table names every `de.mako.vertrag.*` type vertragd emits.
     ///
     /// The table is the only place a subscriber can read what this service puts
     /// on the bus — the constants live in `mako-events`, which says nothing
@@ -176,7 +316,7 @@ mod tests {
     /// and the handlers. A missing row is therefore an event nobody outside the
     /// code knows exists.
     ///
-    /// `de.vertrag.abgeschlossen`, emitted by `workers::ablauf` on every closed
+    /// `de.mako.vertrag.abgeschlossen`, emitted by `workers::ablauf` on every closed
     /// supply, is the event a Schlussrechnung hangs off — a missing row would
     /// hide it from the one consumer that most needs it.
     ///
@@ -212,8 +352,8 @@ mod tests {
         );
 
         // `SCREAMING_SNAKE` → the wire type, the way `mako-events` spells it:
-        // `KUENDIGUNG_WIDERRUFEN` is `de.vertrag.kuendigung-widerrufen`, and
-        // `PREISAENDERUNG_ANKUENDIGUNG` is `de.vertrag.preisaenderung.ankuendigung`
+        // `KUENDIGUNG_WIDERRUFEN` is `de.mako.vertrag.kuendigung-widerrufen`, and
+        // `PREISAENDERUNG_ANKUENDIGUNG` is `de.mako.vertrag.preisaenderung.ankuendigung`
         // — one uses a hyphen, the other a dot, so the constant's *value* is the
         // only reliable source. Take it from the catalogue.
         let table = include_str!("events.rs");
@@ -237,7 +377,7 @@ mod tests {
 
         assert!(
             missing.is_empty(),
-            "these `de.vertrag.*` types are emitted by vertragd but absent from the \
+            "these `de.mako.vertrag.*` types are emitted by vertragd but absent from the \
              emitted-event table in this module's doc comment: {missing:?}"
         );
     }
@@ -245,7 +385,7 @@ mod tests {
     /// The catalogue value for `mako_events::vertrag::<name>`.
     fn wire_type(name: &str) -> String {
         for ty in mako_events::all() {
-            let Some(suffix) = ty.strip_prefix("de.vertrag.") else {
+            let Some(suffix) = ty.strip_prefix("de.mako.vertrag.") else {
                 continue;
             };
             if suffix.replace(['-', '.'], "_").to_uppercase() == name {

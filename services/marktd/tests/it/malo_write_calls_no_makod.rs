@@ -1,7 +1,7 @@
 //! A MaLo write in marktd calls no other service.
 //!
 //! makod's MaLo-Ident cache follows marktd through the durable fan-out
-//! (`de.markt.malo.updated`, enqueued in the write's transaction). A call from
+//! (`de.mako.markt.malo.updated`, enqueued in the write's transaction). A call from
 //! the handler after its commit could not be retried by anything: a makod that
 //! was down at that moment would keep answering counterparties from a stale
 //! record while marktd reported success. So the handler, and the state it
@@ -33,7 +33,7 @@ fn the_malo_handler_still_enqueues_the_event_makod_follows() {
     assert!(
         MALO_HANDLER.contains("mako_events::markt::MALO_UPDATED")
             && MALO_HANDLER.contains("outbox::enqueue"),
-        "put_malo must enqueue de.markt.malo.updated in its transaction — it is the only \
+        "put_malo must enqueue de.mako.markt.malo.updated in its transaction — it is the only \
          way makod's cache learns of the change"
     );
 }

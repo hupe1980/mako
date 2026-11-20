@@ -6,7 +6,7 @@
 //!
 //! Two flavours:
 //! - [`InboundMakoEvent`] — CloudEvents POSTed by `makod` to the `marktd` ingest endpoint.
-//! - [`MarktEvent`] — CloudEvents emitted by `marktd` itself (`de.markt.*`) to ERP subscribers.
+//! - [`MarktEvent`] — CloudEvents emitted by `marktd` itself (`de.mako.markt.*`) to ERP subscribers.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -102,7 +102,7 @@ impl InboundMakoEvent {
 
 // ── marktd-emitted events ─────────────────────────────────────────────────────
 
-/// An event emitted by `marktd` itself (`de.markt.*`).
+/// An event emitted by `marktd` itself (`de.mako.markt.*`).
 ///
 /// Produced by the event enrichment pipeline and broadcast to the fan-out worker
 /// via an unbounded MPSC sender.
@@ -132,7 +132,7 @@ pub struct MarktEvent {
     /// CloudEvents source — `"urn:mako:marktd:tenant:{tenant}"` (the workspace
     /// convention, matching `mako_service::source("marktd", tenant)`).
     pub source: String,
-    /// CloudEvents type, e.g. `"de.markt.malo.updated"`.
+    /// CloudEvents type, e.g. `"de.mako.markt.malo.updated"`.
     #[serde(rename = "type")]
     pub ce_type: String,
     /// Emission time, set by [`MarktEvent::new`] (RFC 3339 on the wire).
@@ -190,7 +190,7 @@ pub struct MarktEvent {
     /// (e.g. `"E01"`, `"Z29"`).
     ///
     /// Forwarded from the `makoerc` CloudEvents extension; present only when
-    /// `ce_type == "de.mako.aperak.rejected"`.
+    /// `ce_type == "de.mako.engine.aperak.rejected"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub makoerc: Option<String>,
     /// W3C Trace Context `traceparent` — forwarded unchanged from the inbound `makod` event.

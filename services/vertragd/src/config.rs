@@ -33,7 +33,7 @@ pub struct VertragdConfig {
     pub edmd_url: String,
     pub edmd_api_key: Option<String>,
 
-    /// ERP webhook receiving the `de.vertrag.*` CloudEvents.
+    /// ERP webhook receiving the `de.mako.vertrag.*` CloudEvents.
     ///
     /// Without it the statutory notices are still persisted in `event_outbox`,
     /// but nothing delivers them — a deployment that owes customers a § 41
@@ -107,7 +107,7 @@ pub struct VertragdConfig {
     pub policy: VertragdPolicy,
 
     /// `[subscriptions]` — the webhook endpoints integrators register for the
-    /// `de.vertrag.*` CloudEvents; `erp_webhook_url` is the endpoint `default`.
+    /// `de.mako.vertrag.*` CloudEvents; `erp_webhook_url` is the endpoint `default`.
     #[serde(default)]
     pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
 }
@@ -255,7 +255,7 @@ impl VertragdConfig {
     /// The three mechanisms are checked together because each guards a
     /// different door: OIDC guards the operator API (GDPR export, IBAN writes,
     /// contract mutation), the inbound HMAC guards the two webhook routes
-    /// (`de.mako.process.*` outcomes and CPQ Angebote) that no token ever
+    /// (`de.mako.engine.process.*` outcomes and CPQ Angebote) that no token ever
     /// reaches, and the outbound HMAC is what lets the ERP tell a notice this
     /// service issued from one anybody posted.
     ///
@@ -358,7 +358,7 @@ impl VertragdConfig {
             out.push((
                 "erp_hmac_secret",
                 "erp_hmac_secret — erp_webhook_url is set, and its webhook endpoint \
-                 `default` signs only when it has a secret: every de.vertrag.* CloudEvent, the § 41 Abs. 5 EnWG \
+                 `default` signs only when it has a secret: every de.mako.vertrag.* CloudEvent, the § 41 Abs. 5 EnWG \
                  notices among them, goes to the ERP unsigned and the receiver cannot tell \
                  one from a forgery",
             ));
@@ -433,7 +433,7 @@ mod tests {
     /// A delivery target without a signing secret is refused.
     ///
     /// The endpoint `default` signs only when it has one, so this posture ships every
-    /// `de.vertrag.*` CloudEvent — the § 41 Abs. 5 EnWG notices among them — to
+    /// `de.mako.vertrag.*` CloudEvent — the § 41 Abs. 5 EnWG notices among them — to
     /// the ERP unsigned, and nothing at runtime says so.
     #[test]
     fn startup_refuses_a_webhook_url_without_its_signing_secret() {

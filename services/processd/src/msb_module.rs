@@ -133,7 +133,7 @@ fn entscheidungsbaum(pid: u32) -> Option<&'static str> {
     }
 }
 
-/// Fields extracted from `de.mako.process.initiated` for a WiM MSB-Wechsel PID.
+/// Fields extracted from `de.mako.engine.process.initiated` for a WiM MSB-Wechsel PID.
 #[derive(Debug, Clone)]
 pub struct MsbWechselPayload {
     pub process_id: uuid::Uuid,
@@ -168,7 +168,7 @@ pub struct MsbWechselPayload {
 }
 
 impl MsbWechselPayload {
-    /// Parse from a `de.mako.process.initiated` CloudEvent for any WiM
+    /// Parse from a `de.mako.engine.process.initiated` CloudEvent for any WiM
     /// MSB-Wechsel PID this deployment could be asked to answer.
     pub fn parse(event: &serde_json::Value) -> Option<Self> {
         let data = &event["data"];
@@ -355,7 +355,7 @@ fn geraetewechsel_answer_command(pid: u32, accept: bool) -> (&'static str, &'sta
 
 // ── STP handler ───────────────────────────────────────────────────────────────
 
-/// Process an inbound `de.mako.process.initiated` event for a WiM MSB-Wechsel PID.
+/// Process an inbound `de.mako.engine.process.initiated` event for a WiM MSB-Wechsel PID.
 ///
 /// Queries `marktd` for the two or three facts the published Prüfschritte need,
 /// runs them through [`mako_pruefung::msb`], and dispatches the verdict to

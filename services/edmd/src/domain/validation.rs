@@ -88,7 +88,7 @@ impl<'a> IngestContext<'a> {
 /// Taken as min/max rather than off the first and last row: a batch is not
 /// required to arrive sorted, and reading the extent off the ends of an
 /// unsorted slice reports a period the delivery does not have. That period is the denominator of the quality score and the
-/// window named in the `de.messwert.reading.quality.warning` event.
+/// window named in the `de.mako.messwert.reading.quality.warning` event.
 #[must_use]
 pub fn batch_period(reads: &[MeterRead]) -> (Option<OffsetDateTime>, Option<OffsetDateTime>) {
     (

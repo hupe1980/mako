@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AusfuehrungNachStorno",
+  "description": "The `data` of `de.mako.sperr.ausfuehrung.nach-storno`.",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "description": "The executing system's own reference, where the order carries one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "malo_id": {
+      "type": "string"
+    },
+    "lf_mp_id": {
+      "type": "string"
+    },
+    "order_type": {
+      "$ref": "#/$defs/OrderType"
+    },
+    "fertigstellung": {
+      "description": "The instant of the act as reported, RFC 3339.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "cancelled_at": {
+      "description": "When the order was withdrawn, RFC 3339.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "order_id",
+    "malo_id",
+    "lf_mp_id",
+    "order_type"
+  ],
+  "$defs": {
+    "OrderType": {
+      "description": "What the Netzbetreiber was asked to do — BGM 1001 on the ORDERS.",
+      "oneOf": [
+        {
+          "description": "`BGM+Z51` — Sperrung. Arrives as ORDERS **17115** (Sperrauftrag).",
+          "type": "string",
+          "const": "sperrung"
+        },
+        {
+          "description": "`BGM+Z52` — Entsperrung. Arrives as ORDERS **17117** (Entsperrauftrag).",
+          "type": "string",
+          "const": "entsperrung"
+        }
+      ]
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.ausfuehrung.nach-storno.json"
+}

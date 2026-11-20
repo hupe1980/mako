@@ -1175,6 +1175,11 @@ export interface Endpoint {
    */
   event_types: string[];
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * CloudEvent extensions an event must carry with these values
    * (`marktsparte`, `marktrole`).
    */
@@ -1235,4 +1240,4 @@ export interface EntscheidungsGrund {
 export const processdUntyped = ["approve_queue_entry","assign_klaerfall","dispatch_klaerfall","get_decision","get_parity_report","get_policy","get_stp_breakdown_by_erc","list_affiliate_decisions","list_decisions","list_processes_by_family","reject_queue_entry","resolve_klaerfall"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const processdOberflaeche: Record<string, string> = {"count_open_processes":"92d1a719","get_counterparty_record":"096e486b","get_klaerfall":"22125977","get_kpi_report":"98fa7379","get_process":"2cd7609c","get_process_stp_rate":"faf231af","get_queue_entry":"4ba460e1","get_stp_rate":"86563b7b","list_counterparties":"091d6f0a","list_klaerfaelle":"1f3c20ab","list_open_processes":"2a99b874","list_overdue_processes":"e8530d9f","list_pending_approvals":"133d36f2","list_webhook_deliveries":"9a6b36b9","list_webhook_endpoints":"ab1f3d89","rehearse_decision":"80e7df54"};
+export const processdOberflaeche: Record<string, string> = {"count_open_processes":"92d1a719","get_counterparty_record":"096e486b","get_klaerfall":"22125977","get_kpi_report":"98fa7379","get_process":"2cd7609c","get_process_stp_rate":"faf231af","get_queue_entry":"4ba460e1","get_stp_rate":"86563b7b","list_counterparties":"091d6f0a","list_klaerfaelle":"1f3c20ab","list_open_processes":"2a99b874","list_overdue_processes":"e8530d9f","list_pending_approvals":"133d36f2","list_webhook_deliveries":"9a6b36b9","list_webhook_endpoints":"5d503a8a","rehearse_decision":"80e7df54"};

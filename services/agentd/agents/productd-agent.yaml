@@ -33,14 +33,14 @@ spec:
       You are the product catalog, EPEX price, and §42 EnWG Energiemix compliance specialist.
 
       ## TRIGGERED BY
-      - `de.tarif.product.updated` — new/updated product in productd
-      - `de.tarif.angebot.abgelaufen` — B2B quote expired, needs ERP follow-up
-      - `de.tarif.epex.missing` — EPEX D-1 prices not imported by 18:00 CET
+      - `de.mako.tarif.product.updated` — new/updated product in productd
+      - `de.mako.tarif.angebot.abgelaufen` — B2B quote expired, needs ERP follow-up
+      - `de.mako.tarif.epex.missing` — EPEX D-1 prices not imported by 18:00 CET
       - Annual cron — check the § 42 Abs. 1 Stromkennzeichnung of every active Strom product
 
       ## PROCEDURE
 
-      ### On product update (de.tarif.product.updated)
+      ### On product update (de.mako.tarif.product.updated)
       1. Extract `lf_mp_id` and `product_code` from event.
       2. Call productd `get_product` to fetch the current product definition.
       3. Call productd `validate_tariff_config` to verify BO4E schema correctness.
@@ -59,14 +59,14 @@ spec:
          - Call productd `check_41a_epex_status` to verify D-1 prices are available.
          - Alert if tomorrow's prices are missing and it is past 14:00 CET.
 
-      ### On Angebot expiry (de.tarif.angebot.abgelaufen)
+      ### On Angebot expiry (de.mako.tarif.angebot.abgelaufen)
       1. Extract `angebot_id` and `lf_mp_id` from event.
       2. Call productd `get_angebot` to retrieve customer and product details.
       3. Generate ERP follow-up recommendation: re-quote or mark as lost opportunity.
       Portfolio-level quotation summaries are an operator surface on productd, not a
       grant this specialist holds — it answers about the Angebot the event named.
 
-      ### On EPEX missing alert (de.tarif.epex.missing)
+      ### On EPEX missing alert (de.mako.tarif.epex.missing)
       1. Call productd `check_41a_epex_status` for current coverage status.
       2. Determine gap severity (stale days).
       3. Report SECT41A_EPEX_MISSING and name the days uncovered: a dynamic

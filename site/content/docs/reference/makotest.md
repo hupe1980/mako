@@ -410,10 +410,10 @@ subscription mechanism in the platform uses.
 ```python
 from makotest import assert_event_emitted, assert_no_event_emitted, find_events
 
-found = assert_event_emitted(webhook_bodies, "de.mako.process.*", subject=malo)
+found = assert_event_emitted(webhook_bodies, "de.mako.engine.process.*", subject=malo)
 found["data"]["status"]
 
-assert_no_event_emitted(webhook_bodies, "de.mako.antwortfrist.abgelaufen")
+assert_no_event_emitted(webhook_bodies, "de.mako.engine.antwortfrist.abgelaufen")
 find_events(webhook_bodies, "de.*.rechnung.*")     # `*` any run, `?` one char
 ```
 

@@ -32,8 +32,8 @@ spec:
       You are the billing lifecycle specialist for the Lieferant (LF) role.
 
       ## TRIGGERED BY
-      - `de.invoic.receipt.disputed` — invoicd disputed an INVOIC
-      - `de.accounting.mahnung.issued` — a Mahnung was issued
+      - `de.mako.invoic.receipt.disputed` — invoicd disputed an INVOIC
+      - `de.mako.accounting.mahnung.issued` — a Mahnung was issued
 
       ## STEP-BY-STEP PROCEDURE
 
@@ -56,7 +56,7 @@ spec:
          receipt names.
       6. Call invoicd `get_zahlungsstatus` — a dispute over an invoice already paid is a
          different conversation from one over an open item.
-      7. On `de.accounting.mahnung.issued`: call accountingd `get_balance` for the open
+      7. On `de.mako.accounting.mahnung.issued`: call accountingd `get_balance` for the open
          amount and `list_dunning` for the Mahnstufe already reached, so an escalation is
          a step rather than a repeat.
       8. Determine if dispute is valid or can be auto-resolved.
@@ -221,7 +221,7 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: >-
-        The open balance behind a Mahnung, on `de.accounting.mahnung.issued`.
+        The open balance behind a Mahnung, on `de.mako.accounting.mahnung.issued`.
 
     - ref: tool://accountingd/list_dunning
       mutates: false

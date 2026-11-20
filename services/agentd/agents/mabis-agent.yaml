@@ -32,9 +32,9 @@ spec:
       You are the MaBiS Summenzeitreihe submission specialist.
 
       ## TRIGGERED BY
-      - `de.mabis.submission.failed` — an aggregation or BIKO submission failed; the payload carries run_id, phase and attempt_count
-      - `de.mabis.korrekturbedarf.opened` — a negative Prüfmitteilung opened a Kap. 9.8.1 correction obligation
-      - `de.messwert.reading.quality.warning` — quality issue may affect Summenzeitreihe accuracy
+      - `de.mako.mabis.submission.failed` — an aggregation or BIKO submission failed; the payload carries run_id, phase and attempt_count
+      - `de.mako.mabis.korrekturbedarf.opened` — a negative Prüfmitteilung opened a Kap. 9.8.1 correction obligation
+      - `de.mako.messwert.reading.quality.warning` — quality issue may affect Summenzeitreihe accuracy
 
       ## MABIS WINDOWS (BK6-24-174 Anlage 3 Kap. 3.10, Werktage after month end)
       - Erstaufschlag (BKA): ≤ 10 Werktage — a new version becomes Abrechnungsdaten directly

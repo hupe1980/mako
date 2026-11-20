@@ -140,7 +140,7 @@ CREATE TABLE accounts (
     -- Emitted in the structured ISO 20022 form, whose required elements are
     -- `town` + `country`. Nullable (no PstlAdr is emitted), refused half-filled
     -- at build time.
-    -- BO4E Sparte, learned from the `de.billing.rechnung.erstellt` CloudEvent.
+    -- BO4E Sparte, learned from the `de.mako.billing.rechnung.erstellt` CloudEvent.
     -- Drives the ISO 20022 `Purp/Cd` on a direct debit: `ELEC` for an
     -- electricity bill, `GASB` for gas, `WTER` for water. The code is
     -- informational — it instructs no bank — but it is what the debtor's
@@ -577,7 +577,7 @@ COMMENT ON TABLE auto_dunning_runs IS
 
 -- ── EEG settlement receipts (einsd) ──────────────────────────────────────────
 --
--- One row per `de.eeg.verguetung.berechnet` / `de.eeg.marktpraemie.berechnet`
+-- One row per `de.mako.eeg.verguetung.berechnet` / `de.mako.eeg.marktpraemie.berechnet`
 -- CloudEvent. A settlement period — plant (`tr_id`), billing year and month —
 -- is one **receipt chain**: einsd's initial receipt and every § 147 AO
 -- correction after it each state the *whole* amount owed for the period

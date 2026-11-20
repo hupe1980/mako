@@ -209,7 +209,7 @@ pub async fn mark_acked(
 /// `attempt_count` so the failure event can carry it.
 ///
 /// Takes a connection rather than the pool because the failure row and the
-/// `de.mabis.submission.failed` outbox record must commit together: a failure
+/// `de.mako.mabis.submission.failed` outbox record must commit together: a failure
 /// nothing announces reads as a submission still pending, and an announcement
 /// of a failure that was never recorded is noise an operator cannot act on.
 pub async fn mark_failed(
@@ -393,7 +393,7 @@ pub async fn record_datenstatus(
 /// Record an inbound Prüfmitteilung (IFTSTA PID 21000/21001).
 ///
 /// Takes a connection so a negative Prüfmitteilung's record and the
-/// `de.mabis.korrekturbedarf.opened` outbox row commit in one transaction.
+/// `de.mako.mabis.korrekturbedarf.opened` outbox row commit in one transaction.
 ///
 /// # Errors
 ///

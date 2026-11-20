@@ -294,7 +294,7 @@ dispatch_mode = "race"
 /// Every subscribing specialist runs; none is dropped.
 ///
 /// The structural half of the guarantee above. Two specialists subscribe to
-/// `de.billing.rechnung.erstellt` — an anomaly check and a regulatory guard —
+/// `de.mako.billing.rechnung.erstellt` — an anomaly check and a regulatory guard —
 /// and both must appear in the routing table, because a fan-out that silently
 /// kept one opinion would lose the other specialist's finding without a trace.
 #[test]

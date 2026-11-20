@@ -513,8 +513,8 @@ pub struct WebhookConfig {
     /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
     /// Use `"env:EDMD_INBOUND_SECRET"`.
     pub inbound_secret: Option<String>,
-    /// ERP webhook URL for outbound CloudEvents (`de.messwert.reading.direct.stored`,
-    /// `de.messwert.reading.quality.warning`): the webhook endpoint `default`.
+    /// ERP webhook URL for outbound CloudEvents (`de.mako.messwert.reading.direct.stored`,
+    /// `de.mako.messwert.reading.quality.warning`): the webhook endpoint `default`.
     /// Omit to deliver only to the endpoints registered under
     /// `/api/v1/webhooks/endpoints`.
     pub erp_webhook_url: Option<String>,
@@ -531,7 +531,7 @@ pub struct WebhookConfig {
 /// Every stored ESTIMATED/SUBSTITUTED interval opens an obligation to
 /// replace it with a plausibilised real value. The daily worker marks
 /// obligations older than `deadline_weeks` as UEBERFAELLIG and emits
-/// `de.messwert.reading.confirmation.overdue`. No statute fixes the deadline —
+/// `de.mako.messwert.reading.confirmation.overdue`. No statute fixes the deadline —
 /// the 8-week default aligns with the MaBiS Bilanzkreisabrechnung
 /// correction window.
 #[derive(Debug, Clone, Deserialize)]

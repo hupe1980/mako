@@ -17,7 +17,7 @@ For each inbound INVOIC it:
 3. **Persists the receipt** — a received INVOIC is a Buchungsbeleg (§ 147 AO /
    § 14b UStG, 8 years). A failed write aborts the dispatch.
 4. Answers the counterparty through `makod` — accept or dispute.
-5. Notifies the ERP with `de.invoic.receipt.*`, durable at-least-once.
+5. Notifies the ERP with `de.mako.invoic.receipt.*`, durable at-least-once.
 
 Every PID of 31001–31011 is either routed or **refused** into `invoic_dlq` with
 its reason (`routing::INVOIC_PIDS`, `REFUSED`); none is answered with a default
@@ -30,11 +30,11 @@ graph TB
     makod["makod :8080"]
     pg["PostgreSQL<br/>invoic_receipts<br/>(§ 147 AO / GoBD, 8y)"]
 
-    marktd -->|"de.mako.process.initiated<br/>(INVOIC 31001–31011)<br/>HMAC POST /webhook"| invoicd
+    marktd -->|"de.mako.engine.process.initiated<br/>(INVOIC 31001–31011)<br/>HMAC POST /webhook"| invoicd
     invoicd -->|"price sheets + MMM reference prices"| marktd
     invoicd -->|"persist receipt BEFORE dispatch<br/>(§ 147 AO / GoBD)"| pg
     invoicd -->|"accept / reject, per the answering PID"| makod
-    invoicd -->|"de.invoic.receipt.settled/disputed<br/>durable at-least-once<br/>(event_outbox → webhook endpoints)"| erp["ERP webhook"]
+    invoicd -->|"de.mako.invoic.receipt.settled/disputed<br/>durable at-least-once<br/>(event_outbox → webhook endpoints)"| erp["ERP webhook"]
 ```
 
 ---
@@ -81,7 +81,7 @@ message reference or a recorded answer.
 ### Deciding a held invoice
 
 A Prüfschritt no INVOIC answers is answered by what a person records, and the
-invoice walks again in place — to a REMADV and a `de.invoic.receipt.*` event
+invoice walks again in place — to a REMADV and a `de.mako.invoic.receipt.*` event
 like any automatic verdict, or still `Offen` with what remains:
 
 - **`POST /api/v1/leistungsnachweise`** — `{rechnungssteller_mp_id,
@@ -233,7 +233,7 @@ position or one whose period crosses a change of the rate. A step the walk
 reaches with no answer — those facts, or a missing Leistungszeitraum,
 Zahlungsziel or Angebot — is neither passed nor refused: the walk ends open, the
 receipt is recorded with outcome `Offen`, no REMADV is sent, no
-`de.invoic.receipt.*` event is enqueued, and `dispatch-answer` refuses it; a
+`de.mako.invoic.receipt.*` event is enqueued, and `dispatch-answer` refuses it; a
 Leistungsnachweis or a statement on the receipt decides it (see *Deciding a
 held invoice*).
 
@@ -325,16 +325,16 @@ not fit; every finding stays on the receipt (`get_check_result`).
 
 | CloudEvents `type` | Trigger |
 |---|---|
-| `de.invoic.receipt.settled` | Outcome `Ok`, `AcceptedPartial`, or `Warn` |
-| `de.invoic.receipt.disputed` | Outcome `Dispute` |
-| `de.invoic.payment.overdue` | Zahlungsziel passed without `confirm-payment` |
+| `de.mako.invoic.receipt.settled` | Outcome `Ok`, `AcceptedPartial`, or `Warn` |
+| `de.mako.invoic.receipt.disputed` | Outcome `Dispute` |
+| `de.mako.invoic.payment.overdue` | Zahlungsziel passed without `confirm-payment` |
 
 `dispatched` in the payload says whether the market answer actually went out.
 
 ```json
 {
   "specversion": "1.0",
-  "type": "de.invoic.receipt.settled",
+  "type": "de.mako.invoic.receipt.settled",
   "source": "urn:mako:invoicd:tenant:9900357000004",
   "subject": "<process_id>",
   "data": {
@@ -349,7 +349,7 @@ not fit; every finding stays on the receipt (`get_check_result`).
 }
 ```
 
-The `payment_overdue` worker (every 6 h) emits `de.invoic.payment.overdue`
+The `payment_overdue` worker (every 6 h) emits `de.mako.invoic.payment.overdue`
 **once** per accepted, dispatched receipt whose `pay_by` passed without
 `payment_confirmed_at` (`overdue_notified_at` stamps it); disputed invoices are
 never overdue.
@@ -357,7 +357,7 @@ never overdue.
 ```json
 {
   "specversion": "1.0",
-  "type": "de.invoic.payment.overdue",
+  "type": "de.mako.invoic.payment.overdue",
   "source": "urn:mako:invoicd:tenant:9900357000004",
   "subject": "<receipt_id>",
   "data": {
@@ -373,9 +373,9 @@ never overdue.
 
 ### Delivery guarantee — durable at-least-once
 
-The `de.invoic.receipt.*` event is enqueued in `event_outbox` in the
+The `de.mako.invoic.receipt.*` event is enqueued in `event_outbox` in the
 transaction that stamps the answer's `dispatched_at`; the
-`de.invoic.payment.overdue` event in the transaction that stamps
+`de.mako.invoic.payment.overdue` event in the transaction that stamps
 `overdue_notified_at`. If that transaction fails, invoicd answers `500` and
 makod redelivers the invoice. The market answer never waits on the ERP.
 
@@ -557,7 +557,7 @@ retention_days = 30        # how long emitted events stay replayable
 | `detect-systematic-errors` | Find NB counterparties with systematic billing errors |
 
 `agentd`'s `invoice-reconciliation-agent` subscribes to
-`de.invoic.payment.overdue` and `de.invoic.receipt.*`.
+`de.mako.invoic.payment.overdue` and `de.mako.invoic.receipt.*`.
 
 ---
 

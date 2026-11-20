@@ -1,4 +1,4 @@
-//! A de.sperr.* notice reaches the webhook endpoint `default` — `[sperr]
+//! A de.mako.sperr.* notice reaches the webhook endpoint `default` — `[sperr]
 //! erp_webhook_url` — through the shared subscription module processd mounts.
 //!
 //! Run with `just test-processd-db`, or:
@@ -84,6 +84,7 @@ fn order() -> CreateOrderRequest {
             land: None,
         },
         hinweis: None,
+        external_ref: None,
     }
 }
 
@@ -111,9 +112,9 @@ async fn call(app: &axum::Router, method: &str, uri: &str) -> (u16, serde_json::
 
 /// processd's migration creates the subscription tables, its build writes the
 /// endpoint `default` from `[sperr]`, a cancellation through the REST route
-/// enqueues `de.sperr.storniert`, and the subscription worker delivers it
+/// enqueues `de.mako.sperr.storniert`, and the subscription worker delivers it
 /// signed with `[sperr] erp_hmac_secret`, after the order's
-/// `de.sperr.auftrag.eingegangen`. A row enqueued for a named target —
+/// `de.mako.sperr.auftrag.eingegangen`. A row enqueued for a named target —
 /// the §38 EnWG notice — is its own worker's and never reaches `default`.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]

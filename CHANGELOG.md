@@ -9,6 +9,27 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.39.0] — 2026-11-20
+
+### Added
+
+- **Field work for any executing system.** The Sperrauftrag queue (processd) and the reading orders (edmd) take an `external_ref` — the workforce tool's or ERP's own order number, unique per tenant, set on creation or with `PUT …/{id}/external-ref`, found with `?external_ref=` and echoed on every event of the order. `de.mako.sperr.auftrag.faellig` announces once the day an order may be carried out, with Treffpunkt, dates and Arbeitszeit; `de.mako.messwert.reading.order.created` and `…completed` announce reading orders from every path. A failed Sperrversuch names its `responsible` party; `GET /api/v1/reading-orders/fail-reasons` serves the Ablesehindernis list with German labels.
+- **What became of a contract, for whoever handed it over.** `de.mako.vertrag.lieferbeginn.bestaetigt` and `…abgelehnt` (with the Antwortcode and its Codeliste), one per component, carrying the `kunden_id` and the caller's `erp_contract_id` / `bestellreferenz`. `GET /api/v1/vertraege?erp_contract_id=` / `?bestellreferenz=` finds a contract in any status.
+- **One Kunde for a returning customer.** `POST /api/v1/bestellungen` answers the `kunden_id`; an order carrying it as `kunde.kunden_id` concludes under that Kunde (`422 kunde_unbekannt` otherwise). The portfolio row carries `vertragsart`.
+- **A published schema** for every `de.mako.sperr.*`, reading-order and `lieferbeginn` type.
+
+### Changed
+
+- **Breaking: every CloudEvent type is `de.mako.<domain>.<fact>`.** `de.vertrag.kuendigung` is `de.mako.vertrag.kuendigung`, and so for all fifteen domains; makod's own events moved to `de.mako.engine.*` (`de.mako.process.completed` is `de.mako.engine.process.completed`). Subscription patterns and schema URLs change with them.
+- **A subscription pattern that matches no event type is refused** — `422 event_type_pattern_matches_nothing` on `POST`/`PUT /api/v1/webhooks/endpoints`, a blocking finding for a `[[subscriptions.endpoints]]` entry. An endpoint stored before the rename lists its dead patterns as `patterns_matching_nothing` and is logged at startup.
+- **Breaking: a report or a cancel reaching a Sperrauftrag no longer pending answers `409 order_not_pending`** with `status` and `executed_at`, where it answered `404`. An execution reported after a withdrawal is kept: `202` with `conflict: "executed_after_cancel"` and `de.mako.sperr.ausfuehrung.nach-storno`; no IFTSTA is queued.
+
+### Fixed
+
+- **A refused Anmeldung keeps its Antwortcode.** vertragd read `erc_code`, where a process answer names `antwortcode` beside its `codeliste`.
+- **An Entsperrauftrag is in the due list.** `?due=true` left out every order without a date — every Entsperrauftrag, owed „unverzüglich" (§ 41f Abs. 7 EnWG).
+- **Every declared event type is on the event catalog page.** A type whose name rustfmt wrapped onto the next line was missing from the page and from its schema ratchet.
+
 ## [0.38.3] — 2026-11-18
 
 ### Fixed

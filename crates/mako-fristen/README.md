@@ -10,6 +10,12 @@ instead of carrying a copy. A window no document states is absent, never
 guessed: `antwort::antwort_obligation` answers `None`, which means unknown, not
 unbounded.
 
+The Werktag here is the market's: a holiday in any one Bundesland counts
+nationwide, and 24.12. and 31.12. are holidays (GPKE Teil 1 Kap. 7). It is the
+wrong calendar for an appointment in one place — for the holidays of a single
+Bundesland use `metering::time::holiday::Bundesland` from the
+[`metering`](https://crates.io/crates/metering) crate.
+
 ## Example
 
 ```rust

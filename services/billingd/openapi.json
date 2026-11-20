@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.38.3"
+    "version": "0.39.0"
   },
   "paths": {
     "/api/v1/billing": {
@@ -588,7 +588,7 @@
           "billing"
         ],
         "summary": "`POST /api/v1/billing/{id}/correction`",
-        "description": "Issue a Stornorechnung for an existing record.\n\n1. Fetch the original by `id` (tenant-scoped).\n2. Produce a correction `Rechnung`: `istOriginal: false`,\n   `originalRechnungsnummer: <original>`, every monetary position negated,\n   and its own number from the tenant's `ST` series.\n3. Insert it with `is_correction = TRUE` and `original_record_id`, and\n   advance the original's `outcome` to `cancelled` — in one transaction.\n4. Enqueue `de.billing.rechnung.erstellt` (`is_correction: true`) so\n   `accountingd` books the CREDIT.\n\n## Storno und Neuberechnung\n\nCancelling the original **releases its period**: `br_unique_original`\nexcludes cancelled rows, so the corrected amounts are re-billed by calling\n`POST /api/v1/billing/{malo_id}/calculate` again for the same window. That\nis the flow German accounting practice expects.\n\n## § 147 AO / GoBD\n\nThe original's content is **never** modified — only its outcome — and both\ndocuments stay in `billing_records` for the statutory **8 years**\n(§ 147 Abs. 3 AO for a Buchungsbeleg, reduced from ten by the BEG IV with\neffect from 01.01.2025).",
+        "description": "Issue a Stornorechnung for an existing record.\n\n1. Fetch the original by `id` (tenant-scoped).\n2. Produce a correction `Rechnung`: `istOriginal: false`,\n   `originalRechnungsnummer: <original>`, every monetary position negated,\n   and its own number from the tenant's `ST` series.\n3. Insert it with `is_correction = TRUE` and `original_record_id`, and\n   advance the original's `outcome` to `cancelled` — in one transaction.\n4. Enqueue `de.mako.billing.rechnung.erstellt` (`is_correction: true`) so\n   `accountingd` books the CREDIT.\n\n## Storno und Neuberechnung\n\nCancelling the original **releases its period**: `br_unique_original`\nexcludes cancelled rows, so the corrected amounts are re-billed by calling\n`POST /api/v1/billing/{malo_id}/calculate` again for the same window. That\nis the flow German accounting practice expects.\n\n## § 147 AO / GoBD\n\nThe original's content is **never** modified — only its outcome — and both\ndocuments stay in `billing_records` for the statutory **8 years**\n(§ 147 Abs. 3 AO for a Buchungsbeleg, reduced from ten by the BEG IV with\neffect from 01.01.2025).",
         "operationId": "post_correction",
         "parameters": [
           {
@@ -1271,7 +1271,7 @@
           "billing"
         ],
         "summary": "`POST /api/v1/billing/{malo_id}/calculate`",
-        "description": "Pipeline:\n1. Parse + validate period\n2. Fetch `Product` from `productd` (or use request override)\n3. Fetch consumption from `edmd` (or use request override)\n4. Take grid pass-through from the request's `grid` (nothing fetches it from `marktd`)\n5. Dispatch to category-specific pure calculator\n6. Persist `billing_records` (idempotent on same malo+period+product)\n7. Emit `de.billing.rechnung.erstellt` CloudEvent",
+        "description": "Pipeline:\n1. Parse + validate period\n2. Fetch `Product` from `productd` (or use request override)\n3. Fetch consumption from `edmd` (or use request override)\n4. Take grid pass-through from the request's `grid` (nothing fetches it from `marktd`)\n5. Dispatch to category-specific pure calculator\n6. Persist `billing_records` (idempotent on same malo+period+product)\n7. Emit `de.mako.billing.rechnung.erstellt` CloudEvent",
         "operationId": "post_calculate",
         "parameters": [
           {
@@ -1535,7 +1535,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2138,10 +2138,10 @@
           "vpp"
         ],
         "summary": "`POST /api/v1/webhooks/vpp-dispatch`",
-        "description": "**Dispatch-confirmed auto-settlement.**\n\nReceives `de.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when the\nMSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag\nand writes one Gutschrift per dispatch against the\n§41e Aggregatorvertrag in force **on the day the dispatch executed** —\n`vertragd` owns that contract; billingd keeps no copy.\n\n## Idempotency\n\nEach `tx_id` is recorded in `vpp_dispatch_ledger` **inside the settlement\ntransaction**, so a dispatch is settled exactly once and a redelivery\nreturns `202 Accepted` without re-settling. That ledger is also why\nper-dispatch records are exempt from `br_unique_original`: a portfolio is\ndispatched several times a day, and a one-row-per-period index cannot\nexpress that.\n\n## HMAC verification\n\nWhen `[inbound_webhook_secret]` is configured in `billingd.toml`, the\n`webhook-signature` header is verified, together with the `webhook-timestamp`\nfreshness that stops a captured request replaying.  Requests with\ninvalid or missing signatures are rejected with `401 Unauthorized`.\n\n## Auto-billing disabled\n\nWhen `vpp_auto_billing = false` in config (the default), the webhook accepts\nevents and records them in `vpp_dispatch_ledger` but does **not** generate a\n`Rechnung`.  The manual `POST /api/v1/billing/vpp/{vpp_id}` endpoint remains\navailable.\n\n## CloudEvent data schema\n\n```json\n{\n  \"tx_id\":               \"abc123\",\n  \"location_id\":         \"C0001234567890\",\n  \"location_type\":       \"sr\",\n  \"execution_time_from\": \"2026-01-15T10:00:00Z\",\n  \"execution_time_until\": \"2026-01-15T10:15:00Z\",\n  \"max_power_kw\":        \"11.0\",\n  \"command_type\":        \"Konfiguration\",\n  \"sender_mp_id\":        \"9900123456789\",\n  \"produkt_code\":        \"TX-MODUL2-HT\"\n}\n```\n\n`sender_mp_id` must be the contracted `aggregator_mp_id` for the dispatch to\nsettle. § 14a EnWG and § 41e ride the same Steuerungsauftrag, so the sender\nis what separates a Netzbetreiber's grid intervention from the aggregator's\nflexibility call — see step 5b.\n\nThe event carries **no price**, deliberately: what a dispatch is worth is the\n§ 41e Aggregatorvertrag's `capacity_price_eur_per_kwh` in `vertragd`, and a\ncounterparty does not get to state what it is owed.",
+        "description": "**Dispatch-confirmed auto-settlement.**\n\nReceives `de.mako.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when the\nMSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag\nand writes one Gutschrift per dispatch against the\n§41e Aggregatorvertrag in force **on the day the dispatch executed** —\n`vertragd` owns that contract; billingd keeps no copy.\n\n## Idempotency\n\nEach `tx_id` is recorded in `vpp_dispatch_ledger` **inside the settlement\ntransaction**, so a dispatch is settled exactly once and a redelivery\nreturns `202 Accepted` without re-settling. That ledger is also why\nper-dispatch records are exempt from `br_unique_original`: a portfolio is\ndispatched several times a day, and a one-row-per-period index cannot\nexpress that.\n\n## HMAC verification\n\nWhen `[inbound_webhook_secret]` is configured in `billingd.toml`, the\n`webhook-signature` header is verified, together with the `webhook-timestamp`\nfreshness that stops a captured request replaying.  Requests with\ninvalid or missing signatures are rejected with `401 Unauthorized`.\n\n## Auto-billing disabled\n\nWhen `vpp_auto_billing = false` in config (the default), the webhook accepts\nevents and records them in `vpp_dispatch_ledger` but does **not** generate a\n`Rechnung`.  The manual `POST /api/v1/billing/vpp/{vpp_id}` endpoint remains\navailable.\n\n## CloudEvent data schema\n\n```json\n{\n  \"tx_id\":               \"abc123\",\n  \"location_id\":         \"C0001234567890\",\n  \"location_type\":       \"sr\",\n  \"execution_time_from\": \"2026-01-15T10:00:00Z\",\n  \"execution_time_until\": \"2026-01-15T10:15:00Z\",\n  \"max_power_kw\":        \"11.0\",\n  \"command_type\":        \"Konfiguration\",\n  \"sender_mp_id\":        \"9900123456789\",\n  \"produkt_code\":        \"TX-MODUL2-HT\"\n}\n```\n\n`sender_mp_id` must be the contracted `aggregator_mp_id` for the dispatch to\nsettle. § 14a EnWG and § 41e ride the same Steuerungsauftrag, so the sender\nis what separates a Netzbetreiber's grid intervention from the aggregator's\nflexibility call — see step 5b.\n\nThe event carries **no price**, deliberately: what a dispatch is worth is the\n§ 41e Aggregatorvertrag's `capacity_price_eur_per_kwh` in `vertragd`, and a\ncounterparty does not get to state what it is owed.",
         "operationId": "post_vpp_webhook",
         "requestBody": {
-          "description": "A `de.vpp.dispatch.confirmed` CloudEvent, signed per Standard Webhooks",
+          "description": "A `de.mako.vpp.dispatch.confirmed` CloudEvent, signed per Standard Webhooks",
           "content": {
             "application/json": {
               "schema": {}
@@ -2344,6 +2344,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -2404,6 +2405,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -2436,7 +2444,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -2654,6 +2662,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -2713,6 +2722,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [

@@ -235,7 +235,7 @@ pub(crate) fn months_before(d: Date, months: u32) -> Date {
 ///
 /// # Parameters
 ///
-/// - `anfrage` — parsed fields from the `de.mako.process.initiated` CloudEvent.
+/// - `anfrage` — parsed fields from the `de.mako.engine.process.initiated` CloudEvent.
 /// - `versorgung` — current supply state from `GET /api/v1/versorgung/{malo_id}`
 ///   on `marktd`. `None` if `marktd` returned 404 (MaLo unknown).
 /// - `grid` — NB grid topology record from `GET /api/v1/malos/{id}/grid`.

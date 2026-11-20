@@ -158,7 +158,7 @@ fn invoice_event(id: &str, rechnungsnummer: &str, zu_zahlen: &str, extra: Value)
         "specversion": "1.0",
         "id": id,
         "source": "billingd/9900357000004",
-        "type": "de.billing.rechnung.erstellt",
+        "type": "de.mako.billing.rechnung.erstellt",
         "subject": MALO,
         "data": data,
     })
@@ -198,7 +198,7 @@ async fn credit_payout_is_raised_once_per_invoice() {
         "specversion": "1.0",
         "id": "ce-storno-1",
         "source": "billingd/9900357000004",
-        "type": "de.billing.rechnung.erstellt",
+        "type": "de.mako.billing.rechnung.erstellt",
         "subject": MALO,
         "data": {
             "record_id": uuid::Uuid::new_v4().to_string(),

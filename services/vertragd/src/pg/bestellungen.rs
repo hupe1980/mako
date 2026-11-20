@@ -374,7 +374,12 @@ pub async fn fetch_nachweis_bytes(
 
 // ── Kunde ─────────────────────────────────────────────────────────────────────
 
-/// The ordering customer as a new `kunden` row, in the order's transaction.
+/// The Kunde an order is for, in the order's transaction: the existing one it
+/// names, or a new `kunden` row. `None` when it names a Kunde this tenant does
+/// not hold.
+///
+/// An order for an existing Kunde leaves that Kunde's data as it is: the
+/// Bestellnachweis records what the order said.
 ///
 /// # Errors
 ///
@@ -383,7 +388,16 @@ pub async fn insert_bestellkunde(
     conn: &mut sqlx::PgConnection,
     tenant: &str,
     kunde: &BestellKunde,
-) -> Result<Uuid> {
+) -> Result<Option<Uuid>> {
+    if let Some(kunden_id) = kunde.kunden_id {
+        return Ok(
+            sqlx::query_scalar("SELECT id FROM kunden WHERE id = $1 AND tenant = $2")
+                .bind(kunden_id)
+                .bind(tenant)
+                .fetch_optional(&mut *conn)
+                .await?,
+        );
+    }
     let haushaltskunde = kunde.haushaltskunde.unwrap_or(kunde.kundentyp == "B2C");
     Ok(sqlx::query_scalar(
         "INSERT INTO kunden (tenant, kundentyp, haushaltskunde, geschaeftspartner)
@@ -394,7 +408,8 @@ pub async fn insert_bestellkunde(
     .bind(haushaltskunde)
     .bind(kunde.geschaeftspartner.canonical_json()?)
     .fetch_one(&mut *conn)
-    .await?)
+    .await
+    .map(Some)?)
 }
 
 // ── Bestellungen ──────────────────────────────────────────────────────────────

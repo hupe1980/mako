@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.38.3"
+    "version": "0.39.0"
   },
   "paths": {
     "/api/v1/angebote": {
@@ -67,7 +67,7 @@
           "angebote"
         ],
         "summary": "`POST /api/v1/angebote`",
-        "description": "Create a formal B2B Angebot (quotation) for a C&I or RLM customer.\n\n## Price calculation\n\nFor each position, `productd` fetches the product's `Tarifpreisblatt` and\nestimates `jahreskosten_netto_eur` from:\n- `GRUNDPREIS` position: `ct/day × 365 / 100`\n- `ARBEITSPREIS_EINTARIF` position: `ct/kWh × jahresverbrauch_kwh / 100`\n- `ARBEITSPREIS_HT` / `ARBEITSPREIS_NT`: each band against its own volume\n- Optional `rabatt_pct` from the Angebot variant\n\nEvery rate comes from the Preisstaffel that covers the position's own\nquantity. `jahreskosten_brutto_eur` is the sum of the positions' gross\nfigures, each at its own Umsatzsteuersatz.\n\nA position that cannot be priced — unresolvable product code, a quantity\noutside every Preisstaffel, a Zweitarif product with no HT/NT split, a Gas\nposition with no CO₂ certificate price — refuses the whole quotation with\n422 and the reason per position. An Angebot is a binding offer, so a\nposition is never quietly dropped from the total.\n\n## Varianten (scenarios)\n\nMultiple `varianten` (e.g., 12M vs 24M, with/without rebate) can be included\nin a single Angebot.  On acceptance, the customer picks one via\n`gewaehlte_variante` (index into the `varianten` array).\n\n## Acceptance lifecycle\n\n`POST /api/v1/angebote/{id}/annehmen` transitions to ANGENOMMEN and emits\n`de.tarif.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the\n`Rahmenvertrag` + `Versorgungsverträge` from the accepted Angebot data.",
+        "description": "Create a formal B2B Angebot (quotation) for a C&I or RLM customer.\n\n## Price calculation\n\nFor each position, `productd` fetches the product's `Tarifpreisblatt` and\nestimates `jahreskosten_netto_eur` from:\n- `GRUNDPREIS` position: `ct/day × 365 / 100`\n- `ARBEITSPREIS_EINTARIF` position: `ct/kWh × jahresverbrauch_kwh / 100`\n- `ARBEITSPREIS_HT` / `ARBEITSPREIS_NT`: each band against its own volume\n- Optional `rabatt_pct` from the Angebot variant\n\nEvery rate comes from the Preisstaffel that covers the position's own\nquantity. `jahreskosten_brutto_eur` is the sum of the positions' gross\nfigures, each at its own Umsatzsteuersatz.\n\nA position that cannot be priced — unresolvable product code, a quantity\noutside every Preisstaffel, a Zweitarif product with no HT/NT split, a Gas\nposition with no CO₂ certificate price — refuses the whole quotation with\n422 and the reason per position. An Angebot is a binding offer, so a\nposition is never quietly dropped from the total.\n\n## Varianten (scenarios)\n\nMultiple `varianten` (e.g., 12M vs 24M, with/without rebate) can be included\nin a single Angebot.  On acceptance, the customer picks one via\n`gewaehlte_variante` (index into the `varianten` array).\n\n## Acceptance lifecycle\n\n`POST /api/v1/angebote/{id}/annehmen` transitions to ANGENOMMEN and emits\n`de.mako.tarif.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the\n`Rahmenvertrag` + `Versorgungsverträge` from the accepted Angebot data.",
         "operationId": "post_angebot",
         "requestBody": {
           "description": "`CreateAngebotRequest`: the quotation to price",
@@ -338,7 +338,7 @@
           "angebote"
         ],
         "summary": "`POST /api/v1/angebote/{id}/annehmen`",
-        "description": "Digitally accept an Angebot.\n\nValidates that the Angebot is still within its `gueltig_bis` window, then\ntransitions to `ANGENOMMEN` and, in the same transaction, enqueues\n`de.tarif.angebot.angenommen` for the configured ERP webhook (`vertragd`).\nThe outbox worker delivers it with retry; `vertragd` answers with the\nRahmenvertrag it created, and the worker links it onto the Angebot in the\ntransaction that marks the delivery done. So the answer here never carries\nthe Rahmenvertrag: it exists once the delivery has gone through, and the\nAngebot names it from then on.",
+        "description": "Digitally accept an Angebot.\n\nValidates that the Angebot is still within its `gueltig_bis` window, then\ntransitions to `ANGENOMMEN` and, in the same transaction, enqueues\n`de.mako.tarif.angebot.angenommen` for the configured ERP webhook (`vertragd`).\nThe outbox worker delivers it with retry; `vertragd` answers with the\nRahmenvertrag it created, and the worker links it onto the Angebot in the\ntransaction that marks the delivery done. So the answer here never carries\nthe Rahmenvertrag: it exists once the delivery has gone through, and the\nAngebot names it from then on.",
         "operationId": "post_angebot_annehmen",
         "parameters": [
           {
@@ -1011,7 +1011,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2528,6 +2528,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -2588,6 +2589,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -2620,7 +2628,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -2838,6 +2846,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -2897,6 +2906,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [

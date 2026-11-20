@@ -367,7 +367,7 @@ pub struct PutKonfigurationsprodukteRequest {
 ///
 /// ## CloudEvent
 ///
-/// Emits `de.markt.sr.konfigurationsprodukt.updated` to the durable fan-out
+/// Emits `de.mako.markt.sr.konfigurationsprodukt.updated` to the durable fan-out
 /// on every successful write so ERP subscribers and `processd` see the change.
 ///
 /// Returns `204 No Content` on success.
@@ -1022,7 +1022,7 @@ pub async fn get_geraet_konfigurationen(
 ///
 /// - Server-side deduplication: last entry wins for duplicate `parameter` values.
 /// - `updated_at` on each stored entry is set server-side (UTC now).
-/// - Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out. Its
+/// - Emits `de.mako.markt.geraet.konfiguration.updated` via the durable fan-out. Its
 ///   subscribers are the ERP and `agentd`'s `smgw-diagnostics-agent`; neither
 ///   `edmd` nor `processd` consumes it.
 ///
@@ -1030,7 +1030,7 @@ pub async fn get_geraet_konfigurationen(
 ///
 /// Both are master data here. `edmd`'s daily certificate-expiry worker sweeps
 /// the `SmgwSession` each gateway registered with `edmd` itself and emits a
-/// tiered `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before
+/// tiered `de.mako.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before
 /// expiry (BSI TR-03109-4 §6.3), once per tier per certificate; it does not read
 /// these entries.
 #[utoipa::path(

@@ -2,20 +2,20 @@
 //!
 //! Closes the statutory fallback-supply loop:
 //!
-//! 1. **Gap trigger** — `marktd` emits `de.markt.versorgung.gap-detected`
+//! 1. **Gap trigger** — `marktd` emits `de.mako.markt.versorgung.gap-detected`
 //!    when a MaLo becomes `Unbeliefert` with no announced successor
 //!    (Bestätigung Lieferende 55005/44005 without pending switch). This
 //!    module looks up the Grundversorger (§36 Abs. 2 Feststellung, marktd
 //!    master data) and dispatches `gpke.eog.anmelden` to `makod`, which
 //!    sends the UTILMD 55013 Zuordnung (GPKE Teil 2 Kap. 2.3:
 //!    "unverzüglich"; retroactive Zuordnungsbeginn allowed).
-//! 2. **Activation** — `de.markt.versorgung.eog-begonnen` promotes the
+//! 2. **Activation** — `de.mako.markt.versorgung.eog-begonnen` promotes the
 //!    case to `active` and records `eog_art` + `eog_seit`.
 //! 3. **§38 timer** — a daily worker scans active `ERSATZVERSORGUNG` cases
 //!    against `eog_seit + 3 months` (§38 Abs. 4 S. 1 EnWG — anchored on
 //!    the possibly retroactive Zuordnungsbeginn, not on detection). It
 //!    warns `warn_days_before_expiry` days ahead and marks expiry;
-//!    both emit `de.markt.versorgung.ersatz-auslaufend` CloudEvents to the
+//!    both emit `de.mako.markt.versorgung.ersatz-auslaufend` CloudEvents to the
 //!    configured webhook. `GRUNDVERSORGUNG` cases have no statutory
 //!    maximum and never expire.
 //!
@@ -46,7 +46,7 @@ pub struct EogModuleConfig {
     pub default_transaktionsgrund: String,
     /// Days before the §38 3-month maximum at which the warning fires.
     pub warn_days_before_expiry: u32,
-    /// Optional webhook for `de.markt.versorgung.ersatz-auslaufend`
+    /// Optional webhook for `de.mako.markt.versorgung.ersatz-auslaufend`
     /// CloudEvents (ERP / operator alerting). When set, the sweep enqueues the
     /// notices for [`EOG_NOTIFY_TARGET`]; the worker draining that target
     /// signs with `eog.notify_webhook_secret`.
@@ -66,7 +66,7 @@ impl Default for EogModuleConfig {
 
 // ── Event handling ────────────────────────────────────────────────────────────
 
-/// Handle a `de.markt.versorgung.*` CloudEvent. Returns `Ok(true)` when the
+/// Handle a `de.mako.markt.versorgung.*` CloudEvent. Returns `Ok(true)` when the
 /// event was consumed by this module.
 pub async fn handle_versorgung_event(
     event: &serde_json::Value,
@@ -447,7 +447,7 @@ pub struct EogTimerHit {
 /// `INTERVAL '3 months'` is calendar-month arithmetic — exactly the statute's
 /// "drei Monate nach Beginn der Ersatzenergieversorgung".
 ///
-/// The status flips and their `de.markt.versorgung.ersatz-auslaufend` notices
+/// The status flips and their `de.mako.markt.versorgung.ersatz-auslaufend` notices
 /// commit in one transaction: a flipped row is never selected again, so a
 /// notice lost after the flip would never be sent.
 pub async fn sweep_ersatzversorgung_timer(
@@ -511,11 +511,11 @@ pub async fn sweep_ersatzversorgung_timer(
     Ok((warned.len() as u64, expired.len() as u64))
 }
 
-/// The outbox target the `de.markt.versorgung.ersatz-auslaufend` notices are
+/// The outbox target the `de.mako.markt.versorgung.ersatz-auslaufend` notices are
 /// enqueued for; the worker delivering to `notify_webhook_url` drains it.
 pub const EOG_NOTIFY_TARGET: &str = "eog-notify";
 
-/// Enqueue a `de.markt.versorgung.ersatz-auslaufend` CloudEvent for the
+/// Enqueue a `de.mako.markt.versorgung.ersatz-auslaufend` CloudEvent for the
 /// configured notify webhook, on the sweep's transaction.
 async fn notify_ersatz_auslaufend(
     conn: &mut sqlx::PgConnection,

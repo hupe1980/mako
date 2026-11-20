@@ -225,7 +225,7 @@ impl std::fmt::Display for Messtyp {
     }
 }
 
-/// Parsed fields from a `de.mako.process.initiated` event for a Lieferbeginn PID.
+/// Parsed fields from a `de.mako.engine.process.initiated` event for a Lieferbeginn PID.
 ///
 /// All fields that `mako-pruefung` needs are extracted at the transport boundary
 /// by `processd` before calling `evaluate`.  No raw CloudEvent JSON arrives here.
@@ -579,7 +579,7 @@ pub struct TranchenZuordnung {
 
 // ── AbmeldungAnfrage ──────────────────────────────────────────────────────────
 
-/// Parsed fields from a `de.mako.process.initiated` event for an **Abmeldung**
+/// Parsed fields from a `de.mako.engine.process.initiated` event for an **Abmeldung**
 /// PID — Strom `55004`, Gas `44004`.
 ///
 /// Separate from [`AnmeldungAnfrage`] because the two carry different facts: an

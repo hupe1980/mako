@@ -1003,7 +1003,7 @@ fn final_window() -> mako_engine::deadline::Deadline {
 /// A stream whose `X5G` Endgültige Allokation arrived raises no overdue notice.
 ///
 /// The final-allocation window is registered on every stream and never
-/// cancelled, so it fires on the healthy path too. `de.gabi.alocat.missing`
+/// cancelled, so it fires on the healthy path too. `de.mako.gabi.alocat.missing`
 /// asks the operator to open a Clearingfall with FNB/MGV, and `gabi-gas-agent`
 /// acts on it — so raising it for a gas day whose `X5G` is on file is a false
 /// regulatory alert on every stream.

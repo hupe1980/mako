@@ -223,9 +223,9 @@ fn every_printed_verifier_accepts_a_real_delivery_and_refuses_a_tampered_one() {
     // with the decoded key) and a plain one: a printed verifier must hold for
     // both, or an integrator copying it rejects every real delivery.
     let issued = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
-    let id = "de.markt.malo.updated/3f2b0c1e-7a4d-4e5f-9b8a-1c2d3e4f5a6b";
+    let id = "de.mako.markt.malo.updated/3f2b0c1e-7a4d-4e5f-9b8a-1c2d3e4f5a6b";
     let ts = time::OffsetDateTime::now_utc().unix_timestamp();
-    let body = br#"{"specversion":"1.0","type":"de.markt.malo.updated"}"#;
+    let body = br#"{"specversion":"1.0","type":"de.mako.markt.malo.updated"}"#;
 
     let mut tampered = body.to_vec();
     tampered[2] ^= 0x01;

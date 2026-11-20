@@ -284,7 +284,7 @@ impl Daemon for Agentd {
                 };
                 let mut destination = agentplane::push::Destination::new("erp-audit", url);
                 // Standard Webhooks, the same scheme `mako_service::webhook`
-                // signs every other mako outbound with — so `de.agent.decision.made`
+                // signs every other mako outbound with — so `de.mako.agent.decision.made`
                 // verifies through the shared verifier like everything else, and
                 // gains the replay protection a body-only HMAC could not give it.
                 //

@@ -89,7 +89,7 @@ pub struct Config {
     pub esa: EsaConfig,
     #[serde(default)]
     pub eog: EogConfig,
-    /// `[obs]` — the process read model's `de.obs.*` producers.
+    /// `[obs]` — the process read model's `de.mako.obs.*` producers.
     #[serde(default)]
     pub obs: ObsConfig,
     /// `[sperr]` — the Sperr-/Entsperrauftrag queue's ERP notices (NB role).
@@ -159,19 +159,19 @@ impl Config {
         if self.webhook.inbound_secret.is_none() {
             fehlt.push(
                 "webhook.inbound_secret — without it POST /webhook accepts any unsigned body, \
-                 and a forged de.mako.process.initiated makes this operator answer a market \
+                 and a forged de.mako.engine.process.initiated makes this operator answer a market \
                  partner over a process nobody started, queues a physical disconnection, or \
                  closes an open process in the read model"
                     .to_owned(),
             );
         }
         // The endpoint `default` signs only when it has a secret, so a configured ERP
-        // webhook without one ships every de.sperr.* notice unsigned — a
+        // webhook without one ships every de.mako.sperr.* notice unsigned — a
         // disconnection announcement the receiver cannot tell from a forged one.
         if self.sperr.erp_webhook_url.is_some() && self.sperr.erp_hmac_secret.is_none() {
             fehlt.push(
                 "sperr.erp_hmac_secret — sperr.erp_webhook_url is configured, and without the \
-                 secret every de.sperr.* notice, including the ones announcing a physical \
+                 secret every de.mako.sperr.* notice, including the ones announcing a physical \
                  disconnection, reaches the ERP unsigned"
                     .to_owned(),
             );
@@ -302,7 +302,7 @@ pub struct WebhookConfig {
 ///
 /// - `PROCESS_INITIATED` drives the NB/LF/MSB STP modules, opens a Sperrauftrag
 ///   for ORDERS 17115/17117 and opens a row in the process read model;
-/// - the four other `de.mako.*` lifecycle types advance that row;
+/// - the four other `de.mako.engine.*` lifecycle types advance that row;
 /// - the versorgung events drive the EoG gap-closure automation (§38 EnWG) —
 ///   CHANGED closes a case once regular supply resumes.
 #[must_use]
@@ -389,7 +389,7 @@ pub struct EogConfig {
     /// Days before the §38 Abs. 4 3-month maximum at which the warning fires.
     #[serde(default = "default_eog_warn_days")]
     pub warn_days_before_expiry: u32,
-    /// Webhook for `de.markt.versorgung.ersatz-auslaufend` CloudEvents.
+    /// Webhook for `de.mako.markt.versorgung.ersatz-auslaufend` CloudEvents.
     #[serde(default)]
     pub notify_webhook_url: Option<String>,
     /// HMAC-SHA256 secret for signing the outbound `notify_webhook_url`
@@ -424,19 +424,19 @@ impl Default for EogConfig {
 
 // ── obs module (process read model) ───────────────────────────────────────────
 
-/// `[obs]` — where the process read model's `de.obs.*` events go, and how its
+/// `[obs]` — where the process read model's `de.mako.obs.*` events go, and how its
 /// sweeps are tuned.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObsConfig {
-    /// Outbound CloudEvent target for `de.obs.deadline.approaching` and
-    /// `de.obs.stp.parity.alert`. In production this is the `marktd`
+    /// Outbound CloudEvent target for `de.mako.obs.deadline.approaching` and
+    /// `de.mako.obs.stp.parity.alert`. In production this is the `marktd`
     /// event-ingest endpoint (`…/api/v1/mako/events`), whose fan-out delivers
     /// to the `agentd` subscribers. When `None` the sweep workers do not run.
     /// Use `"env:PROCESSD_OBS_OUTBOUND_URL"`.
     #[serde(default)]
     pub outbound_url: Option<String>,
-    /// HMAC-SHA256 secret for signing the outbound `de.obs.*` CloudEvents
+    /// HMAC-SHA256 secret for signing the outbound `de.mako.obs.*` CloudEvents
     /// (Standard Webhooks). Must match the target's inbound secret.
     #[serde(default)]
     pub outbound_secret: Option<String>,
@@ -451,7 +451,7 @@ pub struct ObsConfig {
     #[serde(default = "default_parity_sweep_secs")]
     pub parity_sweep_secs: u64,
     /// Completion-rate gap, in percentage points, at which
-    /// `de.obs.stp.parity.alert` fires. Default 5.0.
+    /// `de.mako.obs.stp.parity.alert` fires. Default 5.0.
     ///
     /// **This is the operator's own escalation policy, not a regulatory limit.**
     /// The Bundesnetzagentur publishes no numeric parity threshold for this
@@ -499,14 +499,14 @@ impl Default for ObsConfig {
 
 // ── sperr module (Sperr-/Entsperrauftrag queue, NB role) ──────────────────────
 
-/// `[sperr]` — where the Sperrauftrag queue's `de.sperr.*` notices go.
+/// `[sperr]` — where the Sperrauftrag queue's `de.mako.sperr.*` notices go.
 ///
 /// The ORDERS ingest rides `[webhook]`, the IFTSTA 21039 dispatch rides
 /// `[makod]`; only the ERP notification is the queue's own.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SperrConfig {
-    /// ERP webhook the `de.sperr.*` CloudEvents are delivered to — the
+    /// ERP webhook the `de.mako.sperr.*` CloudEvents are delivered to — the
     /// webhook endpoint `default`.
     ///
     /// `sperr::events` enqueues all seven types into `event_outbox`
@@ -517,7 +517,7 @@ pub struct SperrConfig {
     /// says so.
     #[serde(default)]
     pub erp_webhook_url: Option<String>,
-    /// HMAC secret the outbound `de.sperr.*` deliveries are signed with.
+    /// HMAC secret the outbound `de.mako.sperr.*` deliveries are signed with.
     /// Required when `erp_webhook_url` is set. Use `"env:VAR_NAME"`.
     #[serde(default)]
     pub erp_hmac_secret: Option<String>,

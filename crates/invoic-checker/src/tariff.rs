@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! PRICAT 27003 (NB → LF via AS4)
-//!   → makod processes + emits de.mako.process.completed{pid=27003}
+//!   → makod processes + emits de.mako.engine.process.completed{pid=27003}
 //!   → marktd: PUT /api/v1/preisblaetter/{nb_mp_id}  (persisted to PostgreSQL)
 //!   → invoicd: GET /api/v1/preisblaetter/{nb_mp_id}?date={billing_date}
 //!       → MdmdPreisblattClient (1h LRU cache, circuit breaker)

@@ -12,7 +12,7 @@
 //!
 //! The trigger is the one the NB decision module reads: `makod` spawns the
 //! NB-role `gpke-sperrung` workflow on an inbound ORDERS and announces it as
-//! `de.mako.process.initiated`, which reaches processd's one `POST /webhook`
+//! `de.mako.engine.process.initiated`, which reaches processd's one `POST /webhook`
 //! and is handed to [`handlers::ingest`](crate::sperr::handlers::ingest).
 //!
 //! # Endpoints
@@ -20,19 +20,20 @@
 //! | Method | Path | Cedar action | Description |
 //! |---|---|---|---|
 //! | `POST`  | `/api/v1/sperr-orders` | `create-sperr-order` | Create an order by hand |
-//! | `GET`   | `/api/v1/sperr-orders` | `read-sperr-order` | The queue (`?status=&malo_id=&due=true`) |
+//! | `GET`   | `/api/v1/sperr-orders` | `read-sperr-order` | The queue (`?status=&malo_id=&external_ref=&due=true`) |
 //! | `GET`   | `/api/v1/sperr-orders/stats` | `read-sperr-order` | Counters, incl. outstanding IFTSTA |
 //! | `GET`   | `/api/v1/sperr-orders/{id}` | `read-sperr-order` | One order |
 //! | `PUT`   | `/api/v1/sperr-orders/{id}/execute` | `execute-sperr-order` | Carried out → IFTSTA `Z14` |
 //! | `PUT`   | `/api/v1/sperr-orders/{id}/fail` | `execute-sperr-order` | Not carried out → IFTSTA `Z13` |
 //! | `PUT`   | `/api/v1/sperr-orders/{id}/cancel` | `cancel-sperr-order` | Withdraw a pending order |
+//! | `PUT`   | `/api/v1/sperr-orders/{id}/external-ref` | `execute-sperr-order` | Attach the executing system's reference |
 //!
 //! | Module | Purpose |
 //! |---|---|
 //! | [`model`](crate::sperr::model) | the typed domain — ORDERS/IFTSTA codes, not loose strings |
 //! | [`ingest`](crate::sperr::ingest) | inbound ORDERS 17115/17117 → work order |
 //! | [`handlers`](crate::sperr::handlers) | HTTP routes (all authenticated **and** authorized) |
-//! | [`events`](crate::sperr::events) | `de.sperr.*` CloudEvents |
+//! | [`events`](crate::sperr::events) | `de.mako.sperr.*` CloudEvents |
 //! | [`worker`](crate::sperr::worker) | the IFTSTA escalation and execution-window sweep |
 //! | [`pg`](crate::sperr::pg) | persistence |
 

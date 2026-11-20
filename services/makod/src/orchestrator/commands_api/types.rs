@@ -151,7 +151,7 @@ pub struct CommandAccepted {
     ///
     /// Matches the `subject` field of the corresponding CloudEvent sent to the
     /// ERP webhook. Use this to correlate the command response with the
-    /// `de.mako.process.initiated` (or other) event the ERP received.
+    /// `de.mako.engine.process.initiated` (or other) event the ERP received.
     #[schema(example = "3181967a-02d1-4d0e-9105-0cc46f3b25c9")]
     pub process_id: String,
     /// The reference of the message this command filed (`UNH` DE 0062), when

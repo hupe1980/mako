@@ -1,4 +1,4 @@
-//! Guard: a consumer of `de.mako.process.completed` reads the verdict.
+//! Guard: a consumer of `de.mako.engine.process.completed` reads the verdict.
 //!
 //! One CloudEvent type carries both answers a counterparty can give: a
 //! Bestätigung and an Ablehnung of the same request (BK6-24-174 GPKE Teil 2:
@@ -13,11 +13,11 @@
 //!   with `#[cfg(test)]` items and comment lines blanked: a comparison
 //!   (`==`, `!=`) with, or a `match` arm (`=>`) on,
 //!   `mako_events::mako::PROCESS_COMPLETED` or the literal
-//!   `"de.mako.process.completed"`. The enclosing function must consult the
+//!   `"de.mako.engine.process.completed"`. The enclosing function must consult the
 //!   verdict or the PID — name `accepted`, `outcome` or a `…verdict…`
 //!   identifier, or an identifier containing `pid`.
 //! - **Agent manifests**, `services/agentd/agents/*.yaml`: a trigger line
-//!   naming `de.mako.process.completed` must tell the model about
+//!   naming `de.mako.engine.process.completed` must tell the model about
 //!   `data.accepted` or `data.outcome` — the model reads the event's `data`,
 //!   and the line is what tells it the verdict lives there.
 //!
@@ -29,8 +29,8 @@
 use std::path::{Path, PathBuf};
 
 const CONST_PATH: &str = "mako_events::mako::PROCESS_COMPLETED";
-const LITERAL: &str = "\"de.mako.process.completed\"";
-const TYPE: &str = "de.mako.process.completed";
+const LITERAL: &str = "\"de.mako.engine.process.completed\"";
+const TYPE: &str = "de.mako.engine.process.completed";
 
 /// The lowest number of `.rs` files a healthy walk reads.
 const MIN_FILES: usize = 300;
@@ -236,7 +236,7 @@ mod tests {
                    let is_completed = ce_type == mako_events::mako::PROCESS_COMPLETED;\n    \
                    if is_completed && ABGELEHNT.contains(&pid) {}\n}\n";
         assert!(blind_decisions(src).is_empty());
-        let literal = "fn h(t: &str, data: &Value) -> bool {\n    t == \"de.mako.process.completed\" \
+        let literal = "fn h(t: &str, data: &Value) -> bool {\n    t == \"de.mako.engine.process.completed\" \
                        && data[\"accepted\"] == true\n}\n";
         assert!(blind_decisions(literal).is_empty());
     }
@@ -253,17 +253,17 @@ mod tests {
     #[test]
     fn a_test_item_is_skipped_and_code_after_it_is_not() {
         let src = "#[cfg(test)]\nmod tests {\n    fn t(x: &str) -> bool { x == mako_events::mako::PROCESS_COMPLETED }\n}\n\
-                   fn later(x: &str) -> bool {\n    x == \"de.mako.process.completed\"\n}\n";
+                   fn later(x: &str) -> bool {\n    x == \"de.mako.engine.process.completed\"\n}\n";
         assert_eq!(blind_decisions(src), vec![6]);
     }
 
     #[test]
     fn an_agent_trigger_must_point_at_the_verdict() {
-        let blind = "      ## TRIGGERED BY\n      - `de.mako.process.completed` — WiM MSB-change completed\n";
+        let blind = "      ## TRIGGERED BY\n      - `de.mako.engine.process.completed` — WiM MSB-change completed\n";
         assert_eq!(blind_triggers(blind), vec![2]);
-        let told = "      - `de.mako.process.completed` — closed; `data.accepted: false` is an Ablehnung\n";
+        let told = "      - `de.mako.engine.process.completed` — closed; `data.accepted: false` is an Ablehnung\n";
         assert!(blind_triggers(told).is_empty());
-        let other = "      - `de.mako.process.failed` — failed\n";
+        let other = "      - `de.mako.engine.process.failed` — failed\n";
         assert!(blind_triggers(other).is_empty());
     }
 }

@@ -6,7 +6,7 @@
 //! discharge entries automatically when a MEASURED/CORRECTED value arrives.
 //! This worker is the escalation half: entries older than the configured
 //! deadline flip to `UEBERFAELLIG` and are reported as a
-//! `de.messwert.reading.confirmation.overdue` CloudEvent.
+//! `de.mako.messwert.reading.confirmation.overdue` CloudEvent.
 //!
 //! ## Deadline
 //!

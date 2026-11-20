@@ -23,7 +23,7 @@
 //!   "specversion": "1.0",
 //!   "id": "<idempotency_key>",
 //!   "source": "urn:mako:makod:tenant:<tenant_id>",
-//!   "type": "de.mako.aperak.accepted",
+//!   "type": "de.mako.engine.aperak.accepted",
 //!   "time": "2026-10-01T10:15:00+02:00",
 //!   "subject": "<process_id>",
 //!   "dataschema": "https://.../Marktlokation.json",
@@ -85,7 +85,7 @@ struct CloudEventEnvelope<'a> {
     /// Empty string is serialized as an absent field.
     #[serde(skip_serializing_if = "str::is_empty")]
     makoworkflow: &'a str,
-    /// BDEW ERC error code when `type == "de.mako.aperak.rejected"`.
+    /// BDEW ERC error code when `type == "de.mako.engine.aperak.rejected"`.
     ///
     /// Carries the structured BDEW ERC code (e.g. `"Z29"`, `"E02"`) so ERP
     /// subscribers can automate the response without parsing `data.error_code`.
@@ -152,7 +152,7 @@ impl<'a> CloudEventEnvelope<'a> {
 ///   "specversion": "1.0",
 ///   "id": "<idempotency_key>",
 ///   "source": "urn:mako:makod:tenant:<tenant_id>",
-///   "type": "de.mako.aperak.accepted",
+///   "type": "de.mako.engine.aperak.accepted",
 ///   "time": "2026-10-01T10:15:00+02:00",
 ///   "subject": "<process_id>",
 ///   "dataschema": "https://.../Marktlokation.json",

@@ -12,7 +12,7 @@
 //! the BDEW template): `evidence_uri`/`evidence_hash` are stored verbatim and
 //! never validated for form.
 //!
-//! Revocation commits `de.markt.einwilligung.widerrufen` and one **17008
+//! Revocation commits `de.mako.markt.einwilligung.widerrufen` and one **17008
 //! Abbestellung** command per covered location for makod with the revocation —
 //! GDPR Art. 7(3) obliges the ESA to stop, and the only way to stop is the
 //! Abbestellung.
@@ -187,7 +187,7 @@ pub async fn get_einwilligung(
 
 /// `DELETE /api/v1/esa/einwilligungen/:id` — revoke consent (Art. 7(3) GDPR).
 ///
-/// Commits the revocation with its `de.markt.einwilligung.widerrufen` event and
+/// Commits the revocation with its `de.mako.markt.einwilligung.widerrufen` event and
 /// one ORDERS 17008 Abbestellung command per covered location; the outbox
 /// worker delivers those to makod with retry, so a makod outage delays the stop
 /// and never loses it.

@@ -1,4 +1,4 @@
-//! The projection function: one `de.mako.*` CloudEvent into one
+//! The projection function: one `de.mako.engine.*` CloudEvent into one
 //! [`ProcessProjection`] row.
 //!
 //! The webhook calls it once per delivery and [`super::rebuild`] calls it once
@@ -38,7 +38,7 @@ pub struct ObsState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Projected {
     /// The event is not one the read model carries — another namespace, a
-    /// `de.mako.*` type with no process state, or a subject that is no process id.
+    /// `de.mako.engine.*` type with no process state, or a subject that is no process id.
     Ignored,
     /// The row for this process was written.
     Upserted,
@@ -62,9 +62,9 @@ pub enum Projected {
 pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Projected, ObsError> {
     let ce_type = event["type"].as_str().unwrap_or("");
 
-    // Only project de.mako.* events — via the canonical catalog matcher so a
-    // `de.mako.*` namespace change stays single-sourced in `mako-events`.
-    if !mako_events::matches("de.mako.*", ce_type) {
+    // Only project de.mako.engine.* events — via the canonical catalog matcher so a
+    // `de.mako.engine.*` namespace change stays single-sourced in `mako-events`.
+    if !mako_events::matches("de.mako.engine.*", ce_type) {
         debug!(ce_type, "processd obs: non-mako event not projected");
         return Ok(Projected::Ignored);
     }
@@ -227,7 +227,7 @@ pub async fn project(state: &ObsState, event: &serde_json::Value) -> Result<Proj
 
 /// The Antwortcode a counterparty's business answer carried, and the tree or
 /// Codeliste it named: `data.antwortcode` and `data.codeliste`, the keys makod
-/// writes on the `de.mako.process.completed` of an answered Lieferbeginn
+/// writes on the `de.mako.engine.process.completed` of an answered Lieferbeginn
 /// (55002/55003, 44002/44003 and the other `ANTWORT_PIDS_LF`).
 ///
 /// A list without a code is no answer and yields neither: the pair is stored

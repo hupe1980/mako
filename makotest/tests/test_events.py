@@ -45,25 +45,25 @@ class TestCatalog:
         types = event_types()
         assert len(types) > 50
         assert types == sorted(set(types))
-        assert "de.mako.process.completed" in types
+        assert "de.mako.engine.process.completed" in types
 
     def test_a_retired_prefix_is_not_a_type(self):
         """The rename is why the catalog is bound.
 
-        `de.edmd.*` became `de.messwert.*`. A test still naming the old prefix
+        `de.edmd.*` became `de.mako.messwert.*`. A test still naming the old prefix
         asserts that an event nobody emits was not emitted — which is true, and
         useless.
         """
-        assert event_type_exists("de.messwert.reading.direct.stored")
+        assert event_type_exists("de.mako.messwert.reading.direct.stored")
         assert not event_type_exists("de.edmd.reading.direct.stored")
 
     def test_a_typo_is_not_a_type(self):
-        assert not event_type_exists("de.mako.process.complete")
+        assert not event_type_exists("de.mako.engine.process.complete")
 
     def test_a_pattern_resolves_to_what_it_would_deliver(self):
-        mako = event_types_matching("de.mako.*")
-        assert "de.mako.process.initiated" in mako
-        assert not any(t.startswith("de.markt.") for t in mako)
+        mako = event_types_matching("de.mako.engine.*")
+        assert "de.mako.engine.process.initiated" in mako
+        assert not any(t.startswith("de.mako.markt.") for t in mako)
         assert event_types_matching("*") == event_types()
 
     def test_a_dead_subscription_is_visible_as_one(self):
@@ -71,19 +71,20 @@ class TestCatalog:
 
     def test_the_matcher_is_the_platforms_own(self):
         """`*` is any sequence and `?` exactly one character — not `startswith`."""
-        assert event_matches("de.*.rechnung.*", "de.billing.rechnung.erstellt")
+        assert event_matches("de.*.rechnung.*", "de.mako.billing.rechnung.erstellt")
         assert event_matches("*", "de.anything")
-        assert not event_matches("de.mako.*", "de.markt.malo.updated")
+        assert not event_matches("de.mako.engine.*", "de.mako.markt.malo.updated")
 
 
 class TestEnvelope:
     def test_a_conformant_event_passes(self):
         assert_cloudevent(
-            event("de.mako.process.completed"), type="de.mako.process.completed"
+            event("de.mako.engine.process.completed"),
+            type="de.mako.engine.process.completed",
         )
 
     def test_a_missing_required_attribute_is_reported(self):
-        broken = event("de.mako.process.completed")
+        broken = event("de.mako.engine.process.completed")
         del broken["source"]
         with pytest.raises(AssertionError, match="required attribute"):
             assert_cloudevent(broken)
@@ -95,25 +96,30 @@ class TestEnvelope:
         a Frist, which is what the stream is asserted against — so it is named
         as the defect it is rather than passed as conformant.
         """
-        undated = event("de.mako.process.completed")
+        undated = event("de.mako.engine.process.completed")
         del undated["time"]
         with pytest.raises(AssertionError, match="carries no `time`"):
             assert_cloudevent(undated)
 
     def test_a_wrong_specversion_is_refused(self):
         with pytest.raises(AssertionError, match="specversion"):
-            assert_cloudevent(event("de.mako.process.completed", specversion="0.3"))
+            assert_cloudevent(
+                event("de.mako.engine.process.completed", specversion="0.3")
+            )
 
     def test_a_non_rfc3339_time_is_refused(self):
         """`OffsetDateTime::to_string()` is not RFC 3339, and it renders plausibly."""
         with pytest.raises(ValueError, match="RFC 3339"):
             assert_cloudevent(
-                event("de.mako.process.completed", time="2026-03-02 9:00:00.0 +00:00:00")
+                event(
+                    "de.mako.engine.process.completed",
+                    time="2026-03-02 9:00:00.0 +00:00:00",
+                )
             )
 
     def test_an_undeclared_type_is_refused_even_when_the_envelope_is_fine(self):
         with pytest.raises(AssertionError, match="not a type the platform declares"):
-            assert_cloudevent(event("de.mako.process.invented"))
+            assert_cloudevent(event("de.mako.engine.process.invented"))
 
     def test_an_extension_key_colliding_with_a_core_attribute_is_refused(self):
         """Serialised flat, a collision emits the key twice and receivers reject it."""
@@ -126,11 +132,11 @@ class TestEnvelope:
         assert not is_valid_extension_key(key)
         if key:
             with pytest.raises(AssertionError, match="extension attribute"):
-                assert_cloudevent(event("de.mako.process.completed", **{key: "x"}))
+                assert_cloudevent(event("de.mako.engine.process.completed", **{key: "x"}))
 
     def test_legal_extensions_pass(self):
         assert is_valid_extension_key("makopid") and is_valid_extension_key("traceparent")
-        assert_cloudevent(event("de.mako.process.completed", makopid="55001"))
+        assert_cloudevent(event("de.mako.engine.process.completed", makopid="55001"))
 
     def test_a_binary_payload_is_conformant(self):
         """`data_base64` is a JSON-format member, not a context attribute.
@@ -139,7 +145,7 @@ class TestEnvelope:
         check that knew only the core nine would reject a conformant event that
         happens to carry bytes.
         """
-        binary = event("de.mako.process.completed")
+        binary = event("de.mako.engine.process.completed")
         del binary["data"]
         binary["data_base64"] = "VU5CKw=="
         assert_cloudevent(binary)
@@ -149,7 +155,9 @@ class TestEnvelope:
     def test_carrying_both_payload_members_is_refused(self):
         """§3.1 makes them mutually exclusive — two payloads, no rule for which."""
         with pytest.raises(AssertionError, match="both `data` and `data_base64`"):
-            assert_cloudevent(event("de.mako.process.completed", data_base64="VU5CKw=="))
+            assert_cloudevent(
+                event("de.mako.engine.process.completed", data_base64="VU5CKw==")
+            )
 
     def test_the_time_helper_normalises(self):
         assert parse_cloudevent_time("2026-03-02T09:00:00Z") == "2026-03-02T09:00:00Z"
@@ -159,27 +167,27 @@ class TestEmission:
     @pytest.fixture
     def emitted(self) -> list[dict]:
         return [
-            event("de.mako.process.initiated"),
-            event("de.markt.versorgung.changed"),
-            event("de.mako.process.completed", subject="51238696780"),
+            event("de.mako.engine.process.initiated"),
+            event("de.mako.markt.versorgung.changed"),
+            event("de.mako.engine.process.completed", subject="51238696780"),
         ]
 
     def test_finding_by_pattern_uses_the_platforms_routing(self, emitted):
-        assert len(find_events(emitted, "de.mako.*")) == 2
-        assert len(find_events(emitted, "de.mako.*", subject=MALO)) == 1
+        assert len(find_events(emitted, "de.mako.engine.*")) == 2
+        assert len(find_events(emitted, "de.mako.engine.*", subject=MALO)) == 1
 
     def test_assert_event_emitted_returns_the_match(self, emitted):
-        found = assert_event_emitted(emitted, "de.markt.versorgung.*", subject=MALO)
-        assert found["type"] == "de.markt.versorgung.changed"
+        found = assert_event_emitted(emitted, "de.mako.markt.versorgung.*", subject=MALO)
+        assert found["type"] == "de.mako.markt.versorgung.changed"
 
     def test_a_missing_event_lists_what_was_seen(self, emitted):
         with pytest.raises(AssertionError, match="Types seen"):
-            assert_event_emitted(emitted, "de.billing.*")
+            assert_event_emitted(emitted, "de.mako.billing.*")
 
     def test_assert_no_event_emitted(self, emitted):
-        assert_no_event_emitted(emitted, "de.billing.*")
+        assert_no_event_emitted(emitted, "de.mako.billing.*")
         with pytest.raises(AssertionError, match="but 2 was/were emitted"):
-            assert_no_event_emitted(emitted, "de.mako.*")
+            assert_no_event_emitted(emitted, "de.mako.engine.*")
 
     def test_a_pattern_the_catalog_cannot_satisfy_refuses_to_filter(self, emitted):
         """Otherwise `assert_no_event_emitted` passes on a typo, forever."""

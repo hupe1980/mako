@@ -55,7 +55,7 @@ stages 3 and 4 on a value mako built.
 | `repository` | the record types of every marktd aggregate, incl. `ZuordnungsermaechtigungRecord` (keyed per ZRT, BG, BK and LF — MaBiS Kap. 10.2.1) |
 | `referenzreihen` | `Reihe`, `ReiheInfo`, `Zeitraum`: the published figures billing reads (KAV, EEG Marktwerte, day-ahead) and the `referenzwert_fehlt` refusal |
 | `lokationsbuendel`, `utilmd_stammdaten` | a Marktlokation's Lokationsbündel and UTILMD Stammdaten on a Stichtag |
-| `cloudevents` | `InboundMakoEvent` (from makod) and `MarktEvent` (`de.markt.*`) |
+| `cloudevents` | `InboundMakoEvent` (from makod) and `MarktEvent` (`de.mako.markt.*`) |
 | `commands` | the catalogued `makod` command names |
 | `makod_client`, `marktd_client` | typed HTTP clients; `MarktdClient::referenzwert` returns a missing value as an error, never a zero |
 

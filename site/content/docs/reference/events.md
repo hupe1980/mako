@@ -12,135 +12,143 @@ Every type an integrator can subscribe to, with a webhook endpoint or the
 is emitted through a payload bound to it, and its events carry the schema's
 URL in `dataschema`. A **phantom** is declared and emitted by nothing.
 
-128 types: 1 with a schema, 13 phantoms.
+136 types: 15 with a schema, 13 phantoms.
 
 | Type | Emitted by | Named in | Schema | What it says |
 |---|---|---|---|---|
-| `de.mako.process.initiated` | — | agentd, invoicd, marktd, processd | — | A MaKo market process was started (first outbound message built). |
-| `de.mako.process.completed` | — | agentd, edmd, marktd, processd | — | Happy path finished — the process reached its terminal success state. |
-| `de.mako.process.failed` | — | agentd, processd | — | Unrecoverable failure — the process was cancelled/failed. |
-| `de.mako.aperak.accepted` | — | processd | — | APERAK acknowledged the outbound message. |
-| `de.mako.aperak.rejected` | — | agentd, processd | — | APERAK rejected the outbound message (carries BDEW ERC code). |
-| `de.mako.antwortfrist.abgelaufen` | — | agentd, processd | — | The business Antwortfrist of a Wechselprozess lapsed unanswered — not an APERAK delivery window, which makod alerts on itself. |
-| `de.mako.contrl.received` | — | — | — | CONTRL received for an outbound interchange. |
-| `de.mako.malo.identified` | — | — | — | MaLo identified during Lieferantenwechsel (GPKE identification step). |
-| `de.mako.abmeldeanfrage.beantwortet` | — | processd | — | The LFA answered the NB's Anfrage zur Beendigung der Zuordnung — or its 09:00 window lapsed, which the Festlegung reads as a Zustimmung. |
-| `de.mako.edifact.outbound` | — | makod | — | Outbound EDIFACT interchange handed to the webhook EDIFACT sender. |
-| `de.mako.dead-letter.recorded` | — | processd | — | An inbound message was refused into the dead-letter queue, or an outbound one was given up after its delivery budget. makod writes it in the same transaction as the dead-letter record, so every record has one. `data` carries `dead_letter_id`, `reason` (the category label), `detail`, `rejected_at` and — where the message named them — `pid`, `message_ref`, `message_type`, `sender` and `receiver`. |
-| `de.mako.netzzugang.uebermittlungsbedarf` | — | makod | — | §20 NZV Netzzugang: aggregated Übermittlungsbedarf toward the NB. |
+| `de.mako.engine.process.initiated` | — | agentd, invoicd, marktd, processd | — | A MaKo market process was started (first outbound message built). |
+| `de.mako.engine.process.completed` | — | agentd, edmd, marktd, processd | — | Happy path finished — the process reached its terminal success state. |
+| `de.mako.engine.process.failed` | — | agentd, processd | — | Unrecoverable failure — the process was cancelled/failed. |
+| `de.mako.engine.aperak.accepted` | — | processd | — | APERAK acknowledged the outbound message. |
+| `de.mako.engine.aperak.rejected` | — | agentd, processd | — | APERAK rejected the outbound message (carries BDEW ERC code). |
+| `de.mako.engine.antwortfrist.abgelaufen` | — | agentd, processd | — | The business Antwortfrist of a Wechselprozess lapsed unanswered — not an APERAK delivery window, which makod alerts on itself. |
+| `de.mako.engine.contrl.received` | — | — | — | CONTRL received for an outbound interchange. |
+| `de.mako.engine.malo.identified` | — | — | — | MaLo identified during Lieferantenwechsel (GPKE identification step). |
+| `de.mako.engine.abmeldeanfrage.beantwortet` | — | processd | — | The LFA answered the NB's Anfrage zur Beendigung der Zuordnung — or its 09:00 window lapsed, which the Festlegung reads as a Zustimmung. |
+| `de.mako.engine.edifact.outbound` | — | makod | — | Outbound EDIFACT interchange handed to the webhook EDIFACT sender. |
+| `de.mako.engine.dead-letter.recorded` | — | processd | — | An inbound message was refused into the dead-letter queue, or an outbound one was given up after its delivery budget. makod writes it in the same transaction as the dead-letter record, so every record has one. `data` carries `dead_letter_id`, `reason` (the category label), `detail`, `rejected_at` and — where the message named them — `pid`, `message_ref`, `message_type`, `sender` and `receiver`. |
+| `de.mako.engine.netzzugang.uebermittlungsbedarf` | — | makod | — | §20 NZV Netzzugang: aggregated Übermittlungsbedarf toward the NB. |
 | `de.mako.webhook.test` | mako-service | — | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.webhook.test.json) | A test delivery to one webhook endpoint, sent on request by any service that hosts `mako_service::subscriptions` and signed like a real one, so a receiver that verifies it verifies every delivery. `data` carries `endpoint_id` and `message`. |
-| `de.markt.malo.updated` | — | agentd, edmd, makod, marktd | — | Marktlokation stammdaten changed. |
-| `de.markt.malo.stammdaten-geaendert` | — | marktd | — | A UTILMD Stammdatenänderung (GPKE Teil 4 / GeLi Gas) was applied to a MaLo's typed columns — carries the applied `patch` for ERP audit. |
-| `de.markt.stammdaten.geaendert` | — | marktd | — | Object-generic Stammdatenänderung applied to a non-MaLo master-data object (MeLo/NeLo/Tranche). The subject is the object's location id; the payload carries the `objekt` marker. |
-| `de.markt.melo.updated` | — | marktd | — | Messlokation stammdaten changed. |
-| `de.markt.partner.updated` | — | marktd | — | Marktpartner record changed. |
-| `de.markt.nb-contract.updated` | — | agentd, marktd | — | Netzbetreiber contract (Lieferanten-Rahmenvertrag) changed. |
-| `de.markt.msb-rahmenvertrag.updated` | — | marktd | — | MSB-Rahmenvertrag (NB ↔ MSB, either Sparte) changed. |
-| `de.markt.geraet.konfiguration.updated` | — | agentd, marktd | — | Device (Gerät) configuration changed. |
-| `de.markt.sr.konfigurationsprodukt.updated` | — | marktd | — | Steuerbare-Ressource Konfigurationsprodukt changed (§14a). |
-| `de.markt.netzzugang.antrag.updated` | — | marktd | — | §20 NZV Netzzugang application state changed. |
-| `de.markt.einwilligung.erteilt` | — | marktd | — | Einwilligung (consent) granted. |
-| `de.markt.einwilligung.widerrufen` | — | marktd | — | Einwilligung (consent) revoked. |
-| `de.markt.versorgung.changed` | — | marktd, processd | — | Versorgung state changed (generic transition). |
-| `de.markt.versorgung.beliefert` | — | — | — | **phantom** — ⚠ phantom: no emitter. Versorgung entered `BELIEFERT` (supply active). |
-| `de.markt.versorgung.gap-detected` | — | marktd, processd | — | Supply gap detected: a MaLo became `Unbeliefert` with no announced successor — the NB must activate Ersatz-/Grundversorgung (§38 EnWG). Consumed by the `processd` EoG gap-closure automation. |
-| `de.markt.versorgung.eog-begonnen` | — | marktd, processd | — | Statutory fallback supply began (Ersatz- or Grundversorgung); `data.eog_art` carries the regime, `data.eog_seit` the start date. |
-| `de.markt.versorgung.ersatz-auslaufend` | — | processd | — | §38 Abs. 4 EnWG: a running Ersatzversorgung approaches its 3-month maximum. Emitted by the `processd` EoG timer. |
-| `de.markt.pricat.published` | — | marktd | — | PRICAT price catalog published. |
-| `de.markt.mmma.import.success` | — | marktd | — | MMMA import batch succeeded. |
-| `de.markt.mmma.import.failed` | — | marktd | — | MMMA import batch failed. |
-| `de.billing.rechnung.erstellt` | — | accountingd, agentd, billingd | — | Invoice (Rechnung) created. A credit note / Stornorechnung is the same event with `data.is_correction = true` and a negated amount — there is deliberately no separate `gutschrift` type (one signed document stream is cleaner for the double-entry ledger, and avoids a double-booking hazard). |
-| `de.billing.xrechnung.b2g.ready` | — | billingd | — | XRechnung for a B2G recipient is ready for dispatch. |
-| `de.invoic.receipt.disputed` | — | agentd, invoicd, netzbilanzd | — | Inbound INVOIC disputed (REMADV Ablehnung path). |
-| `de.invoic.receipt.settled` | — | accountingd, invoicd, netzbilanzd | — | Inbound INVOIC settled (REMADV Zahlungsavis). |
-| `de.invoic.payment.overdue` | — | agentd, invoicd | — | Outbound INVOIC payment overdue (no REMADV in time). |
-| `de.eeg.verguetung.berechnet` | — | accountingd, einsd | — | Einspeisevergütung settlement computed (feed-in tariff schemes). |
-| `de.eeg.marktpraemie.berechnet` | — | accountingd, einsd | — | Marktprämie settlement computed (Direktvermarktung schemes). |
-| `de.eeg.settlement.batch-due` | — | agentd, einsd | — | Monthly auto-settle batch trigger. Emitted by einsd's auto-settle worker (`emit_batch_due_ce`); subscribed by agentd's `einsd-batch-agent`. |
-| `de.eeg.anlage.foerderung-auslaufend` | — | agentd, einsd | — | EEG-Anlage Förderung ends within the warning window. |
-| `de.eeg.anlage.mastr-registriert` | — | einsd | — | EEG-Anlage MaStR registration confirmed. |
-| `de.eeg.veraeusserungsform.gewechselt` | — | agentd, einsd | — | §21b Veräußerungsform switched. |
-| `de.accounting.mahnung.issued` | — | accountingd, agentd | — | Dunning notice (Mahnung) issued. |
-| `de.accounting.abschlag.posted` | — | accountingd | — | Abschlag (installment) posted. |
-| `de.accounting.payment.due` | — | accountingd, agentd | — | Payment due notification. |
-| `de.accounting.payment.imported` | — | accountingd | — | Bank statement payment imported and matched. |
-| `de.accounting.erstattung.faellig` | — | accountingd | — | Refund (Erstattung) due to the customer. |
-| `de.accounting.jahresabschluss.abgeschlossen` | — | accountingd | — | § 40b Abs. 1 EnWG — the annual reconciliation for one Marktlokation is committed. |
-| `de.accounting.interest.charged` | — | accountingd | — | Late-payment interest (§288 BGB) charged. |
-| `de.accounting.eeg.payout.rejected` | — | accountingd | — | EEG payout rejected (e.g. missing bank data). |
-| `de.accounting.sperrandrohung` | — | accountingd, agentd | — | §41f Abs. 1 EnWG — Sperrandrohung: disconnection threatened after an unresolved Mahnstufe-3 dunning case, opening the 4-Wochen-Frist. |
-| `de.accounting.sperrankuendigung` | — | accountingd, agentd | — | §41f Abs. 5 EnWG — Sperrankündigung: the concrete disconnection date is announced 8 Werktage in advance (after the 4-Wochen Androhung Frist). |
-| `de.accounting.sperrauftrag` | — | accountingd, agentd | — | §41f Abs. 1 EnWG — Sperrauftrag: **ORDERS 17115** dispatched to the Netzbetreiber once the Androhung (4 Wochen) and Ankündigung (8 Werktage) Fristen have elapsed, the Abs. 3 arrears gates still hold, and no Abwendungsvereinbarung / Unverhältnismäßigkeit halted the sequence. The event announces the market message; it does not carry it. |
-| `de.accounting.entsperrauftrag` | — | accountingd | — | §41f Abs. 7 EnWG — Entsperrauftrag: **ORDERS 17117** dispatched once the grounds for the interruption are gone (the arrears were settled). The statute makes the restoration *unverzüglich* and unconditional on being asked, so this follows automatically from the case settling. |
-| `de.accounting.abwendung.angeboten` | — | accountingd, agentd | — | §41g Abs. 1 S. 2 EnWG — the Grundversorger's offer of an Abwendungsvereinbarung: due within one week of the customer demanding it after the Androhung, and at the latest together with the Ankündigung. Carries the interest-free instalment terms (§41g Abs. 1 S. 7–9). |
-| `de.accounting.abwendung.gebrochen` | — | accountingd, agentd | — | §41g Abs. 1 S. 11 EnWG — an accepted Abwendungsvereinbarung was broken. The supplier may resume the interruption, but must re-observe §41f Abs. 1 S. 2 and issue a **fresh** Ankündigung (§41f Abs. 5). |
-| `de.accounting.bankruecklast` | — | accountingd, agentd | — | SEPA direct-debit return (Bankrücklastschrift) — emitted by `accountingd` when a camt.053/054 booking carries a return reason code or debits the account, and subscribed by agentd's `payment-agent`. |
-| `de.accounting.sepa.collection-rejected` | — | accountingd, agentd | — | A pain.002 rejected a submitted direct-debit collection: the money will never arrive, so the receivable stays open and the mandate needs attention (`AC01` wrong IBAN, `MD01` no mandate, `AM04` no funds). |
-| `de.accounting.sepa.reversal-issued` | — | accountingd | — | The creditor gave a settled collection back via pain.007. |
-| `de.accounting.sepa.recall-requested` | — | accountingd | — | A camt.055 recall was sent for a submitted pain.008: the creditor is asking the bank to stop a collection **before** it settles. |
-| `de.accounting.sepa.recall-resolved` | — | accountingd | — | The bank answered a camt.055 with a camt.029. The outcome is `ACCR` (stopped), `RJCR` (the collection stands), `PDCR` (still open) or `PACR` (some of the named transactions). |
-| `de.accounting.payee.verification-mismatch` | — | accountingd | — | Verification of Payee reported something other than a match for an outgoing credit transfer. Mandatory for euro credit transfers since 9 October 2025: executing after a `RVNM` no-match shifts liability to the payer, so this is a decision an operator has to make. |
-| `de.netzbilanz.invoic.drafted` | — | agentd, netzbilanzd | — | A Netzbetreiber invoice was settled and stored as a draft. |
-| `de.netzbilanz.invoic.dispatched` | — | agentd, netzbilanzd | — | The invoice was handed to `makod` for EDIFACT dispatch. |
-| `de.netzbilanz.invoic.dispatch-overdue` | — | agentd, netzbilanzd | — | A draft is still undispatched past its window. |
-| `de.netzbilanz.invoic.paid` | — | netzbilanzd | — | The counterparty confirmed payment (REMADV 33001, the only Bestätigung). |
-| `de.netzbilanz.invoic.disputed` | — | agentd, netzbilanzd | — | The counterparty rejected the invoice (REMADV 33002/33003/33004). |
-| `de.netzbilanz.kostenblatt.computed` | — | netzbilanzd | — | Kostenblatt computed. |
-| `de.messwert.reading.quality.warning` | — | agentd, edmd | — | Hampel grade C/F, or any V-rule finding, on newly ingested readings. |
-| `de.messwert.reading.direct.stored` | — | agentd, edmd | — | Direct iMSys/SMGW push stored. |
-| `de.messwert.reading.order.failed` | — | agentd, edmd | — | Ablesesteuerung reading order failed. |
-| `de.messwert.reading.confirmation.overdue` | — | edmd | — | Expected reading confirmation overdue. |
-| `de.messwert.reading.delivery.overdue` | — | agentd, edmd | — | A measuring point has stopped delivering, or is delivering too little of the settlement window to bill. |
-| `de.messwert.reading.delivery.resumed` | — | edmd | — | A measuring point that was overdue is delivering again. |
-| `de.messwert.cls.compliance-issue` | — | agentd, edmd | — | §14a SMGW/CLS compliance issue **opened** (§ 25 MsbG monitoring duty). |
-| `de.messwert.cls.compliance-resolved` | — | edmd | — | A §14a SMGW/CLS compliance issue a later sweep no longer finds. |
-| `de.messwert.esa.typ2.delivery.overdue` | — | edmd | — | An **ESA Typ-2** subscription has stopped delivering. |
-| `de.messwert.esa.typ2.delivery.resumed` | — | edmd | — | An ESA Typ-2 subscription that was overdue is delivering again. |
-| `de.messwert.smgw.cert.expiry-warning` | — | agentd, edmd | — | SMGW certificate approaching expiry — tiered advance warning at 90 / 30 / 7 days before `valid_to`, once per tier per certificate. |
-| `de.tarif.product.updated` | — | agentd, productd | — | Product created/updated in the catalog. |
-| `de.tarif.angebot.angenommen` | — | productd, vertragd | — | B2B Angebot accepted — vertragd auto-creates the Rahmenvertrag. |
-| `de.tarif.angebot.abgelaufen` | — | agentd | — | **phantom** — ⚠ phantom: B2B quote expired. Subscribed by agentd (`productd-agent`), emitted by nothing — `productd` expires an Angebot in place without announcing it. |
-| `de.tarif.epex.missing` | — | agentd | — | **phantom** — ⚠ phantom: EPEX D-1 prices not imported by 18:00 CET. Subscribed by agentd (`productd-agent`), emitted by nothing — no worker watches the import window. |
-| `de.vertrag.aktiv` | — | vertragd | — | All components NB-confirmed — billing may start. |
-| `de.vertrag.gekuendigt` | — | vertragd | — | Lieferende dispatched (Rahmenvertrag cascade, per child). |
-| `de.vertrag.kuendigung` | — | vertragd | — | Kündigung accepted; the Lieferende and the Schlussablesung are enqueued. Carries the § 41 Abs. 8 Nr. 2 EnWG Textform confirmation the supplier owes the customer — the document is produced downstream, the instruction to produce it commits with the termination. |
-| `de.vertrag.kuendigung-widerrufen` | — | vertragd | — | Kündigung withdrawn before Lieferende. |
-| `de.vertrag.tarifwechsel` | — | vertragd | — | Product change applied immediately. |
-| `de.vertrag.tarifwechsel-geplant` | — | vertragd | — | Future-dated product change stored. |
-| `de.vertrag.preisgarantie-hinterlegt` | — | vertragd | — | Price guarantee stored/replaced. |
-| `de.vertrag.preisaenderung.ankuendigung` | — | agentd, vertragd | — | § 41 Abs. 5 EnWG price-change notice. Sent as soon as the change is scheduled — Satz 2 is a floor, not a ceiling — and carrying the regime that applied plus the Satz 4 Sonderkündigungsrecht. |
-| `de.vertrag.autoerneuerung.ankuendigung` | — | vertragd | — | 30 days before auto-renewal. |
-| `de.vertrag.ablauf.ankuendigung` | — | agentd, vertragd | — | 30 days before vertragsende / preisgarantie_bis. |
-| `de.vertrag.abgeschlossen` | — | vertragd | — | Supply has actually ended: every commodity has passed its Lieferende and the contract is `ABGELAUFEN`. Distinct from `GEKUENDIGT`, which is the day the termination was *accepted* — months earlier for a notice period that long, and with supply and invoicing running throughout. This is the event a Schlussrechnung and the § 147 AO retention clock hang off. |
-| `de.vertrag.bestellung.eingegangen` | — | vertragd | — | An online order was received and its Bestellnachweis stored (`POST /api/v1/bestellungen`). `subject` is the partner's own `bestellreferenz`, so a front end correlates without polling. |
-| `de.vertrag.bestellung.angenommen` | — | vertragd | — | An online order became a contract — at the click under `[policy] vertragsschluss = "mit_bestellung"`, at the operator's acceptance under `"mit_annahme"`. Carries the `vertrag_id` and the Vertragsschluss instant; `subject` is the `bestellreferenz`. |
-| `de.vertrag.bestellung.abgelehnt` | — | vertragd | — | The operator refused an order under `mit_annahme`. Carries the operator's `grund`; `subject` is the `bestellreferenz`. |
-| `de.vertrag.widerruf.eingegangen` | — | vertragd | — | A consumer's Widerruf (§ 355 BGB) was recorded — timely or not. Carries `rechtzeitig`, the Frist it was decided against, its `wirkung` (`STORNIERT`, `LIEFERENDE`, `BESTELLUNG_GESCHLOSSEN`) and `wertersatz_geschuldet` (§ 357a Abs. 2 Satz 1 BGB), which `billingd` reads; `subject` is the `bestellreferenz`. |
-| `de.vpp.dispatch.confirmed` | — | agentd | — | VPP dispatch confirmed (ERP event type, emitted via mako-engine). |
-| `de.vpp.settlement.berechnet` | — | agentd, billingd | — | VPP settlement computed (emitted by `billingd`). |
-| `de.agent.decision.made` | — | agentd | — | An agent run reached a terminal state and produced a decision. |
-| `de.gabi.measurement.received` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.gabi.allocation.completed` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.gabi.nomination.created` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.gabi.nomination.confirmed` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.gabi.nomination.curtailed` | — | — | — | The FNB/MGV confirmed **less** than was nominated. |
-| `de.gabi.nomination.rejected` | — | — | — | The FNB/MGV refused the nomination. |
-| `de.gabi.nomres.missing` | — | — | — | The `KoV` NOMRES window closed with no answer on file. |
-| `de.gabi.imbalance.calculated` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.gabi.correction.created` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.gabi.invoic.mmm.received` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.gabi.invoic.kapazitaet.received` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.gabi.alocat.missing` | — | agentd | — | The § 47 Ziffer 1 KoV XV final-allocation window closed with no binding final ALOCAT on file, so the gas day's imbalance cannot be settled. |
-| `de.gabi.quality.violation` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.gabi.alocat.final.deadline` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
-| `de.obs.stp.parity.alert` | — | agentd, processd | — | §20 EnWG STP parity-gap alert: the completion-rate gap between affiliate- and non-affiliate-initiated Anmeldungen exceeds the configured threshold. Emitted by processd's parity sweep; consumed by agentd (`compliance-agent`). |
-| `de.obs.deadline.approaching` | — | agentd, processd | — | A tracked process is approaching its regulatory response deadline (within the warn window). Emitted per process by processd's deadline sweep; consumed by agentd (`deadline-alert-agent`). |
-| `de.sperr.auftrag.eingegangen` | — | processd | — | A Sperr-/Entsperrauftrag entered the field-service queue — either from an inbound ORDERS 17115/17117 or from an operator creating one directly. |
-| `de.sperr.ausgefuehrt` | — | processd | — | The field team carried the order out. The IFTSTA 21039 reporting `STS+Z37/Z38 → Z14 erfolgreich` has been handed to `makod`. |
-| `de.sperr.fehlgeschlagen` | — | processd | — | The order could not be carried out (`Z13 gescheitert`) — meter access denied, safety block, address not found. Carries the EBD Prüfschritt code so the LF learns *why* instead of waiting out its ORDRSP deadline. |
-| `de.sperr.versuch.gescheitert` | — | processd | — | A Sperrversuch did not succeed but the order stays in the queue: GPKE Teil 2 Kap. 3.5.1.2 Nr. 5 gives the NB **two** Sperrversuche within one Sperrauftrag, and only the second turns into `FEHLGESCHLAGEN`. |
-| `de.sperr.storniert` | — | processd | — | A pending order was withdrawn before execution (operator action, or an inbound ORDCHG 39000 Stornierung). No IFTSTA is dispatched. |
-| `de.sperr.ausfuehrung.ueberfaellig` | — | processd | — | A pending order is past the window GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 gives the NB for the physical act — 6 Werktage after the frühestmöglicher Sperrtermin. Announced once per order. |
-| `de.sperr.iftsta.ausstehend` | — | processd | — | An order is terminal in `processd`'s Sperrauftrag queue but its IFTSTA 21039 has still not reached `makod` after the retry budget. Until it does, the LF's `gpke-sperrung-lf` process cannot close — this is the one state in the service that needs a human. |
-| `de.mabis.submission.failed` | — | agentd, netzbilanzd | — | A Summenzeitreihe aggregation or BIKO submission failed (BK6-24-174 Anlage 3 Kap. 3.10). Carries the run id, the Bilanzierungsgebiet, the period, the phase and `attempt_count` — after three attempts the scheduler stops retrying and a human has to look. |
-| `de.mabis.korrekturbedarf.opened` | — | agentd, netzbilanzd | — | A negative Prüfmitteilung opened a Korrekturbedarf (Kap. 9.8.1): the BIKO or a BKV objected to a filed Summenzeitreihe, and a corrected version must be submitted within the Clearing window. |
+| `de.mako.markt.malo.updated` | — | agentd, edmd, makod, marktd | — | Marktlokation stammdaten changed. |
+| `de.mako.markt.malo.stammdaten-geaendert` | — | marktd | — | A UTILMD Stammdatenänderung (GPKE Teil 4 / GeLi Gas) was applied to a MaLo's typed columns — carries the applied `patch` for ERP audit. |
+| `de.mako.markt.stammdaten.geaendert` | — | marktd | — | Object-generic Stammdatenänderung applied to a non-MaLo master-data object (MeLo/NeLo/Tranche). The subject is the object's location id; the payload carries the `objekt` marker. |
+| `de.mako.markt.melo.updated` | — | marktd | — | Messlokation stammdaten changed. |
+| `de.mako.markt.partner.updated` | — | marktd | — | Marktpartner record changed. |
+| `de.mako.markt.nb-contract.updated` | — | agentd, marktd | — | Netzbetreiber contract (Lieferanten-Rahmenvertrag) changed. |
+| `de.mako.markt.msb-rahmenvertrag.updated` | — | marktd | — | MSB-Rahmenvertrag (NB ↔ MSB, either Sparte) changed. |
+| `de.mako.markt.geraet.konfiguration.updated` | — | agentd, marktd | — | Device (Gerät) configuration changed. |
+| `de.mako.markt.sr.konfigurationsprodukt.updated` | — | marktd | — | Steuerbare-Ressource Konfigurationsprodukt changed (§14a). |
+| `de.mako.markt.netzzugang.antrag.updated` | — | marktd | — | §20 NZV Netzzugang application state changed. |
+| `de.mako.markt.einwilligung.erteilt` | — | marktd | — | Einwilligung (consent) granted. |
+| `de.mako.markt.einwilligung.widerrufen` | — | marktd | — | Einwilligung (consent) revoked. |
+| `de.mako.markt.versorgung.changed` | — | marktd, processd | — | Versorgung state changed (generic transition). |
+| `de.mako.markt.versorgung.beliefert` | — | — | — | **phantom** — ⚠ phantom: no emitter. Versorgung entered `BELIEFERT` (supply active). |
+| `de.mako.markt.versorgung.gap-detected` | — | marktd, processd | — | Supply gap detected: a MaLo became `Unbeliefert` with no announced successor — the NB must activate Ersatz-/Grundversorgung (§38 EnWG). Consumed by the `processd` EoG gap-closure automation. |
+| `de.mako.markt.versorgung.eog-begonnen` | — | marktd, processd | — | Statutory fallback supply began (Ersatz- or Grundversorgung); `data.eog_art` carries the regime, `data.eog_seit` the start date. |
+| `de.mako.markt.versorgung.ersatz-auslaufend` | — | processd | — | §38 Abs. 4 EnWG: a running Ersatzversorgung approaches its 3-month maximum. Emitted by the `processd` EoG timer. |
+| `de.mako.markt.pricat.published` | — | marktd | — | PRICAT price catalog published. |
+| `de.mako.markt.mmma.import.success` | — | marktd | — | MMMA import batch succeeded. |
+| `de.mako.markt.mmma.import.failed` | — | marktd | — | MMMA import batch failed. |
+| `de.mako.billing.rechnung.erstellt` | — | accountingd, agentd, billingd | — | Invoice (Rechnung) created. A credit note / Stornorechnung is the same event with `data.is_correction = true` and a negated amount — there is deliberately no separate `gutschrift` type (one signed document stream is cleaner for the double-entry ledger, and avoids a double-booking hazard). |
+| `de.mako.billing.abrechnungsinformation.monatlich` | — | billingd | — | Monthly Abrechnungsinformation (§40 EnWG) generated. |
+| `de.mako.billing.xrechnung.b2g.ready` | — | billingd | — | XRechnung for a B2G recipient is ready for dispatch. |
+| `de.mako.invoic.receipt.disputed` | — | agentd, invoicd, netzbilanzd | — | Inbound INVOIC disputed (REMADV Ablehnung path). |
+| `de.mako.invoic.receipt.settled` | — | accountingd, invoicd, netzbilanzd | — | Inbound INVOIC settled (REMADV Zahlungsavis). |
+| `de.mako.invoic.payment.overdue` | — | agentd, invoicd | — | Outbound INVOIC payment overdue (no REMADV in time). |
+| `de.mako.eeg.verguetung.berechnet` | — | accountingd, einsd | — | Einspeisevergütung settlement computed (feed-in tariff schemes). |
+| `de.mako.eeg.marktpraemie.berechnet` | — | accountingd, einsd | — | Marktprämie settlement computed (Direktvermarktung schemes). |
+| `de.mako.eeg.settlement.batch-due` | — | agentd, einsd | — | Monthly auto-settle batch trigger. Emitted by einsd's auto-settle worker (`emit_batch_due_ce`); subscribed by agentd's `einsd-batch-agent`. |
+| `de.mako.eeg.anlage.foerderung-auslaufend` | — | agentd, einsd | — | EEG-Anlage Förderung ends within the warning window. |
+| `de.mako.eeg.anlage.mastr-registriert` | — | einsd | — | EEG-Anlage MaStR registration confirmed. |
+| `de.mako.eeg.veraeusserungsform.gewechselt` | — | agentd, einsd | — | §21b Veräußerungsform switched. |
+| `de.mako.accounting.mahnung.issued` | — | accountingd, agentd | — | Dunning notice (Mahnung) issued. |
+| `de.mako.accounting.abschlag.posted` | — | accountingd | — | Abschlag (installment) posted. |
+| `de.mako.accounting.payment.due` | — | accountingd, agentd | — | Payment due notification. |
+| `de.mako.accounting.payment.imported` | — | accountingd | — | Bank statement payment imported and matched. |
+| `de.mako.accounting.erstattung.faellig` | — | accountingd | — | Refund (Erstattung) due to the customer. |
+| `de.mako.accounting.jahresabschluss.abgeschlossen` | — | accountingd | — | § 40b Abs. 1 EnWG — the annual reconciliation for one Marktlokation is committed. |
+| `de.mako.accounting.interest.charged` | — | accountingd | — | Late-payment interest (§288 BGB) charged. |
+| `de.mako.accounting.eeg.payout.rejected` | — | accountingd | — | EEG payout rejected (e.g. missing bank data). |
+| `de.mako.accounting.sperrandrohung` | — | accountingd, agentd | — | §41f Abs. 1 EnWG — Sperrandrohung: disconnection threatened after an unresolved Mahnstufe-3 dunning case, opening the 4-Wochen-Frist. |
+| `de.mako.accounting.sperrankuendigung` | — | accountingd, agentd | — | §41f Abs. 5 EnWG — Sperrankündigung: the concrete disconnection date is announced 8 Werktage in advance (after the 4-Wochen Androhung Frist). |
+| `de.mako.accounting.sperrauftrag` | — | accountingd, agentd | — | §41f Abs. 1 EnWG — Sperrauftrag: **ORDERS 17115** dispatched to the Netzbetreiber once the Androhung (4 Wochen) and Ankündigung (8 Werktage) Fristen have elapsed, the Abs. 3 arrears gates still hold, and no Abwendungsvereinbarung / Unverhältnismäßigkeit halted the sequence. The event announces the market message; it does not carry it. |
+| `de.mako.accounting.entsperrauftrag` | — | accountingd | — | §41f Abs. 7 EnWG — Entsperrauftrag: **ORDERS 17117** dispatched once the grounds for the interruption are gone (the arrears were settled). The statute makes the restoration *unverzüglich* and unconditional on being asked, so this follows automatically from the case settling. |
+| `de.mako.accounting.abwendung.angeboten` | — | accountingd, agentd | — | §41g Abs. 1 S. 2 EnWG — the Grundversorger's offer of an Abwendungsvereinbarung: due within one week of the customer demanding it after the Androhung, and at the latest together with the Ankündigung. Carries the interest-free instalment terms (§41g Abs. 1 S. 7–9). |
+| `de.mako.accounting.abwendung.gebrochen` | — | accountingd, agentd | — | §41g Abs. 1 S. 11 EnWG — an accepted Abwendungsvereinbarung was broken. The supplier may resume the interruption, but must re-observe §41f Abs. 1 S. 2 and issue a **fresh** Ankündigung (§41f Abs. 5). |
+| `de.mako.accounting.bankruecklast` | — | accountingd, agentd | — | SEPA direct-debit return (Bankrücklastschrift) — emitted by `accountingd` when a camt.053/054 booking carries a return reason code or debits the account, and subscribed by agentd's `payment-agent`. |
+| `de.mako.accounting.sepa.collection-rejected` | — | accountingd, agentd | — | A pain.002 rejected a submitted direct-debit collection: the money will never arrive, so the receivable stays open and the mandate needs attention (`AC01` wrong IBAN, `MD01` no mandate, `AM04` no funds). |
+| `de.mako.accounting.sepa.reversal-issued` | — | accountingd | — | The creditor gave a settled collection back via pain.007. |
+| `de.mako.accounting.sepa.recall-requested` | — | accountingd | — | A camt.055 recall was sent for a submitted pain.008: the creditor is asking the bank to stop a collection **before** it settles. |
+| `de.mako.accounting.sepa.recall-resolved` | — | accountingd | — | The bank answered a camt.055 with a camt.029. The outcome is `ACCR` (stopped), `RJCR` (the collection stands), `PDCR` (still open) or `PACR` (some of the named transactions). |
+| `de.mako.accounting.payee.verification-mismatch` | — | accountingd | — | Verification of Payee reported something other than a match for an outgoing credit transfer. Mandatory for euro credit transfers since 9 October 2025: executing after a `RVNM` no-match shifts liability to the payer, so this is a decision an operator has to make. |
+| `de.mako.netzbilanz.invoic.drafted` | — | agentd, netzbilanzd | — | A Netzbetreiber invoice was settled and stored as a draft. |
+| `de.mako.netzbilanz.invoic.dispatched` | — | agentd, netzbilanzd | — | The invoice was handed to `makod` for EDIFACT dispatch. |
+| `de.mako.netzbilanz.invoic.dispatch-overdue` | — | agentd, netzbilanzd | — | A draft is still undispatched past its window. |
+| `de.mako.netzbilanz.invoic.paid` | — | netzbilanzd | — | The counterparty confirmed payment (REMADV 33001, the only Bestätigung). |
+| `de.mako.netzbilanz.invoic.disputed` | — | agentd, netzbilanzd | — | The counterparty rejected the invoice (REMADV 33002/33003/33004). |
+| `de.mako.netzbilanz.kostenblatt.computed` | — | netzbilanzd | — | Kostenblatt computed. |
+| `de.mako.netzbilanz.kostenblatt.deadline-approaching` | — | netzbilanzd | — | Kostenblatt submission deadline approaching. |
+| `de.mako.messwert.reading.quality.warning` | — | agentd, edmd | — | Hampel grade C/F, or any V-rule finding, on newly ingested readings. |
+| `de.mako.messwert.reading.direct.stored` | — | agentd, edmd | — | Direct iMSys/SMGW push stored. |
+| `de.mako.messwert.reading.order.created` | edmd | edmd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.messwert.reading.order.created.json) | An Ablesesteuerung reading order was created. |
+| `de.mako.messwert.reading.order.completed` | edmd | edmd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.messwert.reading.order.completed.json) | A reading order was completed with its reading. |
+| `de.mako.messwert.reading.order.failed` | edmd | agentd, edmd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.messwert.reading.order.failed.json) | Ablesesteuerung reading order failed. |
+| `de.mako.messwert.reading.confirmation.overdue` | — | edmd | — | Expected reading confirmation overdue. |
+| `de.mako.messwert.reading.delivery.overdue` | — | agentd, edmd | — | A measuring point has stopped delivering, or is delivering too little of the settlement window to bill. |
+| `de.mako.messwert.reading.delivery.resumed` | — | edmd | — | A measuring point that was overdue is delivering again. |
+| `de.mako.messwert.cls.compliance-issue` | — | agentd, edmd | — | §14a SMGW/CLS compliance issue **opened** (§ 25 MsbG monitoring duty). |
+| `de.mako.messwert.cls.compliance-resolved` | — | edmd | — | A §14a SMGW/CLS compliance issue a later sweep no longer finds. |
+| `de.mako.messwert.esa.typ2.delivery.overdue` | — | edmd | — | An **ESA Typ-2** subscription has stopped delivering. |
+| `de.mako.messwert.esa.typ2.delivery.resumed` | — | edmd | — | An ESA Typ-2 subscription that was overdue is delivering again. |
+| `de.mako.messwert.smgw.cert.expiry-warning` | — | agentd, edmd | — | SMGW certificate approaching expiry — tiered advance warning at 90 / 30 / 7 days before `valid_to`, once per tier per certificate. |
+| `de.mako.tarif.product.updated` | — | agentd, productd | — | Product created/updated in the catalog. |
+| `de.mako.tarif.angebot.angenommen` | — | productd, vertragd | — | B2B Angebot accepted — vertragd auto-creates the Rahmenvertrag. |
+| `de.mako.tarif.angebot.abgelaufen` | — | agentd | — | **phantom** — ⚠ phantom: B2B quote expired. Subscribed by agentd (`productd-agent`), emitted by nothing — `productd` expires an Angebot in place without announcing it. |
+| `de.mako.tarif.epex.missing` | — | agentd | — | **phantom** — ⚠ phantom: EPEX D-1 prices not imported by 18:00 CET. Subscribed by agentd (`productd-agent`), emitted by nothing — no worker watches the import window. |
+| `de.mako.vertrag.aktiv` | — | vertragd | — | All components NB-confirmed — billing may start. |
+| `de.mako.vertrag.lieferbeginn.bestaetigt` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.lieferbeginn.bestaetigt.json) | The grid operator confirmed one component's Anmeldung: supply begins on its Lieferbeginn. Per component, with the caller's references. |
+| `de.mako.vertrag.lieferbeginn.abgelehnt` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.lieferbeginn.abgelehnt.json) | The grid operator refused one component's Anmeldung, with the Antwortcode and the Codeliste it is defined in. |
+| `de.mako.vertrag.gekuendigt` | — | vertragd | — | Lieferende dispatched (Rahmenvertrag cascade, per child). |
+| `de.mako.vertrag.kuendigung` | — | vertragd | — | Kündigung accepted; the Lieferende and the Schlussablesung are enqueued. Carries the § 41 Abs. 8 Nr. 2 EnWG Textform confirmation the supplier owes the customer — the document is produced downstream, the instruction to produce it commits with the termination. |
+| `de.mako.vertrag.kuendigung-widerrufen` | — | vertragd | — | Kündigung withdrawn before Lieferende. |
+| `de.mako.vertrag.tarifwechsel` | — | vertragd | — | Product change applied immediately. |
+| `de.mako.vertrag.tarifwechsel-geplant` | — | vertragd | — | Future-dated product change stored. |
+| `de.mako.vertrag.preisgarantie-hinterlegt` | — | vertragd | — | Price guarantee stored/replaced. |
+| `de.mako.vertrag.preisaenderung.ankuendigung` | — | agentd, vertragd | — | § 41 Abs. 5 EnWG price-change notice. Sent as soon as the change is scheduled — Satz 2 is a floor, not a ceiling — and carrying the regime that applied plus the Satz 4 Sonderkündigungsrecht. |
+| `de.mako.vertrag.autoerneuerung.ankuendigung` | — | vertragd | — | 30 days before auto-renewal. |
+| `de.mako.vertrag.ablauf.ankuendigung` | — | agentd, vertragd | — | 30 days before vertragsende / preisgarantie_bis. |
+| `de.mako.vertrag.abgeschlossen` | — | vertragd | — | Supply has actually ended: every commodity has passed its Lieferende and the contract is `ABGELAUFEN`. Distinct from `GEKUENDIGT`, which is the day the termination was *accepted* — months earlier for a notice period that long, and with supply and invoicing running throughout. This is the event a Schlussrechnung and the § 147 AO retention clock hang off. |
+| `de.mako.vertrag.bestellung.eingegangen` | — | vertragd | — | An online order was received and its Bestellnachweis stored (`POST /api/v1/bestellungen`). `subject` is the partner's own `bestellreferenz`, so a front end correlates without polling. |
+| `de.mako.vertrag.bestellung.angenommen` | — | vertragd | — | An online order became a contract — at the click under `[policy] vertragsschluss = "mit_bestellung"`, at the operator's acceptance under `"mit_annahme"`. Carries the `vertrag_id` and the Vertragsschluss instant; `subject` is the `bestellreferenz`. |
+| `de.mako.vertrag.bestellung.abgelehnt` | — | vertragd | — | The operator refused an order under `mit_annahme`. Carries the operator's `grund`; `subject` is the `bestellreferenz`. |
+| `de.mako.vertrag.widerruf.eingegangen` | — | vertragd | — | A consumer's Widerruf (§ 355 BGB) was recorded — timely or not. Carries `rechtzeitig`, the Frist it was decided against, its `wirkung` (`STORNIERT`, `LIEFERENDE`, `BESTELLUNG_GESCHLOSSEN`) and `wertersatz_geschuldet` (§ 357a Abs. 2 Satz 1 BGB), which `billingd` reads; `subject` is the `bestellreferenz`. |
+| `de.mako.vpp.dispatch.confirmed` | — | agentd | — | VPP dispatch confirmed (ERP event type, emitted via mako-engine). |
+| `de.mako.vpp.settlement.berechnet` | — | agentd, billingd | — | VPP settlement computed (emitted by `billingd`). |
+| `de.mako.agent.decision.made` | — | agentd | — | An agent run reached a terminal state and produced a decision. |
+| `de.mako.gabi.measurement.received` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.gabi.allocation.completed` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.gabi.nomination.created` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.gabi.nomination.confirmed` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.gabi.nomination.curtailed` | — | — | — | The FNB/MGV confirmed **less** than was nominated. |
+| `de.mako.gabi.nomination.rejected` | — | — | — | The FNB/MGV refused the nomination. |
+| `de.mako.gabi.nomres.missing` | — | — | — | The `KoV` NOMRES window closed with no answer on file. |
+| `de.mako.gabi.imbalance.calculated` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.gabi.correction.created` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.gabi.invoic.mmm.received` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.gabi.invoic.kapazitaet.received` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.gabi.alocat.missing` | — | agentd | — | The § 47 Ziffer 1 KoV XV final-allocation window closed with no binding final ALOCAT on file, so the gas day's imbalance cannot be settled. |
+| `de.mako.gabi.quality.violation` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.gabi.alocat.final.deadline` | — | — | — | **phantom** — ⚠ phantom: no emitter. |
+| `de.mako.obs.stp.parity.alert` | — | agentd, processd | — | §20 EnWG STP parity-gap alert: the completion-rate gap between affiliate- and non-affiliate-initiated Anmeldungen exceeds the configured threshold. Emitted by processd's parity sweep; consumed by agentd (`compliance-agent`). |
+| `de.mako.obs.deadline.approaching` | — | agentd, processd | — | A tracked process is approaching its regulatory response deadline (within the warn window). Emitted per process by processd's deadline sweep; consumed by agentd (`deadline-alert-agent`). |
+| `de.mako.sperr.auftrag.eingegangen` | processd | processd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.auftrag.eingegangen.json) | A Sperr-/Entsperrauftrag entered the field-service queue — either from an inbound ORDERS 17115/17117 or from an operator creating one directly. |
+| `de.mako.sperr.auftrag.faellig` | processd | processd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.auftrag.faellig.json) | The day a pending order may be carried out has arrived: its requested date, or at once for an order that names none. Announced once per order, with the Treffpunkt and the window. |
+| `de.mako.sperr.ausgefuehrt` | processd | processd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.ausgefuehrt.json) | The field team carried the order out. The IFTSTA 21039 reporting `STS+Z37/Z38 → Z14 erfolgreich` has been handed to `makod`. |
+| `de.mako.sperr.fehlgeschlagen` | processd | processd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.fehlgeschlagen.json) | The order could not be carried out (`Z13 gescheitert`) — meter access denied, safety block, address not found. Carries the EBD Prüfschritt code so the LF learns *why* instead of waiting out its ORDRSP deadline. |
+| `de.mako.sperr.versuch.gescheitert` | processd | processd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.versuch.gescheitert.json) | A Sperrversuch did not succeed but the order stays in the queue: GPKE Teil 2 Kap. 3.5.1.2 Nr. 5 gives the NB **two** Sperrversuche within one Sperrauftrag, and only the second turns into `FEHLGESCHLAGEN`. |
+| `de.mako.sperr.storniert` | processd | processd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.storniert.json) | A pending order was withdrawn before execution (operator action, or an inbound ORDCHG 39000 Stornierung). No IFTSTA is dispatched. |
+| `de.mako.sperr.ausfuehrung.ueberfaellig` | processd | processd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.ausfuehrung.ueberfaellig.json) | A pending order is past the window GPKE Teil 2 Kap. 3.5.1.2 Nr. 1 gives the NB for the physical act — 6 Werktage after the frühestmöglicher Sperrtermin. Announced once per order. |
+| `de.mako.sperr.ausfuehrung.nach-storno` | processd | processd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.ausfuehrung.nach-storno.json) | An execution was reported for an order withdrawn before the report arrived. The supply was interrupted whatever the queue says, so the report is kept and a person resolves it; no IFTSTA is dispatched. |
+| `de.mako.sperr.iftsta.ausstehend` | processd | processd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.iftsta.ausstehend.json) | An order is terminal in `processd`'s Sperrauftrag queue but its IFTSTA 21039 has still not reached `makod` after the retry budget. Until it does, the LF's `gpke-sperrung-lf` process cannot close — this is the one state in the service that needs a human. |
+| `de.mako.mabis.submission.failed` | — | agentd, netzbilanzd | — | A Summenzeitreihe aggregation or BIKO submission failed (BK6-24-174 Anlage 3 Kap. 3.10). Carries the run id, the Bilanzierungsgebiet, the period, the phase and `attempt_count` — after three attempts the scheduler stops retrying and a human has to look. |
+| `de.mako.mabis.korrekturbedarf.opened` | — | agentd, netzbilanzd | — | A negative Prüfmitteilung opened a Korrekturbedarf (Kap. 9.8.1): the BIKO or a BKV objected to a filed Summenzeitreihe, and a corrected version must be submitted within the Clearing window. |

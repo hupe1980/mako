@@ -466,7 +466,7 @@ pub struct MaloTypedFields {
 /// Each `Some` field is a new authoritative value from a GPKE Teil 4 / GeLi Gas
 /// "Änderung Daten der MaLo" message; each `None` leaves the column untouched.
 /// Populated by the `makod` adapter from the UTILMD SG8 `SEQ`/SG10 `CCI`/`CAV`
-/// and `TM` segments and carried into the `de.mako.process.completed` payload
+/// and `TM` segments and carried into the `de.mako.engine.process.completed` payload
 /// that `marktd` applies via `PgMaloRepository::patch_stammdaten`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MaloStammdatenPatch {
@@ -989,7 +989,7 @@ pub struct NbContractRecord {
 
 /// Supply status of a Marktlokation.
 ///
-/// Derived from `de.mako.process.completed` events by `marktd`'s
+/// Derived from `de.mako.engine.process.completed` events by `marktd`'s
 /// `event_ingest` handler and persisted in the `versorgungsstatus` table.
 /// One row per MaLo per tenant — upserted on each relevant process completion.
 ///
@@ -1138,7 +1138,7 @@ impl LfZuordnung {
 /// Per-MaLo supply state record persisted in `marktd`.
 ///
 /// One row per `(malo_id, tenant)`. Upserted atomically on each relevant
-/// `de.mako.process.completed` event with optimistic concurrency control
+/// `de.mako.engine.process.completed` event with optimistic concurrency control
 /// (`WHERE version = $expected`). On conflict: read-retry once (at-least-once
 /// fan-out delivery guarantees convergence).
 #[derive(Debug, Clone, Serialize, Deserialize)]

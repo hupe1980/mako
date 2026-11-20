@@ -18,7 +18,7 @@ spec:
     constraints: |
       The procedure is code: agentd::skills::gabi.
 
-      `de.gabi.alocat.missing` is emitted only after makod's deterministic
+      `de.mako.gabi.alocat.missing` is emitted only after makod's deterministic
       `gabi-gas-allocation` workflow closes its final-allocation deadline
       without a binding ALOCAT. The skill validates the event fields, records
       the engine's deadline label, and opens one urgent task for gas-operations.

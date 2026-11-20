@@ -344,6 +344,11 @@ export interface Endpoint {
    */
   event_types: string[];
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * CloudEvent extensions an event must carry with these values
    * (`marktsparte`, `marktrole`).
    */
@@ -411,4 +416,4 @@ export interface KundeTreffer {
 export const vertragdUntyped = ["check_mako_trigger_status","check_preisgarantie","compute_kuendigungsfrist","get_customer_portfolio","get_kunde_by_sub","get_malo_produkt","get_policy","get_rahmenvertrag","get_vertrag_status","get_zahlungsinformation","list_alle_kunden","list_auto_renewal_due","list_expiring_contracts","list_offene_vertraege","list_pending_kuendigungen","list_pending_tarifwechsel"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const vertragdOberflaeche: Record<string, string> = {"get_kunde":"62f6d22c","kunden_zu_malos":"c15423a5","list_anmeldungen":"991ba181","list_webhook_deliveries":"e1d7bb7c","list_webhook_endpoints":"aa9442dc","search_kunden":"b903c0a9"};
+export const vertragdOberflaeche: Record<string, string> = {"get_kunde":"62f6d22c","kunden_zu_malos":"c15423a5","list_anmeldungen":"991ba181","list_webhook_deliveries":"e1d7bb7c","list_webhook_endpoints":"532802a1","search_kunden":"b903c0a9"};

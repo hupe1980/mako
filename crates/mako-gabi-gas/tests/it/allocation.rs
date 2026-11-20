@@ -248,7 +248,7 @@ async fn final_allocation_window_closing_without_a_final_is_recorded() {
 /// from a healthy one to everything outside makod: the imbalance cannot be
 /// settled and only a Clearingfall with the FNB/MGV resolves it, so the fact
 /// has to reach the operator. The outbox entry is what `OutboxErpWorker` turns
-/// into `de.gabi.alocat.missing`.
+/// into `de.mako.gabi.alocat.missing`.
 #[tokio::test]
 async fn a_closed_window_enqueues_the_alocat_missing_notification() {
     use mako_engine::workflow::Workflow as _;

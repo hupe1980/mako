@@ -2466,7 +2466,7 @@ mod wim;
 /// The id is how a caller names a process that has no business key yet — the
 /// answer to an Anmeldung neue Marktlokation that named no Marktlokation
 /// (Bedingung `[165]` „Wenn bekannt") carries the `process_id` its
-/// `de.mako.process.initiated` event published. Without the entry that answer
+/// `de.mako.engine.process.initiated` event published. Without the entry that answer
 /// finds no process.
 fn correlation_entries<'k, W: Workflow>(
     tenant_id: TenantId,

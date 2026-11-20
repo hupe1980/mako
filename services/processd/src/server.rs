@@ -175,7 +175,7 @@ pub struct ProcessdState {
     /// NB Neuanlage (`E_0608`) — the case log and its 60-Werktage Prüflauf.
     #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
     pub neuanlage: Arc<crate::neuanlage_module::NeuanlageModuleConfig>,
-    /// The process read model every `de.mako.*` event is projected into.
+    /// The process read model every `de.mako.engine.*` event is projected into.
     pub obs: crate::obs::project::ObsState,
     /// `marktd`, whose event feed (`GET /api/v1/events`) the read model is
     /// rebuilt from.
@@ -243,11 +243,11 @@ pub struct RunConfig {
     /// Every operator MP-ID, for the read model's § 7a Abs. 5 EnWG evidence.
     /// `[identity] verbundene_lieferanten`.
     pub verbundene_lieferanten: Vec<String>,
-    /// `[obs]` — the read model's `de.obs.*` producers.
+    /// `[obs]` — the read model's `de.mako.obs.*` producers.
     pub obs_outbound_url: Option<String>,
     pub obs_outbound_secret: Option<SecretString>,
     pub obs_worker: crate::config::ObsConfig,
-    /// `[sperr]` — the ERP webhook the `de.sperr.*` notices are delivered to.
+    /// `[sperr]` — the ERP webhook the `de.mako.sperr.*` notices are delivered to.
     pub sperr_erp_webhook_url: Option<String>,
     pub sperr_erp_hmac_secret: Option<SecretString>,
     /// `[policy] msb_vorlauf_lesart` — the Sperrtermin reading an order view
@@ -443,11 +443,11 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         };
         crate::obs::worker::spawn_deadline_sweep(rt.clone(), ctx.shutdown.clone());
         crate::obs::worker::spawn_parity_sweep(rt, ctx.shutdown.clone());
-        info!("processd obs: de.obs.* sweep producers started");
+        info!("processd obs: de.mako.obs.* sweep producers started");
     } else {
         tracing::warn!(
-            "processd obs: [obs] outbound_url not set — de.obs.deadline.approaching and \
-             de.obs.stp.parity.alert producers are disabled"
+            "processd obs: [obs] outbound_url not set — de.mako.obs.deadline.approaching and \
+             de.mako.obs.stp.parity.alert producers are disabled"
         );
     }
 
@@ -476,7 +476,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         // delivers it to the ERP and every registered endpoint.
         if cfg.sperr_erp_webhook_url.is_none() {
             tracing::warn!(
-                "processd sperr: no [sperr] erp_webhook_url — the de.sperr.* notices reach \
+                "processd sperr: no [sperr] erp_webhook_url — the de.mako.sperr.* notices reach \
                  only the endpoints registered at /api/v1/webhooks/endpoints"
             );
         }

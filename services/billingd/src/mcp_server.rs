@@ -24,7 +24,7 @@
 //!
 //! There is deliberately no `calculate_billing` tool. Issuing a Rechnung is a
 //! legally binding act: it lands in `billing_records` under § 147 AO, dispatches
-//! `de.billing.rechnung.erstellt` to the ledger and the ERP, and can only be
+//! `de.mako.billing.rechnung.erstellt` to the ledger and the ERP, and can only be
 //! undone by a Stornorechnung. Model output is untrusted input everywhere else
 //! in this platform, and that rule does not stop at a well-phrased tool
 //! description. An agent investigates and explains; a human or a scheduled run
@@ -511,7 +511,7 @@ Returns deviation percentage, rolling average, and is_anomaly flag. \
 Flags invoices where |deviation| > threshold_pct (default 20%). The baseline counts live \
 originals and consolidated documents only — reversed invoices and the per-MaLo children of a \
 bundle are excluded, so it is the same population the risk gate scored against. \
-agentd billing-anomaly-agent calls this on every de.billing.rechnung.erstellt event.",
+agentd billing-anomaly-agent calls this on every de.mako.billing.rechnung.erstellt event.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn check_billing_anomaly(
@@ -567,7 +567,7 @@ agentd billing-anomaly-agent calls this on every de.billing.rechnung.erstellt ev
     #[tool(
         description = "List VPP (Virtual Power Plant) aggregation settlement records for a VPP portfolio. \
 Returns billing records with category=VPP showing dispatch events, total flexibility kWh, and Einsatzkosten. \
-CloudEvent de.vpp.settlement.berechnet is emitted per settlement. § 41e EnWG / Art. 17 RL (EU) 2019/944.",
+CloudEvent de.mako.vpp.settlement.berechnet is emitted per settlement. § 41e EnWG / Art. 17 RL (EU) 2019/944.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_vpp_settlements(
@@ -601,7 +601,7 @@ CloudEvent de.vpp.settlement.berechnet is emitted per settlement. § 41e EnWG / 
                 "records": rows,
                 "hint": "POST /api/v1/billing/vpp/{vpp_id} to settle dispatch events. Supply a \
 `tx_id` per event so the manual path shares `vpp_dispatch_ledger` with the auto-settlement \
-webhook and cannot pay the same flexibility twice. CloudEvent de.vpp.settlement.berechnet is \
+webhook and cannot pay the same flexibility twice. CloudEvent de.mako.vpp.settlement.berechnet is \
 emitted to the ERP."
             }))
             .map(|b| CallToolResult::success(vec![b]))
@@ -1102,10 +1102,10 @@ impl BillingdMcpHandler {
                 "The O2C cycle in mako has 6 phases:\n\n                 **1. Customer Onboarding (GPKE)**\n                 POST processd /api/v1/start-supply { malo_id, lieferbeginn_datum }\n                 → makod dispatches UTILMD 55001 to NB\n                 → NB responds UTILMD 55003 (Bestätigung) within 24h\n                 → VersorgungsStatus in marktd → Beliefert\n
                  **2. Tariff Assignment**\n                 POST vertragd /api/v1/vertraege/{id}/tarifwechsel { komp_id, new_product_code, wirksamkeit, initiator }\n                 → a valid-time slice; which product a MaLo is on is a contract fact, not a catalogue one\n                 `initiator` is required and names the act: `\"LIEFERANT\"` where the supplier exercises a\n                 reserved right to change the price — § 41 Abs. 5 Satz 1 EnWG notice, Satz 4\n                 Sonderkündigungsrecht, and `preise[]` must state the Umfang for a future date where\n                 vertragd renders the notice itself (the lines are the document's content); where the\n                 CloudEvent *is* the notice the ERP composes from its own price sheets and they are optional;\n                 `\"KUNDE\"` where the customer asked for the tariff, which is an agreed change,\n                 confirmed rather than announced.\n
                  **3. Meter Data (edmd)**\n                 MSCONS readings arrive via makod EDIFACT pipeline automatically.\n                 Verify: edmd GET /api/v1/billing-period/{malo_id}\n
-                 **4. Invoice Generation (billingd)**\n                 POST /api/v1/billing/{malo_id}/calculate { lf_mp_id, nb_mp_id, period_from, period_to }\n                 → productd → edmd → grid (NNE, from the request) → §14a discount → EEG credit\n                 → Rechnung BO4E persisted; CloudEvent de.billing.rechnung.erstellt\n                 Use `list_billing_records` to verify; `get_xrechnung` for B2G XML.\n
-                 **5. Account Posting (accountingd)**\n                 de.billing.rechnung.erstellt → accountingd debit entry (Rechnungsbetrag)\n                 Check balance: accountingd `get_balance`\n                 Monthly SEPA: accountingd `run_sepa_collection` → pain.008 XML\n                 Payment receipt: accountingd `import_payments` (CAMT.054)\n
-                 **6. Dunning & Collections (if overdue)**\n                 `list_overdue` → Mahnstufe 1 (reminder) → 2 (fee) → 3 (Sperrauftrag)\n                 Mahnstufe 3 → de.accounting.sperrauftrag → ORDERS 17115 to the NB → IFTSTA 21039 back\n
-                 **Annual Jahresabschluss:**\n                 billingd annual settlement → accountingd `trigger_jahresabschluss` → `update_abschlag` with new rate.\n                 ⚠ EEG note: EEG Gutschrift in Rechnung is already netted in the debit amount. \n                 Do NOT separately book de.eeg.verguetung.berechnet credits for the same period.\n\n                 **Monthly Abschlagslauf (automated advance payment cycle):**\n                 accountingd `run_abschlag_cycle` on each billing_day → raises the Abschlagsforderungen (debits).\n                 Then `run_sepa_collection` N-5 bank days before due date → generates pain.008 XML.\n                 Import bank statement: `import_payments` (CAMT.054) to match SEPA returns.\n\n                 **Bilanzielle Abgrenzung (HGB §250 — period-end accruals):**\n                 At Monats-/Jahresabschluss: use accountingd `compute_bilanzielle_abgrenzung`.\n                 pRAP (passive): advance payments collected > energy billed → book as liability.\n                 aRAP (active): unbilled energy → edmd GET /billing-period/{malo_id} × tariff.\n                 ERP journals: Dr. Umsatzerlöse / Cr. pRAP 0990; Dr. FLL 1400 / Cr. Erlöse."
+                 **4. Invoice Generation (billingd)**\n                 POST /api/v1/billing/{malo_id}/calculate { lf_mp_id, nb_mp_id, period_from, period_to }\n                 → productd → edmd → grid (NNE, from the request) → §14a discount → EEG credit\n                 → Rechnung BO4E persisted; CloudEvent de.mako.billing.rechnung.erstellt\n                 Use `list_billing_records` to verify; `get_xrechnung` for B2G XML.\n
+                 **5. Account Posting (accountingd)**\n                 de.mako.billing.rechnung.erstellt → accountingd debit entry (Rechnungsbetrag)\n                 Check balance: accountingd `get_balance`\n                 Monthly SEPA: accountingd `run_sepa_collection` → pain.008 XML\n                 Payment receipt: accountingd `import_payments` (CAMT.054)\n
+                 **6. Dunning & Collections (if overdue)**\n                 `list_overdue` → Mahnstufe 1 (reminder) → 2 (fee) → 3 (Sperrauftrag)\n                 Mahnstufe 3 → de.mako.accounting.sperrauftrag → ORDERS 17115 to the NB → IFTSTA 21039 back\n
+                 **Annual Jahresabschluss:**\n                 billingd annual settlement → accountingd `trigger_jahresabschluss` → `update_abschlag` with new rate.\n                 ⚠ EEG note: EEG Gutschrift in Rechnung is already netted in the debit amount. \n                 Do NOT separately book de.mako.eeg.verguetung.berechnet credits for the same period.\n\n                 **Monthly Abschlagslauf (automated advance payment cycle):**\n                 accountingd `run_abschlag_cycle` on each billing_day → raises the Abschlagsforderungen (debits).\n                 Then `run_sepa_collection` N-5 bank days before due date → generates pain.008 XML.\n                 Import bank statement: `import_payments` (CAMT.054) to match SEPA returns.\n\n                 **Bilanzielle Abgrenzung (HGB §250 — period-end accruals):**\n                 At Monats-/Jahresabschluss: use accountingd `compute_bilanzielle_abgrenzung`.\n                 pRAP (passive): advance payments collected > energy billed → book as liability.\n                 aRAP (active): unbilled energy → edmd GET /billing-period/{malo_id} × tariff.\n                 ERP journals: Dr. Umsatzerlöse / Cr. pRAP 0990; Dr. FLL 1400 / Cr. Erlöse."
             ),
         ]
     }
@@ -1250,8 +1250,8 @@ unpriced intervals would silently under-bill.",
                 3. GET edmd /api/v1/deliveries/{malo_id} → verify Einspeisung kWh available\n\
                 4. POST /api/v1/billing/{malo_id}/preview with eeg_meter override\n\
                 5. POST /api/v1/billing/{malo_id}/calculate → creates a credit Rechnung (negative)\n\
-                6. accountingd books the credit from de.billing.rechnung.erstellt (is_correction)\n\n\
-                ⚠ **Double-booking risk**: If einsd already emitted de.eeg.verguetung.berechnet\n\
+                6. accountingd books the credit from de.mako.billing.rechnung.erstellt (is_correction)\n\n\
+                ⚠ **Double-booking risk**: If einsd already emitted de.mako.eeg.verguetung.berechnet\n\
                 for this period, do NOT also run EEG billing in billingd — that would double-credit\n\
                 the plant owner. Choose one path: einsd settlement OR billingd EEG billing, not both.",
             ),

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ausgefuehrt",
+  "description": "The `data` of `de.mako.sperr.ausgefuehrt`.",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "description": "The executing system's own reference, where the order carries one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "$ref": "#/$defs/OrderStatus"
+    },
+    "iftsta_code": {
+      "description": "`SG15 STS DE4405` — `Z14` erfolgreich.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "iftsta_queued": {
+      "description": "Whether the IFTSTA 21039 committed with the outcome; `false` for an\norder an operator created by hand, which owes none.",
+      "type": "boolean"
+    },
+    "detail": {
+      "$ref": "#/$defs/AusfuehrungDetail"
+    }
+  },
+  "required": [
+    "order_id",
+    "status",
+    "iftsta_queued",
+    "detail"
+  ],
+  "$defs": {
+    "OrderStatus": {
+      "description": "Where the order stands in this service.",
+      "oneOf": [
+        {
+          "description": "Waiting for the field team.",
+          "type": "string",
+          "const": "pending"
+        },
+        {
+          "description": "Carried out — IFTSTA `DE4405 = Z14 erfolgreich`.",
+          "type": "string",
+          "const": "executed"
+        },
+        {
+          "description": "Attempted and not carried out — IFTSTA `DE4405 = Z13 gescheitert`.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "Withdrawn before execution. No IFTSTA: nothing happened to report.",
+          "type": "string",
+          "const": "cancelled"
+        }
+      ]
+    },
+    "AusfuehrungDetail": {
+      "description": "What the field team reported on a carried-out order.",
+      "type": "object",
+      "properties": {
+        "fertigstellung": {
+          "description": "`DTM+293` — the instant of the act, RFC 3339.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pruefschritt_code": {
+          "description": "`SG15 STS DE9013` — the EBD Prüfschritt code.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.sperr.ausgefuehrt.json"
+}

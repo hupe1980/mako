@@ -321,7 +321,7 @@ async fn a_config_endpoint_receives_its_filter_and_leaves_with_the_config() {
         name = "makod"
         url = "{url}"
         secret = "in-cluster-secret"
-        event_types = ["de.markt.malo.*"]
+        event_types = ["de.mako.markt.malo.*"]
         extensions = {{ marktsparte = "strom" }}
         "#
     ))
@@ -339,9 +339,9 @@ async fn a_config_endpoint_receives_its_filter_and_leaves_with_the_config() {
     let ce = |ty: &str, sparte: &str| {
         CloudEvent::new(src.clone(), ty, "51238696012", json!({})).extension("marktsparte", sparte)
     };
-    let strom = ce("de.markt.malo.updated", "strom");
-    let gas = ce("de.markt.malo.updated", "gas");
-    let other = ce("de.markt.partner.updated", "strom");
+    let strom = ce("de.mako.markt.malo.updated", "strom");
+    let gas = ce("de.mako.markt.malo.updated", "gas");
+    let other = ce("de.mako.markt.partner.updated", "strom");
     for ev in [&strom, &gas, &other] {
         outbox::enqueue(&mut conn, ev).await.unwrap();
     }
@@ -461,7 +461,7 @@ async fn a_rotation_keeps_at_most_two_secrets() {
     let second = second["secret"].as_str().unwrap().to_owned();
     let third = third["secret"].as_str().unwrap().to_owned();
 
-    emit(&pool, "de.vertrag.kuendigung", "V-1", None).await;
+    emit(&pool, "de.mako.vertrag.kuendigung", "V-1", None).await;
     subs.drain().await;
     let got = rx.got.lock().unwrap().clone();
     assert_eq!(got.len(), 1);
@@ -493,9 +493,9 @@ async fn an_earlier_event_for_the_same_subject_holds_the_next() {
     let (app, _) = app(&subs, POLICY);
     let (rx, url) = receiver().await;
     create(&app, "erp", &url, None).await;
-    let a1 = emit(&pool, "de.vertrag.aktiv", "A", None).await;
-    let a2 = emit(&pool, "de.vertrag.gekuendigt", "A", None).await;
-    let b1 = emit(&pool, "de.vertrag.aktiv", "B", None).await;
+    let a1 = emit(&pool, "de.mako.vertrag.aktiv", "A", None).await;
+    let a2 = emit(&pool, "de.mako.vertrag.gekuendigt", "A", None).await;
+    let b1 = emit(&pool, "de.mako.vertrag.aktiv", "B", None).await;
     rx.failing.lock().unwrap().insert(a1.clone());
 
     subs.fan_out_once().await.unwrap();
@@ -531,14 +531,14 @@ async fn other_subjects_do_not_wait() {
     let (app, _) = app(&subs, POLICY);
     let (rx, url) = receiver().await;
     create(&app, "erp", &url, None).await;
-    let a1 = emit(&pool, "de.vertrag.aktiv", "A", None).await;
+    let a1 = emit(&pool, "de.mako.vertrag.aktiv", "A", None).await;
     rx.failing.lock().unwrap().insert(a1.clone());
     // Dead-letter A1: its spent budget stops it blocking A.
     subs.drain().await;
     let (_, delivered, dead) = delivery_state(&pool, &a1).await;
     assert!(!delivered && dead);
-    let a2 = emit(&pool, "de.vertrag.gekuendigt", "A", None).await;
-    let b1 = emit(&pool, "de.vertrag.aktiv", "B", None).await;
+    let a2 = emit(&pool, "de.mako.vertrag.gekuendigt", "A", None).await;
+    let b1 = emit(&pool, "de.mako.vertrag.aktiv", "B", None).await;
     subs.drain().await;
     assert!(
         delivery_state(&pool, &a2).await.1,
@@ -556,7 +556,7 @@ async fn a_410_deactivates_the_endpoint() {
     let (rx, url) = receiver().await;
     let created = create(&app, "erp", &url, None).await;
     *rx.status.lock().unwrap() = Some(410);
-    let e = emit(&pool, "de.vertrag.aktiv", "A", None).await;
+    let e = emit(&pool, "de.mako.vertrag.aktiv", "A", None).await;
     subs.drain().await;
     assert_eq!(delivery_state(&pool, &e).await, (Some(410), false, true));
     let id = created["endpoint"]["id"].as_str().unwrap();
@@ -570,7 +570,7 @@ async fn a_410_deactivates_the_endpoint() {
     .await;
     assert_eq!(endpoint["active"], false);
     assert_eq!(endpoint["deactivated_reason"], "gone");
-    emit(&pool, "de.vertrag.aktiv", "B", None).await;
+    emit(&pool, "de.mako.vertrag.aktiv", "B", None).await;
     subs.drain().await;
     assert_eq!(
         rx.ids().len(),
@@ -587,7 +587,7 @@ async fn a_crash_before_commit_refans_the_event() {
     let (app, _) = app(&subs, POLICY);
     let (_rx, url) = receiver().await;
     create(&app, "erp", &url, None).await;
-    let e = emit(&pool, "de.vertrag.aktiv", "A", None).await;
+    let e = emit(&pool, "de.mako.vertrag.aktiv", "A", None).await;
     // Another replica claimed the event and dies before committing.
     let mut dying = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM event_outbox FOR UPDATE")
@@ -623,19 +623,19 @@ async fn a_partner_endpoint_receives_only_its_partners_events() {
     create(&app, "operator", &url_op, None).await;
     let mine = emit(
         &pool,
-        "de.vertrag.bestellung.eingegangen",
+        "de.mako.vertrag.bestellung.eingegangen",
         "B-1",
         Some("P1"),
     )
     .await;
     emit(
         &pool,
-        "de.vertrag.bestellung.eingegangen",
+        "de.mako.vertrag.bestellung.eingegangen",
         "B-2",
         Some("P2"),
     )
     .await;
-    emit(&pool, "de.vertrag.aktiv", "V-3", None).await;
+    emit(&pool, "de.mako.vertrag.aktiv", "V-3", None).await;
     subs.drain().await;
     assert_eq!(
         rx1.ids(),
@@ -685,8 +685,8 @@ async fn a_window_replay_backfills_events_without_a_row() {
     let (app, _) = app(&subs, POLICY);
     let (rx_a, url_a) = receiver().await;
     create(&app, "a", &url_a, None).await;
-    let e1 = emit(&pool, "de.vertrag.aktiv", "A", None).await;
-    let e2 = emit(&pool, "de.vertrag.aktiv", "B", None).await;
+    let e1 = emit(&pool, "de.mako.vertrag.aktiv", "A", None).await;
+    let e2 = emit(&pool, "de.mako.vertrag.aktiv", "B", None).await;
     subs.drain().await;
     assert_eq!(rx_a.ids().len(), 2);
 
@@ -774,11 +774,11 @@ async fn the_feed_pages_by_seq() {
     let (app, _) = app(&subs, POLICY);
     let mut emitted = Vec::new();
     for i in 0..5 {
-        emitted.push(emit(&pool, "de.vertrag.aktiv", &format!("V-{i}"), None).await);
+        emitted.push(emit(&pool, "de.mako.vertrag.aktiv", &format!("V-{i}"), None).await);
     }
-    emit(&pool, "de.markt.malo.updated", "M-1", None).await;
+    emit(&pool, "de.mako.markt.malo.updated", "M-1", None).await;
     let mut seen = Vec::new();
-    let mut uri = "/api/v1/events?type=de.vertrag.*&limit=2".to_owned();
+    let mut uri = "/api/v1/events?type=de.mako.vertrag.*&limit=2".to_owned();
     loop {
         let (status, _, page) = call(&app, "GET", &uri, &[], None).await;
         assert_eq!(status, StatusCode::OK, "{page}");
@@ -786,7 +786,7 @@ async fn the_feed_pages_by_seq() {
             seen.push(item["id"].as_str().unwrap().to_owned());
         }
         match page["next_cursor"].as_str() {
-            Some(c) => uri = format!("/api/v1/events?type=de.vertrag.*&limit=2&cursor={c}"),
+            Some(c) => uri = format!("/api/v1/events?type=de.mako.vertrag.*&limit=2&cursor={c}"),
             None => break,
         }
     }
@@ -794,7 +794,7 @@ async fn the_feed_pages_by_seq() {
     let (_, _, first) = call(
         &app,
         "GET",
-        "/api/v1/events?type=de.vertrag.*&limit=2",
+        "/api/v1/events?type=de.mako.vertrag.*&limit=2",
         &[],
         None,
     )
@@ -803,7 +803,7 @@ async fn the_feed_pages_by_seq() {
     let (status, _, foreign) = call(
         &app,
         "GET",
-        &format!("/api/v1/events?type=de.markt.*&cursor={cursor}"),
+        &format!("/api/v1/events?type=de.mako.markt.*&cursor={cursor}"),
         &[],
         None,
     )
@@ -855,7 +855,7 @@ async fn an_endpoint_is_replaced_and_deleted_under_if_match() {
     let created = create(&app, "erp", "https://erp.example.com/hook", None).await;
     let id = created["endpoint"]["id"].as_str().unwrap();
     let uri = format!("/api/v1/webhooks/endpoints/{id}");
-    let body = json!({ "url": "https://erp.example.com/v2", "event_types": ["de.vertrag.*"],
+    let body = json!({ "url": "https://erp.example.com/v2", "event_types": ["de.mako.vertrag.*"],
                        "extensions": { "marktsparte": "strom" }, "active": true });
     let (status, _, missing) = call(&app, "PUT", &uri, &[], Some(body.clone())).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

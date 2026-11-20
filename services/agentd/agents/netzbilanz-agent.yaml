@@ -36,10 +36,10 @@ spec:
       MSB (Messstellenbetreiber), and AWH (abrechnungswürdige Handlungen bei Sperrprozessen Gas) billing.
 
       ## TRIGGERED BY
-      - `de.netzbilanz.invoic.drafted` — new invoice draft created
-      - `de.netzbilanz.invoic.dispatched` — invoice dispatched
-      - `de.netzbilanz.invoic.dispatch-overdue` — dispatch deadline approaching
-      - `de.netzbilanz.invoic.disputed` — the counterparty rejected one of ours
+      - `de.mako.netzbilanz.invoic.drafted` — new invoice draft created
+      - `de.mako.netzbilanz.invoic.dispatched` — invoice dispatched
+      - `de.mako.netzbilanz.invoic.dispatch-overdue` — dispatch deadline approaching
+      - `de.mako.netzbilanz.invoic.disputed` — the counterparty rejected one of ours
 
       ## STEP-BY-STEP PROCEDURE
 
@@ -74,7 +74,7 @@ spec:
          for the same consumption, and the correction is the document that governs.
       8. Recommend dispatch, or report the blocking issues.
 
-      ## ON A DISPUTED INVOICE (de.netzbilanz.invoic.disputed)
+      ## ON A DISPUTED INVOICE (de.mako.netzbilanz.invoic.disputed)
       1. Call `get_draft` for the document the counterparty rejected. Its own
          `check_findings` come first: a dispute that agrees with our checker is a
          document we should not have dispatched, which is a different answer from

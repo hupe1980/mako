@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 /// A § 41e EnWG Aggregatorvertrag: SR-ID → agreed capacity price and validity.
 ///
-/// `billingd` reads this when settling a `de.vpp.dispatch.confirmed` event; it
+/// `billingd` reads this when settling a `de.mako.vpp.dispatch.confirmed` event; it
 /// keeps no copy of the contract.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct AggregatorvertragRow {

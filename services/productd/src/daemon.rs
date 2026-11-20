@@ -258,7 +258,7 @@ impl Daemon for Productd {
 }
 
 /// The worker that delivers the contract request of an accepted Angebot —
-/// `de.tarif.angebot.angenommen`, enqueued for [`crate::pg::ANGEBOT_TARGET`] —
+/// `de.mako.tarif.angebot.angenommen`, enqueued for [`crate::pg::ANGEBOT_TARGET`] —
 /// to the ERP webhook.
 ///
 /// `vertragd` answers it with the Rahmenvertrag it created; the worker links

@@ -809,6 +809,35 @@ pub async fn list_offene_vertraege(
     .await?)
 }
 
+/// The contracts a caller's own reference names, in any status: its
+/// `erp_contract_id`, or the `bestellreferenz` of the order they came from.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn list_vertraege_by_referenz(
+    pool: &PgPool,
+    tenant: &str,
+    erp_contract_id: Option<&str>,
+    bestellreferenz: Option<&str>,
+) -> Result<Vec<VersorgungsvertragRow>> {
+    Ok(sqlx::query_as(
+        "SELECT v.* FROM versorgungsvertraege v
+          WHERE v.tenant = $1
+            AND ($2::text IS NULL OR v.erp_contract_id = $2)
+            AND ($3::text IS NULL OR EXISTS (
+                    SELECT 1 FROM bestellungen b
+                     WHERE b.vertrag_id = v.id AND b.tenant = v.tenant
+                       AND b.bestellreferenz = $3))
+          ORDER BY v.created_at",
+    )
+    .bind(tenant)
+    .bind(erp_contract_id)
+    .bind(bestellreferenz)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// # Errors
 ///
 /// Propagates storage errors.
@@ -1011,6 +1040,9 @@ pub struct PortfolioItemRow {
     pub lieferende: Option<Date>,
     pub status: String,
     pub vertrag_status: String,
+    /// `SONDERVERTRAG`, `GRUNDVERSORGUNG`, … — what the contract is, which a
+    /// product code does not say.
+    pub vertragsart: String,
 }
 
 /// # Errors
@@ -1025,7 +1057,7 @@ pub async fn list_portfolio_by_kunde(
         r"SELECT k.vertrag_id, v.vertrags_nr, v.standort_bezeichnung,
                  k.sparte, k.malo_id, p.product_code,
                  k.lieferbeginn, k.lieferende, k.status,
-                 v.status AS vertrag_status
+                 v.status AS vertrag_status, v.vertragsart
           FROM vertragskomponenten k
           JOIN versorgungsvertraege v ON v.id = k.vertrag_id
           LEFT JOIN LATERAL (
@@ -1193,7 +1225,7 @@ pub async fn schedule_lieferende(
 /// `GEKÜNDIGT` for ever with components that were still nominally in supply.
 ///
 /// Runs on the caller's transaction, which enqueues each closed contract's
-/// `de.vertrag.abgeschlossen` before it commits: a closed contract is no longer
+/// `de.mako.vertrag.abgeschlossen` before it commits: a closed contract is no longer
 /// due on the next run, so one committed without its event is never announced.
 ///
 /// # Errors

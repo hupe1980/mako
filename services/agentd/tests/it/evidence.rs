@@ -320,14 +320,14 @@ fn the_record_signer_and_the_claim_signer_are_one_identity() {
     );
 }
 
-// ── What a receiver of `de.agent.decision.made` is told ───────────────────
+// ── What a receiver of `de.mako.agent.decision.made` is told ───────────────────
 
 /// **A failed run's delivery says *why*.**
 ///
 /// This is mako's own upstream report, pinned in mako's tree.
 /// `RecordKind::RunConcluded` carries a `reason` so that why a run failed
 /// outlives the process that wrote it, and the projection that turns a
-/// conclusion into `de.agent.decision.made` has to carry it out: a receiver told
+/// conclusion into `de.mako.agent.decision.made` has to carry it out: a receiver told
 /// `outcome: "failed"` and nothing else is back in the state the field exists to
 /// end, one layer further out. The projection destructures every field of the
 /// conclusion, so the next field added has to answer deliver-or-not at the
@@ -363,7 +363,8 @@ async fn a_failed_runs_delivery_carries_the_reason_it_failed() {
         .find(|r| matches!(r.kind(), RecordKind::RunConcluded { .. }))
         .expect("a concluded run seals");
 
-    let projection = RunCompleted::new("urn:mako:test:agentd").event_type("de.agent.decision.made");
+    let projection =
+        RunCompleted::new("urn:mako:test:agentd").event_type("de.mako.agent.decision.made");
     let messages = projection
         .messages(&sealed)
         .await
@@ -413,7 +414,8 @@ async fn a_successful_runs_delivery_carries_no_reason_field() {
         .find(|r| matches!(r.kind(), RecordKind::RunConcluded { .. }))
         .expect("a concluded run seals");
 
-    let projection = RunCompleted::new("urn:mako:test:agentd").event_type("de.agent.decision.made");
+    let projection =
+        RunCompleted::new("urn:mako:test:agentd").event_type("de.mako.agent.decision.made");
     let messages = projection.messages(&sealed).await.expect("projects");
     let data = &messages.first().expect("one message").payload["data"];
 
@@ -426,7 +428,7 @@ async fn a_successful_runs_delivery_carries_no_reason_field() {
 
 /// **The run's answer does not travel.**
 ///
-/// `de.agent.decision.made` carries the *conclusion*, not the output. The output
+/// `de.mako.agent.decision.made` carries the *conclusion*, not the output. The output
 /// is domain data with a label on it, and shipping it by default would make an
 /// egress decision nobody declared: whatever the run happened to hold, to
 /// whatever destination the operator happened to configure, under no ceiling.
@@ -451,7 +453,8 @@ async fn a_delivery_carries_the_conclusion_and_not_the_answer() {
         .find(|r| matches!(r.kind(), RecordKind::RunConcluded { .. }))
         .expect("seals");
 
-    let projection = RunCompleted::new("urn:mako:test:agentd").event_type("de.agent.decision.made");
+    let projection =
+        RunCompleted::new("urn:mako:test:agentd").event_type("de.mako.agent.decision.made");
     let body = projection.messages(&sealed).await.expect("projects")[0]
         .payload
         .to_string();

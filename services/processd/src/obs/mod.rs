@@ -1,4 +1,4 @@
-//! The process read model: every `de.mako.*` event projected into one
+//! The process read model: every `de.mako.engine.*` event projected into one
 //! `process_projections` row per business process.
 //!
 //! It answers what the `makod` Prometheus metrics cannot: which MaLo is stuck
@@ -35,12 +35,12 @@
 //!
 //! | `ce_type`                    | Resulting `ProcessState` |
 //! |------------------------------|--------------------------|
-//! | `de.mako.process.initiated`  | `Initiated`              |
-//! | `de.mako.aperak.accepted`    | `Running`                |
-//! | `de.mako.aperak.rejected`    | `Rejected` + ERC code    |
-//! | `de.mako.antwortfrist.abgelaufen`     | `AntwortfristAbgelaufen`          |
-//! | `de.mako.process.completed`  | `Completed`, or `Rejected` when `data.accepted` is `false` / `data.outcome` is `"rejected"` |
-//! | `de.mako.process.failed`     | `Failed`                 |
+//! | `de.mako.engine.process.initiated`  | `Initiated`              |
+//! | `de.mako.engine.aperak.accepted`    | `Running`                |
+//! | `de.mako.engine.aperak.rejected`    | `Rejected` + ERC code    |
+//! | `de.mako.engine.antwortfrist.abgelaufen`     | `AntwortfristAbgelaufen`          |
+//! | `de.mako.engine.process.completed`  | `Completed`, or `Rejected` when `data.accepted` is `false` / `data.outcome` is `"rejected"` |
+//! | `de.mako.engine.process.failed`     | `Failed`                 |
 //!
 //! ## Two deadline clocks
 //!
@@ -51,7 +51,7 @@
 //!
 //! ## Producers
 //!
-//! [`worker`](crate::obs::worker) emits `de.obs.deadline.approaching` and `de.obs.stp.parity.alert`
+//! [`worker`](crate::obs::worker) emits `de.mako.obs.deadline.approaching` and `de.mako.obs.stp.parity.alert`
 //! to `marktd`'s ingest when `[obs] outbound_url` is configured.
 
 pub mod counterparty;

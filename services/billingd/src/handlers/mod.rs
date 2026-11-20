@@ -103,7 +103,7 @@ fn build_vpp_settlement(
     // from runtime values — the dispatch credits, the VAT rate the aggregator
     // contract carries, the tax pass over both — and no fixture can cover the
     // arithmetic this checks for arbitrary amounts. The document is persisted
-    // and published as `de.billing.rechnung.erstellt`, off which `accountingd`
+    // and published as `de.mako.billing.rechnung.erstellt`, off which `accountingd`
     // books the CREDIT, so a Gutschrift whose totals disagree would be booked.
     mako_markt::bo4e::ensure_conformant(&rechnung)
         .map_err(|e| anyhow::anyhow!("the VPP settlement is not a valid BO4E document: {e}"))?;
@@ -459,7 +459,7 @@ pub(crate) async fn next_rechnungsnummer(
     }
 }
 
-/// Build the `de.billing.rechnung.erstellt` CloudEvent for a persisted record.
+/// Build the `de.mako.billing.rechnung.erstellt` CloudEvent for a persisted record.
 ///
 /// Pure constructor — no I/O. The caller enqueues the returned event into the
 /// transactional outbox **inside the same transaction as the representing

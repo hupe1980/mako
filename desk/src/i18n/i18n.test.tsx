@@ -347,7 +347,7 @@ describe("the Assistent view speaks only through the catalogue", () => {
                   version: "1.2.0",
                   digest: null,
                   aktiv: true,
-                  ausloeser: ["de.mako.process.started"],
+                  ausloeser: ["de.mako.engine.process.started"],
                   modell: "anthropic/claude-sonnet-5",
                   liest: [{ werkzeug: "processd/get_process", wozu: "Prozess lesen" }],
                   nur_lesend: true,

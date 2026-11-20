@@ -16,8 +16,8 @@ entity state in a MaKo deployment, on port **8180**. It stores:
   steuerbare and technische Ressourcen, the location graph, ESA consents and
   §20b EnWG Netzzugang requests.
 
-It also runs the **durable fan-out**: inbound `de.mako.*` events from `makod`
-and its own `de.markt.*` events reach every webhook endpoint whose filter
+It also runs the **durable fan-out**: inbound `de.mako.engine.*` events from `makod`
+and its own `de.mako.markt.*` events reach every webhook endpoint whose filter
 matches (`makod`, `processd`, `invoicd`, `edmd` from its config, an ERP through
 the API) as signed webhooks.
 
@@ -35,12 +35,12 @@ graph TB
     edmd["edmd :8380"]
     pg["PostgreSQL"]
 
-    makod -->|"de.mako.process.*<br/>signed POST"| marktd
+    makod -->|"de.mako.engine.process.*<br/>signed POST"| marktd
     marktd --- pg
-    marktd -->|"de.mako.* + de.markt.*"| erp
-    marktd -->|"de.mako.* · de.markt.versorgung.*"| processd
-    marktd -->|"de.mako.process.initiated"| invoicd
-    marktd -->|"de.mako.*"| edmd
+    marktd -->|"de.mako.engine.* + de.mako.markt.*"| erp
+    marktd -->|"de.mako.engine.* · de.mako.markt.versorgung.*"| processd
+    marktd -->|"de.mako.engine.process.initiated"| invoicd
+    marktd -->|"de.mako.engine.*"| edmd
     erp -->|"PUT /api/v1/malos/{id}<br/>PUT /api/v1/partners/{mp_id}"| marktd
     invoicd -->|"GET /api/v1/preisblaetter/{nb_mp_id}"| marktd
     processd -->|"GET /api/v1/versorgung/{malo_id}<br/>GET /api/v1/malos/{id}/grid"| marktd
@@ -138,7 +138,7 @@ retention_days = 30                           # default
 name        = "makod"
 url         = "http://makod:8080/webhooks/marktd"
 secret      = "env:MAKOD_MARKTD_WEBHOOK_SECRET"   # makod's [marktd] webhook_secret
-event_types = ["de.markt.malo.updated"]
+event_types = ["de.mako.markt.malo.updated"]
 
 [oidc]              # required unless allow_insecure_no_auth
 issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -281,7 +281,7 @@ is a `422` naming the stage in `code`:
 |---|---|---|---|
 | `GET` | `/health/live` · `/health/ready` | — | Liveness; readiness with a bounded DB ping |
 | `GET` | `/metrics` | — | Prometheus |
-| `PUT` | `/api/v1/malos/{malo_id}` | `write-malo` | Upsert a Marktlokation through the gate; emits `de.markt.malo.updated` |
+| `PUT` | `/api/v1/malos/{malo_id}` | `write-malo` | Upsert a Marktlokation through the gate; emits `de.mako.markt.malo.updated` |
 | `GET` | `/api/v1/malos/{malo_id}` | `read-malo` | Typed `Marktlokation` plus the typed columns |
 | `GET` | `/api/v1/malos/{malo_id}/lastprofil` | `read-malo` | Lastprofil (SLP/TLP) of the MaLo |
 | `GET` | `/api/v1/malos/{malo_id}/bundesland` | `read-malo` | The Land of the MaLo's `lokationsadresse`, from its PLZ over the GeoNames postal code table for Germany (CC BY 4.0, `services/marktd/data/plz_bundesland.tsv`); a missing PLZ, an unknown one or one whose places lie in two Länder is `422` (`KEINE_POSTLEITZAHL`, `PLZ_UNBEKANNT`, `PLZ_MEHRDEUTIG`) |
@@ -301,7 +301,7 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/referenzreihen/{reihe}/werte` | `read-referenzreihen` | Values overlapping `?von=&bis=` (Berlin days), `?dim=`, as known at `?stand=` |
 | `GET` | `/api/v1/referenzreihen/{reihe}/wert` | `read-referenzreihen` | The value of `?jahr=` (`&monat=`), as known at `?stand=`; none is `422 referenzwert_fehlt` |
 | `POST` | `/api/v1/referenzreihen/{reihe}/import` | `import-referenzreihen` | A publisher's file as the body; `?vorschau=true` writes nothing; idempotent on the file's SHA-256 |
-| `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | `write-preisblatt` | Upsert a Netznutzung sheet, snapshot it, emit `de.markt.pricat.published` |
+| `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | `write-preisblatt` | Upsert a Netznutzung sheet, snapshot it, emit `de.mako.markt.pricat.published` |
 | `GET` | `/api/v1/preisblaetter/{nb_mp_id}` | `read-preisblatt` | Sheet valid on `?date=` |
 | `GET` | `/api/v1/pricat/{nb_mp_id}/history` | `read-pricat` | PRICAT versions, newest first |
 | `GET` | `/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}` | `read-pricat` | Dispatch audit log of a version |
@@ -310,9 +310,9 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/versorgung/{malo_id}/history` | `read-versorgungsstatus` | Change history, newest first, paged |
 | `PUT` | `/api/v1/versorgung/{malo_id}` | `write-versorgungsstatus` | ERP override (`If-Match` for OCC) |
 | `GET/PUT` | `/api/v1/grundversorger/{nb_mp_id}` | `read-grundversorger` / `write-grundversorger` | §36 Abs. 2 EnWG Feststellung (`?sparte=STROM\|GAS`); optional `default_bilanzkreis` for an EoG ohne Antwort |
-| `POST` | `/api/v1/esa/einwilligungen` | `write-einwilligung` | Grant an ESA consent (§49 Abs. 2 Nr. 9 MsbG); emits `de.markt.einwilligung.erteilt` |
+| `POST` | `/api/v1/esa/einwilligungen` | `write-einwilligung` | Grant an ESA consent (§49 Abs. 2 Nr. 9 MsbG); emits `de.mako.markt.einwilligung.erteilt` |
 | `GET` | `/api/v1/esa/einwilligungen` · `/{id}` | `read-einwilligung` | List active consents (`?esa_mp_id=`); one consent |
-| `DELETE` | `/api/v1/esa/einwilligungen/{id}` | `write-einwilligung` | Revoke (GDPR Art. 7(3)); commits `de.markt.einwilligung.widerrufen` and one ORDERS 17008 Abbestellung command per covered location with the revocation |
+| `DELETE` | `/api/v1/esa/einwilligungen/{id}` | `write-einwilligung` | Revoke (GDPR Art. 7(3)); commits `de.mako.markt.einwilligung.widerrufen` and one ORDERS 17008 Abbestellung command per covered location with the revocation |
 | `PUT` | `/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}` | `write-einwilligung` | Prices of an accepted QUOTES 15003, filed by makod on the ORDRSP 19011 |
 | `GET` | `/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}?at=` | `read-einwilligung` | Prices in force; invoicd's basis for an ESA INVOIC 31009 (an ESA has no Preisblatt) |
 | `PUT/GET` | `/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}` | `write-einwilligung` / `read-einwilligung` | Framework agreement and AS4 certificate state |
@@ -324,7 +324,7 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `read-mabis-zp` | MaBiS-Zählpunkt (`LOC+172`); `404` makes `netzbilanzd` refuse the MaBiS filing, never fall back to the EIC |
 | `PUT` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `write-mabis-zp` | Assign it; `400` for a value equal to the EIC or not 33 characters |
 | `GET` | `/api/v1/zuordnungsermaechtigungen/{lf_mp_id}` | `read-zuordnungsermaechtigung` | Every Zuordnungsermächtigung (BKV, BK, BG, ZRT, `[valid_from, valid_to)`) naming the LF, from the UTILMD 55071/55072 the event ingest recorded; processd's `E_0622` Prüfschritt 60 reads it. No write route — only the BKV's message sets one |
-| `PUT` | `/api/v1/netzzugang/antraege` | `write-netzzugang` | Upsert a §20b EnWG request; emits `de.markt.netzzugang.antrag.updated` |
+| `PUT` | `/api/v1/netzzugang/antraege` | `write-netzzugang` | Upsert a §20b EnWG request; emits `de.mako.markt.netzzugang.antrag.updated` |
 | `GET` | `/api/v1/netzzugang/antraege` · `/{id}` | `read-netzzugang` | List (`?status=&netzanschluss_id=`); one |
 | `PATCH` | `/api/v1/netzzugang/antraege/{id}/status` | `write-netzzugang` | `erfasst → uebermittelt → bestaetigt/abgelehnt`; optional `platform_ref`, `expected_version` (→ `412`) |
 | `PUT` | `/api/v1/msb-rahmenvertraege` | `write-msb-rv` | MSB-Rahmenvertrag NB ↔ MSB, `sparte` `STROM` or `GAS`; idempotent on `(tenant, sparte, nb_mp_id, msb_mp_id, valid_from)`; `version` → `412`; an overlapping window → `422` |
@@ -362,13 +362,13 @@ is a `422` naming the stage in `code`:
 | `PUT` | `/api/v1/zaehler/{zaehler_id}` | `write-device` | Upsert a Zähler through the gate |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlwerke` | `read-device` | `Zaehlwerk` registers (`[]` when none) |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/geraete` · `/{geraet_id}` | `read-device` | Geräte; one with `konfigurationen` |
-| `GET/PUT` | `/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen` | `read-device` / `write-device` | Replace `GeraetKonfiguration` entries; emits `de.markt.geraet.konfiguration.updated` |
+| `GET/PUT` | `/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen` | `read-device` / `write-device` | Replace `GeraetKonfiguration` entries; emits `de.mako.markt.geraet.konfiguration.updated` |
 | `GET/PUT` | `/api/v1/zaehler/{zaehler_id}/register` | `read-device` / `write-device` | TOU registers |
 | `GET/PUT` | `/api/v1/zaehler-register/{register_id}/saisons` | `read-device` / `write-device` | Seasonal windows |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/tariff-zone` | `read-device` | HT/NT/EINZEL at `?datetime=`; `422` when no Zählzeit window covers the instant |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen` | `read-device` | BO4E `Zaehlzeitdefinition`; `?valid_only=true` |
 | `PUT` | `/api/v1/geraete/{geraet_id}` | `write-device` | Upsert a Gerät through the gate |
-| `GET/PUT` | `/api/v1/nb-contracts/{id}` | `read-nb-contract` / `write-nb-contract` | NB contract as `Vertrag`; PUT emits `de.markt.nb-contract.updated` |
+| `GET/PUT` | `/api/v1/nb-contracts/{id}` | `read-nb-contract` / `write-nb-contract` | NB contract as `Vertrag`; PUT emits `de.mako.markt.nb-contract.updated` |
 | `GET` | `/api/v1/nb-contracts` | `read-nb-contract` | List (`?nb_mp_id=` required) |
 | `GET` | `/api/v1/nb-contracts/by-malo/{malo_id}` | `read-nb-contract` | Contract in force on `?on=` |
 | `GET/PUT` | `/api/v1/energiemix/{nb_mp_id}` | `read-energiemix` / `write-energiemix` | §42 EnWG Energiemix (`?year=`) |
@@ -405,7 +405,7 @@ is a `422` naming the stage in `code`:
   none it did not name. `anpassung_erforderlich` is refused on a Strom row, and
   a Gas contract still in Fassung `BK7-17-026` answers `anpassung_erforderlich`
   for any day from 01.10.2026. Every upsert emits
-  `de.markt.msb-rahmenvertrag.updated` (`sparte`, `version`, `valid_from`,
+  `de.mako.markt.msb-rahmenvertrag.updated` (`sparte`, `version`, `valid_from`,
   `valid_to`, `signed_at`) in the write's transaction.
 - **Partner role `LFG` is refused** (`422`): a gas supplier is `LF` +
   Rollencodetyp `DVGW`.
@@ -419,7 +419,7 @@ Gültigkeit ist abgelaufen**", and both owe the ORDERS 17008 Abbestellung.
 and Anschlussnutzer replaces the active consent.
 
 Every ending commits, in the transaction that sets `revoked_at`, its
-`de.markt.einwilligung.widerrufen` event and one `esa.abbestellung.beauftragen`
+`de.mako.markt.einwilligung.widerrufen` event and one `esa.abbestellung.beauftragen`
 command per location in `event_outbox`. A worker delivers the commands to makod
 (`POST /api/v1/commands`, keyed `esa-abbestellung:{consent}:{location}`) with
 retry and a dead-letter budget, so a makod outage delays the 17008 and never
@@ -504,7 +504,7 @@ what was transmitted. Only the Netznutzung sheet has a PRICAT.
 
 A `PUT /api/v1/preisblaetter/{nb_mp_id}` writes, in **one transaction**, the
 sheet, a snapshot keyed on `(nb_mp_id, tenant, valid_from)`, and the
-`de.markt.pricat.published` outbox row. A background task then dispatches
+`de.mako.markt.pricat.published` outbox row. A background task then dispatches
 PRICAT 27003 to every active LF via makod and logs each NB × LF attempt in
 `pricat_dispatch_log`.
 
@@ -606,7 +606,7 @@ curl -s -X PUT "http://marktd:8180/api/v1/mmm-preise/strom/2026/7" \
 and, on the 1st at or after `check_hour_utc`, fetches `gas_url` / `strom_url`,
 parses CSV (`year,month,marktgebiet,mehr_ct_kwh,minder_ct_kwh`) or JSON (one
 object or an array) and upserts idempotently. It emits
-`de.markt.mmma.import.success` or `de.markt.mmma.import.failed` (operator
+`de.mako.markt.mmma.import.success` or `de.mako.markt.mmma.import.failed` (operator
 action). Catch up by hand:
 
 ```bash
@@ -767,7 +767,7 @@ has no BO4E field. The `Bilanzierung` resource and the UTILMD
 Stammdatenänderung (`TM+Z10`, `CCI+Z24++Z96/Z97`, `CCI+ZA2++ZE9/ZF0`) write
 them. `lokationsbuendel_objektcode` on `malo` and `melo` is validated on write.
 
-The `PUT` calls no other service. It enqueues `de.markt.malo.updated` (data
+The `PUT` calls no other service. It enqueues `de.mako.markt.malo.updated` (data
 `{"version"}`) in the write's transaction; makod's MaLo-Ident cache follows it
 through the [fan-out](#fan-out) as a config endpoint and reads the record back —
 see [makod's MaLo cache](@/docs/services/makod.md#malo-cache-follows-marktd).
@@ -788,7 +788,7 @@ see [makod's MaLo cache](@/docs/services/makod.md#malo-cache-follows-marktd).
 }
 ```
 
-**From makod.** A `de.mako.process.initiated` for 55001/55077 or 44001 patches
+**From makod.** A `de.mako.engine.process.initiated` for 55001/55077 or 44001 patches
 `malo.bilanzierungsmethode` (UTILMD `TM+EM`: Z01→SLP, Z02→RLM, Z04→IMS) and
 `malo.fallgruppe` (`TM+Z10`). A MaLo not yet stored is a no-op.
 
@@ -985,15 +985,15 @@ never an overlap. `tests/it/temporal_constraints_integration.rs` and
 
 One record per MaLo, derived from inbound CloudEvents. Every write appends to
 `versorgungsstatus_history` in the same transaction and emits
-`de.markt.versorgung.changed`. All operations are idempotent under
+`de.mako.markt.versorgung.changed`. All operations are idempotent under
 at-least-once delivery.
 
 | Phase | CloudEvent | PID | Operation | Effect |
 |---|---|---|---|---|
 | Announce | `process.initiated` | 55001 / 55077 / 44001 | `announce_lf_next` | Adds an `Angekuendigt` assignment (100 % or the Tranche share) with its Zuordnungsbeginn; `lieferstatus` unchanged |
 | Confirm | `process.completed` | 55002 / 55078 / 44002 | `confirm_supply` | Promotes the named supplier to `Aktiv`, displacing only the running assignment on the same Tranche; `Beliefert` |
-| End | `process.completed` | 55005 / 44005, 55008, 55007 with `ohne_antwort` | `end_supply` | Removes the named running assignment (all when none named); `Unbeliefert` only when none is left. An uncovered interval emits `de.markt.versorgung.gap-detected` |
-| EoG | `process.completed` | 55013 / 44013 | `begin_eog_supply` | `Ersatzversorgung`/`Grundversorgung` (per `eog_art`), `eog_seit` = Zuordnungsbeginn; Bilanzkreis from the payload, else the NB's `default_bilanzkreis`. Emits `de.markt.versorgung.eog-begonnen` |
+| End | `process.completed` | 55005 / 44005, 55008, 55007 with `ohne_antwort` | `end_supply` | Removes the named running assignment (all when none named); `Unbeliefert` only when none is left. An uncovered interval emits `de.mako.markt.versorgung.gap-detected` |
+| EoG | `process.completed` | 55013 / 44013 | `begin_eog_supply` | `Ersatzversorgung`/`Grundversorgung` (per `eog_art`), `eog_seit` = Zuordnungsbeginn; Bilanzkreis from the payload, else the NB's `default_bilanzkreis`. Emits `de.mako.markt.versorgung.eog-begonnen` |
 | Clear | `process.completed` | 55003 / 55080 / 44003 | `clear_lf_next` | Drops the refused supplier's announcement; also the write behind 55038 / 44038 |
 | Stammdatenänderung | `process.completed` | GPKE Teil 4 / GeLi Gas | `patch_stammdaten` | See below |
 
@@ -1073,8 +1073,8 @@ a no-op.
 | `STEUERBARE_RESSOURCE` | `steuerbare_ressourcen` | Konfigurationsprodukte, **replaced**: one per `SG8 SEQ+Z79` (`PIA+5`, `CAV+Z91`/`ZF0`, `CCI+Z66`) |
 | `TRANCHE` | `tranche` | — |
 
-It emits `de.markt.malo.stammdaten-geaendert` for a MaLo and
-`de.markt.stammdaten.geaendert` otherwise.
+It emits `de.mako.markt.malo.stammdaten-geaendert` for a MaLo and
+`de.mako.markt.stammdaten.geaendert` otherwise.
 
 ### Reading it
 
@@ -1185,7 +1185,7 @@ curl -s -X PUT "http://marktd:8180/api/v1/zaehler/Z001234567/geraete/SMGW-2026-0
       { "parameter": "GWA_CODENUMMER",         "wert": "9900000000099"    }
     ]
   }'
-# → 204 No Content + de.markt.geraet.konfiguration.updated
+# → 204 No Content + de.mako.markt.geraet.konfiguration.updated
 ```
 
 The configuration is master data for the ERP and `agentd`'s
@@ -1272,7 +1272,7 @@ An SR-ID is `C[A-Z0-9]{9}[0-9]` (check digit by the ASCII procedure). The
 `{"konfigurationsprodukte": [...]}` — the list is required (`[]` clears it) —
 and each element crosses the BO4E gate as a `Konfigurationsprodukt` with a
 non-empty `produktcode`. A key the body or BO4E does not define, at any depth,
-is `422` (`bo4e.unknown_field` inside an element): `bandNummer` is one. A `PUT` emits `de.markt.sr.konfigurationsprodukt.updated`;
+is `422` (`bo4e.unknown_field` inside an element): `bandNummer` is one. A `PUT` emits `de.mako.markt.sr.konfigurationsprodukt.updated`;
 `processd` refuses a Steuerungsauftrag for an uncontracted `produktcode`.
 
 ```bash
@@ -1384,10 +1384,10 @@ verifies with (`env:VAR` reads it from the environment):
 
 | Endpoint | `url` | `event_types` | The receiver's secret |
 |---|---|---|---|
-| `makod` | `http://makod:8080/webhooks/marktd` | `de.markt.malo.updated` | `[marktd] webhook_secret` |
-| `processd` | `http://processd:8580/webhook` | the `de.mako.*` lifecycle types and `de.markt.versorgung.{gap-detected,eog-begonnen,changed}` | `[webhook] inbound_secret` |
-| `edmd` | `http://edmd:8380/webhook` | `de.mako.process.completed`, `de.markt.malo.updated` | `[webhook] inbound_secret` |
-| `invoicd` | `http://invoicd:8280/webhook` | `de.mako.process.initiated` | `[webhook] inbound_secret` |
+| `makod` | `http://makod:8080/webhooks/marktd` | `de.mako.markt.malo.updated` | `[marktd] webhook_secret` |
+| `processd` | `http://processd:8580/webhook` | the `de.mako.engine.*` lifecycle types and `de.mako.markt.versorgung.{gap-detected,eog-begonnen,changed}` | `[webhook] inbound_secret` |
+| `edmd` | `http://edmd:8380/webhook` | `de.mako.engine.process.completed`, `de.mako.markt.malo.updated` | `[webhook] inbound_secret` |
+| `invoicd` | `http://invoicd:8280/webhook` | `de.mako.engine.process.initiated` | `[webhook] inbound_secret` |
 
 `deploy/demo/marktd.toml` is the full set; a processd entry that leaves out a
 type processd reads silently disables a module, which processd's
@@ -1430,27 +1430,27 @@ Source: `urn:mako:marktd:tenant:{tenant}`.
 
 | `type` | `subject` | Trigger | Consumers |
 |---|---|---|---|
-| `de.markt.malo.updated` | `malo_id` | MaLo `PUT` | `edmd`, `processd`, ERP |
-| `de.markt.melo.updated` | `melo_id` | MeLo `PUT` | `edmd`, `processd`, ERP |
-| `de.markt.malo.stammdaten-geaendert` | `malo_id` | Stammdatenänderung on a MaLo, with the `patch` | ERP |
-| `de.markt.stammdaten.geaendert` | object id | Stammdatenänderung on another object | ERP |
-| `de.markt.partner.updated` | `mp_id` | Partner `PUT` | `makod`, ERP |
-| `de.markt.nb-contract.updated` | `contract_id` | NB contract `PUT` | ERP |
-| `de.markt.pricat.published` | `nb_mp_id` | Preisblatt `PUT` | `netzbilanzd`, `invoicd`, ERP |
-| `de.markt.sr.konfigurationsprodukt.updated` | `sr_id` | Konfigurationsprodukte replaced | `processd`, ERP |
-| `de.markt.geraet.konfiguration.updated` | `geraet_id` | Konfigurationen `PUT` (`geraet_id`, `zaehler_id`, `count`) | `agentd`, ERP |
-| `de.markt.msb-rahmenvertrag.updated` | contract id | MSB-Rahmenvertrag upsert (`sparte` in `data`) | ERP |
-| `de.markt.netzzugang.antrag.updated` | request id | §20b request upserted or advanced | `makod`, ERP |
-| `de.markt.einwilligung.erteilt` | consent id | Consent granted | `makod`, ERP |
-| `de.markt.einwilligung.widerrufen` | consent id | Revoked, expired or replaced (`grund`); the 17008 travels as its own outbox command | ERP |
-| `de.markt.versorgung.changed` | `malo_id` | Every supply transition and the REST upsert | `vertragd`, `billingd`, ERP |
-| `de.markt.versorgung.gap-detected` | `malo_id` | Uncovered interval (§38 EnWG) | `processd` |
-| `de.markt.versorgung.eog-begonnen` | `malo_id` | 55013/44013 completed | `processd`, ERP |
-| `de.markt.mmma.import.success` · `.failed` | year-month | Monthly MMM import | `netzbilanzd`, `invoicd`; operator |
+| `de.mako.markt.malo.updated` | `malo_id` | MaLo `PUT` | `edmd`, `processd`, ERP |
+| `de.mako.markt.melo.updated` | `melo_id` | MeLo `PUT` | `edmd`, `processd`, ERP |
+| `de.mako.markt.malo.stammdaten-geaendert` | `malo_id` | Stammdatenänderung on a MaLo, with the `patch` | ERP |
+| `de.mako.markt.stammdaten.geaendert` | object id | Stammdatenänderung on another object | ERP |
+| `de.mako.markt.partner.updated` | `mp_id` | Partner `PUT` | `makod`, ERP |
+| `de.mako.markt.nb-contract.updated` | `contract_id` | NB contract `PUT` | ERP |
+| `de.mako.markt.pricat.published` | `nb_mp_id` | Preisblatt `PUT` | `netzbilanzd`, `invoicd`, ERP |
+| `de.mako.markt.sr.konfigurationsprodukt.updated` | `sr_id` | Konfigurationsprodukte replaced | `processd`, ERP |
+| `de.mako.markt.geraet.konfiguration.updated` | `geraet_id` | Konfigurationen `PUT` (`geraet_id`, `zaehler_id`, `count`) | `agentd`, ERP |
+| `de.mako.markt.msb-rahmenvertrag.updated` | contract id | MSB-Rahmenvertrag upsert (`sparte` in `data`) | ERP |
+| `de.mako.markt.netzzugang.antrag.updated` | request id | §20b request upserted or advanced | `makod`, ERP |
+| `de.mako.markt.einwilligung.erteilt` | consent id | Consent granted | `makod`, ERP |
+| `de.mako.markt.einwilligung.widerrufen` | consent id | Revoked, expired or replaced (`grund`); the 17008 travels as its own outbox command | ERP |
+| `de.mako.markt.versorgung.changed` | `malo_id` | Every supply transition and the REST upsert | `vertragd`, `billingd`, ERP |
+| `de.mako.markt.versorgung.gap-detected` | `malo_id` | Uncovered interval (§38 EnWG) | `processd` |
+| `de.mako.markt.versorgung.eog-begonnen` | `malo_id` | 55013/44013 completed | `processd`, ERP |
+| `de.mako.markt.mmma.import.success` · `.failed` | year-month | Monthly MMM import | `netzbilanzd`, `invoicd`; operator |
 
-Relayed from makod unchanged: `de.mako.process.initiated`,
-`de.mako.process.completed`, `de.mako.process.failed`,
-`de.mako.aperak.accepted`, `de.mako.aperak.rejected`, `de.mako.antwortfrist.abgelaufen`.
+Relayed from makod unchanged: `de.mako.engine.process.initiated`,
+`de.mako.engine.process.completed`, `de.mako.engine.process.failed`,
+`de.mako.engine.aperak.accepted`, `de.mako.engine.aperak.rejected`, `de.mako.engine.antwortfrist.abgelaufen`.
 
 | Extension | Meaning |
 |---|---|
@@ -1470,7 +1470,7 @@ containing `-lf-` → `LF`; `wim-` → `MSB`; `mabis-` → `BIKO`; otherwise `NB
   "specversion":     "1.0",
   "id":              "01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f",
   "source":          "urn:mako:marktd:tenant:9900357000004",
-  "type":            "de.mako.process.completed",
+  "type":            "de.mako.engine.process.completed",
   "time":            "2025-10-01T08:15:00+02:00",
   "subject":         "018f3a2b-7c4e-7d5f-8a9b-0c1d2e3f4a5b",
   "datacontenttype": "application/json",

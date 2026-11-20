@@ -1,6 +1,6 @@
 //! Guards that processd listens for the PIDs `makod` actually emits.
 //!
-//! processd reacts to `de.mako.process.initiated`, whose `makopid` is the PID of
+//! processd reacts to `de.mako.engine.process.initiated`, whose `makopid` is the PID of
 //! the **inbound** EDIFACT message that spawned the process. Answer PIDs never
 //! appear there: `makod`'s ingest dispatcher matches inbound PIDs against a
 //! per-workflow spawn table and reports anything else as

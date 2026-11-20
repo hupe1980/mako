@@ -203,7 +203,7 @@ permit(
 };
 
 // ── Webhook subscriptions ────────────────────────────────────────────────────
-// A webhook endpoint receives every `de.vertrag.*` event that matches it — a
+// A webhook endpoint receives every `de.mako.vertrag.*` event that matches it — a
 // customer's contract, Kündigung and § 41 Abs. 5 EnWG notice included — so
 // registering one is an outbound data-export decision, and its test delivery
 // reports the target's HTTP status. The supplier's own decision: an MSB or

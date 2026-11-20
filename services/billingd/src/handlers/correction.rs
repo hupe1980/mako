@@ -67,7 +67,7 @@ fn ensure_correctable(is_correction: bool, outcome: &str) -> BillingResult<()> {
 ///    and its own number from the tenant's `ST` series.
 /// 3. Insert it with `is_correction = TRUE` and `original_record_id`, and
 ///    advance the original's `outcome` to `cancelled` — in one transaction.
-/// 4. Enqueue `de.billing.rechnung.erstellt` (`is_correction: true`) so
+/// 4. Enqueue `de.mako.billing.rechnung.erstellt` (`is_correction: true`) so
 ///    `accountingd` books the CREDIT.
 ///
 /// ## Storno und Neuberechnung
@@ -138,7 +138,7 @@ pub async fn post_correction(
     // JSON field by field — string-keyed surgery over totals, the tax
     // breakdown, the advances and every position — so a field the negation
     // misses yields a document whose totals silently disagree. It is persisted
-    // and published as `de.billing.rechnung.erstellt`, and it was the one
+    // and published as `de.mako.billing.rechnung.erstellt`, and it was the one
     // billingd write path that never crossed the gate the ordinary invoice
     // path crosses. A correction that does not add up must not be booked.
     let corrected: rubo4e::current::Rechnung = serde_json::from_value(corrected_json.clone())
@@ -149,7 +149,7 @@ pub async fn post_correction(
     let netto = -original.total_netto_eur;
     let brutto = -original.total_brutto_eur;
 
-    // Korrekturrechnung row + its `de.billing.rechnung.erstellt`
+    // Korrekturrechnung row + its `de.mako.billing.rechnung.erstellt`
     // (`is_correction: true`) event commit atomically, so accountingd's CREDIT
     // ledger entry can never be lost after the correction is persisted.
     let mut tx = pool.begin().await?;

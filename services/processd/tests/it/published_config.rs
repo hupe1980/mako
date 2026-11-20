@@ -4,9 +4,9 @@
 //!
 //! marktd delivers to processd through processd's endpoint in its
 //! `[[subscriptions.endpoints]]`. An `event_types` there that leaves out a type
-//! processd reads means `de.markt.versorgung.gap-detected` is never delivered
+//! processd reads means `de.mako.markt.versorgung.gap-detected` is never delivered
 //! and the §§ 36/38 EnWG Ersatz-/Grundversorgung module never runs, or a
-//! `de.mako.process.completed` never closes a row of the process read model —
+//! `de.mako.engine.process.completed` never closes a row of the process read model —
 //! silently, because both services run exactly as configured.
 
 use std::path::Path;
@@ -82,7 +82,7 @@ fn the_demo_marktd_delivers_every_type_processd_reads() {
 fn an_endpoint_that_narrows_the_types_is_refused() {
     let planted = "[[subscriptions.endpoints]]\nname = \"processd\"\n\
                    url = \"http://processd:8580/webhook\"\n\
-                   event_types = [\"de.mako.process.initiated\"]\n";
+                   event_types = [\"de.mako.engine.process.initiated\"]\n";
     let missing = undelivered(planted);
     assert!(
         missing

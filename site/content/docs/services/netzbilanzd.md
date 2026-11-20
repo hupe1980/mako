@@ -1102,8 +1102,8 @@ Both alerts stop promptly on shutdown:
 
 | Worker | Interval | Emits |
 |---|---|---|
-| Undispatched-draft alert | 1 h (`dispatch_alert_interval_secs`) | `de.netzbilanz.invoic.dispatch-overdue` — two clocks: a draft older than `dispatch_stale_hours`, **or** one whose own `due_date` falls inside that window |
-| Kostenblatt deadline alert | 1 d (`kostenblatt_alert_interval_secs`) | `de.netzbilanz.kostenblatt.deadline-approaching` on days 10–14 with pending records |
+| Undispatched-draft alert | 1 h (`dispatch_alert_interval_secs`) | `de.mako.netzbilanz.invoic.dispatch-overdue` — two clocks: a draft older than `dispatch_stale_hours`, **or** one whose own `due_date` falls inside that window |
+| Kostenblatt deadline alert | 1 d (`kostenblatt_alert_interval_secs`) | `de.mako.netzbilanz.kostenblatt.deadline-approaching` on days 10–14 with pending records |
 
 With `[mabis]`, the MaBiS scheduler runs as well: it wakes every five minutes and files the
 previous Bilanzierungsmonat at `run_hour_utc` on the `erstaufschlag_werktag`, skipping a period
@@ -1118,15 +1118,15 @@ of the change they describe.
 
 | Event | Trigger | Key `data` fields |
 |---|---|---|
-| `de.netzbilanz.invoic.drafted` | a draft is settled | `draft_id`, `rechnungsnummer`, `pid`, `check_outcome`, `brutto_eur`, `zu_zahlen_eur` |
-| `de.netzbilanz.invoic.dispatched` | dispatch succeeds | `draft_id`, `dispatch_ref`, `rechnungsnummer` |
-| `de.netzbilanz.invoic.paid` | REMADV 33001 | `draft_id`, `remadv_ref` |
-| `de.netzbilanz.invoic.disputed` | REMADV Abweisung | `draft_id`, `erc_code`, `reason` |
-| `de.netzbilanz.invoic.dispatch-overdue` | hourly worker | `stale_hours`, `undispatched_count`, `drafts[]` (each with `due_date` and `zu_zahlen_eur`) |
-| `de.netzbilanz.kostenblatt.computed` | an activation is quantified | `record_id`, `einsatzkosten_eur`, `dispatch_source` |
-| `de.netzbilanz.kostenblatt.deadline-approaching` | daily worker | `period_year`, `period_month`, `pending_count`, `days_until_deadline` |
-| `de.mabis.submission.failed` | a MaBiS aggregation or BIKO submission failed | `run_id`, `bilanzierungsgebiet_id`, period, `phase`, `attempt_count` (at 3 the scheduler stops retrying) |
-| `de.mabis.korrekturbedarf.opened` | a negative Prüfmitteilung was recorded | `pruefmitteilung_id`, `bilanzierungsgebiet_id`, period, `version` — a corrected Summenzeitreihe is owed within the Clearing window |
+| `de.mako.netzbilanz.invoic.drafted` | a draft is settled | `draft_id`, `rechnungsnummer`, `pid`, `check_outcome`, `brutto_eur`, `zu_zahlen_eur` |
+| `de.mako.netzbilanz.invoic.dispatched` | dispatch succeeds | `draft_id`, `dispatch_ref`, `rechnungsnummer` |
+| `de.mako.netzbilanz.invoic.paid` | REMADV 33001 | `draft_id`, `remadv_ref` |
+| `de.mako.netzbilanz.invoic.disputed` | REMADV Abweisung | `draft_id`, `erc_code`, `reason` |
+| `de.mako.netzbilanz.invoic.dispatch-overdue` | hourly worker | `stale_hours`, `undispatched_count`, `drafts[]` (each with `due_date` and `zu_zahlen_eur`) |
+| `de.mako.netzbilanz.kostenblatt.computed` | an activation is quantified | `record_id`, `einsatzkosten_eur`, `dispatch_source` |
+| `de.mako.netzbilanz.kostenblatt.deadline-approaching` | daily worker | `period_year`, `period_month`, `pending_count`, `days_until_deadline` |
+| `de.mako.mabis.submission.failed` | a MaBiS aggregation or BIKO submission failed | `run_id`, `bilanzierungsgebiet_id`, period, `phase`, `attempt_count` (at 3 the scheduler stops retrying) |
+| `de.mako.mabis.korrekturbedarf.opened` | a negative Prüfmitteilung was recorded | `pruefmitteilung_id`, `bilanzierungsgebiet_id`, period, `version` — a corrected Summenzeitreihe is owed within the Clearing window |
 
 Inbound REMADV events arrive on `POST /api/v1/webhooks/remadv`, HMAC-verified against
 `inbound_secret`, and are idempotent.
@@ -1325,6 +1325,6 @@ PostgreSQL.
 
 `netzbilanzd` is an NB-side service: Cedar gates every write on `NB`/`MSB` (invoicing) or
 `NB`/`UENB` (Redispatch), it is not in the LF `agentd` MCP server list, and `billingd` /
-`invoicd` do not receive `de.netzbilanz.*` events.
+`invoicd` do not receive `de.mako.netzbilanz.*` events.
 
 See [§ 6a EnWG Informatorisches Unbundling](@/docs/services/portald.md#informatorisches-unbundling-ss-6a-enwg).

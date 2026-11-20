@@ -1,4 +1,4 @@
-//! One place that raises `de.messwert.reading.quality.warning`.
+//! One place that raises `de.mako.messwert.reading.quality.warning`.
 //!
 //! # Why this is shared rather than per-handler
 //!

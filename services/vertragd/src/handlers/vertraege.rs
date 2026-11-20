@@ -230,9 +230,15 @@ pub async fn get(
 #[into_params(parameter_in = Query)]
 pub struct ListQuery {
     pub limit: Option<i64>,
+    /// The contract created with this `erp_contract_id`, in any status.
+    pub erp_contract_id: Option<String>,
+    /// The contracts of the order with this `bestellreferenz`, in any status.
+    pub bestellreferenz: Option<String>,
 }
 
-/// `GET /api/v1/vertraege` — open contracts.
+/// `GET /api/v1/vertraege` — open contracts, or the contracts a caller's own
+/// reference names (`?erp_contract_id=` / `?bestellreferenz=`), whatever
+/// their status.
 #[utoipa::path(
     get,
     path = "/api/v1/vertraege",
@@ -252,12 +258,22 @@ pub async fn list_open(
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
-    let rows = pg::list_offene_vertraege(
-        &ctx.pool,
-        ctx.tenant(),
-        q.limit.unwrap_or(100).clamp(1, 500),
-    )
-    .await
+    let rows = if q.erp_contract_id.is_some() || q.bestellreferenz.is_some() {
+        pg::list_vertraege_by_referenz(
+            &ctx.pool,
+            ctx.tenant(),
+            q.erp_contract_id.as_deref(),
+            q.bestellreferenz.as_deref(),
+        )
+        .await
+    } else {
+        pg::list_offene_vertraege(
+            &ctx.pool,
+            ctx.tenant(),
+            q.limit.unwrap_or(100).clamp(1, 500),
+        )
+        .await
+    }
     .map_err(ApiError::Internal)?;
     ok(serde_json::json!({ "count": rows.len(), "vertraege": rows }))
 }
@@ -731,7 +747,7 @@ pub async fn expiring(
 ///
 /// Everything then happens in one transaction: the components leave supply, the
 /// Lieferende UTILMDs and the Schlussablesung are enqueued, and the
-/// `de.vertrag.kuendigung` CloudEvent — which carries the § 41 Abs. 8 Nr. 2
+/// `de.mako.vertrag.kuendigung` CloudEvent — which carries the § 41 Abs. 8 Nr. 2
 /// EnWG Textform confirmation the supplier owes the customer — goes into the
 /// outbox.
 #[utoipa::path(

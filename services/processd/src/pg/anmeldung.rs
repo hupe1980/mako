@@ -122,7 +122,7 @@ impl PgAnmeldungRepository {
     /// Record a decision, ignoring a redelivery of the same process.
     ///
     /// Returns `true` when a row was actually written. The fan-out is
-    /// at-least-once, so the same `de.mako.process.initiated` can arrive more
+    /// at-least-once, so the same `de.mako.engine.process.initiated` can arrive more
     /// than once; the unique key makes the write idempotent, and the caller
     /// needs to know whether this delivery was the one that counted so the STP
     /// counter measures decisions rather than deliveries.

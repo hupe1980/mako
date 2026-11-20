@@ -786,6 +786,13 @@
                 "type": "string"
               }
             },
+            "patterns_matching_nothing": {
+              "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "extensions": {
               "description": "CloudEvent extensions an event must carry with these values\n(`marktsparte`, `marktrole`).",
               "type": "object",
@@ -839,6 +846,7 @@
             "name",
             "url",
             "event_types",
+            "patterns_matching_nothing",
             "extensions",
             "owner",
             "partner",

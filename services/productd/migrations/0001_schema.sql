@@ -229,7 +229,7 @@ CREATE INDEX nehs_date ON nehs_prices (price_date DESC);
 
 -- ── B2B Angebote (formal quotation workflow) ──────────────────────────────────
 -- Lifecycle: ANGELEGT → VERSANDT → ANGENOMMEN | ABGELEHNT | ABGELAUFEN.
--- On ANGENOMMEN: emits de.tarif.angebot.angenommen → vertragd creates Rahmenvertrag.
+-- On ANGENOMMEN: emits de.mako.tarif.angebot.angenommen → vertragd creates Rahmenvertrag.
 
 CREATE TABLE angebote (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -298,7 +298,7 @@ CREATE TABLE angebote (
 
 COMMENT ON TABLE angebote IS
     'Formal B2B quotation (Angebot) for C&I/RLM customers. '
-    'Acceptance emits de.tarif.angebot.angenommen → vertragd creates Rahmenvertrag.';
+    'Acceptance emits de.mako.tarif.angebot.angenommen → vertragd creates Rahmenvertrag.';
 
 -- Angebotsnummer counter, one row per tenant and year.
 --

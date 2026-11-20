@@ -12,8 +12,8 @@ ledger, committed with the business change that causes it; it prices nothing.
 | **Port** | 9380 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — satellites in `public`, the journal in schema `ledger` |
 | **MCP** | 20 tools, 1 prompt at `/mcp` |
-| **Emits** | `de.accounting.*` (`payment.imported`, `mahnung.issued`, `sperrauftrag`, `sepa.collection-rejected`, …) to the ERP webhook |
-| **Consumes** | `de.billing.rechnung.erstellt`, `de.invoic.receipt.settled`, `de.eeg.verguetung.berechnet`, `de.eeg.marktpraemie.berechnet` at `POST /webhook` |
+| **Emits** | `de.mako.accounting.*` (`payment.imported`, `mahnung.issued`, `sperrauftrag`, `sepa.collection-rejected`, …) to the ERP webhook |
+| **Consumes** | `de.mako.billing.rechnung.erstellt`, `de.mako.invoic.receipt.settled`, `de.mako.eeg.verguetung.berechnet`, `de.mako.eeg.marktpraemie.berechnet` at `POST /webhook` |
 | **Depends on** | `makod` (ORDERS 17115/17117), `outputd` (Mahnung), `vertragd` (Mahnung recipient) |
 
 ## Run

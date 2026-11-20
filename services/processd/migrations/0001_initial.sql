@@ -194,8 +194,8 @@ CREATE INDEX aa_tenant_malo ON abmeldeanfragen (tenant, malo_id) WHERE resolved_
 -- ── EoG gap-closure case log (§36/§38 EnWG) ───────────────────────────────────
 --
 -- One row per Marktlokation currently (or last) in the Ersatz-/Grundversorgung
--- pipeline. Written by the eog_module on de.markt.versorgung.gap-detected,
--- promoted on de.markt.versorgung.eog-begonnen, expired by the daily §38
+-- pipeline. Written by the eog_module on de.mako.markt.versorgung.gap-detected,
+-- promoted on de.mako.markt.versorgung.eog-begonnen, expired by the daily §38
 -- timer worker (3 months from eog_seit — the possibly retroactive
 -- Zuordnungsbeginn, §38 Abs. 4 S. 1 EnWG).
 
@@ -309,7 +309,7 @@ CREATE INDEX nf_tenant_status ON neuanlage_faelle (tenant, status);
 
 -- ── process_projections — the process read model ──────────────────────────────
 --
--- One row per business process, updated on every de.mako.* CloudEvent received
+-- One row per business process, updated on every de.mako.engine.* CloudEvent received
 -- from marktd, and rebuildable from marktd's event feed (GET /api/v1/events)
 -- through the same projection function.
 --
@@ -343,7 +343,7 @@ CREATE TABLE process_projections (
     eingriff            TEXT
         CHECK (eingriff IN ('system','freigabe','freigabe-geaendert','person')),
     -- The BUSINESS Antwortfrist from mako_fristen::antwort — NOT the APERAK
-    -- clock, which is minutes and arrives as its own de.mako.antwortfrist.abgelaufen
+    -- clock, which is minutes and arrives as its own de.mako.engine.antwortfrist.abgelaufen
     -- event. NULL means no Festlegung this codebase has read quantifies the
     -- window for this PID: unknown, never unbounded. Such a process is
     -- deliberately absent from every breach sweep rather than measured against
@@ -356,7 +356,7 @@ CREATE TABLE process_projections (
     -- — an unread Festlegung must not read as healthy.
     deadline_risk       TEXT        NOT NULL DEFAULT 'unknown',
     -- Set by the deadline sweep worker when it has emitted
-    -- de.obs.deadline.approaching for this process — makes the alert idempotent
+    -- de.mako.obs.deadline.approaching for this process — makes the alert idempotent
     -- (emit once per process entering the approaching window).
     deadline_alerted_at TIMESTAMPTZ,
     -- § 7a Abs. 5 EnWG parity: TRUE when the initiating Lieferant belongs to the
@@ -381,12 +381,12 @@ CREATE TABLE process_projections (
 
 COMMENT ON TABLE process_projections IS
     'Process-level read-model for KPI, Antwortfrist and § 7a Abs. 5 EnWG parity '
-    'reporting. Updated on each de.mako.* CloudEvent. One row per business process.';
+    'reporting. Updated on each de.mako.engine.* CloudEvent. One row per business process.';
 
 COMMENT ON COLUMN process_projections.deadline_at IS
     'Business Antwortfrist (mako_fristen::antwort). NULL = no published window for '
     'this PID — unknown, never unbounded. A lapse the workflow itself observed '
-    'arrives as de.mako.antwortfrist.abgelaufen and lands in state = antwortfrist_abgelaufen.';
+    'arrives as de.mako.engine.antwortfrist.abgelaufen and lands in state = antwortfrist_abgelaufen.';
 
 COMMENT ON COLUMN process_projections.initiator_is_affiliate IS
     '§ 7a Abs. 5 EnWG Gleichbehandlung: TRUE when the process was initiated by a '
@@ -506,13 +506,24 @@ CREATE TABLE sperr_orders (
     -- SG29 FTX+ACB — the LF's free-text hints.
     hinweis             TEXT,
 
+    -- ── The executing system's own reference ─────────────────────────────────
+    -- The work-order number of whatever carries the order out — a workforce
+    -- tool's job id, an ERP order number. Stored and echoed on every
+    -- `de.mako.sperr.*` event, never parsed; unique per tenant so a lookup by it
+    -- names one order.
+    external_ref        TEXT        CHECK (external_ref IS NULL
+                                           OR length(external_ref) BETWEEN 1 AND 200),
+    -- Set when `de.mako.sperr.auftrag.faellig` was announced, so the day an order
+    -- may be carried out is announced once.
+    due_announced_at    TIMESTAMPTZ,
+
     -- ── The regulatory execution window (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1) ────────
     -- „…spätestens innerhalb von 6 WT nach dem frühestmöglichen Sperrtermin."
     -- Computed on insert from COALESCE(ausfuehrung_am, fruehestens_am) with the
     -- BDEW-MaKo Werktag calendar; NULL when the order names no date at all
     -- (an Entsperrauftrag carries neither), where „unverzüglich" governs.
     ausfuehrung_faellig_am DATE,
-    -- Set when `de.sperr.ausfuehrung.ueberfaellig` was announced, so a missed
+    -- Set when `de.mako.sperr.ausfuehrung.ueberfaellig` was announced, so a missed
     -- window is reported once instead of on every sweep.
     ausfuehrung_eskaliert_at TIMESTAMPTZ,
 
@@ -544,6 +555,10 @@ CREATE TABLE sperr_orders (
                         CHECK (sperrversuche BETWEEN 0 AND 2),
     letzter_versuch_am  TIMESTAMPTZ,
     letzter_versuch_grund TEXT,
+    -- Whom the last unsuccessful visit is put down to: the Lieferant asks why,
+    -- and „niemand angetroffen" and „Monteur kam nicht" are different answers.
+    responsible         TEXT        CHECK (responsible IN
+                                           ('customer', 'contractor', 'operator', 'nobody')),
     -- DTM+293 Fertigstellungsdatum. Muss when the outcome is Z14 erfolgreich,
     -- and condition [495] requires it to be ≤ the IFTSTA document date — so a
     -- future timestamp is refused at the API boundary, not discovered by the
@@ -557,6 +572,12 @@ CREATE TABLE sperr_orders (
     pruefschritt_code   TEXT,
     CHECK (status <> 'executed' OR executed_at IS NOT NULL),
     CHECK (status <> 'failed'   OR fail_reason IS NOT NULL),
+    -- When the order was withdrawn. An `executed_at` on a cancelled order is an
+    -- execution reported after the withdrawal: the supply was interrupted
+    -- whatever the queue says, so the report is kept beside the withdrawal and
+    -- announced as `de.mako.sperr.ausfuehrung.nach-storno` for a person to resolve.
+    cancelled_at        TIMESTAMPTZ,
+    CHECK (status <> 'cancelled' OR cancelled_at IS NOT NULL),
 
     -- ── IFTSTA 21039 dispatch ────────────────────────────────────────────────
     -- `iftsta_dispatched_at IS NULL` on a terminal order is the one state that
@@ -590,8 +611,10 @@ COMMENT ON TABLE sperr_orders IS
 COMMENT ON COLUMN sperr_orders.iftsta_dispatched_at IS
     'When the IFTSTA 21039 command reached makod. NULL on a terminal order means '
     'the Lieferant has not been told the outcome — the outbox is still '
-    'delivering it, or dead-lettered it and de.sperr.iftsta.ausstehend was emitted.';
+    'delivering it, or dead-lettered it and de.mako.sperr.iftsta.ausstehend was emitted.';
 
+CREATE UNIQUE INDEX so_external_ref ON sperr_orders (tenant, external_ref)
+    WHERE external_ref IS NOT NULL;
 CREATE INDEX so_tenant_status ON sperr_orders (tenant, status);
 CREATE INDEX so_malo_status   ON sperr_orders (malo_id, status);
 -- Field-dispatch scan: what the LF asked for, soonest first. COALESCE folds the

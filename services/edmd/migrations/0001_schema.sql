@@ -279,6 +279,16 @@ CREATE TABLE ablese_auftraege (
     auftrag_position_id UUID,
     insrpt_process_id  TEXT,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- The work-order number of whatever carries the order out — a workforce
+    -- tool's job id, an ERP order number. Stored and echoed on every
+    -- `de.mako.messwert.reading.order.*` event, never parsed.
+    external_ref       TEXT
+                           CHECK (external_ref IS NULL
+                                  OR length(external_ref) BETWEEN 1 AND 200),
+    -- Set when `de.mako.messwert.reading.order.created` was announced. Orders are
+    -- written by the API, by a market process and by the Jahresablesung
+    -- campaign; one sweep announces all three.
+    created_announced_at TIMESTAMPTZ,
     -- A failure must name its cause, so FEHLGESCHLAGEN cannot be used to
     -- silently retire an order that is still owed a reading.
     CONSTRAINT ablese_fehlschlag_begruendet CHECK (
@@ -296,6 +306,11 @@ CREATE UNIQUE INDEX ablese_insrpt_unique ON ablese_auftraege (tenant, insrpt_pro
 CREATE UNIQUE INDEX ablese_scheduled_unique ON ablese_auftraege
     (tenant, malo_id, anlass, geplant_am)
     WHERE insrpt_process_id IS NULL;
+
+CREATE UNIQUE INDEX ablese_external_ref ON ablese_auftraege (tenant, external_ref)
+    WHERE external_ref IS NOT NULL;
+CREATE INDEX ablese_unannounced ON ablese_auftraege (tenant, created_at)
+    WHERE created_announced_at IS NULL;
 
 CREATE INDEX ablese_malo_status    ON ablese_auftraege (malo_id, tenant, status);
 CREATE INDEX ablese_geplant_offen  ON ablese_auftraege (geplant_am, status) WHERE status = 'OFFEN';
@@ -509,7 +524,7 @@ CREATE TABLE substitute_value_log (
 
 -- The Bundesland of a Marktlokation, as `marktd` derives it from the PLZ of
 -- the MaLo's address (`GET /api/v1/malos/{id}/bundesland`). Filled when
--- `marktd` announces the MaLo (`de.markt.malo.updated`), so an Ersatzwert
+-- `marktd` announces the MaLo (`de.mako.markt.malo.updated`), so an Ersatzwert
 -- reads its day class's Land here instead of calling `marktd`; a refusal from
 -- `marktd` (no PLZ, a PLZ across a Land border) removes the row.
 CREATE TABLE malo_bundesland (
@@ -597,7 +612,7 @@ CREATE INDEX smgw_session_gin    ON smgw_sessions USING GIN (session);
 --
 -- This was an append-only log, and the daily sweep wrote one row per open issue
 -- per sweep and emitted one CloudEvent to match. A gateway sitting on an expired
--- certificate therefore produced a `de.messwert.cls.compliance-issue` every day
+-- certificate therefore produced a `de.mako.messwert.cls.compliance-issue` every day
 -- for as long as nobody fixed it — for a fleet, an unbounded event stream that
 -- says the same thing forever, and a table that grows without limit. Worse, the
 -- fleet list counted rows in the last 24 h and called that "issues", so the

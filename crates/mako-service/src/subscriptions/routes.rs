@@ -78,7 +78,7 @@ pub struct EndpointCreate {
     pub name: String,
     /// `https` URL deliveries are POSTed to.
     pub url: String,
-    /// `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+    /// `mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type.
     #[serde(default)]
     pub event_types: Vec<String>,
     /// CloudEvent extensions an event must carry with these values.
@@ -193,7 +193,7 @@ pub struct DeliveryQuery {
 #[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub struct FeedQuery {
-    /// A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.
+    /// A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.
     #[serde(rename = "type")]
     #[param(rename = "type")]
     pub event_type: Option<String>,
@@ -238,14 +238,14 @@ fn parse_id(raw: &str) -> ApiResult<Uuid> {
 }
 
 fn check_filter(event_types: &[String], extensions: &BTreeMap<String, String>) -> ApiResult<()> {
-    if let Some(p) = event_types
-        .iter()
-        .find(|p| !p.starts_with("de.") && p.as_str() != "*")
-    {
+    let silent = super::silent_patterns(event_types);
+    if !silent.is_empty() {
         return Err(ApiError::unprocessable(format!(
-            "event type pattern {p:?} names no mako event: types start with `de.`"
+            "event type patterns {silent:?} match no event mako emits — every type is \
+             `de.mako.<domain>.<fact>`, listed in the event catalog"
         ))
-        .with_code("event_type_pattern_invalid"));
+        .with_code("event_type_pattern_matches_nothing")
+        .with_fields(serde_json::json!({ "muster": silent })));
     }
     if let Some(k) = extensions.keys().find(|k| {
         k.is_empty()
@@ -925,7 +925,10 @@ pub async fn list_events(
 mod tests {
     #[test]
     fn a_glob_becomes_an_escaped_like_pattern() {
-        assert_eq!(super::like_pattern("de.vertrag.*"), "de.vertrag.%");
+        assert_eq!(
+            super::like_pattern("de.mako.vertrag.*"),
+            "de.mako.vertrag.%"
+        );
         assert_eq!(super::like_pattern("de.a_b?"), "de.a\\_b_");
     }
 }

@@ -191,6 +191,11 @@ export interface Endpoint {
    */
   event_types: string[];
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * CloudEvent extensions an event must carry with these values
    * (`marktsparte`, `marktrole`).
    */
@@ -232,4 +237,4 @@ export interface Endpoint {
 export const netzbilanzdUntyped = ["get_billing_summary","get_draft","get_policy","get_submission_run","get_submission_status","list_corrections","list_disputed","list_drafts","list_failed_submissions","list_kostenblatt_gaps","list_pending_kostenblatt","list_undispatched"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const netzbilanzdOberflaeche: Record<string, string> = {"list_korrekturbedarf":"4e7f44c1","list_webhook_deliveries":"6e5dafe5","list_webhook_endpoints":"b40aaf14"};
+export const netzbilanzdOberflaeche: Record<string, string> = {"list_korrekturbedarf":"4e7f44c1","list_webhook_deliveries":"6e5dafe5","list_webhook_endpoints":"4c47caf9"};

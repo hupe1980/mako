@@ -1,7 +1,7 @@
 # processd
 
 `processd` is the process decision engine for NB, LF and MSB: for each
-`de.mako.process.initiated` from `marktd`'s fan-out it applies the
+`de.mako.engine.process.initiated` from `marktd`'s fan-out it applies the
 Entscheidungsbaum of the Marktrolle that owes the answer and sends the answer to
 `makod` as a command — automatically where the tree decides, through an operator
 approval queue bounded by the business Frist where it does not. Beside the
@@ -15,8 +15,8 @@ Sperrauftrag queue that turns ORDERS 17115 / 17117 into field work and IFTSTA
 | **Port** | 8580 (`deploy/ports.toml`) |
 | **Database** | PostgreSQL — approval queue, decisions, read model, Sperrauftrag queue |
 | **MCP** | 29 tools, 8 prompts at `/mcp` |
-| **Emits** | `de.obs.deadline.approaching`, `de.obs.stp.parity.alert`, `de.sperr.*` |
-| **Consumes** | `de.mako.*` and `de.markt.versorgung.*` at `POST /webhook` (HMAC) |
+| **Emits** | `de.mako.obs.deadline.approaching`, `de.mako.obs.stp.parity.alert`, `de.mako.sperr.*` |
+| **Consumes** | `de.mako.engine.*` and `de.mako.markt.versorgung.*` at `POST /webhook` (HMAC) |
 | **Depends on** | makod, marktd; einsd and vertragd optional |
 
 Role features (`role-{lf,nb}-{strom,gas}`, `role-msb`; composites `lf-only`,

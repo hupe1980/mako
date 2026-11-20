@@ -1016,7 +1016,7 @@ impl AccountingdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. Use `get_balance` to check current open-items balance.\n                 2. Use `list_ledger` to see recent RECHNUNG/ZAHLUNG/GUTSCHRIFT/ABSCHLAG history.\n                 3. If balance > 0 (overdue): check `list_dunning` for active dunning cases.\n                 4. For missing payments: `import_payments` with CAMT.054 bank entries to match.\n                 5. Monthly Abschlagslauf: `run_abschlag_cycle` raises the Abschlagsforderungen (day=billing_day).\n                 6. Monthly SEPA: `run_sepa_collection` → pain.008 XML (send N-5 bank days before due).\n                 7. After Jahresabschluss: `trigger_jahresabschluss` → review → `update_abschlag`.\n                 8. Period-end HGB accruals: `compute_bilanzielle_abgrenzung` → ERP pRAP/aRAP booking.\n                 9. Mahnstufe 3: de.accounting.sperrauftrag → ORDERS 17115 to the NB, whose Sperrauftrag queue (processd) reports IFTSTA 21039.",
+                "1. Use `get_balance` to check current open-items balance.\n                 2. Use `list_ledger` to see recent RECHNUNG/ZAHLUNG/GUTSCHRIFT/ABSCHLAG history.\n                 3. If balance > 0 (overdue): check `list_dunning` for active dunning cases.\n                 4. For missing payments: `import_payments` with CAMT.054 bank entries to match.\n                 5. Monthly Abschlagslauf: `run_abschlag_cycle` raises the Abschlagsforderungen (day=billing_day).\n                 6. Monthly SEPA: `run_sepa_collection` → pain.008 XML (send N-5 bank days before due).\n                 7. After Jahresabschluss: `trigger_jahresabschluss` → review → `update_abschlag`.\n                 8. Period-end HGB accruals: `compute_bilanzielle_abgrenzung` → ERP pRAP/aRAP booking.\n                 9. Mahnstufe 3: de.mako.accounting.sperrauftrag → ORDERS 17115 to the NB, whose Sperrauftrag queue (processd) reports IFTSTA 21039.",
             ),
         ]
     }
@@ -1039,14 +1039,14 @@ impl ServerHandler for AccountingdMcpHandler {
                 "accountingd MCP — Customer Account Ledger (Massenkontokorrent, LF role).\n\
                  Running debit/credit ledger per MaLo; SEPA direct debit; Mahnwesen Mahnstufe 1-3.\n\n\
                  **Order-to-Cash integration:**\n\
-                 - Inbound: de.billing.rechnung.erstellt → RECHNUNG debit entry\n\
+                 - Inbound: de.mako.billing.rechnung.erstellt → RECHNUNG debit entry\n\
                  - Inbound: CAMT.054 bank statement → use `import_payments` for ZAHLUNG credit\n\
                  - Outbound: pain.008 XML → use `run_sepa_collection` for monthly Abschlag collection\n\
-                 - Dunning: `list_dunning` → escalate → de.accounting.sperrauftrag → ORDERS 17115 to the NB\n\n\
+                 - Dunning: `list_dunning` → escalate → de.mako.accounting.sperrauftrag → ORDERS 17115 to the NB\n\n\
                  **⚠ EEG double-booking prevention (§20-21 EEG 2023):**\n\
                  If billingd includes an EEG Gutschrift as a negative Rechnungsposition,\n\
-                 the resulting debit from de.billing.rechnung.erstellt is already net of EEG.\n\
-                 Do NOT post a separate credit for de.eeg.verguetung.berechnet for the same\n\
+                 the resulting debit from de.mako.billing.rechnung.erstellt is already net of EEG.\n\
+                 Do NOT post a separate credit for de.mako.eeg.verguetung.berechnet for the same\n\
                  customer/period — that path is only for Direktvermarkter standalone settlement.\n\n\
                  Use `get_balance` for open-items balance.\n\
                  Use `update_abschlag` after Jahresabschluss to recalibrate monthly advance.",

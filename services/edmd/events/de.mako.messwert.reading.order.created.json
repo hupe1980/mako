@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReadingOrderCreated",
+  "description": "The `data` of `de.mako.messwert.reading.order.created`.",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "description": "The executing system's own reference, where the order carries one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "malo_id": {
+      "type": "string"
+    },
+    "melo_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "anlass": {
+      "description": "Why the reading is wanted: `JAHRESABLESUNG`, `LIEFERBEGINN`, …",
+      "type": "string"
+    },
+    "auftraggeber_rolle": {
+      "description": "The Marktrolle that ordered it.",
+      "type": "string"
+    },
+    "ausfuehrender_msb": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sparte": {
+      "description": "`STROM`, `GAS`, `WAERME` or `WASSER` — it fixes the register's unit.",
+      "type": "string"
+    },
+    "obis_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "geplant_am": {
+      "type": "string",
+      "format": "date"
+    },
+    "ausfuehrt_bis": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    }
+  },
+  "required": [
+    "order_id",
+    "malo_id",
+    "anlass",
+    "auftraggeber_rolle",
+    "sparte",
+    "geplant_am"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.messwert.reading.order.created.json"
+}

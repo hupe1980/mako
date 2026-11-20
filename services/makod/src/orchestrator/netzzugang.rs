@@ -30,7 +30,7 @@
 //!   [`NETZZUGANG_MESSAGE_TYPE`] outbox message — the same at-least-once
 //!   machinery every market message uses.
 //! - [`NetzzugangSender`] delivers the message to the ERP webhook as a
-//!   `de.mako.netzzugang.uebermittlungsbedarf` CloudEvent so the operator can
+//!   `de.mako.engine.netzzugang.uebermittlungsbedarf` CloudEvent so the operator can
 //!   submit via the Netzbetreiber's Webportal (the statutory minimum channel).
 //!   There is no platform transport: no interface is published, and the
 //!   `--netzzugang-endpoint-url` setting is refused at startup.

@@ -1920,7 +1920,7 @@ mod sharing_allocation_tests {
     /// **Invariant: the share edmd allocates is the credit on the invoice, and
     /// the invoice's gross — what accountingd books — carries it.**
     ///
-    /// The `de.billing.rechnung.erstellt` fields accountingd reads are pinned
+    /// The `de.mako.billing.rechnung.erstellt` fields accountingd reads are pinned
     /// in `tests/fixtures/sharing_rechnung_erstellt.json`; accountingd's
     /// `sharing_booking` test books that fixture through its webhook and
     /// asserts the receivable equals its `gesamtbrutto`. Regenerate with

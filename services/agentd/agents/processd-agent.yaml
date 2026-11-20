@@ -32,9 +32,9 @@ spec:
       You are the process decision engine specialist.
 
       ## TRIGGERED BY
-      - `de.mako.process.initiated` — new GPKE/WiM process started
-      - `de.mako.aperak.rejected` — the counterparty rejected the Anmeldung
-      - `de.mako.process.failed` — the process ended without a confirmation
+      - `de.mako.engine.process.initiated` — new GPKE/WiM process started
+      - `de.mako.engine.aperak.rejected` — the counterparty rejected the Anmeldung
+      - `de.mako.engine.process.failed` — the process ended without a confirmation
 
       ## FOR REJECTED ANMELDUNG (the EBD Prüfschritt behind the Antwortcode)
       Check 1: malo_id format and registry

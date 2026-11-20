@@ -24,8 +24,8 @@ use crate::domain::Lieferbeginnanlass;
 #[serde(deny_unknown_fields)]
 pub struct BestellungInput {
     /// The front end's or partner's own reference for this order — the
-    /// `subject` of every `de.vertrag.bestellung.*` and
-    /// `de.vertrag.widerruf.*` CloudEvent, so the caller correlates without
+    /// `subject` of every `de.mako.vertrag.bestellung.*` and
+    /// `de.mako.vertrag.widerruf.*` CloudEvent, so the caller correlates without
     /// polling.
     pub bestellreferenz: String,
     /// The frozen Endkunden-Angebot accepted, by id and content hash.
@@ -77,6 +77,10 @@ pub struct AngebotRef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BestellKunde {
+    /// An existing Kunde of this deployment the order is for — the `kunden_id`
+    /// an earlier order's answer returned. Absent, the order creates a Kunde.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kunden_id: Option<uuid::Uuid>,
     /// `B2C` | `B2B_SLP` | `B2B_RLM` | `B2B_HV`.
     pub kundentyp: String,
     /// § 3 Nr. 57 EnWG; defaults to `kundentyp == "B2C"`.

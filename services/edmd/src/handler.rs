@@ -4,9 +4,9 @@
 //!
 //! | `ce_type`                    | `makopid` | Action |
 //! |------------------------------|-----------|--------|
-//! | `de.mako.process.completed`  | MSCONS set | Store `MeterDataReceipt` |
-//! | `de.mako.process.completed`  | 55002/55078, accepted (Bestätigung Anmeldung) | Auto-create `LIEFERBEGINN` reading order |
-//! | `de.mako.process.completed`  | 55005, accepted (Bestätigung Abmeldung) | Auto-create `LIEFERENDE` reading order |
+//! | `de.mako.engine.process.completed`  | MSCONS set | Store `MeterDataReceipt` |
+//! | `de.mako.engine.process.completed`  | 55002/55078, accepted (Bestätigung Anmeldung) | Auto-create `LIEFERBEGINN` reading order |
+//! | `de.mako.engine.process.completed`  | 55005, accepted (Bestätigung Abmeldung) | Auto-create `LIEFERENDE` reading order |
 //! | *(anything else)*            | *(any)*   | 204 No Content (ignored) |
 //!
 //! ## Supply-handover reading orders
@@ -179,7 +179,7 @@ pub async fn handle_webhook(
 
     debug!(ce_type, pid, "edmd: received event");
 
-    // No branch for `de.mako.process.initiated`: an INSRPT Störungsbehebung
+    // No branch for `de.mako.engine.process.initiated`: an INSRPT Störungsbehebung
     // orders no reading. WiM Teil 2 Kap. 1.1 (S. 5) leaves the Zählerstand as
     // read — „Der von der Messeinrichtung abgelesene Zählerstand wird nicht
     // korrigiert." — and has the MSB transmit it, with any
@@ -368,7 +368,7 @@ mod json_decimal_tests {
 
 /// The reading a completed process orders, as `(anlass, label)`.
 ///
-/// A `de.mako.process.completed` names the **answer** that ended the process —
+/// A `de.mako.engine.process.completed` names the **answer** that ended the process —
 /// `makopid` is the Prüfidentifikator the NB answered with, not the one the
 /// Lieferant sent — and `data.accepted` / `data.outcome` carry the verdict. A
 /// Bestätigung der Anmeldung (55002 verb. MaLo, 55078 erz. MaLo) starts supply,

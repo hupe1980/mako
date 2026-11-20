@@ -198,7 +198,7 @@ permit(
 //
 //   "manage-subscription" — /api/v1/webhooks/** (endpoints, deliveries, replay)
 //                           and the `list_webhook_*` MCP tools. An endpoint
-//                           receives every de.sperr.* notice, which names the
+//                           receives every de.mako.sperr.* notice, which names the
 //                           Marktlokation to be disconnected. Registering one is
 //                           an outbound data-export decision, and a test
 //                           delivery returns the target's HTTP status, which
@@ -225,7 +225,7 @@ permit(
 //                           data — which household is to be disconnected, and
 //                           where the technician should meet them.
 //   "create-sperr-order"  — POST a new order. Schedules a physical visit.
-//   "execute-sperr-order" — PUT .../execute or .../fail. Reports the outcome to
+//   "execute-sperr-order" — PUT .../execute, .../fail or .../external-ref. Reports the outcome to
 //                           the Lieferant as IFTSTA 21039; the message cannot be
 //                           taken back, only corrected by another one.
 //   "cancel-sperr-order"  — PUT .../cancel. Withdraws a pending order. It only

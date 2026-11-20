@@ -21,7 +21,7 @@ use mako_engine::outbox::PendingOutbox;
 use mako_engine::types::{MaLo, MarktpartnerCode};
 
 /// The `SG4` facts an LF-answered Vorgang carries, and the
-/// `de.mako.process.initiated` it builds.
+/// `de.mako.engine.process.initiated` it builds.
 ///
 /// Defined in [`mako_engine::lf_vorgang`] rather than here because GeLi Gas
 /// emits the same contract for 44007 / 44010 / 44016 and `processd` parses both

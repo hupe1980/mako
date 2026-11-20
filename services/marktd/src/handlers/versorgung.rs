@@ -278,7 +278,7 @@ pub async fn put_versorgungsstatus(
         tenant: state.tenant.clone(),
         version: 0,
     };
-    // Persist-before-dispatch: the state change and the de.markt.versorgung.changed
+    // Persist-before-dispatch: the state change and the de.mako.markt.versorgung.changed
     // outbox row commit in ONE transaction, so a crash can never change the supply
     // state without emitting the event.
     let mut tx = match pool.begin().await {
@@ -295,7 +295,7 @@ pub async fn put_versorgungsstatus(
             Err(e) => return e.into_response(),
         };
 
-    // Emit de.markt.versorgung.changed so ERP subscribers (vertragd, billingd)
+    // Emit de.mako.markt.versorgung.changed so ERP subscribers (vertragd, billingd)
     // are notified of supply-state transitions (Lieferbeginn, Lieferende,
     // Lieferant changes) in near-real-time without polling.
     // The Sparte a subscriber filters on lives on the MaLo, not on the supply

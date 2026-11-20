@@ -189,9 +189,37 @@ impl SubscriptionsConfig {
                     "a config endpoint needs a URL",
                 ));
             }
+            let silent = silent_patterns(&e.event_types);
+            if !silent.is_empty() {
+                out.push(Befund::blockiert(
+                    format!("{path}.event_types"),
+                    format!(
+                        "{silent:?} match no event type mako emits, so the endpoint would \
+                         receive nothing — every type is `de.mako.<domain>.<fact>`"
+                    ),
+                ));
+            }
         }
         out
     }
+}
+
+/// The patterns of `event_types` that match no catalogued type.
+///
+/// Such a pattern delivers nothing and says nothing about it: a subscriber
+/// with an outdated type name or a typo waits for events that never come. `*`
+/// matches everything and is never silent.
+#[must_use]
+pub fn silent_patterns(event_types: &[String]) -> Vec<String> {
+    event_types
+        .iter()
+        .filter(|p| {
+            !mako_events::all()
+                .iter()
+                .any(|ty| mako_events::matches(p, ty))
+        })
+        .cloned()
+        .collect()
 }
 
 /// A config secret, `env:VAR` read from the environment.
@@ -319,8 +347,38 @@ impl Subscriptions {
                     () = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
                 }
             }
+            subs.warn_silent_endpoints().await;
             subs.run(shutdown).await;
         });
+    }
+
+    /// Log every active endpoint with a pattern that matches no catalogued
+    /// type. The endpoint keeps the pattern and its read shows it as
+    /// `patterns_matching_nothing`; the log is where an operator learns of it
+    /// without reading every endpoint.
+    async fn warn_silent_endpoints(&self) {
+        let rows: Result<Vec<(String, Vec<String>)>, _> = sqlx::query_as(
+            "SELECT name, event_types FROM webhook_endpoints WHERE tenant = $1 AND active",
+        )
+        .bind(&self.inner.tenant)
+        .fetch_all(&self.inner.pool)
+        .await;
+        match rows {
+            Ok(rows) => {
+                for (name, event_types) in rows {
+                    let silent = silent_patterns(&event_types);
+                    if !silent.is_empty() {
+                        tracing::warn!(
+                            service = %self.inner.service, endpoint = %name, patterns = ?silent,
+                            "subscriptions: endpoint patterns match no event type — it receives \
+                             nothing for them; every type is `de.mako.<domain>.<fact>`"
+                        );
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(service = %self.inner.service, error = %e,
+                "subscriptions: endpoints not read for the pattern check"),
+        }
     }
 
     /// Write the config-owned endpoints — `default` and every
@@ -515,6 +573,37 @@ mod tests {
                 "subscriptions.endpoints[2].name",
             ]
         );
+    }
+
+    /// A pattern naming a type mako does not emit matches nothing, so a
+    /// subscriber would wait for events that never come. Config refuses it at
+    /// boot; `*` and a pattern matching a catalogued type pass.
+    #[test]
+    fn a_pattern_matching_no_type_is_silent_and_refused_in_config() {
+        let patterns = [
+            "de.vertrag.*".to_owned(),
+            "de.mako.vertrag.*".to_owned(),
+            "*".to_owned(),
+            "de.mako.engine.process.completed".to_owned(),
+            "de.mako.engine.prozess.*".to_owned(),
+        ];
+        assert_eq!(
+            silent_patterns(&patterns),
+            ["de.vertrag.*", "de.mako.engine.prozess.*"]
+        );
+        let cfg: SubscriptionsConfig = toml::from_str(
+            r#"
+            [[endpoints]]
+            name = "erp"
+            url = "https://erp.example"
+            event_types = ["de.mako.vertrag.*", "de.sperr.*"]
+            "#,
+        )
+        .expect("parses");
+        let befunde = cfg.befunde();
+        assert_eq!(befunde.len(), 1, "{befunde:?}");
+        assert_eq!(befunde[0].pfad, "subscriptions.endpoints[0].event_types");
+        assert!(befunde[0].text.contains("de.sperr.*"), "{:?}", befunde[0]);
     }
 
     /// The `[subscriptions]` section refuses a key it does not declare.

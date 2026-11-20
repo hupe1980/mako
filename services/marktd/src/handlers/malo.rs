@@ -236,7 +236,7 @@ pub async fn put_malo(
     let sparte_str = req.sparte.to_string();
     let malo_id_str = malo_id.to_string();
 
-    // Persist-before-dispatch: the master record and the de.markt.malo.updated
+    // Persist-before-dispatch: the master record and the de.mako.markt.malo.updated
     // outbox row commit in ONE transaction, so a crash can never leave the
     // record changed without the event.
     let mut tx = match pool.begin().await {
@@ -262,7 +262,7 @@ pub async fn put_malo(
         Err(e) => return e.into_response(),
     };
 
-    // Emit de.markt.malo.updated. Every consumer of the record — makod's
+    // Emit de.mako.markt.malo.updated. Every consumer of the record — makod's
     // MaLo-Ident cache among them — receives the durable fan-out and reads
     // the record back, so a consumer that is down when the record changes
     // still receives it: the fan-out retries and dead-letters (replayable

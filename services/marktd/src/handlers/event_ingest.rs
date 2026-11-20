@@ -179,14 +179,14 @@ pub async fn ingest_event(
     //                        Antwort, GPKE Teil 2 Kap. 2.5.2.2 Nr. 3)
     //     → end_supply: delete the `Aktiv` rows, lieferstatus = Unbeliefert
     //       (any `Angekuendigt` row survives for the pending transition);
-    //       when no successor is announced, emit de.markt.versorgung.gap-detected
+    //       when no successor is announced, emit de.mako.markt.versorgung.gap-detected
     //       — the §38 EnWG gap-closure trigger consumed by processd
     //
     //   process.completed  + PID 55013/44013 (Anmeldung/Zuordnung EOG)
     //     → begin_eog_supply: the E/G becomes the supplier of record
     //       (lieferstatus = Ersatzversorgung/Grundversorgung per data.eog_art,
     //        eog_seit = data.process_date — anchors the §38 Abs. 4 3-month clock);
-    //       emits de.markt.versorgung.eog-begonnen
+    //       emits de.mako.markt.versorgung.eog-begonnen
     //
     // The CE subject is always the process UUID — malo_id is extracted from
     // the data payload.  All actions are idempotent under at-least-once delivery.
@@ -584,7 +584,7 @@ fn ends_supply(pid: u32, data: &serde_json::Value) -> bool {
 /// processd's automated LFA answers read must never silently diverge from the
 /// acknowledged event.
 ///
-/// Every transition emits `de.markt.versorgung.changed` carrying the resulting
+/// Every transition emits `de.mako.markt.versorgung.changed` carrying the resulting
 /// state, plus the specific trigger event where one exists
 /// (`versorgung.gap-detected`, `versorgung.eog-begonnen`). Subscribers track the
 /// supply lifecycle from that one event type, so no transition may be silent.
@@ -921,7 +921,7 @@ const fn sparte_of_pid(pid: u32) -> &'static str {
     }
 }
 
-/// Build `de.markt.versorgung.changed` from the state the transition left behind.
+/// Build `de.mako.markt.versorgung.changed` from the state the transition left behind.
 ///
 /// Read back rather than reconstructed: the transitions are `ON CONFLICT` upserts
 /// whose result depends on the prior row, so only the row itself describes the

@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.38.3"
+    "version": "0.39.0"
   },
   "paths": {
     "/admin/malo/stats": {
@@ -929,7 +929,7 @@
           },
           "process_id": {
             "type": "string",
-            "description": "UUID of the process that was spawned or updated.\n\nMatches the `subject` field of the corresponding CloudEvent sent to the\nERP webhook. Use this to correlate the command response with the\n`de.mako.process.initiated` (or other) event the ERP received.",
+            "description": "UUID of the process that was spawned or updated.\n\nMatches the `subject` field of the corresponding CloudEvent sent to the\nERP webhook. Use this to correlate the command response with the\n`de.mako.engine.process.initiated` (or other) event the ERP received.",
             "example": "3181967a-02d1-4d0e-9105-0cc46f3b25c9"
           },
           "status": {
@@ -1316,7 +1316,7 @@
               "string",
               "null"
             ],
-            "description": "UUID of the process that was spawned or resumed.\n\nMatches the `subject` of the `de.mako.process.initiated` CloudEvent\nsent to the ERP webhook. Present only when `status == \"routed\"` and\nPhase 2 dispatch succeeded.",
+            "description": "UUID of the process that was spawned or resumed.\n\nMatches the `subject` of the `de.mako.engine.process.initiated` CloudEvent\nsent to the ERP webhook. Present only when `status == \"routed\"` and\nPhase 2 dispatch succeeded.",
             "example": "3181967a-02d1-4d0e-9105-0cc46f3b25c9"
           },
           "status": {

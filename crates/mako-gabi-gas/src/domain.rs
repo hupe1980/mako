@@ -12,7 +12,7 @@
 //! - [`GasImbalanceSaldo`] — nomination vs. allocation deviation with Ausgleichsenergie price
 //! - [`NominationQuantity`] — submitted / accepted / curtailed breakdown
 //! - [`GasQualityClass`] — H-Gas / L-Gas designation per DVGW G 260
-//! - `cloud_events` — typed `de.gabi.*` CloudEvent type constants
+//! - `cloud_events` — typed `de.mako.gabi.*` CloudEvent type constants
 //!
 //! ## No float money rule
 //!
@@ -339,7 +339,7 @@ impl GasQualityFlag {
 
 // ── CloudEvent type constants ─────────────────────────────────────────────────
 
-/// CloudEvent type constants for GaBi Gas domain events (`de.gabi.*`).
+/// CloudEvent type constants for GaBi Gas domain events (`de.mako.gabi.*`).
 ///
 /// Re-exported from the workspace-wide [`mako_events`] catalog, which is the
 /// single source of truth — including for which of these are actually emitted.
@@ -354,7 +354,7 @@ impl GasQualityFlag {
 /// The one live subscription reflects that: `gabi-gas-agent` triggers on the
 /// concrete [`ALOCAT_MISSING`](mako_events::gabi::ALOCAT_MISSING), in both its
 /// manifest's `## TRIGGERED BY` block and the `builtin` subscription table, not
-/// on a `de.gabi.*` glob — a glob here would advertise ten types that never
+/// on a `de.mako.gabi.*` glob — a glob here would advertise ten types that never
 /// arrive.
 pub use mako_events::gabi as cloud_events;
 
@@ -1374,11 +1374,11 @@ mod tests {
 
     #[test]
     fn cloud_event_constants_have_correct_prefix() {
-        assert!(cloud_events::MEASUREMENT_RECEIVED.starts_with("de.gabi."));
-        assert!(cloud_events::ALLOCATION_COMPLETED.starts_with("de.gabi."));
-        assert!(cloud_events::NOMINATION_CREATED.starts_with("de.gabi."));
-        assert!(cloud_events::IMBALANCE_CALCULATED.starts_with("de.gabi."));
-        assert!(cloud_events::INVOIC_MMM_RECEIVED.starts_with("de.gabi."));
+        assert!(cloud_events::MEASUREMENT_RECEIVED.starts_with("de.mako.gabi."));
+        assert!(cloud_events::ALLOCATION_COMPLETED.starts_with("de.mako.gabi."));
+        assert!(cloud_events::NOMINATION_CREATED.starts_with("de.mako.gabi."));
+        assert!(cloud_events::IMBALANCE_CALCULATED.starts_with("de.mako.gabi."));
+        assert!(cloud_events::INVOIC_MMM_RECEIVED.starts_with("de.mako.gabi."));
     }
 
     // ── GasImbalanceSaldo with Ausgleichsenergie ───────────────────────────────

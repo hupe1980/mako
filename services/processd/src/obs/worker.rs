@@ -1,12 +1,12 @@
-//! Background sweep workers that produce the `de.obs.*` CloudEvents.
+//! Background sweep workers that produce the `de.mako.obs.*` CloudEvents.
 //!
-//! The `obs` module is otherwise a read-model: it projects inbound `de.mako.*` events and
+//! The `obs` module is otherwise a read-model: it projects inbound `de.mako.engine.*` events and
 //! serves queries. These two workers are its only **producers**:
 //!
-//! - `de.obs.deadline.approaching` — emitted per tracked process whose
+//! - `de.mako.obs.deadline.approaching` — emitted per tracked process whose
 //!   regulatory response deadline falls inside the warn window and has not yet
 //!   been alerted (consumed by agentd's `deadline-alert-agent`).
-//! - `de.obs.stp.parity.alert` — emitted when the § 7a Abs. 5 EnWG completion-rate
+//! - `de.mako.obs.stp.parity.alert` — emitted when the § 7a Abs. 5 EnWG completion-rate
 //!   gap between affiliate- and third-party-initiated Lieferanten processes passes
 //!   the **operator-configured** threshold (consumed by agentd's
 //!   `compliance-agent`). No BNetzA publication sets a numeric parity limit for
@@ -47,7 +47,7 @@ pub struct WorkerRuntime {
 /// cap was waiting, never that the cap was all there was.
 const DEADLINE_ALERT_LIMIT: i64 = 200;
 
-/// Emit one `de.obs.*` CloudEvent, HMAC-signed when configured. Returns `true`
+/// Emit one `de.mako.obs.*` CloudEvent, HMAC-signed when configured. Returns `true`
 /// when the event reached the outbound webhook.
 ///
 /// The deadline sweep stamps `deadline_alerted_at` from the outcome, so this
@@ -90,7 +90,7 @@ async fn emit_obs_event(
 
 // ── Deadline sweep ─────────────────────────────────────────────────────────────
 
-/// Spawn the `de.obs.deadline.approaching` producer.
+/// Spawn the `de.mako.obs.deadline.approaching` producer.
 pub fn spawn_deadline_sweep(rt: WorkerRuntime, shutdown: CancellationToken) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(rt.deadline_sweep_secs));
@@ -111,7 +111,7 @@ pub fn spawn_deadline_sweep(rt: WorkerRuntime, shutdown: CancellationToken) {
                             "processd obs: deadline sweep needs attention — a saturated tick means at \
                              least the cap was waiting, never that the cap was all there was"
                         ),
-                        Ok(o) => info!(emitted = o.emitted, "processd obs: de.obs.deadline.approaching sweep"),
+                        Ok(o) => info!(emitted = o.emitted, "processd obs: de.mako.obs.deadline.approaching sweep"),
                         Err(e) => warn!(error = %e, "processd obs: deadline sweep failed"),
                     }
                 }
@@ -155,7 +155,7 @@ impl SweepOutcome {
     }
 }
 
-/// Emit `de.obs.deadline.approaching` for every open, not-yet-alerted process
+/// Emit `de.mako.obs.deadline.approaching` for every open, not-yet-alerted process
 /// whose Antwortfrist is within the warn window.
 ///
 /// Deadlines **already past** when first seen are included, carrying
@@ -254,7 +254,7 @@ pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<SweepOutcome, sqlx::E
 
 // ── § 7a Abs. 5 EnWG parity sweep ─────────────────────────────────────────────
 
-/// Spawn the `de.obs.stp.parity.alert` producer.
+/// Spawn the `de.mako.obs.stp.parity.alert` producer.
 pub fn spawn_parity_sweep(rt: WorkerRuntime, shutdown: CancellationToken) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(rt.parity_sweep_secs));
@@ -264,7 +264,7 @@ pub fn spawn_parity_sweep(rt: WorkerRuntime, shutdown: CancellationToken) {
                 _ = interval.tick() => {
                     match sweep_parity(&rt).await {
                         Ok(true) => info!(
-                            "processd obs: de.obs.stp.parity.alert emitted — the completion-rate gap \
+                            "processd obs: de.mako.obs.stp.parity.alert emitted — the completion-rate gap \
                              between affiliate and third-party Lieferanten passed the \
                              operator's configured threshold"
                         ),

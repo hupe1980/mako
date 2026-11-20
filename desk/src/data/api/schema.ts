@@ -81,6 +81,17 @@ export type EdmdTageszustand = "gemessen" | "ersatzwert" | "korrigiert" | "fehlt
  */
 export type EdmdNote = "A" | "B" | "C" | "F";
 /**
+ * The value `grund` takes.
+ */
+export type EdmdAblesehindernis =
+  | "KEIN_ZUTRITT"
+  | "ZAEHLER_UNZUGAENGLICH"
+  | "ZAEHLER_DEFEKT"
+  | "ZAEHLER_NICHT_AUFFINDBAR"
+  | "KUNDE_VERWEIGERT"
+  | "ABLESUNG_UNPLAUSIBEL"
+  | "SONSTIGES";
+/**
  * The quality of one stored value — the MSCONS Messwertstatus: `MEASURED`
  * (Messwert), `ESTIMATED` (Prognosewert), `SUBSTITUTED` (Ersatzwert),
  * `CALCULATED` (Rechenwert), `CORRECTED` (Nachbearbeitungswert),
@@ -206,6 +217,11 @@ export type NetzbilanzdDeliveryFilter = "all" | "pending" | "delivered" | "faile
  */
 export type NetzbilanzdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
 /**
+ * Whom the visit is put down to: `customer`, `contractor`, `operator` or
+ * `nobody`. Kept on the order and in its events; the Lieferant asks why.
+ */
+export type ProcessdResponsible = "customer" | "contractor" | "operator" | "nobody";
+/**
  * `config` or `api`.
  */
 export type ProcessdOwner = "config" | "api";
@@ -276,6 +292,19 @@ export type BillingdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
  */
 export type BillingdOwner2 = "config" | "api";
 /**
+ * Why a reading could not be taken — the closed vocabulary of
+ * `PUT /api/v1/reading-orders/{id}/fail`, of `fehlschlag_grund` and of
+ * `de.mako.messwert.reading.order.failed`.
+ */
+export type EdmdAblesehindernis1 =
+  | "KEIN_ZUTRITT"
+  | "ZAEHLER_UNZUGAENGLICH"
+  | "ZAEHLER_DEFEKT"
+  | "ZAEHLER_NICHT_AUFFINDBAR"
+  | "KUNDE_VERWEIGERT"
+  | "ABLESUNG_UNPLAUSIBEL"
+  | "SONSTIGES";
+/**
  * `pending`, `delivered` or `dead_lettered`.
  */
 export type EdmdDeliveryStatus1 = "pending" | "delivered" | "dead_lettered";
@@ -345,6 +374,13 @@ export type ProcessdDeliveryStatus2 = "pending" | "delivered" | "dead_lettered";
  * Who owns an endpoint.
  */
 export type ProcessdOwner2 = "config" | "api";
+/**
+ * Whom an unsuccessful visit is put down to.
+ *
+ * The Lieferant asks why a Sperrung did not happen, and „niemand angetroffen"
+ * and „der Monteur kam nicht" are different answers with different costs.
+ */
+export type ProcessdResponsible1 = "customer" | "contractor" | "operator" | "nobody";
 /**
  * `pending`, `delivered` or `dead_lettered`.
  */
@@ -6661,6 +6697,7 @@ export interface Api {
             malo_id?: string;
             status?: string;
             anlass?: string;
+            external_ref?: string;
             limit?: number;
           };
         };
@@ -6739,6 +6776,14 @@ export interface Api {
               "application/json": EdmdApiError;
             };
           };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
           422: {
             headers: {
               [k: string]: unknown | undefined;
@@ -6800,6 +6845,37 @@ export interface Api {
             };
           };
           422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/reading-orders/fail-reasons": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdAblesehindernisEintrag[];
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
             headers: {
               [k: string]: unknown | undefined;
             };
@@ -6952,6 +7028,75 @@ export interface Api {
             };
           };
           404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/edmd/api/v1/reading-orders/{id}/external-ref": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": EdmdExternalRefRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          409: {
             headers: {
               [k: string]: unknown | undefined;
             };
@@ -20197,6 +20342,7 @@ export interface Api {
           query?: {
             status?: string;
             malo_id?: string;
+            external_ref?: string;
             limit?: number;
             due?: boolean;
           };
@@ -20358,6 +20504,14 @@ export interface Api {
               "application/json": ProcessdApiError;
             };
           };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
         };
       };
     };
@@ -20396,6 +20550,67 @@ export interface Api {
             };
           };
           404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/sperr-orders/{id}/external-ref": {
+      put: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdExternalRefRequest;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
             headers: {
               [k: string]: unknown | undefined;
             };
@@ -20449,6 +20664,14 @@ export interface Api {
             };
           };
           404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
             headers: {
               [k: string]: unknown | undefined;
             };
@@ -24442,6 +24665,8 @@ export interface Api {
         parameters: {
           query?: {
             limit?: number;
+            erp_contract_id?: string;
+            bestellreferenz?: string;
           };
         };
         responses: {
@@ -25517,6 +25742,8 @@ export interface Api {
       "billingd.TotalEstimate": BillingdTotalEstimate3;
       "billingd.VerifyTokenBody": BillingdVerifyTokenBody;
       "edmd.Abdeckung": EdmdAbdeckung;
+      "edmd.Ablesehindernis": EdmdAblesehindernis1;
+      "edmd.AblesehindernisEintrag": EdmdAblesehindernisEintrag;
       "edmd.ApiError": EdmdApiError;
       "edmd.Delivery": EdmdDelivery;
       "edmd.DeliveryFilter": EdmdDeliveryFilter;
@@ -25525,6 +25752,7 @@ export interface Api {
       "edmd.EndpointCreate": EdmdEndpointCreate;
       "edmd.EndpointCreated": EdmdEndpointCreated;
       "edmd.EndpointUpdate": EdmdEndpointUpdate;
+      "edmd.ExternalRefRequest": EdmdExternalRefRequest;
       "edmd.Korrektur": EdmdKorrektur;
       "edmd.Korrekturen": EdmdKorrekturen;
       "edmd.Messwert": EdmdMesswert;
@@ -25730,6 +25958,7 @@ export interface Api {
       "processd.EndpointCreated": ProcessdEndpointCreated;
       "processd.EndpointUpdate": ProcessdEndpointUpdate;
       "processd.ExecuteRequest": ProcessdExecuteRequest;
+      "processd.ExternalRefRequest": ProcessdExternalRefRequest;
       "processd.FailRequest": ProcessdFailRequest;
       "processd.NeuanlageIdentifikationRequest": ProcessdNeuanlageIdentifikationRequest;
       "processd.Owner": ProcessdOwner2;
@@ -25739,6 +25968,7 @@ export interface Api {
       "processd.ReplayWindow": ProcessdReplayWindow;
       "processd.Replayed": ProcessdReplayed;
       "processd.ResolveKlaerfallRequest": ProcessdResolveKlaerfallRequest;
+      "processd.Responsible": ProcessdResponsible1;
       "processd.RotateSecret": ProcessdRotateSecret;
       "processd.SecretRotated": ProcessdSecretRotated;
       "processd.TestDelivery": ProcessdTestDelivery;
@@ -27026,6 +27256,11 @@ export interface BillingdPageEndpoint {
      */
     partner?: string | null;
     /**
+     * The patterns of `event_types` that match no event type mako emits.
+     * They deliver nothing; replace them.
+     */
+    patterns_matching_nothing: string[];
+    /**
      * Until when the previous secret still signs, after a rotation.
      */
     previous_secret_expires_at?: Instant | null;
@@ -27062,7 +27297,7 @@ export interface BillingdTotalEstimate1 {
  */
 export interface BillingdEndpointCreate {
   /**
-   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   * `mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type.
    */
   event_types?: string[];
   /**
@@ -27132,6 +27367,11 @@ export interface BillingdEndpoint {
    */
   partner?: string | null;
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * Until when the previous secret still signs, after a rotation.
    */
   previous_secret_expires_at?: Instant | null;
@@ -27185,6 +27425,11 @@ export interface BillingdEndpoint1 {
    * stamped with that partner.
    */
   partner?: string | null;
+  /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
   /**
    * Until when the previous secret still signs, after a rotation.
    */
@@ -27535,6 +27780,23 @@ export interface EdmdQualitaetsbefund {
   zero_run_length: number;
 }
 /**
+ * One entry of the published Ablesehindernis vocabulary.
+ */
+export interface EdmdAblesehindernisEintrag {
+  code: EdmdAblesehindernis;
+  /**
+   * The German label.
+   */
+  label: string;
+}
+export interface EdmdExternalRefRequest {
+  /**
+   * The executing system's own reference: 1–200 characters, opaque, unique
+   * per tenant.
+   */
+  external_ref: string;
+}
+/**
  * The version-resolved series of a Marktlokation over a window.
  */
 export interface EdmdMesswerte {
@@ -27636,6 +27898,11 @@ export interface EdmdPageEndpoint {
      */
     partner?: string | null;
     /**
+     * The patterns of `event_types` that match no event type mako emits.
+     * They deliver nothing; replace them.
+     */
+    patterns_matching_nothing: string[];
+    /**
      * Until when the previous secret still signs, after a rotation.
      */
     previous_secret_expires_at?: Instant | null;
@@ -27672,7 +27939,7 @@ export interface EdmdTotalEstimate1 {
  */
 export interface EdmdEndpointCreate {
   /**
-   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   * `mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type.
    */
   event_types?: string[];
   /**
@@ -27742,6 +28009,11 @@ export interface EdmdEndpoint {
    */
   partner?: string | null;
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * Until when the previous secret still signs, after a rotation.
    */
   previous_secret_expires_at?: Instant | null;
@@ -27795,6 +28067,11 @@ export interface EdmdEndpoint1 {
    * stamped with that partner.
    */
   partner?: string | null;
+  /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
   /**
    * Until when the previous secret still signs, after a rotation.
    */
@@ -28777,6 +29054,11 @@ export interface InvoicdPageEndpoint {
      */
     partner?: string | null;
     /**
+     * The patterns of `event_types` that match no event type mako emits.
+     * They deliver nothing; replace them.
+     */
+    patterns_matching_nothing: string[];
+    /**
      * Until when the previous secret still signs, after a rotation.
      */
     previous_secret_expires_at?: Instant | null;
@@ -28813,7 +29095,7 @@ export interface InvoicdTotalEstimate1 {
  */
 export interface InvoicdEndpointCreate {
   /**
-   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   * `mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type.
    */
   event_types?: string[];
   /**
@@ -28883,6 +29165,11 @@ export interface InvoicdEndpoint {
    */
   partner?: string | null;
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * Until when the previous secret still signs, after a rotation.
    */
   previous_secret_expires_at?: Instant | null;
@@ -28936,6 +29223,11 @@ export interface InvoicdEndpoint1 {
    * stamped with that partner.
    */
   partner?: string | null;
+  /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
   /**
    * Until when the previous secret still signs, after a rotation.
    */
@@ -29245,7 +29537,7 @@ export interface MakodCommandAccepted {
    *
    * Matches the `subject` field of the corresponding CloudEvent sent to the
    * ERP webhook. Use this to correlate the command response with the
-   * `de.mako.process.initiated` (or other) event the ERP received.
+   * `de.mako.engine.process.initiated` (or other) event the ERP received.
    */
   process_id: string;
   /**
@@ -29594,7 +29886,7 @@ export interface MakodMessageResult {
   /**
    * UUID of the process that was spawned or resumed.
    *
-   * Matches the `subject` of the `de.mako.process.initiated` CloudEvent
+   * Matches the `subject` of the `de.mako.engine.process.initiated` CloudEvent
    * sent to the ERP webhook. Present only when `status == "routed"` and
    * Phase 2 dispatch succeeded.
    */
@@ -30827,6 +31119,11 @@ export interface MarktdPageEndpoint {
      */
     partner?: string | null;
     /**
+     * The patterns of `event_types` that match no event type mako emits.
+     * They deliver nothing; replace them.
+     */
+    patterns_matching_nothing: string[];
+    /**
      * Until when the previous secret still signs, after a rotation.
      */
     previous_secret_expires_at?: Instant | null;
@@ -30863,7 +31160,7 @@ export interface MarktdTotalEstimate1 {
  */
 export interface MarktdEndpointCreate {
   /**
-   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   * `mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type.
    */
   event_types?: string[];
   /**
@@ -30933,6 +31230,11 @@ export interface MarktdEndpoint {
    */
   partner?: string | null;
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * Until when the previous secret still signs, after a rotation.
    */
   previous_secret_expires_at?: Instant | null;
@@ -30986,6 +31288,11 @@ export interface MarktdEndpoint1 {
    * stamped with that partner.
    */
   partner?: string | null;
+  /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
   /**
    * Until when the previous secret still signs, after a rotation.
    */
@@ -31330,6 +31637,11 @@ export interface NetzbilanzdPageEndpoint {
      */
     partner?: string | null;
     /**
+     * The patterns of `event_types` that match no event type mako emits.
+     * They deliver nothing; replace them.
+     */
+    patterns_matching_nothing: string[];
+    /**
      * Until when the previous secret still signs, after a rotation.
      */
     previous_secret_expires_at?: Instant | null;
@@ -31366,7 +31678,7 @@ export interface NetzbilanzdTotalEstimate1 {
  */
 export interface NetzbilanzdEndpointCreate {
   /**
-   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   * `mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type.
    */
   event_types?: string[];
   /**
@@ -31436,6 +31748,11 @@ export interface NetzbilanzdEndpoint {
    */
   partner?: string | null;
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * Until when the previous secret still signs, after a rotation.
    */
   previous_secret_expires_at?: Instant | null;
@@ -31489,6 +31806,11 @@ export interface NetzbilanzdEndpoint1 {
    * stamped with that partner.
    */
   partner?: string | null;
+  /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
   /**
    * Until when the previous secret still signs, after a rotation.
    */
@@ -31912,6 +32234,13 @@ export interface ProcessdExecuteRequest {
    */
   pruefschritt_code?: string | null;
 }
+export interface ProcessdExternalRefRequest {
+  /**
+   * The executing system's own reference: 1–200 characters, opaque, unique
+   * per tenant.
+   */
+  external_ref: string;
+}
 export interface ProcessdFailRequest {
   /**
    * `true` when no further Sperrversuch will be made — a court injunction, a
@@ -31933,6 +32262,7 @@ export interface ProcessdFailRequest {
    * `SG25 FTX+ACB` — why it could not be carried out.
    */
   reason: string;
+  responsible?: null | ProcessdResponsible;
 }
 /**
  * How many deliveries a replay queued.
@@ -31991,6 +32321,11 @@ export interface ProcessdPageEndpoint {
      */
     partner?: string | null;
     /**
+     * The patterns of `event_types` that match no event type mako emits.
+     * They deliver nothing; replace them.
+     */
+    patterns_matching_nothing: string[];
+    /**
      * Until when the previous secret still signs, after a rotation.
      */
     previous_secret_expires_at?: Instant | null;
@@ -32027,7 +32362,7 @@ export interface ProcessdTotalEstimate1 {
  */
 export interface ProcessdEndpointCreate {
   /**
-   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   * `mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type.
    */
   event_types?: string[];
   /**
@@ -32097,6 +32432,11 @@ export interface ProcessdEndpoint {
    */
   partner?: string | null;
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * Until when the previous secret still signs, after a rotation.
    */
   previous_secret_expires_at?: Instant | null;
@@ -32150,6 +32490,11 @@ export interface ProcessdEndpoint1 {
    * stamped with that partner.
    */
   partner?: string | null;
+  /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
   /**
    * Until when the previous secret still signs, after a rotation.
    */
@@ -32427,6 +32772,11 @@ export interface ProductdPageEndpoint {
      */
     partner?: string | null;
     /**
+     * The patterns of `event_types` that match no event type mako emits.
+     * They deliver nothing; replace them.
+     */
+    patterns_matching_nothing: string[];
+    /**
      * Until when the previous secret still signs, after a rotation.
      */
     previous_secret_expires_at?: Instant | null;
@@ -32463,7 +32813,7 @@ export interface ProductdTotalEstimate1 {
  */
 export interface ProductdEndpointCreate {
   /**
-   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   * `mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type.
    */
   event_types?: string[];
   /**
@@ -32533,6 +32883,11 @@ export interface ProductdEndpoint {
    */
   partner?: string | null;
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * Until when the previous secret still signs, after a rotation.
    */
   previous_secret_expires_at?: Instant | null;
@@ -32586,6 +32941,11 @@ export interface ProductdEndpoint1 {
    * stamped with that partner.
    */
   partner?: string | null;
+  /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
   /**
    * Until when the previous secret still signs, after a rotation.
    */
@@ -32863,6 +33223,11 @@ export interface VertragdPageEndpoint {
      */
     partner?: string | null;
     /**
+     * The patterns of `event_types` that match no event type mako emits.
+     * They deliver nothing; replace them.
+     */
+    patterns_matching_nothing: string[];
+    /**
      * Until when the previous secret still signs, after a rotation.
      */
     previous_secret_expires_at?: Instant | null;
@@ -32899,7 +33264,7 @@ export interface VertragdTotalEstimate1 {
  */
 export interface VertragdEndpointCreate {
   /**
-   * `mako_events::matches` patterns (`de.vertrag.*`); empty matches every type.
+   * `mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type.
    */
   event_types?: string[];
   /**
@@ -32969,6 +33334,11 @@ export interface VertragdEndpoint {
    */
   partner?: string | null;
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * Until when the previous secret still signs, after a rotation.
    */
   previous_secret_expires_at?: Instant | null;
@@ -33022,6 +33392,11 @@ export interface VertragdEndpoint1 {
    * stamped with that partner.
    */
   partner?: string | null;
+  /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
   /**
    * Until when the previous secret still signs, after a rotation.
    */

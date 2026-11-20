@@ -1252,7 +1252,7 @@ impl Workflow for WimWertebestellungWorkflow {
         // Both also carry `IMD+7081` and an `AJT` naming the EBD the
         // Prüfschritt code belongs to — Muss on all four (ORDRSP AHB 1.1b
         // Kap. 4.15). An ORDRSP carries **no LOC**, so no location travels here.
-        /// The `de.mako.process.initiated` notification an inbound ESA step
+        /// The `de.mako.engine.process.initiated` notification an inbound ESA step
         /// owes its observers.
         ///
         /// WiM Teil 2 Kapitel 4 obliges the **MSB** to answer four inbound

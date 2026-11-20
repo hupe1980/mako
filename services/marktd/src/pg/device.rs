@@ -404,7 +404,7 @@ impl PgDeviceRepository {
     /// The `updated_at` timestamp on each entry is set server-side; callers
     /// should not set it in the request (it is overwritten).
     ///
-    /// Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out.
+    /// Emits `de.mako.markt.geraet.konfiguration.updated` via the durable fan-out.
     pub async fn upsert_geraet_konfigurationen(
         &self,
         geraet_id: &str,

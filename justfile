@@ -1125,7 +1125,7 @@ check-sts-codes:
 check-error-tuples:
     cargo xtask check-error-tuples
 
-# A consumer of `de.mako.process.completed` reads the verdict. One type carries
+# A consumer of `de.mako.engine.process.completed` reads the verdict. One type carries
 # the Bestätigung and the Ablehnung; branching on the type alone reads every
 # refused Anmeldung as a supply that started.
 check-process-verdict:

@@ -97,7 +97,7 @@ graph LR
 | `GET` | `/api/v1/angebote/{id}/comparison` | Prices the scenarios and persists the BO4E `Angebot` to `angebote.bo4e` |
 | `POST` | `/api/v1/angebote/{id}/versenden` | ANGELEGT → VERSANDT; an unknown id is `404`, another status `409` |
 | `PUT` | `/api/v1/angebote/{id}` | Edit before sending — `gueltig_bis`, `lieferbeginn`, `laufzeit_monate`, `positionen`, `varianten`, `notizen`. **`ANGELEGT` only**: once VERSANDT the customer holds the document |
-| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | ANGELEGT **or** VERSANDT → ANGENOMMEN / ABGELEHNT. Unknown id `404`, already decided `409`; acceptance of an unpriced Angebot (no `bo4e`) `422`. An acceptance enqueues `de.tarif.angebot.angenommen` for `erp_webhook_url` in its own transaction (`erp_dispatch: queued`); the Angebot names its `rahmenvertrag_id` once `vertragd` has answered the delivery |
+| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | ANGELEGT **or** VERSANDT → ANGENOMMEN / ABGELEHNT. Unknown id `404`, already decided `409`; acceptance of an unpriced Angebot (no `bo4e`) `422`. An acceptance enqueues `de.mako.tarif.angebot.angenommen` for `erp_webhook_url` in its own transaction (`erp_dispatch: queued`); the Angebot names its `rahmenvertrag_id` once `vertragd` has answered the delivery |
 | `POST` | `/api/v1/angebote/expire` | Sweeps ANGELEGT and VERSANDT Angebote past `gueltig_bis` to ABGELAUFEN |
 | | `/api/v1/webhooks/…` · `/api/v1/events` | Webhook endpoints, deliveries and the event feed — see [Webhooks](#webhooks) |
 | `GET` | `/api/v1/openapi.json` | This table as an OpenAPI 3.1 document; committed as `services/productd/openapi.json` |
@@ -108,14 +108,14 @@ graph LR
 ## Webhooks
 
 productd mounts the shared [webhook subscriptions](@/docs/architecture/erp-integration.md#webhook-subscriptions):
-every `de.tarif.*` event it commits reaches each endpoint registered through
+every `de.mako.tarif.*` event it commits reaches each endpoint registered through
 `/api/v1/webhooks/endpoints` whose filter matches, and `erp_webhook_url` is
 the endpoint `default`. Managing endpoints and reading `GET /api/v1/events`
 are the operator's (`ADMIN`) alone; productd marks no caller as a
 Vertriebspartner.
 
 The contract request of an accepted Angebot is not one of those deliveries:
-`de.tarif.angebot.angenommen` goes to `erp_webhook_url` alone, because
+`de.mako.tarif.angebot.angenommen` goes to `erp_webhook_url` alone, because
 `vertragd` answers it with the Rahmenvertrag the Angebot then names, and a
 fan-out carries no answer back.
 
@@ -710,7 +710,7 @@ url = "postgresql://productd:secret@db:5432/productd"
 issuer   = "https://idp.example/realms/mako"
 audience = "productd"
 
-# The webhook endpoint `default`: every de.tarif.* event, persisted in
+# The webhook endpoint `default`: every de.mako.tarif.* event, persisted in
 # event_outbox with the write it announces; also the receiver (vertragd) of an
 # accepted Angebot's contract request. Signed when the secret is set.
 # erp_webhook_url = "https://erp.internal/hooks/tarif"

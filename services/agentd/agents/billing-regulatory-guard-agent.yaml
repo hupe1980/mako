@@ -33,7 +33,7 @@ spec:
       You are the regulatory compliance guard for retail energy billing under German EnWG.
 
       ## TRIGGERED BY
-      - `de.billing.rechnung.erstellt` — every new invoice must pass this check
+      - `de.mako.billing.rechnung.erstellt` — every new invoice must pass this check
 
       ## WHICH PARAGRAPH GOVERNS WHAT
 

@@ -1063,7 +1063,7 @@ impl Workflow for GaBiGasNominationWorkflow {
                     // Empty, and that is the gap rather than the design.
                     // `mako_events::gabi::NOMINATION_CONFIRMED` is declared for
                     // exactly this arm and nothing emits it, so a BKV watching
-                    // `de.gabi.*` is told about a curtailment, a refusal and a
+                    // `de.mako.gabi.*` is told about a curtailment, a refusal and a
                     // missing answer, and never about a confirmation. Filling it
                     // is a `PendingOutbox` here plus an `ErpEventType` in
                     // `mako-engine` and a `map_message_type_to_erp_event` arm in

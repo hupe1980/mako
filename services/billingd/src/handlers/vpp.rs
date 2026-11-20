@@ -1,5 +1,5 @@
 //! § 41e EnWG VPP dispatch settlement — the manual endpoint and the
-//! `de.vpp.dispatch.confirmed` auto-settlement webhook.
+//! `de.mako.vpp.dispatch.confirmed` auto-settlement webhook.
 //!
 //! Both produce a **Gutschrift**: the flexibility provider delivered the
 //! energy, the aggregator owes the remuneration, and the aggregator writes the
@@ -105,7 +105,7 @@ pub(crate) fn vpp_mwst_rate(
 ///
 /// ## CloudEvent emitted
 ///
-/// `de.vpp.settlement.berechnet` (type) — consumed by ERP/DSO settlement systems.
+/// `de.mako.vpp.settlement.berechnet` (type) — consumed by ERP/DSO settlement systems.
 ///
 /// ## Regulatory basis
 ///
@@ -295,7 +295,7 @@ pub async fn post_vpp_billing(
     let total_netto = invoice.netto_eur;
     let total_brutto = invoice.brutto_eur;
 
-    // VPP settlement row, its ledger claims and its `de.vpp.settlement.berechnet`
+    // VPP settlement row, its ledger claims and its `de.mako.vpp.settlement.berechnet`
     // outbox event commit atomically, so a settled dispatch can never be
     // persisted without its event or without its idempotency claim.
     let mut tx = pool.begin().await?;
@@ -407,7 +407,7 @@ pub(crate) fn disposition(sender_mp_id: &str, aggregator_mp_id: &str) -> Disposi
 ///
 /// **Dispatch-confirmed auto-settlement.**
 ///
-/// Receives `de.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when the
+/// Receives `de.mako.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when the
 /// MSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag
 /// and writes one Gutschrift per dispatch against the
 /// §41e Aggregatorvertrag in force **on the day the dispatch executed** —
@@ -464,7 +464,7 @@ pub(crate) fn disposition(sender_mp_id: &str, aggregator_mp_id: &str) -> Disposi
     post,
     path = "/api/v1/webhooks/vpp-dispatch",
     tag = "vpp",
-    request_body(content = serde_json::Value, description = "A `de.vpp.dispatch.confirmed` CloudEvent, signed per Standard Webhooks"),
+    request_body(content = serde_json::Value, description = "A `de.mako.vpp.dispatch.confirmed` CloudEvent, signed per Standard Webhooks"),
     responses(
         (status = 202, description = "Accepted — settled, or recorded as not this aggregator's to settle"),
         (status = 401, description = "The signature does not verify", body = crate::openapi::Problem),
@@ -776,7 +776,7 @@ pub async fn post_vpp_webhook(
 
     // Auto-billing is atomic across three writes that must never diverge: the
     // settlement row, the `vpp_dispatch_ledger` idempotency record, and the
-    // `de.vpp.settlement.berechnet` outbox event. One transaction guarantees a
+    // `de.mako.vpp.settlement.berechnet` outbox event. One transaction guarantees a
     // dispatch is billed exactly once and its event is never lost — and if the
     // commit fails the top-of-handler idempotency guard lets the sender's retry
     // reprocess cleanly (nothing was committed).
@@ -823,8 +823,8 @@ pub async fn post_vpp_webhook(
         return ApiError::internal(e).into_response();
     }
 
-    // ── 9. Enqueue de.vpp.settlement.berechnet ────────────────────────────────
-    // The VPP dispatch subscriber keys on `de.vpp.settlement.berechnet`, so the
+    // ── 9. Enqueue de.mako.vpp.settlement.berechnet ────────────────────────────────
+    // The VPP dispatch subscriber keys on `de.mako.vpp.settlement.berechnet`, so the
     // event carries that type directly (never the Rechnung helper's type).
     {
         let ce = mako_service::CloudEvent::new(

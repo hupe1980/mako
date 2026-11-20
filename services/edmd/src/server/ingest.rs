@@ -125,7 +125,7 @@ pub struct DirectPushRequest {
 /// ## Quality scoring
 ///
 /// Gap detection, consecutive-zero analysis, and 3-sigma outlier detection run at
-/// ingest time.  If `has_warnings = true`, `edmd` emits `de.messwert.reading.quality.warning`
+/// ingest time.  If `has_warnings = true`, `edmd` emits `de.mako.messwert.reading.quality.warning`
 /// to the ERP webhook so `agentd` can investigate.
 #[utoipa::path(
     post,
@@ -600,7 +600,7 @@ pub(crate) async fn post_direct_reads_inner(
     crate::server::quality_alert::raise_quality_warning(state.repo.pool(), &state.tenant, &alert)
         .await;
 
-    // `de.messwert.reading.direct.stored` is what tells `billingd` to recompute,
+    // `de.mako.messwert.reading.direct.stored` is what tells `billingd` to recompute,
     // so it is enqueued for every stored batch — not only when a webhook happens
     // to be configured. Gating the *emission* on the delivery target means a
     // webhook added later can never recover the events of the period before it,
@@ -655,9 +655,9 @@ pub(crate) async fn post_direct_reads_inner(
             // not eagerly here.
             "billing_period_cache_invalidated": true,
             "note": if alert.is_warning() {
-                "de.messwert.reading.quality.warning emitted — investigate before billing run"
+                "de.mako.messwert.reading.quality.warning emitted — investigate before billing run"
             } else {
-                "de.messwert.reading.direct.stored emitted — billing period cache invalidated (read-through recompute)"
+                "de.mako.messwert.reading.direct.stored emitted — billing period cache invalidated (read-through recompute)"
             },
         })),
     )

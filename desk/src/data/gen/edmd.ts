@@ -493,6 +493,11 @@ export interface Endpoint {
    */
   event_types: string[];
   /**
+   * The patterns of `event_types` that match no event type mako emits.
+   * They deliver nothing; replace them.
+   */
+  patterns_matching_nothing: string[];
+  /**
    * CloudEvent extensions an event must carry with these values
    * (`marktsparte`, `marktrole`).
    */
@@ -534,4 +539,4 @@ export interface Endpoint {
 export const edmdUntyped = ["get_annual_forecast","get_billing_period","get_device_history","get_gas_quality","get_imbalance","get_policy","get_quality_assessments","get_summenzeitreihe","list_reading_orders","trigger_jahresablesung","trigger_substitution","validate_timeseries"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const edmdOberflaeche: Record<string, string> = {"get_correction_history":"d7416ed5","get_coverage":"fa510e18","get_quality_warnings":"a2044016","get_timeseries":"3ae64296","list_overdue_reading_orders":"42cd50df","list_webhook_deliveries":"e9b2ac35","list_webhook_endpoints":"e18d6bdc"};
+export const edmdOberflaeche: Record<string, string> = {"get_correction_history":"d7416ed5","get_coverage":"fa510e18","get_quality_warnings":"a2044016","get_timeseries":"3ae64296","list_overdue_reading_orders":"42cd50df","list_webhook_deliveries":"e9b2ac35","list_webhook_endpoints":"a05f25a1"};

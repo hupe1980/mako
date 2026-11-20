@@ -33,7 +33,7 @@ spec:
 
       ## TRIGGERED BY
       - Manual or scheduled compliance checks
-      - `de.obs.stp.parity.alert`
+      - `de.mako.obs.stp.parity.alert`
 
       ## PROCEDURE
 

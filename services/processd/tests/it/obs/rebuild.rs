@@ -82,7 +82,7 @@ fn event(
 }
 
 /// A log with several processes in every state the read model knows, and one
-/// event outside `de.mako.*`, which the feed's `type` filter leaves out.
+/// event outside `de.mako.engine.*`, which the feed's `type` filter leaves out.
 fn replay_log() -> Vec<Logged> {
     let p1 = "00000000-0000-4000-8000-000000000001";
     let p2 = "00000000-0000-4000-8000-000000000002";
@@ -93,10 +93,17 @@ fn replay_log() -> Vec<Logged> {
     let lf = serde_json::json!({ "malo_id": "51238696012", "partner_mp_id": "9900012345678",
                                  "new_supplier": TENANT });
     vec![
-        event(1, "de.mako.process.initiated", p1, 55_001, t0, lf.clone()),
+        event(
+            1,
+            "de.mako.engine.process.initiated",
+            p1,
+            55_001,
+            t0,
+            lf.clone(),
+        ),
         event(
             2,
-            "de.mako.process.initiated",
+            "de.mako.engine.process.initiated",
             p2,
             44_001,
             t0,
@@ -105,7 +112,7 @@ fn replay_log() -> Vec<Logged> {
         ),
         event(
             3,
-            "de.mako.aperak.accepted",
+            "de.mako.engine.aperak.accepted",
             p1,
             55_001,
             tied,
@@ -113,7 +120,7 @@ fn replay_log() -> Vec<Logged> {
         ),
         event(
             4,
-            "de.mako.aperak.rejected",
+            "de.mako.engine.aperak.rejected",
             p2,
             44_001,
             tied,
@@ -122,7 +129,7 @@ fn replay_log() -> Vec<Logged> {
         ),
         event(
             5,
-            "de.mako.process.initiated",
+            "de.mako.engine.process.initiated",
             p3,
             13_003,
             tied,
@@ -130,7 +137,7 @@ fn replay_log() -> Vec<Logged> {
         ),
         event(
             6,
-            "de.markt.versorgung.changed",
+            "de.mako.markt.versorgung.changed",
             p3,
             0,
             datetime!(2026-09-01 10:00 UTC),
@@ -138,7 +145,7 @@ fn replay_log() -> Vec<Logged> {
         ),
         event(
             7,
-            "de.mako.process.completed",
+            "de.mako.engine.process.completed",
             p1,
             55_001,
             datetime!(2026-09-02 07:00 UTC),
@@ -146,7 +153,7 @@ fn replay_log() -> Vec<Logged> {
         ),
         event(
             8,
-            "de.mako.antwortfrist.abgelaufen",
+            "de.mako.engine.antwortfrist.abgelaufen",
             p4,
             55_010,
             datetime!(2026-09-02 08:00 UTC),
@@ -154,7 +161,7 @@ fn replay_log() -> Vec<Logged> {
         ),
         event(
             9,
-            "de.mako.process.failed",
+            "de.mako.engine.process.failed",
             p3,
             13_003,
             datetime!(2026-09-03 08:00 UTC),
@@ -269,7 +276,10 @@ async fn a_truncated_projection_is_rebuilt_row_for_row() {
     let marktd = marktd_feed(log.clone()).await;
     let report = rebuild(&obs, &upstream(&marktd), 4).await.expect("rebuild");
 
-    assert_eq!(report.read, 8, "every de.mako.* event is read exactly once");
+    assert_eq!(
+        report.read, 8,
+        "every de.mako.engine.* event is read exactly once"
+    );
     assert_eq!(report.ignored, 0);
     assert_eq!(report.projected, 8);
     assert_eq!(

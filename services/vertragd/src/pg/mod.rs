@@ -66,8 +66,9 @@ pub use vertraege::{
     list_billing_candidates, list_komponenten, list_offene_vertraege, list_pending_kuendigungen,
     list_portfolio_by_kunde, list_rahmenvertraege_by_kunde, list_rahmenvertrag_malos,
     list_versorgungsvertraege_by_rahmenvertrag, list_vertraege_by_kunde,
-    mark_kuendigung_bestaetigt, storniere_vertrag, storniere_vertrag_tx, update_komponente_status,
-    update_vertrag_status, upsert_preisgarantie, widerruf_kuendigung,
+    list_vertraege_by_referenz, mark_kuendigung_bestaetigt, storniere_vertrag,
+    storniere_vertrag_tx, update_komponente_status, update_vertrag_status, upsert_preisgarantie,
+    widerruf_kuendigung,
 };
 
 // ── Row types ─────────────────────────────────────────────────────────────────

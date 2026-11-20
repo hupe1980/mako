@@ -1,6 +1,6 @@
 //! The Guthaben a Schlussrechnung owes back (§ 40c Abs. 3 EnWG).
 //!
-//! A `de.billing.rechnung.erstellt` with `schlussrechnung: true` whose
+//! A `de.mako.billing.rechnung.erstellt` with `schlussrechnung: true` whose
 //! `zuZahlen` is negative raises one open payout item, keyed on (tenant,
 //! Rechnungsnummer) and due by `mako_fristen::vorlauf::guthaben_faellig` of
 //! its Rechnungsdatum ([`aus_rechnung`], [`raise`]). The invoice's Storno
@@ -68,7 +68,7 @@ fn eur_to_ct(s: &str) -> Option<i64> {
         .to_i64()
 }
 
-/// The payout a `de.billing.rechnung.erstellt` owes, if any.
+/// The payout a `de.mako.billing.rechnung.erstellt` owes, if any.
 ///
 /// `None` for anything but a Schlussrechnung (`schlussrechnung: true`, not a
 /// correction) whose `zuZahlen` is negative. A Schlussrechnung with a Guthaben

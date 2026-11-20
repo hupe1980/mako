@@ -46,7 +46,7 @@
 //! and routes the outcome:
 //!
 //! ```text
-//! de.mako.process.initiated (an answerable PID)
+//! de.mako.engine.process.initiated (an answerable PID)
 //!   → build LfAnfrage from the CloudEvent
 //!   → build LfVertragslage from marktd + vertragd
 //!   → mako_pruefung::lf::pruefe_*(…)
@@ -577,7 +577,7 @@ impl LfAnfragePayload {
         }
     }
 
-    /// Parse a `de.mako.process.initiated`, or `None` when the PID is not ours.
+    /// Parse a `de.mako.engine.process.initiated`, or `None` when the PID is not ours.
     #[must_use]
     pub fn parse(event: &serde_json::Value) -> Option<Self> {
         let data = &event["data"];
@@ -1011,7 +1011,7 @@ fn gesetzliche_pflicht(
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
-/// Handle one `de.mako.process.initiated` for a PID this module answers.
+/// Handle one `de.mako.engine.process.initiated` for a PID this module answers.
 ///
 /// Returns `true` when the event was handled — including when it escalated —
 /// and `false` when the PID belongs to another module.

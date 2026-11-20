@@ -122,7 +122,7 @@
           "accounts"
         ],
         "summary": "`GET /api/v1/accounts/{malo_id}/abschlaege`",
-        "description": "The advances of one Marktlokation in a period, in exactly the shape a\nsettling invoice deducts them: date, gross amount, and **the VAT rate the\nadvance was raised at** (§ 14 Abs. 5 Satz 2 UStG — an Endrechnung deducts\nthe part-payments *and the tax attributable to them*, and a gross figure\nalone cannot express that when a rate changed mid-year).\n\nThis is the read `billingd`'s § 40b sweep needs to issue a lawful\nJahresrechnung unattended. Without it the sweep refused every annual\nsettlement, because it could not itemise or deduct the advances § 40 Abs. 1\nEnWG requires it to show — the correct refusal, but it left automated annual\nbilling switched off.\n\n**On the service graph.** `accountingd` sits downstream of `billingd` for\n*events* (`de.billing.rechnung.erstellt` → the receivable). This is a read\nin the other direction, at billing time, and it does not invert anything:\nthe advance register is customer-account state that only the ledger holds,\nexactly as SAP IS-U billing reads FI-CA advances. What would invert the\ngraph is `accountingd` computing an invoice, and it does not.\n\nResponse: `[{ \"datum\", \"betrag_eur\", \"ust_satz\", \"beschreibung\" }]` —\n`energy_billing::AbschlagDeduction` verbatim, oldest first, plus\n`reference`, `offen_ct` and `verrechnet_mit` for reconciliation.",
+        "description": "The advances of one Marktlokation in a period, in exactly the shape a\nsettling invoice deducts them: date, gross amount, and **the VAT rate the\nadvance was raised at** (§ 14 Abs. 5 Satz 2 UStG — an Endrechnung deducts\nthe part-payments *and the tax attributable to them*, and a gross figure\nalone cannot express that when a rate changed mid-year).\n\nThis is the read `billingd`'s § 40b sweep needs to issue a lawful\nJahresrechnung unattended. Without it the sweep refused every annual\nsettlement, because it could not itemise or deduct the advances § 40 Abs. 1\nEnWG requires it to show — the correct refusal, but it left automated annual\nbilling switched off.\n\n**On the service graph.** `accountingd` sits downstream of `billingd` for\n*events* (`de.mako.billing.rechnung.erstellt` → the receivable). This is a read\nin the other direction, at billing time, and it does not invert anything:\nthe advance register is customer-account state that only the ledger holds,\nexactly as SAP IS-U billing reads FI-CA advances. What would invert the\ngraph is `accountingd` computing an invoice, and it does not.\n\nResponse: `[{ \"datum\", \"betrag_eur\", \"ust_satz\", \"beschreibung\" }]` —\n`energy_billing::AbschlagDeduction` verbatim, oldest first, plus\n`reference`, `offen_ct` and `verrechnet_mit` for reconciliation.",
         "operationId": "get_abschlaege",
         "parameters": [
           {
@@ -2090,7 +2090,7 @@
           "dunning"
         ],
         "summary": "`POST /api/v1/dunning/{id}/abwendung/angebot` — § 41g Abs. 1 S. 2 EnWG.",
-        "description": "Records that the Grundversorger's **offer** went out, and emits\n`de.accounting.abwendung.angeboten` with the interest-free instalment terms.\n\nOwed within **one week** of the customer demanding it after the Androhung, and\nno later than the Ankündigung. Recorded separately from acceptance because it\nis the only evidence the obligation was met — a supplier that never offered\nand one that offered and was refused are otherwise indistinguishable.\n\nThe instalment period follows § 41g Abs. 1 S. 7–9: **6 to 18 months** in\ngeneral, and **12 to 24 months** once the arrears exceed 300 EUR.",
+        "description": "Records that the Grundversorger's **offer** went out, and emits\n`de.mako.accounting.abwendung.angeboten` with the interest-free instalment terms.\n\nOwed within **one week** of the customer demanding it after the Androhung, and\nno later than the Ankündigung. Recorded separately from acceptance because it\nis the only evidence the obligation was met — a supplier that never offered\nand one that offered and was refused are otherwise indistinguishable.\n\nThe instalment period follows § 41g Abs. 1 S. 7–9: **6 to 18 months** in\ngeneral, and **12 to 24 months** once the arrears exceed 300 EUR.",
         "operationId": "abwendung_angebot",
         "parameters": [
           {
@@ -2754,7 +2754,7 @@
           "eeg"
         ],
         "summary": "`PUT /api/v1/eeg/payouts/{payout_id}/status`",
-        "description": "Record a pain.002 status report for a payout order.\n`ACCP` / `ACSC` → sets `settled_at = now()`; `ACSC` — the funds moved — also\nbooks the payment on the plant's Kontokorrent (`EEG_AUSZAHLUNG`), once.\n`RJCT` / `CANC` → sets `pain002_reason` for audit; emits\n`de.accounting.eeg.payout.rejected` CloudEvent if ERP webhook is configured.\nA settled order stays settled: a later status is `409` — money returned\nafter settlement arrives as a camt return, not as a pain.002.",
+        "description": "Record a pain.002 status report for a payout order.\n`ACCP` / `ACSC` → sets `settled_at = now()`; `ACSC` — the funds moved — also\nbooks the payment on the plant's Kontokorrent (`EEG_AUSZAHLUNG`), once.\n`RJCT` / `CANC` → sets `pain002_reason` for audit; emits\n`de.mako.accounting.eeg.payout.rejected` CloudEvent if ERP webhook is configured.\nA settled order stays settled: a later status is `409` — money returned\nafter settlement arrives as a camt return, not as a pain.002.",
         "operationId": "put_eeg_payout_status",
         "parameters": [
           {
@@ -4089,7 +4089,7 @@
           "sepa"
         ],
         "summary": "`POST /api/v1/sepa/pain002` — ingest a **pain.002 XML** exactly as the bank\ndelivers it (Customer Payment Status Report).",
-        "description": "One document answers a whole submission, so it is applied to whatever it\nrefers to, keyed by the reference the bank echoes back:\n\n| The report is about | Matched on | Effect |\n|---|---|---|\n| a pain.001 EEG payout | `eeg_payout_orders.end_to_end_ref` | status, reason, `settled_at`, VoP outcome |\n| a pain.008 collection | `sepa_collection_entries.end_to_end_id` | `SETTLED` / `REJECTED` + a rejection event |\n\n## A rejected collection is not a Bankrücklastschrift\n\n`RJCT` on a direct debit means the collection **never happened**: no money\nmoved, so nothing is reversed. accountingd books a `ZAHLUNG` only when a camt\nbooking confirms the money arrived, so posting a compensating\n`BANKRUECKLAST` here would credit a payment that was never received and then\ndebit it back. The receivable simply stays open, the entry is marked\n`REJECTED`, and `de.accounting.sepa.collection-rejected` tells the ERP the\nmandate needs attention. A collection that settled and was *then* returned\narrives as a camt.054 R-transaction and is the other event.\n\n## Verification of Payee\n\nVoP has been mandatory for euro credit transfers since 9 October 2025 and its\nresult arrives inside this same message. It is a **different axis** from\nacceptance: `RCVC` says a payee name matched, which is not a statement about\nwhether the payment was taken. The outcome is stored in `vop_outcome` and\nleaves `pain002_status` alone; anything other than a match emits\n`de.accounting.payee.verification-mismatch`, because whether to execute\nafter anything but a match is an operator's decision. The codes are the\nDeutsche Kreditwirtschaft's pain.002 conventions (DFÜ-Abkommen Anlage 3\nV3.9 Kap. 2.2.6); they report the check, not who is liable for executing.",
+        "description": "One document answers a whole submission, so it is applied to whatever it\nrefers to, keyed by the reference the bank echoes back:\n\n| The report is about | Matched on | Effect |\n|---|---|---|\n| a pain.001 EEG payout | `eeg_payout_orders.end_to_end_ref` | status, reason, `settled_at`, VoP outcome |\n| a pain.008 collection | `sepa_collection_entries.end_to_end_id` | `SETTLED` / `REJECTED` + a rejection event |\n\n## A rejected collection is not a Bankrücklastschrift\n\n`RJCT` on a direct debit means the collection **never happened**: no money\nmoved, so nothing is reversed. accountingd books a `ZAHLUNG` only when a camt\nbooking confirms the money arrived, so posting a compensating\n`BANKRUECKLAST` here would credit a payment that was never received and then\ndebit it back. The receivable simply stays open, the entry is marked\n`REJECTED`, and `de.mako.accounting.sepa.collection-rejected` tells the ERP the\nmandate needs attention. A collection that settled and was *then* returned\narrives as a camt.054 R-transaction and is the other event.\n\n## Verification of Payee\n\nVoP has been mandatory for euro credit transfers since 9 October 2025 and its\nresult arrives inside this same message. It is a **different axis** from\nacceptance: `RCVC` says a payee name matched, which is not a statement about\nwhether the payment was taken. The outcome is stored in `vop_outcome` and\nleaves `pain002_status` alone; anything other than a match emits\n`de.mako.accounting.payee.verification-mismatch`, because whether to execute\nafter anything but a match is an operator's decision. The codes are the\nDeutsche Kreditwirtschaft's pain.002 conventions (DFÜ-Abkommen Anlage 3\nV3.9 Kap. 2.2.6); they report the check, not who is liable for executing.",
         "operationId": "import_pain002",
         "requestBody": {
           "description": "The pain.002 document exactly as the bank delivers it",
@@ -5490,7 +5490,7 @@
           "billing"
         ],
         "summary": "`POST /api/v1/billing/{id}/correction`",
-        "description": "Issue a Stornorechnung for an existing record.\n\n1. Fetch the original by `id` (tenant-scoped).\n2. Produce a correction `Rechnung`: `istOriginal: false`,\n   `originalRechnungsnummer: <original>`, every monetary position negated,\n   and its own number from the tenant's `ST` series.\n3. Insert it with `is_correction = TRUE` and `original_record_id`, and\n   advance the original's `outcome` to `cancelled` — in one transaction.\n4. Enqueue `de.billing.rechnung.erstellt` (`is_correction: true`) so\n   `accountingd` books the CREDIT.\n\n## Storno und Neuberechnung\n\nCancelling the original **releases its period**: `br_unique_original`\nexcludes cancelled rows, so the corrected amounts are re-billed by calling\n`POST /api/v1/billing/{malo_id}/calculate` again for the same window. That\nis the flow German accounting practice expects.\n\n## § 147 AO / GoBD\n\nThe original's content is **never** modified — only its outcome — and both\ndocuments stay in `billing_records` for the statutory **8 years**\n(§ 147 Abs. 3 AO for a Buchungsbeleg, reduced from ten by the BEG IV with\neffect from 01.01.2025).",
+        "description": "Issue a Stornorechnung for an existing record.\n\n1. Fetch the original by `id` (tenant-scoped).\n2. Produce a correction `Rechnung`: `istOriginal: false`,\n   `originalRechnungsnummer: <original>`, every monetary position negated,\n   and its own number from the tenant's `ST` series.\n3. Insert it with `is_correction = TRUE` and `original_record_id`, and\n   advance the original's `outcome` to `cancelled` — in one transaction.\n4. Enqueue `de.mako.billing.rechnung.erstellt` (`is_correction: true`) so\n   `accountingd` books the CREDIT.\n\n## Storno und Neuberechnung\n\nCancelling the original **releases its period**: `br_unique_original`\nexcludes cancelled rows, so the corrected amounts are re-billed by calling\n`POST /api/v1/billing/{malo_id}/calculate` again for the same window. That\nis the flow German accounting practice expects.\n\n## § 147 AO / GoBD\n\nThe original's content is **never** modified — only its outcome — and both\ndocuments stay in `billing_records` for the statutory **8 years**\n(§ 147 Abs. 3 AO for a Buchungsbeleg, reduced from ten by the BEG IV with\neffect from 01.01.2025).",
         "operationId": "post_correction",
         "parameters": [
           {
@@ -6173,7 +6173,7 @@
           "billing"
         ],
         "summary": "`POST /api/v1/billing/{malo_id}/calculate`",
-        "description": "Pipeline:\n1. Parse + validate period\n2. Fetch `Product` from `productd` (or use request override)\n3. Fetch consumption from `edmd` (or use request override)\n4. Take grid pass-through from the request's `grid` (nothing fetches it from `marktd`)\n5. Dispatch to category-specific pure calculator\n6. Persist `billing_records` (idempotent on same malo+period+product)\n7. Emit `de.billing.rechnung.erstellt` CloudEvent",
+        "description": "Pipeline:\n1. Parse + validate period\n2. Fetch `Product` from `productd` (or use request override)\n3. Fetch consumption from `edmd` (or use request override)\n4. Take grid pass-through from the request's `grid` (nothing fetches it from `marktd`)\n5. Dispatch to category-specific pure calculator\n6. Persist `billing_records` (idempotent on same malo+period+product)\n7. Emit `de.mako.billing.rechnung.erstellt` CloudEvent",
         "operationId": "post_calculate",
         "parameters": [
           {
@@ -6437,7 +6437,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -7040,10 +7040,10 @@
           "vpp"
         ],
         "summary": "`POST /api/v1/webhooks/vpp-dispatch`",
-        "description": "**Dispatch-confirmed auto-settlement.**\n\nReceives `de.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when the\nMSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag\nand writes one Gutschrift per dispatch against the\n§41e Aggregatorvertrag in force **on the day the dispatch executed** —\n`vertragd` owns that contract; billingd keeps no copy.\n\n## Idempotency\n\nEach `tx_id` is recorded in `vpp_dispatch_ledger` **inside the settlement\ntransaction**, so a dispatch is settled exactly once and a redelivery\nreturns `202 Accepted` without re-settling. That ledger is also why\nper-dispatch records are exempt from `br_unique_original`: a portfolio is\ndispatched several times a day, and a one-row-per-period index cannot\nexpress that.\n\n## HMAC verification\n\nWhen `[inbound_webhook_secret]` is configured in `billingd.toml`, the\n`webhook-signature` header is verified, together with the `webhook-timestamp`\nfreshness that stops a captured request replaying.  Requests with\ninvalid or missing signatures are rejected with `401 Unauthorized`.\n\n## Auto-billing disabled\n\nWhen `vpp_auto_billing = false` in config (the default), the webhook accepts\nevents and records them in `vpp_dispatch_ledger` but does **not** generate a\n`Rechnung`.  The manual `POST /api/v1/billing/vpp/{vpp_id}` endpoint remains\navailable.\n\n## CloudEvent data schema\n\n```json\n{\n  \"tx_id\":               \"abc123\",\n  \"location_id\":         \"C0001234567890\",\n  \"location_type\":       \"sr\",\n  \"execution_time_from\": \"2026-01-15T10:00:00Z\",\n  \"execution_time_until\": \"2026-01-15T10:15:00Z\",\n  \"max_power_kw\":        \"11.0\",\n  \"command_type\":        \"Konfiguration\",\n  \"sender_mp_id\":        \"9900123456789\",\n  \"produkt_code\":        \"TX-MODUL2-HT\"\n}\n```\n\n`sender_mp_id` must be the contracted `aggregator_mp_id` for the dispatch to\nsettle. § 14a EnWG and § 41e ride the same Steuerungsauftrag, so the sender\nis what separates a Netzbetreiber's grid intervention from the aggregator's\nflexibility call — see step 5b.\n\nThe event carries **no price**, deliberately: what a dispatch is worth is the\n§ 41e Aggregatorvertrag's `capacity_price_eur_per_kwh` in `vertragd`, and a\ncounterparty does not get to state what it is owed.",
+        "description": "**Dispatch-confirmed auto-settlement.**\n\nReceives `de.mako.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when the\nMSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag\nand writes one Gutschrift per dispatch against the\n§41e Aggregatorvertrag in force **on the day the dispatch executed** —\n`vertragd` owns that contract; billingd keeps no copy.\n\n## Idempotency\n\nEach `tx_id` is recorded in `vpp_dispatch_ledger` **inside the settlement\ntransaction**, so a dispatch is settled exactly once and a redelivery\nreturns `202 Accepted` without re-settling. That ledger is also why\nper-dispatch records are exempt from `br_unique_original`: a portfolio is\ndispatched several times a day, and a one-row-per-period index cannot\nexpress that.\n\n## HMAC verification\n\nWhen `[inbound_webhook_secret]` is configured in `billingd.toml`, the\n`webhook-signature` header is verified, together with the `webhook-timestamp`\nfreshness that stops a captured request replaying.  Requests with\ninvalid or missing signatures are rejected with `401 Unauthorized`.\n\n## Auto-billing disabled\n\nWhen `vpp_auto_billing = false` in config (the default), the webhook accepts\nevents and records them in `vpp_dispatch_ledger` but does **not** generate a\n`Rechnung`.  The manual `POST /api/v1/billing/vpp/{vpp_id}` endpoint remains\navailable.\n\n## CloudEvent data schema\n\n```json\n{\n  \"tx_id\":               \"abc123\",\n  \"location_id\":         \"C0001234567890\",\n  \"location_type\":       \"sr\",\n  \"execution_time_from\": \"2026-01-15T10:00:00Z\",\n  \"execution_time_until\": \"2026-01-15T10:15:00Z\",\n  \"max_power_kw\":        \"11.0\",\n  \"command_type\":        \"Konfiguration\",\n  \"sender_mp_id\":        \"9900123456789\",\n  \"produkt_code\":        \"TX-MODUL2-HT\"\n}\n```\n\n`sender_mp_id` must be the contracted `aggregator_mp_id` for the dispatch to\nsettle. § 14a EnWG and § 41e ride the same Steuerungsauftrag, so the sender\nis what separates a Netzbetreiber's grid intervention from the aggregator's\nflexibility call — see step 5b.\n\nThe event carries **no price**, deliberately: what a dispatch is worth is the\n§ 41e Aggregatorvertrag's `capacity_price_eur_per_kwh` in `vertragd`, and a\ncounterparty does not get to state what it is owed.",
         "operationId": "post_vpp_webhook",
         "requestBody": {
-          "description": "A `de.vpp.dispatch.confirmed` CloudEvent, signed per Standard Webhooks",
+          "description": "A `de.mako.vpp.dispatch.confirmed` CloudEvent, signed per Standard Webhooks",
           "content": {
             "application/json": {
               "schema": {}
@@ -8274,7 +8274,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -9162,7 +9162,7 @@
           "ingest"
         ],
         "summary": "`POST /api/v1/meter-reads/rlm/{malo_id}`",
-        "description": "iMSys / SMGW direct push for **Strom RLM** and **iMSys** customers.\n\n## Why direct push?\n\n- MSCONS round-trip via `makod` adds 15–60 min latency.\n- §41a EnWG dynamic tariffs need sub-hourly resolution for real-time billing.\n- High-frequency RLM meters (up to 96 intervals/day) saturate the EDIFACT pipeline.\n\n## Idempotency\n\nSubmit the same `session_id` twice to get the stored result back without re-processing.\n\n## Quality scoring\n\nGap detection, consecutive-zero analysis, and 3-sigma outlier detection run at\ningest time.  If `has_warnings = true`, `edmd` emits `de.messwert.reading.quality.warning`\nto the ERP webhook so `agentd` can investigate.",
+        "description": "iMSys / SMGW direct push for **Strom RLM** and **iMSys** customers.\n\n## Why direct push?\n\n- MSCONS round-trip via `makod` adds 15–60 min latency.\n- §41a EnWG dynamic tariffs need sub-hourly resolution for real-time billing.\n- High-frequency RLM meters (up to 96 intervals/day) saturate the EDIFACT pipeline.\n\n## Idempotency\n\nSubmit the same `session_id` twice to get the stored result back without re-processing.\n\n## Quality scoring\n\nGap detection, consecutive-zero analysis, and 3-sigma outlier detection run at\ningest time.  If `has_warnings = true`, `edmd` emits `de.mako.messwert.reading.quality.warning`\nto the ERP webhook so `agentd` can investigate.",
         "operationId": "post_direct_reads_rlm",
         "parameters": [
           {
@@ -9573,7 +9573,7 @@
           "quality"
         ],
         "summary": "`POST /api/v1/quality-score/{malo_id}[?from=&to=]`",
-        "description": "Retroactively re-scores **all** `meter_reads` for `malo_id` in the given\ndate window with the same validation every ingest door runs.\n\nThis is useful when:\n- MSCONS-ingested historical data was stored without quality scoring\n- The validation rules changed\n- A billing dispute requires re-verification of read quality\n\nThe handler re-runs `compute_quality()` over the window's version-resolved\nreads, records the verdict in `quality_assessments` (source `BATCH_RESCORE`),\nand emits `de.messwert.reading.quality.warning` for any newly-found warnings.\nmeterstore owns the readings and carries no per-interval `quality_warnings`\ncolumn, so the audit trail is the `quality_assessments` row, not a read update.\n\n## Response\n\n```json\n{\n  \"malo_id\": \"DE0001234567890723456789012345678\",\n  \"rows_rescored\": 96,\n  \"warnings_found\": 2,\n  \"grades\": { \"A\": 0, \"B\": 1, \"C\": 1, \"F\": 0 }\n}\n```",
+        "description": "Retroactively re-scores **all** `meter_reads` for `malo_id` in the given\ndate window with the same validation every ingest door runs.\n\nThis is useful when:\n- MSCONS-ingested historical data was stored without quality scoring\n- The validation rules changed\n- A billing dispute requires re-verification of read quality\n\nThe handler re-runs `compute_quality()` over the window's version-resolved\nreads, records the verdict in `quality_assessments` (source `BATCH_RESCORE`),\nand emits `de.mako.messwert.reading.quality.warning` for any newly-found warnings.\nmeterstore owns the readings and carries no per-interval `quality_warnings`\ncolumn, so the audit trail is the `quality_assessments` row, not a read update.\n\n## Response\n\n```json\n{\n  \"malo_id\": \"DE0001234567890723456789012345678\",\n  \"rows_rescored\": 96,\n  \"warnings_found\": 2,\n  \"grades\": { \"A\": 0, \"B\": 1, \"C\": 1, \"F\": 0 }\n}\n```",
         "operationId": "post_quality_rescore",
         "parameters": [
           {
@@ -9784,7 +9784,7 @@
         "tags": [
           "reading-orders"
         ],
-        "summary": "`GET /api/v1/reading-orders?malo_id=&status=&anlass=&limit=`",
+        "summary": "`GET /api/v1/reading-orders?malo_id=&status=&anlass=&external_ref=&limit=`",
         "operationId": "list_reading_orders",
         "parameters": [
           {
@@ -9806,6 +9806,15 @@
           {
             "name": "anlass",
             "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "external_ref",
+            "in": "query",
+            "description": "The order that carries this reference of the executing system.",
             "required": false,
             "schema": {
               "type": "string"
@@ -9916,6 +9925,16 @@
               }
             }
           },
+          "409": {
+            "description": "`external_ref_taken`: another order carries it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Refused on its content",
             "content": {
@@ -9997,6 +10016,51 @@
           },
           "422": {
             "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/svc/edmd/api/v1/reading-orders/fail-reasons": {
+      "get": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`GET /api/v1/reading-orders/fail-reasons`",
+        "description": "The closed list `PUT …/fail` accepts as `grund`, with its German labels —\nwhat a workforce tool maps its own reasons onto.",
+        "operationId": "list_fail_reasons",
+        "responses": {
+          "200": {
+            "description": "Every Ablesehindernis",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/edmd.AblesehindernisEintrag"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
             "content": {
               "application/json": {
                 "schema": {
@@ -10220,6 +10284,103 @@
           },
           "422": {
             "description": "Refused on its content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/svc/edmd/api/v1/reading-orders/{id}/external-ref": {
+      "put": {
+        "tags": [
+          "reading-orders"
+        ],
+        "summary": "`PUT /api/v1/reading-orders/{id}/external-ref`",
+        "description": "Attach the executing system's reference to an order — the way an order a\nmarket process or the Jahresablesung campaign created gets one. Every later\nevent of the order echoes it, and `GET /api/v1/reading-orders?external_ref=`\nfinds it.",
+        "operationId": "put_reading_order_external_ref",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Reading order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/edmd.ExternalRefRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Attached"
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`external_ref_taken`: another order carries it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blank, longer than 200 characters, or with a control character",
             "content": {
               "application/json": {
                 "schema": {
@@ -10775,7 +10936,7 @@
           "smgw"
         ],
         "summary": "`POST /api/v1/smgw/compliance/scan`",
-        "description": "Trigger an immediate, side-effecting compliance sweep:\n- Runs `run_cls_compliance_sweep()` synchronously\n- Reconciles all found issues against `cls_compliance_issues`\n- Emits `de.messwert.cls.compliance-issue` CloudEvents for each issue\n\nUse this endpoint for manual compliance audits or integration tests.\nThe daily background worker calls the same logic automatically.",
+        "description": "Trigger an immediate, side-effecting compliance sweep:\n- Runs `run_cls_compliance_sweep()` synchronously\n- Reconciles all found issues against `cls_compliance_issues`\n- Emits `de.mako.messwert.cls.compliance-issue` CloudEvents for each issue\n\nUse this endpoint for manual compliance audits or integration tests.\nThe daily background worker calls the same logic automatically.",
         "operationId": "post_smgw_compliance_scan",
         "responses": {
           "200": {
@@ -10874,7 +11035,7 @@
           "smgw"
         ],
         "summary": "`PUT /api/v1/smgw/{malo_id}`",
-        "description": "Register or update a `SmgwSession` for a MaLo.\n\nThe body is a [`SmgwSession`], read through `mako_service::Json`: a key the\nsession does not declare — at any depth — is a `422` naming it, so a\nmisspelt field is refused rather than read as absent. The session is stored\nas JSONB in its own serialisation. The caller is the MSB's\nGWA (Gateway-Administrator) system after a BSI TR-03109-4 Admin session;\nedmd subscribes to no `de.markt.*` event, so a Gerätekonfiguration changed\nin marktd reaches this table only through such a call.\n\nTriggers a synchronous compliance check.  Detected issues are logged to\n`cls_compliance_issues` immediately and CloudEvents emitted.  This makes the first\ncompliance check available within seconds of gateway registration, without waiting\nfor the daily sweep.\n\n## `gateway_status` extraction\n\nThe promoted `gateway_status` column is extracted from `session.status` so the\ncompliance sweep can pre-filter `WHERE gateway_status != 'REPLACED'` efficiently.",
+        "description": "Register or update a `SmgwSession` for a MaLo.\n\nThe body is a [`SmgwSession`], read through `mako_service::Json`: a key the\nsession does not declare — at any depth — is a `422` naming it, so a\nmisspelt field is refused rather than read as absent. The session is stored\nas JSONB in its own serialisation. The caller is the MSB's\nGWA (Gateway-Administrator) system after a BSI TR-03109-4 Admin session;\nedmd subscribes to no `de.mako.markt.*` event, so a Gerätekonfiguration changed\nin marktd reaches this table only through such a call.\n\nTriggers a synchronous compliance check.  Detected issues are logged to\n`cls_compliance_issues` immediately and CloudEvents emitted.  This makes the first\ncompliance check available within seconds of gateway registration, without waiting\nfor the daily sweep.\n\n## `gateway_status` extraction\n\nThe promoted `gateway_status` column is extracted from `session.status` so the\ncompliance sweep can pre-filter `WHERE gateway_status != 'REPLACED'` efficiently.",
         "operationId": "put_smgw_session",
         "parameters": [
           {
@@ -13287,7 +13448,7 @@
           "anlagen"
         ],
         "summary": "`POST /api/v1/anlagen/{tr_id}/mastr-registrierung`",
-        "description": "Confirm MaStR registration for a plant:\n- `mastr_registriert` → `true`\n- the §52 Abs. 1 Nr. 11 violation clock (`mastr_violation_start`) is cleared\n\nThe plant status is untouched. `eeg_anlagen.status` has no pre-activation\nvalue — a plant is `aktiv` from registration — so there is no transition to\nmake here.\n\n## Legal basis\n\n§52 Abs. 1 Nr. 11 EEG 2023: plant operators must register in MaStR.\n- EEG 2023 plants: until confirmed, €10/kW/month Pflichtzahlung accrues.\n- EEG ≤2021 plants: until confirmed, Vergütung = 0 (old §52/§47 via §100).\n\n## CloudEvent emitted\n\n`de.eeg.anlage.mastr-registriert` — signals ERP to release pending Vergütung.",
+        "description": "Confirm MaStR registration for a plant:\n- `mastr_registriert` → `true`\n- the §52 Abs. 1 Nr. 11 violation clock (`mastr_violation_start`) is cleared\n\nThe plant status is untouched. `eeg_anlagen.status` has no pre-activation\nvalue — a plant is `aktiv` from registration — so there is no transition to\nmake here.\n\n## Legal basis\n\n§52 Abs. 1 Nr. 11 EEG 2023: plant operators must register in MaStR.\n- EEG 2023 plants: until confirmed, €10/kW/month Pflichtzahlung accrues.\n- EEG ≤2021 plants: until confirmed, Vergütung = 0 (old §52/§47 via §100).\n\n## CloudEvent emitted\n\n`de.mako.eeg.anlage.mastr-registriert` — signals ERP to release pending Vergütung.",
         "operationId": "post_mastr_registrierung",
         "parameters": [
           {
@@ -15107,7 +15268,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -17794,7 +17955,7 @@
           "einwilligung"
         ],
         "summary": "`DELETE /api/v1/esa/einwilligungen/:id` — revoke consent (Art. 7(3) GDPR).",
-        "description": "Commits the revocation with its `de.markt.einwilligung.widerrufen` event and\none ORDERS 17008 Abbestellung command per covered location; the outbox\nworker delivers those to makod with retry, so a makod outage delays the stop\nand never loses it.",
+        "description": "Commits the revocation with its `de.mako.markt.einwilligung.widerrufen` event and\none ORDERS 17008 Abbestellung command per covered location; the outbox\nworker delivers those to makod with retry, so a makod outage delays the stop\nand never loses it.",
         "operationId": "revoke_einwilligung",
         "parameters": [
           {
@@ -18333,7 +18494,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -23007,7 +23168,7 @@
           "device"
         ],
         "summary": "`PUT /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`",
-        "description": "Atomically replace the contracted iMS control products\n(`Vec<Konfigurationsprodukt>`) for an existing `SteuerbareRessource`\n(Codeliste der Konfigurationen 1.4 Kap. 4.1–4.3, ordered under GPKE Teil 3\nKap. 1.3).\n\n## Validation\n\nThe body is a [`PutKonfigurationsprodukteRequest`]. Every element must:\n1. Cross the BO4E gate as a `Konfigurationsprodukt`, with no key BO4E does\n   not define\n2. Carry a non-empty `produktcode` — **mandatory** per BDEW AHB\n\n## Idempotency\n\nSupplying the same list twice is safe (version counter increments but\nthe JSONB payload is unchanged).  Pass `{\"konfigurationsprodukte\": []}` to\nclear all products.\n\n## CloudEvent\n\nEmits `de.markt.sr.konfigurationsprodukt.updated` to the durable fan-out\non every successful write so ERP subscribers and `processd` see the change.\n\nReturns `204 No Content` on success.",
+        "description": "Atomically replace the contracted iMS control products\n(`Vec<Konfigurationsprodukt>`) for an existing `SteuerbareRessource`\n(Codeliste der Konfigurationen 1.4 Kap. 4.1–4.3, ordered under GPKE Teil 3\nKap. 1.3).\n\n## Validation\n\nThe body is a [`PutKonfigurationsprodukteRequest`]. Every element must:\n1. Cross the BO4E gate as a `Konfigurationsprodukt`, with no key BO4E does\n   not define\n2. Carry a non-empty `produktcode` — **mandatory** per BDEW AHB\n\n## Idempotency\n\nSupplying the same list twice is safe (version counter increments but\nthe JSONB payload is unchanged).  Pass `{\"konfigurationsprodukte\": []}` to\nclear all products.\n\n## CloudEvent\n\nEmits `de.mako.markt.sr.konfigurationsprodukt.updated` to the durable fan-out\non every successful write so ERP subscribers and `processd` see the change.\n\nReturns `204 No Content` on success.",
         "operationId": "put_konfigurationsprodukte",
         "parameters": [
           {
@@ -24518,7 +24679,7 @@
           "device"
         ],
         "summary": "`PUT /api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen`",
-        "description": "**Atomically replace** all configuration entries for a `Geraet`.\n\n- Server-side deduplication: last entry wins for duplicate `parameter` values.\n- `updated_at` on each stored entry is set server-side (UTC now).\n- Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out. Its\n  subscribers are the ERP and `agentd`'s `smgw-diagnostics-agent`; neither\n  `edmd` nor `processd` consumes it.\n\n### `SmgwTlsCertFingerprint` and `SmgwCertAblaufdatum`\n\nBoth are master data here. `edmd`'s daily certificate-expiry worker sweeps\nthe `SmgwSession` each gateway registered with `edmd` itself and emits a\ntiered `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before\nexpiry (BSI TR-03109-4 §6.3), once per tier per certificate; it does not read\nthese entries.",
+        "description": "**Atomically replace** all configuration entries for a `Geraet`.\n\n- Server-side deduplication: last entry wins for duplicate `parameter` values.\n- `updated_at` on each stored entry is set server-side (UTC now).\n- Emits `de.mako.markt.geraet.konfiguration.updated` via the durable fan-out. Its\n  subscribers are the ERP and `agentd`'s `smgw-diagnostics-agent`; neither\n  `edmd` nor `processd` consumes it.\n\n### `SmgwTlsCertFingerprint` and `SmgwCertAblaufdatum`\n\nBoth are master data here. `edmd`'s daily certificate-expiry worker sweeps\nthe `SmgwSession` each gateway registered with `edmd` itself and emits a\ntiered `de.mako.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before\nexpiry (BSI TR-03109-4 §6.3), once per tier per certificate; it does not read\nthese entries.",
         "operationId": "put_geraet_konfigurationen",
         "parameters": [
           {
@@ -26097,7 +26258,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -29377,7 +29538,7 @@
           "obs"
         ],
         "summary": "`GET /api/v1/audit/gleichbehandlung?year=YYYY[&format=csv|json]`",
-        "description": "Per-PID evidence for the **Gleichbehandlungsbericht** a vertically\nintegrated undertaking's Gleichbehandlungsbeauftragte files with the\nBundesnetzagentur by **31 March** for the preceding calendar year\n(§ 7a Abs. 5 EnWG), and publishes in non-personalised form.\nLieferantenwechsel is one of the areas those reports examine.\n\nIt compares how the operator's network arm treated Lieferanten inside its\nown undertaking against third-party Lieferanten, over the processes the\nnetwork arm actually answers (`handler::is_nb_answered_lieferanten_process`).\nThe underlying duties are § 6a EnWG (informatorische Entflechtung) and\n§ 20 Abs. 1 Satz 1 EnWG (diskriminierungsfreier Netzzugang).\n\n**`gap_pp` is `affiliate − third_party`, in percentage points.** A positive\ngap means the affiliate fared better, which is the concern. This convention\nis `ParityComparison`'s and is shared with the `de.obs.stp.parity.alert`\nCloudEvent and the MCP tool: three surfaces read one sign, because a sign\ncomputed per surface is a sign that can disagree about which side was\nfavoured.\n\n**No threshold is asserted.** The Bundesnetzagentur publishes no numeric\nparity limit for this figure; what counts as a gap worth explaining is the\noperator's judgement, and the escalation threshold lives in\n`[obs] parity_threshold_pp`. A gap over a group smaller than\n`PARITY_MIN_SAMPLE` is reported as `null`, not as a large number.",
+        "description": "Per-PID evidence for the **Gleichbehandlungsbericht** a vertically\nintegrated undertaking's Gleichbehandlungsbeauftragte files with the\nBundesnetzagentur by **31 March** for the preceding calendar year\n(§ 7a Abs. 5 EnWG), and publishes in non-personalised form.\nLieferantenwechsel is one of the areas those reports examine.\n\nIt compares how the operator's network arm treated Lieferanten inside its\nown undertaking against third-party Lieferanten, over the processes the\nnetwork arm actually answers (`handler::is_nb_answered_lieferanten_process`).\nThe underlying duties are § 6a EnWG (informatorische Entflechtung) and\n§ 20 Abs. 1 Satz 1 EnWG (diskriminierungsfreier Netzzugang).\n\n**`gap_pp` is `affiliate − third_party`, in percentage points.** A positive\ngap means the affiliate fared better, which is the concern. This convention\nis `ParityComparison`'s and is shared with the `de.mako.obs.stp.parity.alert`\nCloudEvent and the MCP tool: three surfaces read one sign, because a sign\ncomputed per surface is a sign that can disagree about which side was\nfavoured.\n\n**No threshold is asserted.** The Bundesnetzagentur publishes no numeric\nparity limit for this figure; what counts as a gap worth explaining is the\noperator's judgement, and the escalation threshold lives in\n`[obs] parity_threshold_pp`. A gap over a group smaller than\n`PARITY_MIN_SAMPLE` is reported as `null`, not as a large number.",
         "operationId": "get_gleichbehandlung_report",
         "parameters": [
           {
@@ -29796,7 +29957,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -30576,6 +30737,15 @@
             }
           },
           {
+            "name": "external_ref",
+            "in": "query",
+            "description": "The order that carries this reference of the executing system",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "description": "1–1000; 100 when absent",
@@ -30588,7 +30758,7 @@
           {
             "name": "due",
             "in": "query",
-            "description": "Only orders whose requested execution date has arrived",
+            "description": "Only orders whose day has come: the requested date has arrived, or the order names none",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -30660,7 +30830,7 @@
             }
           },
           "409": {
-            "description": "An order for this process already exists",
+            "description": "An order for this process already exists, or `external_ref_taken`",
             "content": {
               "application/json": {
                 "schema": {
@@ -30768,7 +30938,7 @@
           "sperr"
         ],
         "summary": "`PUT /api/v1/sperr-orders/{id}/cancel`",
-        "description": "Withdraw a pending order. No IFTSTA is dispatched — nothing happened.",
+        "description": "Withdraw a pending order. No IFTSTA is dispatched — nothing happened.\n\nA cancel that reaches an order already carried out answers `409` with the\ninstant of the act, so the caller knows which came first.",
         "operationId": "cancel_order",
         "parameters": [
           {
@@ -30797,7 +30967,17 @@
             }
           },
           "404": {
-            "description": "No pending order with that id",
+            "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`order_not_pending`: the act or an earlier withdrawal came first; carries `status` and `executed_at`",
             "content": {
               "application/json": {
                 "schema": {
@@ -30841,7 +31021,7 @@
         },
         "responses": {
           "202": {
-            "description": "Recorded; its IFTSTA 21039 is queued",
+            "description": "Recorded; its IFTSTA 21039 is queued. With `conflict: executed_after_cancel` the order was withdrawn before the report arrived: the report is kept and announced, and no IFTSTA is queued",
             "content": {
               "application/json": {
                 "schema": {}
@@ -30871,8 +31051,95 @@
               }
             }
           },
+          "409": {
+            "description": "`order_not_pending`: already executed or failed; carries `status` and `executed_at`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "`executed_at` is not RFC 3339 or lies in the future",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/svc/processd/api/v1/sperr-orders/{id}/external-ref": {
+      "put": {
+        "tags": [
+          "sperr"
+        ],
+        "summary": "`PUT /api/v1/sperr-orders/{id}/external-ref`",
+        "description": "Attach the executing system's reference to an order — the way an order\nthat arrived from the market gets one. Every later `de.mako.sperr.*` event of\nthe order echoes it, and `GET /api/v1/sperr-orders?external_ref=` finds it.",
+        "operationId": "put_external_ref",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/processd.ExternalRefRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Attached"
+          },
+          "403": {
+            "description": "Cedar `execute-sperr-order` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`external_ref_taken`: another order carries it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blank, longer than 200 characters, or with a control character",
             "content": {
               "application/json": {
                 "schema": {
@@ -30938,6 +31205,16 @@
           },
           "404": {
             "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`order_not_pending`: executed, failed or withdrawn; carries `status` and `executed_at`",
             "content": {
               "application/json": {
                 "schema": {
@@ -31695,7 +31972,7 @@
           "angebote"
         ],
         "summary": "`POST /api/v1/angebote`",
-        "description": "Create a formal B2B Angebot (quotation) for a C&I or RLM customer.\n\n## Price calculation\n\nFor each position, `productd` fetches the product's `Tarifpreisblatt` and\nestimates `jahreskosten_netto_eur` from:\n- `GRUNDPREIS` position: `ct/day × 365 / 100`\n- `ARBEITSPREIS_EINTARIF` position: `ct/kWh × jahresverbrauch_kwh / 100`\n- `ARBEITSPREIS_HT` / `ARBEITSPREIS_NT`: each band against its own volume\n- Optional `rabatt_pct` from the Angebot variant\n\nEvery rate comes from the Preisstaffel that covers the position's own\nquantity. `jahreskosten_brutto_eur` is the sum of the positions' gross\nfigures, each at its own Umsatzsteuersatz.\n\nA position that cannot be priced — unresolvable product code, a quantity\noutside every Preisstaffel, a Zweitarif product with no HT/NT split, a Gas\nposition with no CO₂ certificate price — refuses the whole quotation with\n422 and the reason per position. An Angebot is a binding offer, so a\nposition is never quietly dropped from the total.\n\n## Varianten (scenarios)\n\nMultiple `varianten` (e.g., 12M vs 24M, with/without rebate) can be included\nin a single Angebot.  On acceptance, the customer picks one via\n`gewaehlte_variante` (index into the `varianten` array).\n\n## Acceptance lifecycle\n\n`POST /api/v1/angebote/{id}/annehmen` transitions to ANGENOMMEN and emits\n`de.tarif.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the\n`Rahmenvertrag` + `Versorgungsverträge` from the accepted Angebot data.",
+        "description": "Create a formal B2B Angebot (quotation) for a C&I or RLM customer.\n\n## Price calculation\n\nFor each position, `productd` fetches the product's `Tarifpreisblatt` and\nestimates `jahreskosten_netto_eur` from:\n- `GRUNDPREIS` position: `ct/day × 365 / 100`\n- `ARBEITSPREIS_EINTARIF` position: `ct/kWh × jahresverbrauch_kwh / 100`\n- `ARBEITSPREIS_HT` / `ARBEITSPREIS_NT`: each band against its own volume\n- Optional `rabatt_pct` from the Angebot variant\n\nEvery rate comes from the Preisstaffel that covers the position's own\nquantity. `jahreskosten_brutto_eur` is the sum of the positions' gross\nfigures, each at its own Umsatzsteuersatz.\n\nA position that cannot be priced — unresolvable product code, a quantity\noutside every Preisstaffel, a Zweitarif product with no HT/NT split, a Gas\nposition with no CO₂ certificate price — refuses the whole quotation with\n422 and the reason per position. An Angebot is a binding offer, so a\nposition is never quietly dropped from the total.\n\n## Varianten (scenarios)\n\nMultiple `varianten` (e.g., 12M vs 24M, with/without rebate) can be included\nin a single Angebot.  On acceptance, the customer picks one via\n`gewaehlte_variante` (index into the `varianten` array).\n\n## Acceptance lifecycle\n\n`POST /api/v1/angebote/{id}/annehmen` transitions to ANGENOMMEN and emits\n`de.mako.tarif.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the\n`Rahmenvertrag` + `Versorgungsverträge` from the accepted Angebot data.",
         "operationId": "post_angebot",
         "requestBody": {
           "description": "`CreateAngebotRequest`: the quotation to price",
@@ -31966,7 +32243,7 @@
           "angebote"
         ],
         "summary": "`POST /api/v1/angebote/{id}/annehmen`",
-        "description": "Digitally accept an Angebot.\n\nValidates that the Angebot is still within its `gueltig_bis` window, then\ntransitions to `ANGENOMMEN` and, in the same transaction, enqueues\n`de.tarif.angebot.angenommen` for the configured ERP webhook (`vertragd`).\nThe outbox worker delivers it with retry; `vertragd` answers with the\nRahmenvertrag it created, and the worker links it onto the Angebot in the\ntransaction that marks the delivery done. So the answer here never carries\nthe Rahmenvertrag: it exists once the delivery has gone through, and the\nAngebot names it from then on.",
+        "description": "Digitally accept an Angebot.\n\nValidates that the Angebot is still within its `gueltig_bis` window, then\ntransitions to `ANGENOMMEN` and, in the same transaction, enqueues\n`de.mako.tarif.angebot.angenommen` for the configured ERP webhook (`vertragd`).\nThe outbox worker delivers it with retry; `vertragd` answers with the\nRahmenvertrag it created, and the worker links it onto the Angebot in the\ntransaction that marks the delivery done. So the answer here never carries\nthe Rahmenvertrag: it exists once the delivery has gone through, and the\nAngebot names it from then on.",
         "operationId": "post_angebot_annehmen",
         "parameters": [
           {
@@ -32639,7 +32916,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -34165,7 +34442,7 @@
           "bestellungen"
         ],
         "summary": "`POST /api/v1/bestellungen` — an online order (US1).",
-        "description": "The `Idempotency-Key` header is required once; the same key with the same\nbody answers with the first response, with another body `422\nidempotency_key_reused`, and while the first is still being processed `409\nidempotency_request_in_flight`.\n\nUnder `[policy] vertragsschluss = \"mit_bestellung\"` the Bestellnachweis,\nthe Bestellung, the contract, the Anmeldung's outbox command, the\ndocuments' commands and the `de.vertrag.bestellung.*` events commit in one\ntransaction (`201`). Under `\"mit_annahme\"` the order is stored\n`EINGEGANGEN` and the contract waits for `…/annehmen` (`202`).",
+        "description": "The `Idempotency-Key` header is required once; the same key with the same\nbody answers with the first response, with another body `422\nidempotency_key_reused`, and while the first is still being processed `409\nidempotency_request_in_flight`.\n\nUnder `[policy] vertragsschluss = \"mit_bestellung\"` the Bestellnachweis,\nthe Bestellung, the contract, the Anmeldung's outbox command, the\ndocuments' commands and the `de.mako.vertrag.bestellung.*` events commit in one\ntransaction (`201`). Under `\"mit_annahme\"` the order is stored\n`EINGEGANGEN` and the contract waits for `…/annehmen` (`202`).",
         "operationId": "bestellen",
         "requestBody": {
           "description": "`BestellungInput`",
@@ -34546,7 +34823,7 @@
           {
             "name": "type",
             "in": "query",
-            "description": "A `mako_events::matches` pattern (`de.vertrag.*`); every type when absent.",
+            "description": "A `mako_events::matches` pattern (`de.mako.vertrag.*`); every type when absent.",
             "required": false,
             "schema": {
               "type": "string"
@@ -34601,7 +34878,7 @@
           "inbound"
         ],
         "summary": "`POST /api/v1/events` — inbound CloudEvents from `makod` / `processd`.",
-        "description": "A confirmation moves the component into supply and, in the same\ntransaction, enqueues everything that follows from it: the GPKE\nBeginnablesung, the tariff assignment `billingd` prices from, the billing\naccount, and — once every commodity is in supply — `de.vertrag.aktiv`. None\nof that is a detached task any more, so a restart mid-confirmation costs a\nretry rather than a lost obligation.",
+        "description": "A confirmation moves the component into supply and, in the same\ntransaction, enqueues everything that follows from it: the GPKE\nBeginnablesung, the tariff assignment `billingd` prices from, the billing\naccount, and — once every commodity is in supply — `de.mako.vertrag.aktiv`. None\nof that is a detached task any more, so a restart mid-confirmation costs a\nretry rather than a lost obligation.",
         "operationId": "cloud_event",
         "requestBody": {
           "description": "A CloudEvent, signed with the `inbound_secret` (Standard Webhooks)",
@@ -37117,7 +37394,7 @@
         "tags": [
           "vertraege"
         ],
-        "summary": "`GET /api/v1/vertraege` — open contracts.",
+        "summary": "`GET /api/v1/vertraege` — open contracts, or the contracts a caller's own\nreference names (`?erp_contract_id=` / `?bestellreferenz=`), whatever\ntheir status.",
         "operationId": "list_open",
         "parameters": [
           {
@@ -37127,6 +37404,24 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "erp_contract_id",
+            "in": "query",
+            "description": "The contract created with this `erp_contract_id`, in any status.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bestellreferenz",
+            "in": "query",
+            "description": "The contracts of the order with this `bestellreferenz`, in any status.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -37428,7 +37723,7 @@
           "vertraege"
         ],
         "summary": "`POST /api/v1/vertraege/{id}/kuendigen` — terminate the contract.",
-        "description": "The notice period comes from the *reason*, not from the contract: an\nordinary termination runs on the agreed period (capped for consumers by\n§ 309 Nr. 9 lit. c BGB), a Grundversorgungsvertrag on the two weeks of\n§ 20 Abs. 1 StromGVV/GasGVV, a move on the six weeks of § 41b Abs. 5 EnWG,\nand a price change ends the contract without notice on the day the change\ntakes effect (§ 41 Abs. 5 Satz 4 EnWG). A `lieferende` earlier than the rule\nallows is refused with the rule quoted.\n\nEverything then happens in one transaction: the components leave supply, the\nLieferende UTILMDs and the Schlussablesung are enqueued, and the\n`de.vertrag.kuendigung` CloudEvent — which carries the § 41 Abs. 8 Nr. 2\nEnWG Textform confirmation the supplier owes the customer — goes into the\noutbox.",
+        "description": "The notice period comes from the *reason*, not from the contract: an\nordinary termination runs on the agreed period (capped for consumers by\n§ 309 Nr. 9 lit. c BGB), a Grundversorgungsvertrag on the two weeks of\n§ 20 Abs. 1 StromGVV/GasGVV, a move on the six weeks of § 41b Abs. 5 EnWG,\nand a price change ends the contract without notice on the day the change\ntakes effect (§ 41 Abs. 5 Satz 4 EnWG). A `lieferende` earlier than the rule\nallows is refused with the rule quoted.\n\nEverything then happens in one transaction: the components leave supply, the\nLieferende UTILMDs and the Schlussablesung are enqueued, and the\n`de.mako.vertrag.kuendigung` CloudEvent — which carries the § 41 Abs. 8 Nr. 2\nEnWG Textform confirmation the supplier owes the customer — goes into the\noutbox.",
         "operationId": "kuendigen_vertrag",
         "parameters": [
           {
@@ -38020,7 +38315,7 @@
         "tags": [
           "inbound"
         ],
-        "summary": "`POST /api/v1/webhooks/angebot` — `de.tarif.angebot.angenommen` from\n`productd`.",
+        "summary": "`POST /api/v1/webhooks/angebot` — `de.mako.tarif.angebot.angenommen` from\n`productd`.",
         "description": "Creates the Rahmenvertrag and one Versorgungsvertrag per site, from the\n**accepted variant of the BO4E `Angebot`**: what the customer was quoted and\nwhat is contracted come from one document, so they cannot drift. The scalar\nfields on the event are the fallback for a quotation accepted before it was\never priced.\n\nIdempotent twice over — on the CloudEvent id, recorded once the work is\ndone, and on `erp_rahmenvertrag_id = angebot_id` — so a redelivery creates\nnothing, and a redelivery after a failure finishes the work.",
         "operationId": "angebot",
         "requestBody": {
@@ -40540,6 +40835,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -40600,6 +40896,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -40632,7 +40935,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -40850,6 +41153,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -40909,6 +41213,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [
@@ -41218,6 +41529,37 @@
           }
         }
       },
+      "edmd.Ablesehindernis": {
+        "type": "string",
+        "description": "Why a reading could not be taken — the closed vocabulary of\n`PUT /api/v1/reading-orders/{id}/fail`, of `fehlschlag_grund` and of\n`de.mako.messwert.reading.order.failed`.",
+        "enum": [
+          "KEIN_ZUTRITT",
+          "ZAEHLER_UNZUGAENGLICH",
+          "ZAEHLER_DEFEKT",
+          "ZAEHLER_NICHT_AUFFINDBAR",
+          "KUNDE_VERWEIGERT",
+          "ABLESUNG_UNPLAUSIBEL",
+          "SONSTIGES"
+        ]
+      },
+      "edmd.AblesehindernisEintrag": {
+        "type": "object",
+        "description": "One entry of the published Ablesehindernis vocabulary.",
+        "required": [
+          "code",
+          "label"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/edmd.Ablesehindernis",
+            "description": "The value `grund` takes."
+          },
+          "label": {
+            "type": "string",
+            "description": "The German label."
+          }
+        }
+      },
       "edmd.ApiError": {
         "type": "object",
         "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
@@ -41362,6 +41704,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -41422,6 +41765,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -41454,7 +41804,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -41527,6 +41877,19 @@
           "url": {
             "type": "string",
             "description": "`https` URL deliveries are POSTed to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "edmd.ExternalRefRequest": {
+        "type": "object",
+        "required": [
+          "external_ref"
+        ],
+        "properties": {
+          "external_ref": {
+            "type": "string",
+            "description": "The executing system's own reference: 1–200 characters, opaque, unique\nper tenant."
           }
         },
         "additionalProperties": false
@@ -41880,6 +42243,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -41939,6 +42303,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [
@@ -43877,6 +44248,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -43937,6 +44309,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -43969,7 +44348,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -44187,6 +44566,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -44246,6 +44626,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [
@@ -44606,7 +44993,7 @@
           },
           "process_id": {
             "type": "string",
-            "description": "UUID of the process that was spawned or updated.\n\nMatches the `subject` field of the corresponding CloudEvent sent to the\nERP webhook. Use this to correlate the command response with the\n`de.mako.process.initiated` (or other) event the ERP received.",
+            "description": "UUID of the process that was spawned or updated.\n\nMatches the `subject` field of the corresponding CloudEvent sent to the\nERP webhook. Use this to correlate the command response with the\n`de.mako.engine.process.initiated` (or other) event the ERP received.",
             "example": "3181967a-02d1-4d0e-9105-0cc46f3b25c9"
           },
           "status": {
@@ -44993,7 +45380,7 @@
               "string",
               "null"
             ],
-            "description": "UUID of the process that was spawned or resumed.\n\nMatches the `subject` of the `de.mako.process.initiated` CloudEvent\nsent to the ERP webhook. Present only when `status == \"routed\"` and\nPhase 2 dispatch succeeded.",
+            "description": "UUID of the process that was spawned or resumed.\n\nMatches the `subject` of the `de.mako.engine.process.initiated` CloudEvent\nsent to the ERP webhook. Present only when `status == \"routed\"` and\nPhase 2 dispatch succeeded.",
             "example": "3181967a-02d1-4d0e-9105-0cc46f3b25c9"
           },
           "status": {
@@ -45694,6 +46081,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -45754,6 +46142,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -45786,7 +46181,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -46828,6 +47223,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -46887,6 +47283,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [
@@ -48151,6 +48554,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -48211,6 +48615,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -48243,7 +48654,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -48461,6 +48872,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -48520,6 +48932,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [
@@ -49062,6 +49481,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -49122,6 +49542,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -49154,7 +49581,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -49258,6 +49685,19 @@
         },
         "additionalProperties": false
       },
+      "processd.ExternalRefRequest": {
+        "type": "object",
+        "required": [
+          "external_ref"
+        ],
+        "properties": {
+          "external_ref": {
+            "type": "string",
+            "description": "The executing system's own reference: 1–200 characters, opaque, unique\nper tenant."
+          }
+        },
+        "additionalProperties": false
+      },
       "processd.FailRequest": {
         "type": "object",
         "required": [
@@ -49278,6 +49718,17 @@
           "reason": {
             "type": "string",
             "description": "`SG25 FTX+ACB` — why it could not be carried out."
+          },
+          "responsible": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/processd.Responsible",
+                "description": "Whom the visit is put down to: `customer`, `contractor`, `operator` or\n`nobody`. Kept on the order and in its events; the Lieferant asks why."
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -49436,6 +49887,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -49495,6 +49947,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [
@@ -49617,6 +50076,16 @@
           }
         },
         "additionalProperties": false
+      },
+      "processd.Responsible": {
+        "type": "string",
+        "description": "Whom an unsuccessful visit is put down to.\n\nThe Lieferant asks why a Sperrung did not happen, and „niemand angetroffen\"\nand „der Monteur kam nicht\" are different answers with different costs.",
+        "enum": [
+          "customer",
+          "contractor",
+          "operator",
+          "nobody"
+        ]
       },
       "processd.RotateSecret": {
         "type": "object",
@@ -49853,6 +50322,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -49913,6 +50383,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -49945,7 +50422,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -50163,6 +50640,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -50222,6 +50700,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [
@@ -50566,6 +51051,7 @@
           "name",
           "url",
           "event_types",
+          "patterns_matching_nothing",
           "extensions",
           "owner",
           "active",
@@ -50626,6 +51112,13 @@
             ],
             "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
           },
+          "patterns_matching_nothing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
+          },
           "previous_secret_expires_at": {
             "type": [
               "string",
@@ -50658,7 +51151,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`mako_events::matches` patterns (`de.vertrag.*`); empty matches every type."
+            "description": "`mako_events::matches` patterns (`de.mako.vertrag.*`); empty matches every type."
           },
           "extensions": {
             "type": "object",
@@ -50876,6 +51369,7 @@
                 "name",
                 "url",
                 "event_types",
+                "patterns_matching_nothing",
                 "extensions",
                 "owner",
                 "active",
@@ -50935,6 +51429,13 @@
                     "null"
                   ],
                   "description": "The Vertriebspartner the endpoint is bound to; it receives only events\nstamped with that partner."
+                },
+                "patterns_matching_nothing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The patterns of `event_types` that match no event type mako emits.\nThey deliver nothing; replace them."
                 },
                 "previous_secret_expires_at": {
                   "type": [

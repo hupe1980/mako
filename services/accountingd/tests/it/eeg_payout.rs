@@ -102,7 +102,7 @@ impl Periode {
         }
     }
 
-    /// A `de.eeg.verguetung.berechnet` CloudEvent for `receipt_id`, as einsd
+    /// A `de.mako.eeg.verguetung.berechnet` CloudEvent for `receipt_id`, as einsd
     /// emits it; `folge` is the chain position einsd wrote it at, and
     /// `korrektur_von` names the receipt a correction supersedes.
     fn receipt(
@@ -117,7 +117,7 @@ impl Periode {
             "specversion": "1.0",
             "id": ce_id,
             "source": format!("urn:mako:einsd:{TENANT}"),
-            "type": "de.eeg.verguetung.berechnet",
+            "type": "de.mako.eeg.verguetung.berechnet",
             "subject": self.tr_id,
             "time": "2026-11-02T08:00:00Z",
             "datacontenttype": "application/json",
@@ -524,11 +524,11 @@ async fn a_receipt_without_its_chain_is_refused() {
 }
 
 impl Periode {
-    /// The same receipt announced as `de.eeg.marktpraemie.berechnet` — a
+    /// The same receipt announced as `de.mako.eeg.marktpraemie.berechnet` — a
     /// Direktvermarktung plant's Marktprämie.
     fn marktpraemie(&self, ce_id: &str, folge: i64, settlement_eur: &str) -> serde_json::Value {
         let mut ce = self.receipt(ce_id, folge, Uuid::new_v4(), None, settlement_eur);
-        ce["type"] = "de.eeg.marktpraemie.berechnet".into();
+        ce["type"] = "de.mako.eeg.marktpraemie.berechnet".into();
         ce["data"]["settlement_model"] = "DIREKTVERMARKTUNG".into();
         ce
     }

@@ -81,7 +81,7 @@ use crate::party_registry::MpIdRegistry;
 ///
 /// {
 ///   "specversion": "1.0",
-///   "type": "de.mako.edifact.outbound",
+///   "type": "de.mako.engine.edifact.outbound",
 ///   "source": "urn:mako:makod:tenant:<tenant_id>",
 ///   "id": "<message_id>",
 ///   "subject": "<process_id>",

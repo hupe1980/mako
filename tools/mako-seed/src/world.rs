@@ -352,28 +352,28 @@ pub fn nachbar_ereignisse(now: time::OffsetDateTime) -> Vec<Value> {
     vec![
         event(
             format!("{NACHBAR_SPAET}-aperak"),
-            "de.mako.aperak.accepted",
+            "de.mako.engine.aperak.accepted",
             NACHBAR_SPAET,
             spaet_start,
             Value::Null,
         ),
         event(
             format!("{NACHBAR_SPAET}-antwort"),
-            "de.mako.process.completed",
+            "de.mako.engine.process.completed",
             NACHBAR_SPAET,
             frist + time::Duration::hours(NACHBAR_VERSPAETUNG_STUNDEN),
             serde_json::json!({ "accepted": true }),
         ),
         event(
             format!("{NACHBAR_ABGELEHNT}-aperak"),
-            "de.mako.aperak.accepted",
+            "de.mako.engine.aperak.accepted",
             NACHBAR_ABGELEHNT,
             abgelehnt_start,
             Value::Null,
         ),
         event(
             format!("{NACHBAR_ABGELEHNT}-antwort"),
-            "de.mako.process.completed",
+            "de.mako.engine.process.completed",
             NACHBAR_ABGELEHNT,
             abgelehnt_start + time::Duration::hours(2),
             serde_json::json!({ "accepted": false, "antwortcode": code, "codeliste": liste }),
@@ -552,7 +552,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .all(|e| e["type"] != "de.mako.process.initiated")
+                .all(|e| e["type"] != "de.mako.engine.process.initiated")
         );
         assert!(
             events
