@@ -14,6 +14,7 @@ mod online_vertragsschluss;
 mod openapi_coverage;
 mod processd_supply_contract;
 mod router_builds;
+mod sales_edge;
 mod schema_enum_guard;
 mod seed_payloads;
 mod webhooks;

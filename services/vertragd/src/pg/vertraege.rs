@@ -66,6 +66,20 @@ pub struct CreateVersorgungsvertragInput {
     pub erp_contract_id: Option<String>,
     pub notizen: Option<String>,
     pub komponenten: Vec<CreateKomponenteInput>,
+    /// The Netzbetreiber's 55013 an Ersatzversorgung was opened from; `None`
+    /// for a contract created through the API. Never read from a request.
+    #[serde(skip)]
+    pub eog_quelle: Option<&'static str>,
+}
+
+impl CreateVersorgungsvertragInput {
+    /// An Ersatzversorgung is the Netzbetreiber's Zuordnung (§ 38 Abs. 1 EnWG,
+    /// GPKE Teil 2 Kap. 2.3.2), so its components are never registered by the
+    /// supplier.
+    #[must_use]
+    pub fn meldet_an(&self, k: &CreateKomponenteInput) -> bool {
+        k.wird_angemeldet() && self.vertragsart.as_deref() != Some("ERSATZVERSORGUNG")
+    }
 }
 
 /// One commodity position of a supply contract.
@@ -119,9 +133,61 @@ pub struct CreateKomponenteInput {
     #[serde(default)]
     pub enfg_grund: Option<String>,
     pub fulfillment_data: Option<serde_json::Value>,
+    /// The § 14a EnWG modules the customer chose with this Strom component,
+    /// recorded from its Lieferbeginn.
+    #[serde(default)]
+    pub sect14a: Option<super::sect14a::Sect14aIntake>,
+    /// The customer's previous supplier.
+    #[serde(default)]
+    pub vorversorger: Option<crate::kuendigung_vorversorger::Vorversorger>,
+    /// Terminate the old contract on the customer's behalf before the
+    /// Anmeldung (55016 / 44016).
+    #[serde(default)]
+    pub kuendigung_beim_vorversorger:
+        Option<crate::kuendigung_vorversorger::KuendigungBeimVorversorger>,
 }
 
 impl CreateKomponenteInput {
+    /// The sales-edge facts held to their rules before anything is written:
+    /// the § 14a module set, the previous supplier and the Kündigung request.
+    ///
+    /// # Errors
+    ///
+    /// The first refusal, with its stable `code`.
+    pub fn pruefe_vertriebsangaben(
+        &self,
+        vertragsart: &str,
+        heute: Date,
+    ) -> std::result::Result<(), crate::kuendigung_vorversorger::Ablehnung> {
+        if let Some(s) = &self.sect14a {
+            s.pruefe(&self.sparte)
+                .map_err(|e| crate::kuendigung_vorversorger::Ablehnung {
+                    code: e.code(),
+                    message: match e {
+                        super::sect14a::Sect14aIntakeFehler::Leer => {
+                            "sect14a.module states no module".to_owned()
+                        }
+                        super::sect14a::Sect14aIntakeFehler::NurStrom => format!(
+                            "a § 14a module needs a STROM component, not {}",
+                            self.sparte
+                        ),
+                        super::sect14a::Sect14aIntakeFehler::Kombination => {
+                            "BK8-22/010-A offers Modul 1 or Modul 2, and Modul 3 only beside \
+                             Modul 1 (Tenor 2 a, 3 a)"
+                                .to_owned()
+                        }
+                    },
+                })?;
+        }
+        crate::kuendigung_vorversorger::pruefe(
+            self.vorversorger.as_ref(),
+            self.kuendigung_beim_vorversorger.as_ref(),
+            vertragsart,
+            &self.sparte,
+            heute,
+        )
+    }
+
     /// `true` when the component is registered at the NB on creation — the
     /// condition [`insert_versorgungsvertrag`] enqueues the Lieferbeginn on.
     #[must_use]
@@ -617,7 +683,7 @@ pub async fn insert_versorgungsvertrag_tx(
     let mut dispatched = 0usize;
     // The Kunde an Anmeldung names — read once, and only when one of the
     // components is registered at the NB.
-    let kunde = if is_new && input.komponenten.iter().any(|k| k.wird_angemeldet()) {
+    let kunde = if is_new && input.komponenten.iter().any(|k| input.meldet_an(k)) {
         Some(
             kunde_anmeldedaten(&mut *tx, kunden_id, tenant, input.standort_adresse.as_ref())
                 .await?
@@ -631,7 +697,7 @@ pub async fn insert_versorgungsvertrag_tx(
             let komp_id = insert_komponente(&mut *tx, actual_id, tenant, lf_mp_id, komp).await?;
             // Persist-before-dispatch: the registration intent commits with the
             // contract, so it survives a restart and can be retried.
-            if komp.wird_angemeldet()
+            if input.meldet_an(komp)
                 && let Some(malo_id) = &komp.malo_id
             {
                 let gas = kunde
@@ -666,7 +732,33 @@ pub async fn insert_versorgungsvertrag_tx(
                     strom.as_ref(),
                     gas.as_ref(),
                 )?;
-                if outbound::enqueue(&mut *tx, tenant, &task).await? {
+                if komp.kuendigung_beim_vorversorger.is_some()
+                    && let Some(vv) = &komp.vorversorger
+                {
+                    // GPKE Teil 2 Kap. 1.2, S. 8: the Kündigung runs first, and
+                    // the Anmeldung waits for its answer on the component.
+                    let kuendigung = outbound::kuendigung_vorversorger(
+                        komp_id,
+                        &komp.sparte,
+                        malo_id,
+                        vv.mp_id.trim(),
+                        komp.kuendigung_beim_vorversorger
+                            .as_ref()
+                            .map_or(komp.lieferbeginn, |k| k.zum),
+                    );
+                    sqlx::query(
+                        "UPDATE vertragskomponenten
+                            SET kuendigung_wartende_anmeldung = $2
+                          WHERE id = $1",
+                    )
+                    .bind(komp_id)
+                    .bind(&task.payload)
+                    .execute(&mut *tx)
+                    .await?;
+                    if outbound::enqueue(&mut *tx, tenant, &kuendigung).await? {
+                        dispatched += 1;
+                    }
+                } else if outbound::enqueue(&mut *tx, tenant, &task).await? {
                     dispatched += 1;
                 }
             }
@@ -678,6 +770,9 @@ pub async fn insert_versorgungsvertrag_tx(
                 nb_mp_id: komp.nb_mp_id.clone(),
                 lieferbeginn: komp.lieferbeginn,
             });
+        }
+        if input.vertragsart.as_deref() == Some("ERSATZVERSORGUNG") {
+            ersatzversorgung_begonnen(&mut *tx, tenant, actual_id, input, &komponenten).await?;
         }
         if dispatched > 0 {
             sqlx::query(
@@ -699,6 +794,73 @@ pub async fn insert_versorgungsvertrag_tx(
     })
 }
 
+/// The contract an event names, with the references its creator knows it by.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn vertragsbezug(
+    conn: &mut sqlx::PgConnection,
+    vertrag_id: Uuid,
+    tenant: &str,
+) -> Result<crate::events::Vertragsbezug> {
+    Ok(sqlx::query_as(
+        "SELECT v.id AS vertrag_id, v.vertrags_nr, v.kunden_id, v.erp_contract_id,
+                (SELECT b.bestellreferenz FROM bestellungen b
+                  WHERE b.vertrag_id = v.id AND b.tenant = v.tenant LIMIT 1) AS bestellreferenz
+           FROM versorgungsvertraege v WHERE v.id = $1 AND v.tenant = $2",
+    )
+    .bind(vertrag_id)
+    .bind(tenant)
+    .fetch_one(&mut *conn)
+    .await?)
+}
+
+/// `de.mako.vertrag.ersatzversorgung.begonnen` for each supply component of a
+/// new Ersatzversorgung, in its transaction.
+async fn ersatzversorgung_begonnen(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    vertrag_id: Uuid,
+    input: &CreateVersorgungsvertragInput,
+    komponenten: &[InsertedKomponente],
+) -> Result<()> {
+    let vertrag = vertragsbezug(&mut *conn, vertrag_id, tenant).await?;
+    // The name as the Kunde holds it — from the NB's `NAD+Z67` where the
+    // contract was opened from a 55013.
+    let kunde_name: Option<String> = sqlx::query_scalar(
+        "SELECT NULLIF(COALESCE(geschaeftspartner->>'organisationsname',
+                                trim(concat_ws(' ', geschaeftspartner->>'vorname',
+                                                    geschaeftspartner->>'nachname'))), '')
+           FROM kunden WHERE id = $1 AND tenant = $2",
+    )
+    .bind(vertrag.kunden_id)
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await?
+    .flatten();
+    let ende = input
+        .vertragsende
+        .unwrap_or_else(|| crate::domain::add_months(input.vertragsbeginn, 3));
+    for k in komponenten {
+        let payload = crate::events::ErsatzversorgungBegonnen {
+            vertrag: vertrag.clone(),
+            komponente: crate::events::Komponentenbezug {
+                komp_id: k.id,
+                sparte: k.sparte.clone(),
+                malo_id: k.malo_id.clone(),
+                lieferbeginn: k.lieferbeginn.to_string(),
+            },
+            ende: ende.to_string(),
+            kunde_name: kunde_name.clone(),
+            quelle: input.eog_quelle.unwrap_or("api").to_owned(),
+        };
+        let ce = crate::events::typed_event(vertrag_id, tenant, &payload)?;
+        mako_service::outbox::enqueue(&mut *conn, &ce).await?;
+    }
+    Ok(())
+}
+
 async fn insert_komponente(
     conn: &mut sqlx::PgConnection,
     vertrag_id: Uuid,
@@ -715,8 +877,11 @@ async fn insert_komponente(
          (id,vertrag_id,tenant,sparte,malo_id,melo_id,lf_mp_id,nb_mp_id,bilanzkreis,
           lieferbeginn,lieferende,jahresverbrauch_kwh,fulfillment_data,
           lieferbeginn_anlass,netznutzungsvertrag,netznutzung_zahler,gemeinderabatt_prozent,
-          enfg_grundlage,enfg_grund)
-         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
+          enfg_grundlage,enfg_grund,
+          vorversorger_mp_id,vorversorger_kundennummer,vollmacht_erteilt_am,vollmacht_referenz,
+          kuendigung_status,kuendigung_zum)
+         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+                $19,$20,$21,$22,$23,$24
          FROM versorgungsvertraege v WHERE v.id=$2",
     )
     .bind(id)
@@ -737,12 +902,40 @@ async fn insert_komponente(
     .bind(k.gemeinderabatt_prozent)
     .bind(&k.enfg_grundlage)
     .bind(&k.enfg_grund)
+    .bind(k.vorversorger.as_ref().map(|v| v.mp_id.trim()))
+    .bind(
+        k.vorversorger
+            .as_ref()
+            .and_then(|v| v.kundennummer.as_deref()),
+    )
+    .bind(
+        k.vorversorger
+            .as_ref()
+            .and_then(|v| v.vollmacht.as_ref())
+            .map(|v| v.erteilt_am),
+    )
+    .bind(
+        k.vorversorger
+            .as_ref()
+            .and_then(|v| v.vollmacht.as_ref())
+            .map(|v| v.referenz.as_str()),
+    )
+    .bind(
+        k.kuendigung_beim_vorversorger
+            .as_ref()
+            .map(|_| crate::kuendigung_vorversorger::KuendigungStatus::Ausstehend.as_db()),
+    )
+    .bind(k.kuendigung_beim_vorversorger.as_ref().map(|kv| kv.zum))
     .execute(&mut *conn)
     .await?;
     // The product a component starts on is its first valid-time slice. Written
     // in the same transaction, so a component never exists without one.
     crate::pg::produkte::open_initial(&mut *conn, tenant, id, &k.product_code, k.lieferbeginn)
         .await?;
+    if let Some(s) = &k.sect14a {
+        let module = s.pruefe(&k.sparte).map_err(|e| anyhow::anyhow!(e.code()))?;
+        crate::pg::sect14a::open_initial(&mut *conn, tenant, id, &module, k.lieferbeginn).await?;
+    }
     Ok(id)
 }
 

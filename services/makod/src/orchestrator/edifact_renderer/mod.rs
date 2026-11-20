@@ -1228,6 +1228,17 @@ mod tests {
             !beendigung.contains("NAD+VY"),
             "55037 names no third party: {beendigung}"
         );
+        // Read back as the LFA receives it: the Zuordnungsende is the day the
+        // supplier's contract ends on, so it survives the adapter.
+        let parsed = edi_energy::parse(beendigung.as_bytes()).expect("parse");
+        let fv = crate::orchestrator::ingest_dispatcher::detect_format_version(&parsed);
+        let cmd = crate::orchestrator::adapters::gpke_zuordnungsmeldung_registry()
+            .dispatch(&parsed, &fv)
+            .expect("adapts");
+        let mako_gpke::ZuordnungsmeldungCommand::Empfangen { process_date, .. } = cmd else {
+            panic!("an inbound 55037 is an Empfangen");
+        };
+        assert_eq!(process_date.as_deref(), Some("20261101"), "{beendigung}");
 
         // 55038 — Aufhebung einer zukünftigen Zuordnung (NB → LFZ). `DTM+92`,
         // „ursprünglich vom NB bestätigtes Beginndatum" (Bedingung [507]).

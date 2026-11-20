@@ -63,6 +63,18 @@ pub struct BestellungInput {
     #[serde(with = "time::serde::rfc3339")]
     pub bestellt_am: OffsetDateTime,
     pub kanal: Kanal,
+    /// The § 14a EnWG modules the customer chose (Strom only), recorded from
+    /// the Lieferbeginn.
+    #[serde(default)]
+    pub sect14a: Option<crate::pg::sect14a::Sect14aIntake>,
+    /// The customer's previous supplier.
+    #[serde(default)]
+    pub vorversorger: Option<crate::kuendigung_vorversorger::Vorversorger>,
+    /// Terminate the old contract on the customer's behalf before the
+    /// Anmeldung (55016 / 44016).
+    #[serde(default)]
+    pub kuendigung_beim_vorversorger:
+        Option<crate::kuendigung_vorversorger::KuendigungBeimVorversorger>,
 }
 
 /// The offer an order accepts.

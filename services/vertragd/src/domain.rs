@@ -159,7 +159,7 @@ impl Kuendigungsgrund {
 ///
 /// On Gas it decides the Mindestvorlauffrist as well: a Wechsel needs 10 WT, an
 /// Einzug has the NB correct the date (AWH GeLi Gas 2.0 Kap. 2.5.2, Kap. 4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Lieferbeginnanlass {
     /// `E03` Wechsel.

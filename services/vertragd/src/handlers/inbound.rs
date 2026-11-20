@@ -117,6 +117,7 @@ pub async fn cloud_event(
             );
         }
     }
+    super::market::apply(&ctx, &mut tx, ce_type, &ce).await?;
     tx.commit()
         .await
         .map_err(|e| ApiError::Internal(e.into()))?;
@@ -125,7 +126,7 @@ pub async fn cloud_event(
 
 /// Apply one process outcome to one component and everything downstream of it,
 /// on the inbound event's transaction.
-async fn apply_outcome(
+pub(super) async fn apply_outcome(
     ctx: &Ctx,
     tx: &mut sqlx::PgConnection,
     k: &pg::VertragskomponenteRow,
@@ -193,17 +194,9 @@ async fn apply_outcome(
 
     // The component's own fact, for whoever handed the contract over: supply
     // begins, or the grid operator refused and why.
-    let vertrag: crate::events::Vertragsbezug = sqlx::query_as(
-        "SELECT v.id AS vertrag_id, v.vertrags_nr, v.kunden_id, v.erp_contract_id,
-                (SELECT b.bestellreferenz FROM bestellungen b
-                  WHERE b.vertrag_id = v.id AND b.tenant = v.tenant LIMIT 1) AS bestellreferenz
-           FROM versorgungsvertraege v WHERE v.id = $1 AND v.tenant = $2",
-    )
-    .bind(k.vertrag_id)
-    .bind(ctx.tenant())
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| ApiError::Internal(e.into()))?;
+    let vertrag = pg::vertraege::vertragsbezug(&mut *tx, k.vertrag_id, ctx.tenant())
+        .await
+        .map_err(ApiError::Internal)?;
     let komponente = crate::events::Komponentenbezug {
         komp_id: k.id,
         sparte: k.sparte.clone(),
@@ -448,6 +441,7 @@ pub async fn angebot(
                     ..k
                 })
                 .collect(),
+            eog_quelle: None,
         };
         match pg::insert_versorgungsvertrag(
             &ctx.pool,
@@ -617,6 +611,9 @@ fn collect_sites(
                     enfg_grundlage: None,
                     enfg_grund: None,
                     fulfillment_data: None,
+                    sect14a: None,
+                    vorversorger: None,
+                    kuendigung_beim_vorversorger: None,
                 });
         }
         if !by_standort.is_empty() {
@@ -662,6 +659,9 @@ fn collect_sites(
                 enfg_grundlage: None,
                 enfg_grund: None,
                 fulfillment_data: None,
+                sect14a: None,
+                vorversorger: None,
+                kuendigung_beim_vorversorger: None,
             });
     }
     by_standort

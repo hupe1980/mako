@@ -108,11 +108,13 @@ pub async fn create(
         if let Some(bk) = k.bilanzkreis.as_deref() {
             domain::pruefe_bilanzkreis(&k.sparte, bk).map_err(ApiError::unprocessable)?;
         }
+        k.pruefe_vertriebsangaben(vertragsart.as_db(), heute())
+            .map_err(|a| ApiError::unprocessable(a.message).with_code(a.code))?;
     }
     // The Anmeldung — the GeLi Gas 44001 or the Strom 55001 — is assembled
     // here as it will be on insert, so a contract that cannot be registered is
     // refused before it is written.
-    if input.komponenten.iter().any(|k| k.wird_angemeldet()) {
+    if input.komponenten.iter().any(|k| input.meldet_an(k)) {
         let mut conn = ctx
             .pool
             .acquire()
@@ -131,6 +133,7 @@ pub async fn create(
         let fehlend: Vec<String> = input
             .komponenten
             .iter()
+            .filter(|k| input.meldet_an(k))
             .filter_map(|k| k.gas_anmeldung(zyklus, &anmeldedaten).err())
             .flatten()
             .collect();
@@ -145,6 +148,7 @@ pub async fn create(
         let fehlend: Vec<String> = input
             .komponenten
             .iter()
+            .filter(|k| input.meldet_an(k))
             .filter_map(|k| k.strom_anmeldung(&anmeldedaten).err())
             .flatten()
             .collect();
@@ -1324,4 +1328,222 @@ pub async fn get_preisgarantie(
 
 fn anyhow_from(e: sqlx::Error) -> ApiError {
     ApiError::Internal(anyhow::Error::new(e))
+}
+
+// ── The sales edge ────────────────────────────────────────────────────────────
+
+/// Query of `GET /api/v1/lieferbeginn/fruehestens`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FruehestensQuery {
+    /// `STROM` or `GAS`.
+    pub sparte: String,
+    /// `WECHSEL` (default), `UMZUG`, `NEUANLAGE` or `ENDE_ERSATZVERSORGUNG` —
+    /// only a Gas Wechsel carries a lead time of its own.
+    #[serde(default)]
+    #[param(inline)]
+    pub lieferbeginn_anlass: Option<domain::Lieferbeginnanlass>,
+    /// § 13 BGB — a consumer has a Widerrufsrecht. Default `true`, the
+    /// tighter reading.
+    #[serde(default)]
+    pub verbraucher: Option<bool>,
+    /// § 357a Abs. 2 Satz 1 Nr. 1 BGB — the express request to start supply
+    /// inside the Widerrufsfrist.
+    #[serde(default)]
+    pub lieferung_in_widerrufsfrist_verlangt: bool,
+    /// The Widerrufsbelehrung is shown before the order.
+    #[serde(default)]
+    pub belehrung_angezeigt: bool,
+}
+
+/// `GET /api/v1/lieferbeginn/fruehestens` — the earliest Lieferbeginn an order
+/// placed today may name, and each bound that sets it.
+///
+/// The answer is what the order route and processd's Anmeldung check accept
+/// today: both compute it with the same function.
+#[utoipa::path(
+    get,
+    path = "/api/v1/lieferbeginn/fruehestens",
+    tag = "vertraege",
+    params(FruehestensQuery),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 422, description = "A Sparte other than STROM or GAS", body = ApiError),
+    )
+)]
+pub async fn fruehester_lieferbeginn(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(ctx): Extension<Arc<Ctx>>,
+    Query(q): Query<FruehestensQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
+    if !matches!(q.sparte.as_str(), "STROM" | "GAS") {
+        return Err(
+            ApiError::unprocessable("sparte must be STROM or GAS").with_code("sparte_ungueltig")
+        );
+    }
+    let heute = heute();
+    let f = super::bestellungen::fruehester_lieferbeginn(
+        ctx.cfg.policy.lieferbeginn_in_widerrufsfrist.get(),
+        &q.sparte,
+        q.lieferbeginn_anlass
+            .is_none_or(|a| a == domain::Lieferbeginnanlass::Wechsel),
+        q.verbraucher.unwrap_or(true),
+        q.lieferung_in_widerrufsfrist_verlangt,
+        q.belehrung_angezeigt,
+        heute,
+    );
+    ok(serde_json::json!({
+        "fruehestens": f.datum.to_string(),
+        "stand": heute.to_string(),
+        "grenzen": f.grenzen.iter().map(|g| serde_json::json!({
+            "regel": g.regel,
+            "datum": g.datum.to_string(),
+            "quelle": g.quelle,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+/// `POST /api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/freigeben`
+/// — send the Anmeldung a refused Kündigung beim Vorversorger is holding.
+///
+/// The person releasing it and the instant are recorded on the component.
+#[utoipa::path(
+    post,
+    path = "/api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/freigeben",
+    tag = "vertraege",
+    params(
+        ("id" = Uuid, Path, description = "The contract"),
+        ("komp" = Uuid, Path, description = "The component"),
+    ),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 409, description = "`kuendigung_nicht_gehalten` — no Anmeldung is held", body = ApiError),
+    )
+)]
+pub async fn kuendigung_vorversorger_freigeben(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(ctx): Extension<Arc<Ctx>>,
+    Path((id, komp)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "create-vertrag", ctx.tenant())?;
+    gehaltene_anmeldung(&ctx, id, komp, claims.sub(), true).await
+}
+
+/// `POST /api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/zurueckziehen`
+/// — withdraw a component whose Anmeldung a refused Kündigung is holding.
+///
+/// Nothing reached the Netzbetreiber, so nothing is sent: the component is
+/// `STORNIERT` and the held Anmeldung dropped.
+#[utoipa::path(
+    post,
+    path = "/api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/zurueckziehen",
+    tag = "vertraege",
+    params(
+        ("id" = Uuid, Path, description = "The contract"),
+        ("komp" = Uuid, Path, description = "The component"),
+    ),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 401, description = "No valid token", body = ApiError),
+        (status = 403, description = "Cedar refused the action", body = ApiError),
+        (status = 409, description = "`kuendigung_nicht_gehalten` — no Anmeldung is held", body = ApiError),
+    )
+)]
+pub async fn kuendigung_vorversorger_zurueckziehen(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(ctx): Extension<Arc<Ctx>>,
+    Path((id, komp)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "stornieren-vertrag", ctx.tenant())?;
+    gehaltene_anmeldung(&ctx, id, komp, claims.sub(), false).await
+}
+
+/// Release (`freigeben`) or withdraw a held Anmeldung, recording who did it.
+async fn gehaltene_anmeldung(
+    ctx: &Ctx,
+    vertrag_id: Uuid,
+    komp_id: Uuid,
+    aktor: &str,
+    freigeben: bool,
+) -> ApiResult<Json<serde_json::Value>> {
+    use crate::kuendigung_vorversorger::KuendigungStatus;
+    let internal = |e: sqlx::Error| ApiError::Internal(e.into());
+    let mut tx = ctx.pool.begin().await.map_err(internal)?;
+    let gehalten: Option<(String, Date, Option<serde_json::Value>)> = sqlx::query_as(
+        "SELECT vorversorger_mp_id, kuendigung_zum, kuendigung_wartende_anmeldung
+           FROM vertragskomponenten
+          WHERE id = $1 AND vertrag_id = $2 AND tenant = $3
+            AND kuendigung_wartende_anmeldung IS NOT NULL
+            AND kuendigung_status IN ('ABGELEHNT','BESTAETIGT')
+          FOR UPDATE",
+    )
+    .bind(komp_id)
+    .bind(vertrag_id)
+    .bind(ctx.tenant())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(internal)?;
+    let Some((vorversorger_mp_id, kuendigung_zum, anmeldung)) = gehalten else {
+        return Err(ApiError::conflict("this component holds no Anmeldung")
+            .with_code("kuendigung_nicht_gehalten"));
+    };
+    let status = if freigeben {
+        KuendigungStatus::Freigegeben
+    } else {
+        KuendigungStatus::Zurueckgezogen
+    };
+    sqlx::query(
+        "UPDATE vertragskomponenten
+            SET kuendigung_status = $2, kuendigung_aktor = $3, kuendigung_aktion_am = now(),
+                status = CASE WHEN $4 THEN status ELSE 'STORNIERT' END,
+                kuendigung_wartende_anmeldung = CASE WHEN $4 THEN kuendigung_wartende_anmeldung END,
+                updated_at = now()
+          WHERE id = $1",
+    )
+    .bind(komp_id)
+    .bind(status.as_db())
+    .bind(aktor)
+    .bind(freigeben)
+    .execute(&mut *tx)
+    .await
+    .map_err(internal)?;
+    if freigeben {
+        super::market::anmeldung_freigeben(
+            &mut tx,
+            ctx.tenant(),
+            &super::market::Wartend {
+                komp_id,
+                vorversorger_mp_id,
+                kuendigung_zum,
+                anmeldung,
+            },
+        )
+        .await?;
+    } else {
+        let alle = pg::list_komponenten(&mut *tx, vertrag_id)
+            .await
+            .map_err(ApiError::Internal)?;
+        pg::update_vertrag_status(
+            &mut *tx,
+            vertrag_id,
+            ctx.tenant(),
+            pg::derive_vertrag_status(&alle),
+        )
+        .await
+        .map_err(ApiError::Internal)?;
+    }
+    tx.commit().await.map_err(internal)?;
+    ok(serde_json::json!({
+        "vertrag_id": vertrag_id,
+        "komponente_id": komp_id,
+        "kuendigung_status": status.as_db(),
+    }))
 }

@@ -1028,6 +1028,16 @@ pub fn gpke_zuordnungsmeldung_registry() -> AdapterRegistry<mako_gpke::GpkeZuord
                     .map(|g| g.grund)
                     .unwrap_or_default(),
                 message_ref: MessageRef::new(msg.message_ref()),
+                // `SG4 DTM+93` Zuordnungsende on a 55037, `DTM+92` on a 55038:
+                // the German day the instant begins, as every process date.
+                process_date: super::prozesstag(
+                    u.transactions().first().and_then(|t| {
+                        super::sg4_dtm(Some(t), edi_energy::utilmd_codes::dtm::ENDE_ZUM).or_else(
+                            || super::sg4_dtm(Some(t), edi_energy::utilmd_codes::dtm::BEGINN_ZUM),
+                        )
+                    }),
+                    super::utilmd_sparte(u),
+                )?,
                 validation_passed,
                 validation_errors,
             })
@@ -2351,6 +2361,13 @@ pub fn gpke_eog_registry(
                         vorgangsnummer: first_tx
                             .and_then(|t| t.vorgangsnummer())
                             .map(ToOwned::to_owned),
+                        // `SG12 NAD+Z67` Informativer Kundenname des NB (Kann).
+                        kunde_name: first_tx.and_then(|t| t.party("Z67")).map(|p| {
+                            mako_gpke::eog::InformativerKundenname {
+                                namensformat: p.nad.name_format.clone(),
+                                teile: p.name_parts.clone(),
+                            }
+                        }),
                         validation_passed,
                         validation_errors,
                         received_at,

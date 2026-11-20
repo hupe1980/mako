@@ -23,6 +23,7 @@
 pub mod bestellungen;
 pub mod inbound;
 pub mod kunden;
+pub mod market;
 pub mod rahmenvertraege;
 pub mod stammdaten;
 pub mod vertraege;
@@ -121,6 +122,9 @@ pub fn api() -> OpenApiRouter {
         .routes(routes!(vertraege::by_malo))
         .routes(routes!(vertraege::get))
         .routes(routes!(vertraege::kuendigen))
+        .routes(routes!(vertraege::fruehester_lieferbeginn))
+        .routes(routes!(vertraege::kuendigung_vorversorger_freigeben))
+        .routes(routes!(vertraege::kuendigung_vorversorger_zurueckziehen))
         .routes(routes!(vertraege::kuendigungsfrist))
         .routes(routes!(vertraege::widerruf_kuendigung))
         .routes(routes!(vertraege::stornieren))

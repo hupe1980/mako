@@ -35,6 +35,8 @@ just test-vertragd-db
 | `PUT\|GET /api/v1/rechtsdokumente/{key}` | Rechtsdokumente — `PUT` by `art`, `GET` by SHA-256 |
 | `POST /api/v1/bestellungen` (+ `/{id}/annehmen`, `/ablehnen`, `/nachweis`, `/widerruf`) | Online order with its Bestellnachweis (§ 312j Abs. 4 BGB), `angebot_ref` and `Idempotency-Key` |
 | `POST /api/v1/vertraege/{id}/widerruf` | Widerruf of an online contract |
+| `GET /api/v1/lieferbeginn/fruehestens` | The earliest Lieferbeginn an order placed today may name, with each bound |
+| `POST /api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/freigeben` · `…/zurueckziehen` | Release or withdraw an Anmeldung a refused Kündigung beim Vorversorger is holding |
 | `GET /api/v1/malo/{malo_id}/produkte`, `GET\|POST /malo/{malo_id}/sect14a` | Product and § 14a module slices `billingd` bills from |
 | `/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`, `/aggregatorvertraege`, `/ggv/{ggv_id}/betreiber` | Other customer contracts |
 | `/api/v1/webhooks/endpoints` (+ `/{id}`, `/rotate-secret`, `/test`, `/deliveries`, `/replay`), `GET /api/v1/events` | Webhook subscriptions and the event feed |
@@ -51,13 +53,15 @@ routes), `erp_webhook_url` / `erp_hmac_secret` (the webhook endpoint `default`),
 `[subscriptions] retention_days`, `outputd_url`, `[absender]
 name` (the § 126b BGB declarant), `[database]`, `[oidc]`. `productd_url`,
 `outputd_url` and `[absender] name` are required once `[policy]
-vertragsschluss` is set.
+vertragsschluss` is set. `ersatzversorgung_produkt` prices an Ersatzversorgung
+accepted on a 55013; without it none is opened.
 
 `[policy]`:
 [`vertragsschluss`](https://hupe1980.github.io/mako/docs/services/vertragd/#policy-vertragsschluss)
 (`mit_bestellung` / `mit_annahme`, no default — unset, `POST
 /api/v1/bestellungen` refuses `409 policy_nicht_gesetzt`),
-`lieferbeginn_in_widerrufsfrist` and `bestellbutton_beschriftungen` beside it,
+`lieferbeginn_in_widerrufsfrist`, `bestellbutton_beschriftungen` and
+`nach_kuendigungsablehnung` beside it,
 and [`dsr`](https://hupe1980.github.io/mako/docs/services/vertragd/#policy-dsr).
 All are listed in the
 [operator policy reference](https://hupe1980.github.io/mako/docs/reference/operator-policy/).

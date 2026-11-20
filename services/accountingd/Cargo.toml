@@ -39,7 +39,7 @@ time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
 rubo4e       = { workspace = true }
-sepa         = { workspace = true, features = ["time"] }
+sepa         = { workspace = true, features = ["serde", "time"] }
 # Tamper-evident double-entry ledger kernel — accountingd's accounting/storage base.
 doubleentry  = { workspace = true, features = ["postgres-tls", "serde"] }
 # Keyed hashing for the IBAN lookup key (computed in the application, not by pgcrypto).

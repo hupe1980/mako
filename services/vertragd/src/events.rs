@@ -13,6 +13,10 @@
 //! | `de.mako.vertrag.aktiv` | All components NB-confirmed, billing may start |
 //! | `de.mako.vertrag.lieferbeginn.bestaetigt` | The grid operator confirmed one component's Anmeldung; with the Lieferbeginn and the caller's references |
 //! | `de.mako.vertrag.lieferbeginn.abgelehnt` | The grid operator refused one component's Anmeldung; with the Antwortcode and its Codeliste |
+//! | `de.mako.vertrag.ersatzversorgung.begonnen` | An Ersatzversorgung contract was written — from the NB's 55013 or the contract route |
+//! | `de.mako.vertrag.zuordnung.beendet` | The NB ended this supplier's Zuordnung (55037/44037); the component's Lieferende is the Zuordnungsende |
+//! | `de.mako.vertrag.kuendigung-vorversorger.bestaetigt` | The previous supplier confirmed the Kündigung sent on the customer's behalf |
+//! | `de.mako.vertrag.kuendigung-vorversorger.abgelehnt` | It refused, with the Antwortcode's class and whether the Anmeldung went out |
 //! | `de.mako.vertrag.gekuendigt` | Lieferende dispatched (Rahmenvertrag cascade, per child) |
 //! | `de.mako.vertrag.kuendigung` | Kündigung accepted, Lieferende dispatched |
 //! | `de.mako.vertrag.kuendigung-widerrufen` | Kündigung withdrawn before Lieferende |
@@ -102,9 +106,13 @@ pub fn build_bestell_event(
 pub fn parse_mako_outcome(ce: &Value) -> Option<MakoOutcome> {
     let ce_type = ce.get("type")?.as_str()?;
     let data = ce.get("data")?;
+    // makod names the process in the CloudEvent `subject` and marktd relays it
+    // unchanged; a `data.process_id` is honoured where an emitter states one.
     let process_id = data
         .get("process_id")
+        .or_else(|| ce.get("subject"))
         .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .map(str::to_owned);
     let malo_id = data
         .get("malo_id")
@@ -162,6 +170,12 @@ pub fn parse_mako_outcome(ce: &Value) -> Option<MakoOutcome> {
         // Carried on a refusal only: a Bestätigung has no Ablehnungsgrund, and
         // leaving a stale one on it would put an ERC code beside an accepted
         // Marktlokation.
+        antwortcode: erc_code.clone(),
+        antwort_codeliste: codeliste.clone(),
+        process_date: data
+            .get("process_date")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
         erc_code: if confirmed { None } else { erc_code },
         codeliste: if confirmed { None } else { codeliste },
         reason: if confirmed { None } else { reason },
@@ -178,6 +192,13 @@ pub struct MakoOutcome {
     /// means nothing without it.
     pub codeliste: Option<String>,
     pub reason: Option<String>,
+    /// The answer's Antwortcode whatever the verdict — a Zustimmung's code
+    /// distinguishes a plain one from one that moved the date (`E_3001` Z01).
+    pub antwortcode: Option<String>,
+    /// The Codeliste of [`Self::antwortcode`].
+    pub antwort_codeliste: Option<String>,
+    /// The date the process asked for, as `data.process_date` names it.
+    pub process_date: Option<String>,
 }
 
 /// The contract a component belongs to, as its events name it: mako's ids and
@@ -241,6 +262,94 @@ impl mako_service::EventPayload for LieferbeginnAbgelehnt {
     const TYPE: &'static str = mako_events::vertrag::LIEFERBEGINN_ABGELEHNT;
 }
 
+/// The `data` of `de.mako.vertrag.ersatzversorgung.begonnen`.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct ErsatzversorgungBegonnen {
+    #[serde(flatten)]
+    pub vertrag: Vertragsbezug,
+    #[serde(flatten)]
+    pub komponente: Komponentenbezug,
+    /// The day the Ersatzversorgung ends at the latest: „spätestens aber drei
+    /// Monate nach Beginn" (§ 38 Abs. 4 Satz 1 EnWG).
+    #[schemars(extend("format" = "date"))]
+    pub ende: String,
+    /// The household's name as the Netzbetreiber stated it (`NAD+Z67`, Kann)
+    /// or as the contract's Kunde holds it; absent where neither names one.
+    pub kunde_name: Option<String>,
+    /// `55013` when the Netzbetreiber's Zuordnung opened it, `api` when it
+    /// was created through the contract route.
+    pub quelle: String,
+}
+
+impl mako_service::EventPayload for ErsatzversorgungBegonnen {
+    const TYPE: &'static str = mako_events::vertrag::ERSATZVERSORGUNG_BEGONNEN;
+}
+
+/// The `data` of `de.mako.vertrag.zuordnung.beendet`.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct ZuordnungBeendet {
+    #[serde(flatten)]
+    pub vertrag: Vertragsbezug,
+    #[serde(flatten)]
+    pub komponente: Komponentenbezug,
+    /// The Zuordnungsende the Netzbetreiber stated (`DTM+93`), now the
+    /// component's Lieferende.
+    #[schemars(extend("format" = "date"))]
+    pub zuordnungsende: String,
+    /// `SG4 STS+7` — why the Zuordnung ended.
+    pub grund: String,
+    /// `true` when another supplier takes the Marktlokation (`E03` Wechsel).
+    pub wechsel: bool,
+    /// The Netzbetreiber that sent the 55037 / 44037.
+    pub netzbetreiber: String,
+}
+
+impl mako_service::EventPayload for ZuordnungBeendet {
+    const TYPE: &'static str = mako_events::vertrag::ZUORDNUNG_BEENDET;
+}
+
+/// The `data` of `de.mako.vertrag.kuendigung-vorversorger.bestaetigt`.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct KuendigungVorversorgerBestaetigt {
+    #[serde(flatten)]
+    pub vertrag: Vertragsbezug,
+    #[serde(flatten)]
+    pub komponente: Komponentenbezug,
+    /// The previous supplier that confirmed.
+    pub vorversorger_mp_id: String,
+    /// The end of the old contract the Kündigung named.
+    #[schemars(extend("format" = "date"))]
+    pub kuendigung_zum: String,
+    pub antwortcode: Option<String>,
+    pub codeliste: Option<String>,
+    /// Whether the Anmeldung went out (`angemeldet`) or waits (`gehalten`).
+    pub reaktion: crate::kuendigung_vorversorger::Reaktion,
+}
+
+impl mako_service::EventPayload for KuendigungVorversorgerBestaetigt {
+    const TYPE: &'static str = mako_events::vertrag::KUENDIGUNG_VORVERSORGER_BESTAETIGT;
+}
+
+/// The `data` of `de.mako.vertrag.kuendigung-vorversorger.abgelehnt`.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct KuendigungVorversorgerAbgelehnt {
+    #[serde(flatten)]
+    pub vertrag: Vertragsbezug,
+    #[serde(flatten)]
+    pub komponente: Komponentenbezug,
+    pub vorversorger_mp_id: String,
+    pub antwortcode: Option<String>,
+    pub codeliste: Option<String>,
+    pub reason: Option<String>,
+    /// What the code means for the Anmeldung.
+    pub klasse: Option<crate::kuendigung_vorversorger::Klasse>,
+    pub reaktion: crate::kuendigung_vorversorger::Reaktion,
+}
+
+impl mako_service::EventPayload for KuendigungVorversorgerAbgelehnt {
+    const TYPE: &'static str = mako_events::vertrag::KUENDIGUNG_VORVERSORGER_ABGELEHNT;
+}
+
 /// A typed `de.mako.vertrag.*` event of one contract: subject and `correlationid`
 /// the Vertrag, like [`build_cloud_event`].
 ///
@@ -267,6 +376,10 @@ fn event_schemas() -> Vec<(&'static str, Value)> {
     vec![
         mako_service::cloudevent::event_schema::<LieferbeginnBestaetigt>(),
         mako_service::cloudevent::event_schema::<LieferbeginnAbgelehnt>(),
+        mako_service::cloudevent::event_schema::<ErsatzversorgungBegonnen>(),
+        mako_service::cloudevent::event_schema::<ZuordnungBeendet>(),
+        mako_service::cloudevent::event_schema::<KuendigungVorversorgerBestaetigt>(),
+        mako_service::cloudevent::event_schema::<KuendigungVorversorgerAbgelehnt>(),
     ]
 }
 
@@ -306,6 +419,23 @@ mod tests {
         });
         let outcome = super::parse_mako_outcome(&ok).expect("an outcome");
         assert!(outcome.erc_code.is_none() && outcome.codeliste.is_none());
+    }
+
+    /// makod names the process in the CloudEvent `subject`, and marktd relays
+    /// it unchanged: an outcome without `data.process_id` still finds its
+    /// component, or a confirmed Anmeldung would never activate supply.
+    #[test]
+    fn the_process_is_read_from_the_subject() {
+        let ce = serde_json::json!({
+            "type": "de.mako.engine.process.completed",
+            "subject": "0f8e3c1a-0000-4000-8000-000000000001",
+            "data": { "accepted": true, "malo_id": "51238696012" }
+        });
+        let outcome = super::parse_mako_outcome(&ce).expect("an outcome");
+        assert_eq!(
+            outcome.process_id.as_deref(),
+            Some("0f8e3c1a-0000-4000-8000-000000000001")
+        );
     }
 
     /// The emitted-event table names every `de.mako.vertrag.*` type vertragd emits.

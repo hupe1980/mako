@@ -42,6 +42,9 @@ pub enum TaskKind {
     Lieferbeginn,
     /// `processd` UTILMD Abmeldung.
     Lieferende,
+    /// `processd` UTILMD Kündigung beim Vorversorger (GPKE 55016 / GeLi Gas
+    /// 44016) — sent before the Lieferbeginn, which waits for its answer.
+    KuendigungVorversorger,
     /// `edmd` GPKE Beginnablesung.
     AblesungBeginn,
     /// `edmd` GPKE Schlussablesung — the basis of the Schlussrechnung.
@@ -61,6 +64,7 @@ impl TaskKind {
     pub const ALL: &'static [Self] = &[
         Self::Lieferbeginn,
         Self::Lieferende,
+        Self::KuendigungVorversorger,
         Self::AblesungBeginn,
         Self::AblesungEnde,
         Self::Abrechnungskonto,
@@ -73,6 +77,7 @@ impl TaskKind {
         match self {
             Self::Lieferbeginn => "LIEFERBEGINN",
             Self::Lieferende => "LIEFERENDE",
+            Self::KuendigungVorversorger => "KUENDIGUNG_VORVERSORGER",
             Self::AblesungBeginn => "ABLESUNG_BEGINN",
             Self::AblesungEnde => "ABLESUNG_ENDE",
             Self::Abrechnungskonto => "ABRECHNUNGSKONTO",
@@ -87,6 +92,7 @@ impl TaskKind {
         Some(match s {
             "LIEFERBEGINN" => Self::Lieferbeginn,
             "LIEFERENDE" => Self::Lieferende,
+            "KUENDIGUNG_VORVERSORGER" => Self::KuendigungVorversorger,
             "ABLESUNG_BEGINN" => Self::AblesungBeginn,
             "ABLESUNG_ENDE" => Self::AblesungEnde,
             "ABRECHNUNGSKONTO" => Self::Abrechnungskonto,
@@ -147,6 +153,76 @@ pub fn lieferbeginn(
         payload,
         dedupe_key: format!("LIEFERBEGINN:{komp_id}"),
     })
+}
+
+/// The `processd` Kündigung beim Vorversorger for one component.
+///
+/// `kuendigung` (Strom, 55016) takes `kuendigung_datum` (ISO-8601),
+/// `kuendigung-gas` (44016) a `YYYYMMDD` `process_date`; both name the previous
+/// supplier. The 44016 identifies the location by its MaLo-ID, so no Kunde
+/// travels.
+#[must_use]
+pub fn kuendigung_vorversorger(
+    komp_id: Uuid,
+    sparte: &str,
+    malo_id: &str,
+    lfa_mp_id: &str,
+    zum: Date,
+) -> Task {
+    let (endpoint, body) = if sparte == "GAS" {
+        (
+            "kuendigung-gas",
+            serde_json::json!({
+                "malo_id": malo_id,
+                "lfa_mp_id": lfa_mp_id,
+                "process_date": compact_date(zum),
+            }),
+        )
+    } else {
+        (
+            "kuendigung",
+            serde_json::json!({
+                "malo_id": malo_id,
+                "lfa_mp_id": lfa_mp_id,
+                "kuendigung_datum": zum.to_string(),
+            }),
+        )
+    };
+    Task {
+        kind: TaskKind::KuendigungVorversorger,
+        komp_id: Some(komp_id),
+        payload: processd_call(endpoint, body),
+        dedupe_key: format!("KUENDIGUNG_VORVERSORGER:{komp_id}"),
+    }
+}
+
+/// The Lieferbeginn task held while the Kündigung beim Vorversorger is
+/// answered: the stored call, keyed as the Lieferbeginn it is, with its date
+/// moved to `ab` when the confirmed end of the old contract requires a later
+/// start.
+#[must_use]
+pub fn gehaltener_lieferbeginn(
+    komp_id: Uuid,
+    mut payload: serde_json::Value,
+    ab: Option<Date>,
+) -> Task {
+    if let Some(ab) = ab
+        && let Some(body) = payload
+            .get_mut("body")
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        if body.contains_key("lieferbeginn_datum") {
+            body.insert("lieferbeginn_datum".into(), ab.to_string().into());
+        } else if body.contains_key("process_date") {
+            body.insert("process_date".into(), compact_date(ab).into());
+        }
+    }
+    Task {
+        kind: TaskKind::Lieferbeginn,
+        komp_id: Some(komp_id),
+        payload,
+        dedupe_key: format!("LIEFERBEGINN:{komp_id}"),
+    }
 }
 
 /// A `processd` call as a task stores it: the endpoint, and the `body` the
@@ -538,11 +614,11 @@ pub fn key(tenant: &str, task: &Task) -> String {
 /// URL.
 pub fn command(tenant: &str, task: &Task) -> Result<Command> {
     let (upstream, method, path, body) = match task.kind {
-        TaskKind::Lieferbeginn | TaskKind::Lieferende => {
-            let fallback = if task.kind == TaskKind::Lieferbeginn {
-                "start-supply"
-            } else {
-                "end-supply"
+        TaskKind::Lieferbeginn | TaskKind::Lieferende | TaskKind::KuendigungVorversorger => {
+            let fallback = match task.kind {
+                TaskKind::Lieferbeginn => "start-supply",
+                TaskKind::KuendigungVorversorger => "kuendigung",
+                _ => "end-supply",
             };
             let endpoint = task
                 .payload
@@ -885,6 +961,23 @@ async fn apply_follow_up(conn: &mut sqlx::PgConnection, delivered: &Delivered) -
                 None,
             )
             .await
+        }
+        // The Kündigung reached `processd`: its process is what the old
+        // supplier's answer is matched by.
+        Some(TaskKind::KuendigungVorversorger) => {
+            let process_id = reply
+                .and_then(|b| b.get("process_id"))
+                .and_then(serde_json::Value::as_str);
+            sqlx::query(
+                "UPDATE vertragskomponenten
+                    SET kuendigung_process_id = $2, updated_at = now()
+                  WHERE id = $1 AND kuendigung_process_id IS NULL",
+            )
+            .bind(komp_id)
+            .bind(process_id)
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
         }
         // The reading order reached `edmd`: keep the trail from a
         // Schlussrechnung back to the reading it was built on.

@@ -435,6 +435,20 @@ pub mod vertrag {
     /// The grid operator refused one component's Anmeldung, with the
     /// Antwortcode and the Codeliste it is defined in.
     pub const LIEFERBEGINN_ABGELEHNT: &str = "de.mako.vertrag.lieferbeginn.abgelehnt";
+    /// An Ersatzversorgung contract was written (§ 38 EnWG) — from the
+    /// Netzbetreiber's 55013/44013 or through the API.
+    pub const ERSATZVERSORGUNG_BEGONNEN: &str = "de.mako.vertrag.ersatzversorgung.begonnen";
+    /// The Netzbetreiber ended this supplier's Zuordnung (55037/44037); the
+    /// component's Lieferende is the Zuordnungsende.
+    pub const ZUORDNUNG_BEENDET: &str = "de.mako.vertrag.zuordnung.beendet";
+    /// The previous supplier confirmed the Kündigung sent on the customer's
+    /// behalf (55017/44017).
+    pub const KUENDIGUNG_VORVERSORGER_BESTAETIGT: &str =
+        "de.mako.vertrag.kuendigung-vorversorger.bestaetigt";
+    /// The previous supplier refused it (55018/44018), with the Antwortcode and
+    /// the reaction taken.
+    pub const KUENDIGUNG_VORVERSORGER_ABGELEHNT: &str =
+        "de.mako.vertrag.kuendigung-vorversorger.abgelehnt";
     /// Lieferende dispatched (Rahmenvertrag cascade, per child).
     pub const GEKUENDIGT: &str = "de.mako.vertrag.gekuendigt";
     /// Kündigung accepted; the Lieferende and the Schlussablesung are
@@ -797,6 +811,10 @@ pub fn all() -> &'static [&'static str] {
         vertrag::AKTIV,
         vertrag::LIEFERBEGINN_BESTAETIGT,
         vertrag::LIEFERBEGINN_ABGELEHNT,
+        vertrag::ERSATZVERSORGUNG_BEGONNEN,
+        vertrag::ZUORDNUNG_BEENDET,
+        vertrag::KUENDIGUNG_VORVERSORGER_BESTAETIGT,
+        vertrag::KUENDIGUNG_VORVERSORGER_ABGELEHNT,
         vertrag::GEKUENDIGT,
         vertrag::KUENDIGUNG,
         vertrag::KUENDIGUNG_WIDERRUFEN,

@@ -9,6 +9,26 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.41.0] — 2026-11-20
+
+### Added
+
+- **The § 14a module with the order.** `POST /api/v1/bestellungen` and `POST /api/v1/kunden/{id}/vertraege` take `sect14a.module` per Strom component and record it from the Lieferbeginn. Only Modul 1, Modul 2, or Modul 1 with 3 pass (`422 sect14a_kombination_unzulaessig`); nothing goes on the wire.
+- **The Kündigung beim Vorversorger.** An order or a contract takes `vorversorger` (MP-ID, customer number, Vollmacht date and reference) and `kuendigung_beim_vorversorger.zum`. vertragd sends the 55016 / 44016 through processd's new `POST /api/v1/kuendigung[-gas]` and holds the Anmeldung until the answer. The Antwortcode decides: no contract left sends it, Vertragsbindung follows `[policy] nach_kuendigungsablehnung` (`halten` by default, or `anmelden`), and every other refusal holds it. A held Anmeldung is released or withdrawn at `…/kuendigung-vorversorger/freigeben` / `…/zurueckziehen`. The answer is announced as `de.mako.vertrag.kuendigung-vorversorger.bestaetigt` / `…abgelehnt`.
+- **The loss to another supplier.** The Netzbetreiber's 55037 / 44037 sets the Lieferende of the component it serves to the Zuordnungsende, orders the Schlussablesung and announces `de.mako.vertrag.zuordnung.beendet` (`wechsel` on `E03`). makod now carries the Meldung's `DTM+93` as `process_date`.
+- **An Ersatzversorgung becomes a contract.** An accepted 55013 opens it for three months, with no Anmeldung, priced on the new `ersatzversorgung_produkt` and named by the NB's `NAD+Z67`. Every Ersatzversorgung contract announces `de.mako.vertrag.ersatzversorgung.begonnen`.
+- **`GET /api/v1/lieferbeginn/fruehestens`** answers the earliest Lieferbeginn of an order placed today, with each bound. The order route now refuses a date before the Anmeldung's lead time too; it and processd compute it with `mako_fristen::vorlauf::fruehester_lieferbeginn`.
+
+### Changed
+
+- **Breaking for `mako-gpke` / `mako-geli-gas`:** `ZuordnungsmeldungCommand::Empfangen` carries `process_date`; `EogCommand::ReceiveAnmeldung` and `EogData` carry `kunde_name`.
+- **An Ersatzversorgung contract sends no Anmeldung**, whichever route created it: the Netzbetreiber assigned it.
+- **sepa 0.10.** accountingd stamps `CreDtTm` explicitly. An IBAN in a debug log line is masked.
+
+### Fixed
+
+- **A process outcome finds its component.** makod names the process in the CloudEvent `subject`, and vertragd read only `data.process_id`, so an Anmeldung's answer relayed by marktd matched nothing. The demo now subscribes vertragd to makod's process events.
+
 ## [0.40.0] — 2026-11-20
 
 ### Fixed

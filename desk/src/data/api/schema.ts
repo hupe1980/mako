@@ -20056,6 +20056,110 @@ export interface Api {
         };
       };
     };
+    "/svc/processd/api/v1/kuendigung": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": ProcessdKuendigungRequest;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/kuendigung-gas": {
+      post: {
+        parameters: {};
+        requestBody: {
+          content: {
+            "application/json": ProcessdKuendigungGasRequest;
+          };
+        };
+        responses: {
+          202: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/processd/api/v1/neuanlage": {
       get: {
         parameters: {
@@ -24010,6 +24114,62 @@ export interface Api {
         };
       };
     };
+    "/svc/vertragd/api/v1/lieferbeginn/fruehestens": {
+      get: {
+        parameters: {
+          query: {
+            sparte: string;
+            /**
+             * Why a supply begins — the contract fact the Anmeldung states as its `SG4
+             * STS+7` Transaktionsgrund: the GeLi Gas Anmeldung NN 44001 (UTILMD AHB Gas
+             * 1.2 Kap. 5.6, S. 45) and the Strom Anmeldung 55001 (UTILMD AHB Strom 2.2
+             * Kap. 8.2, S. 73, [`Self::anmeldung_strom_transaktionsgrund`]).
+             *
+             * On Gas it decides the Mindestvorlauffrist as well: a Wechsel needs 10 WT, an
+             * Einzug has the NB correct the date (AWH GeLi Gas 2.0 Kap. 2.5.2, Kap. 4).
+             */
+            lieferbeginn_anlass?: "WECHSEL" | "UMZUG" | "NEUANLAGE" | "ENDE_ERSATZVERSORGUNG";
+            verbraucher?: boolean;
+            lieferung_in_widerrufsfrist_verlangt?: boolean;
+            belehrung_angezeigt?: boolean;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/vertragd/api/v1/malo/{malo_id}/produkte": {
       get: {
         parameters: {
@@ -24867,6 +25027,94 @@ export interface Api {
             };
           };
           404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/freigeben": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+            komp: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/vertragd/api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/zurueckziehen": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+            komp: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          409: {
             headers: {
               [k: string]: unknown | undefined;
             };
@@ -25960,6 +26208,8 @@ export interface Api {
       "processd.ExecuteRequest": ProcessdExecuteRequest;
       "processd.ExternalRefRequest": ProcessdExternalRefRequest;
       "processd.FailRequest": ProcessdFailRequest;
+      "processd.KuendigungGasRequest": ProcessdKuendigungGasRequest;
+      "processd.KuendigungRequest": ProcessdKuendigungRequest;
       "processd.NeuanlageIdentifikationRequest": ProcessdNeuanlageIdentifikationRequest;
       "processd.Owner": ProcessdOwner2;
       "processd.Page_Delivery": ProcessdPageDelivery;
@@ -32207,6 +32457,44 @@ export interface ProcessdResolveKlaerfallRequest {
    * Why the case closes without a market message.
    */
   begruendung: string;
+}
+/**
+ * `POST /api/v1/kuendigung` — the Kündigung 55016, LFN → LFA (GPKE Teil 2
+ * Kap. 1.2).
+ */
+export interface ProcessdKuendigungRequest {
+  /**
+   * „Ende zum", ISO-8601 date — `SG4 DTM+93`.
+   */
+  kuendigung_datum: string;
+  /**
+   * The previous supplier's MP-ID — `NAD+MR`.
+   */
+  lfa_mp_id: string;
+  /**
+   * 11-digit Strom Marktlokations-ID — the only identification the
+   * 55016 carries (GPKE Teil 2 Kap. 1.2.2 Nr. 1, S. 9).
+   */
+  malo_id: string;
+}
+/**
+ * `POST /api/v1/kuendigung-gas` — the Kündigung 44016, LFN → LFA (GeLi
+ * Gas Anlage Kap. 3.1). The body `makod`'s `geli.kuendigung.anmelden`
+ * reads (`mako_markt::commands::GeliKuendigungAnmelden`).
+ */
+export interface ProcessdKuendigungGasRequest {
+  /**
+   * The previous supplier's MP-ID — `NAD+MR`.
+   */
+  lfa_mp_id: string;
+  /**
+   * Gas-MaLo-ID — `SG5 LOC+172`.
+   */
+  malo_id: string;
+  /**
+   * „Ende zum", `YYYYMMDD` — `SG4 DTM+93`.
+   */
+  process_date: string;
 }
 /**
  * `PUT /api/v1/neuanlage/{id}/identifikation`.

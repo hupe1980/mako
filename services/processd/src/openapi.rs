@@ -56,6 +56,8 @@ pub fn api(subs: &Subscriptions) -> OpenApiRouter<ProcessdState> {
         .routes(routes!(rest::start_supply_gas))
         .routes(routes!(rest::end_supply))
         .routes(routes!(rest::end_supply_gas))
+        .routes(routes!(rest::kuendigung))
+        .routes(routes!(rest::kuendigung_gas))
         .routes(routes!(rest::list_eog_cases))
         .routes(routes!(rest::list_neuanlage_cases))
         .routes(routes!(rest::set_neuanlage_identifikation))

@@ -11,12 +11,17 @@ use mako_markt::utilmd_stammdaten::{NetznutzungZahler, Netznutzungsvertrag};
 use processd::{
     config::BilanzkreisEintrag,
     lf_module::anmeldung_bilanzkreis,
-    server::{EndSupplyGasRequest, EndSupplyRequest, StartSupplyGasRequest, StartSupplyRequest},
+    server::{
+        EndSupplyGasRequest, EndSupplyRequest, KuendigungGasRequest, KuendigungRequest,
+        StartSupplyGasRequest, StartSupplyRequest,
+    },
 };
 use time::macros::date;
 use uuid::Uuid;
 use vertragd::domain::{Kuendigungsgrund, Lieferbeginnanlass};
-use vertragd::outbound::{GasAnmeldung, StromAnmeldung, lieferbeginn, lieferende};
+use vertragd::outbound::{
+    GasAnmeldung, StromAnmeldung, kuendigung_vorversorger, lieferbeginn, lieferende,
+};
 
 const MALO: &str = "51238696012";
 const BK: &str = "11XBK-STANDARD-4";
@@ -257,6 +262,27 @@ fn every_lieferende_body_is_the_request_processd_reads() {
         assert_eq!(req.process_date, "20270630");
         assert_eq!(req.transaktionsgrund, code, "{grund:?}");
     }
+}
+
+/// The Kündigung beim Vorversorger reaches processd as its own two request
+/// types: the previous supplier, the MaLo and the „Ende zum".
+#[test]
+fn every_kuendigung_body_is_the_request_processd_reads() {
+    let komp = Uuid::nil();
+    let lfa = "9900357000004";
+    let strom = kuendigung_vorversorger(komp, "STROM", MALO, lfa, date!(2027 - 01 - 31));
+    let (endpoint, body) = call(&strom.payload);
+    assert_eq!(endpoint, "kuendigung");
+    let req: KuendigungRequest = mako_service::json_from_value(body).expect("kuendigung body");
+    assert_eq!((req.malo_id.as_str(), req.lfa_mp_id.as_str()), (MALO, lfa));
+    assert_eq!(req.kuendigung_datum, "2027-01-31");
+
+    let gas = kuendigung_vorversorger(komp, "GAS", MALO, lfa, date!(2027 - 01 - 31));
+    let (endpoint, body) = call(&gas.payload);
+    assert_eq!(endpoint, "kuendigung-gas");
+    let req: KuendigungGasRequest =
+        mako_service::json_from_value(body).expect("kuendigung-gas body");
+    assert_eq!(req.process_date, "20270131");
 }
 
 /// The check is the handler's: a key it does not declare refuses the body, so

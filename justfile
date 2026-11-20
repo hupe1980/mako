@@ -237,6 +237,7 @@ test-vertragd-db:
     {{ just_executable() }} suite vertragd inbound_marker --include-ignored --test-threads=1
     {{ just_executable() }} suite vertragd online_vertragsschluss --include-ignored --test-threads=1
     {{ just_executable() }} suite vertragd webhooks --include-ignored --test-threads=1
+    {{ just_executable() }} suite vertragd sales_edge --include-ignored --test-threads=1
 
 # Catalog integration tests for productd.
 test-productd-db:

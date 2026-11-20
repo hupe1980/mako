@@ -2381,7 +2381,7 @@ fn dokumentennummer(segments: &[edifact::Segment]) -> String {
 /// signal a profile is missing from the deployed binary. The spawned process also
 /// carries the substituted FV in its `WorkflowId`, so the audit trail names a
 /// release the message did not claim.
-fn detect_format_version(msg: &AnyMessage) -> FormatVersion {
+pub(crate) fn detect_format_version(msg: &AnyMessage) -> FormatVersion {
     // Derive the fallback dynamically from the registry so it stays current
     // across annual format-version cutovers without a code change.
     let fallback = |reason: &'static str| {

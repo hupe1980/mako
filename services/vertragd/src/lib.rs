@@ -54,6 +54,7 @@ pub mod dsr_policy;
 pub mod endkunden_angebot;
 pub mod events;
 pub mod handlers;
+pub mod kuendigung_vorversorger;
 pub mod mcp_server;
 pub mod outbound;
 pub mod pg;

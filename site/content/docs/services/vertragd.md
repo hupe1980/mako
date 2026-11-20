@@ -372,6 +372,93 @@ makod adds the Strom Lokationsart from the MaLo.
 Supply continues until the Lieferende: the daily worker ends the components then
 and closes the contract with `de.mako.vertrag.abgeschlossen`.
 
+### Kündigung beim Vorversorger
+
+A new supplier may terminate the customer's old contract on their behalf —
+the 55016 (Gas 44016), LFN → LFA, GPKE Teil 2 Kap. 1.2. An order or a contract
+asks for it per component:
+
+```json
+"vorversorger": {
+  "mp_id": "9900357000011",
+  "kundennummer": "K-4711",
+  "vollmacht": { "erteilt_am": "2026-11-20", "referenz": "sha256:…" }
+},
+"kuendigung_beim_vorversorger": { "zum": "2027-01-31" }
+```
+
+The Vollmacht is held, not sent („im Regelfall auf den Versand von Vollmachten
+zu verzichten", GPKE Teil 1 Kap. 5): its date and reference are the proof,
+stored on the component. The customer number travels only where an AHB has an
+element for it — the 44016's `RFF+Z01`; the 55016 identifies by MaLo-ID alone.
+
+GPKE recommends the Kündigung run first („empfiehlt es sich, den Use-Case
+„Kündigung" generell einem Use-Case „Lieferbeginn" vorzuschalten", Teil 2
+Kap. 1.2), so the contract enqueues the Kündigung and **holds** the Anmeldung.
+The old supplier's Antwortcode decides what follows:
+
+| Answer | Codes | The Anmeldung |
+|---|---|---|
+| Zustimmung | `E_0614` A03, A09, A12, A17; `E_3001` E15, Z44 | sent, no earlier than the end of the old contract |
+| Kein Vertrag mehr | A04, A13, A18; Z29 | sent — there is nothing to terminate |
+| Vertragsbindung | A05, A06, A14, A15; Z12 | `[policy] nach_kuendigungsablehnung` |
+| Zustimmung mit Terminänderung | Z01 | held — mako does not read the new date from the answer |
+| Everything else | A01, A08, A10, A16, A99; E14, Z34, A03, A04 | held |
+| No answer within the Frist (1 WT Strom, 3 WT Gas) | — | sent; the Netzbetreiber's 55010 settles it |
+
+A held Anmeldung waits for a person:
+`POST /api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/freigeben`
+sends it (Cedar `create-vertrag`), `…/zurueckziehen` withdraws the component
+(`stornieren-vertrag`); both record who and when, and answer `409
+kuendigung_nicht_gehalten` when nothing is held. Each answer is announced as
+`de.mako.vertrag.kuendigung-vorversorger.bestaetigt` or `…abgelehnt`, with the
+code's `klasse` and the `reaktion` taken.
+
+#### `[policy] nach_kuendigungsablehnung` {#policy-nach-kuendigungsablehnung}
+
+| Value | Effect |
+|---|---|
+| `halten` (default) | a Vertragsbindung refusal holds the Anmeldung — the 24-hour switch does not shorten a binding contract |
+| `anmelden` | the Anmeldung goes out anyway, and the old supplier's answer to the Netzbetreiber's 55010 decides |
+
+### What the market writes back
+
+- **The Zuordnung ends.** The Netzbetreiber's 55037 (Gas 44037) „Beendigung
+  der Zuordnung" names its Grund and the Zuordnungsende (GPKE Teil 2 Kap.
+  2.1.2 SD Lieferbeginn Nr. 10). vertragd sets that date as the Lieferende of
+  every running component **whose `nb_mp_id` is the sender**, orders the
+  Schlussablesung and announces `de.mako.vertrag.zuordnung.beendet` (`wechsel:
+  true` on `E03`). A Meldung from another party, or without a date, changes
+  nothing.
+- **An Ersatzversorgung begins.** When this deployment accepts a 55013 as
+  Ersatzversorgung, vertragd opens the contract: a Kunde named by the NB's
+  informative `NAD+Z67` (where sent), `vertragsart = ERSATZVERSORGUNG`, three
+  months from the Zuordnungsbeginn (§ 38 Abs. 4 Satz 1 EnWG), priced on
+  `ersatzversorgung_produkt`, with no Anmeldung — the Netzbetreiber assigned
+  it. Once per (MaLo, Zuordnungsbeginn), however often the outcome arrives.
+  Without `ersatzversorgung_produkt` no contract is opened, and
+  `--check-config` says so. A Gas 44013 opens no contract.
+
+Both arrive as makod's process events, which marktd fans out to vertragd's
+`POST /api/v1/events` (`[[subscriptions.endpoints]]` in marktd's
+configuration, signed with vertragd's `inbound_secret`).
+
+### Earliest Lieferbeginn
+
+`GET /api/v1/lieferbeginn/fruehestens?sparte=STROM&verbraucher=true` answers
+the earliest Lieferbeginn an order placed today may name, with each bound:
+
+```json
+{ "fruehestens": "2026-12-05", "stand": "2026-11-20",
+  "grenzen": [
+    { "regel": "vorlauf", "datum": "2026-11-24", "quelle": "BK6-24-174 GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1" },
+    { "regel": "widerrufsfrist", "datum": "2026-12-05", "quelle": "§ 357a Abs. 2 Satz 1 Nr. 1 BGB" } ] }
+```
+
+`lieferbeginn_anlass` (only a Gas `WECHSEL` has a lead time of its own),
+`lieferung_in_widerrufsfrist_verlangt` and `belehrung_angezeigt` refine it.
+The order route and processd's Anmeldung check compute the same date.
+
 ### Widerruf and Stornierung
 
 `POST /api/v1/vertraege/{id}/widerruf-kuendigung` reverts a Kündigung whose
@@ -437,9 +524,11 @@ the Anmeldung needs. Each refusal is a stable
 | `dokument_unbekannt` | 422 | `unbekannt: [...]` — a hash no registered document has |
 | `angebot_unbekannt` · `angebot_abgelaufen` · `angebot_hash_abweichend` | 422 | the offer |
 | `malo_id_abweichend` | 422 | the order's MaLo-ID is not the offer's |
-| `lieferbeginn_zu_frueh` | 422 | `fruehestens` — the offer's, or the Widerrufsfrist's below |
+| `lieferbeginn_zu_frueh` | 422 | `fruehestens` — the offer's, the Anmeldung's lead time, or the Widerrufsfrist's below |
 | `anmeldedaten_unvollstaendig` | 422 | `fehlend: [...]` — a fact the Anmeldung needs |
 | `kunde_unbekannt` | 422 | `kunde.kunden_id` names no Kunde of this deployment |
+| `sect14a_kombination_unzulaessig` · `sect14a_nur_strom` | 422 | the § 14a module set ([below](#the-ss-14a-enwg-module-state-lives-here-too)) |
+| `vorversorger_fehlt` · `vorversorger_mp_id_ungueltig` · `vollmacht_in_zukunft` · `kuendigung_zum_vergangen` · `freitext_ungueltig` | 422 | the Kündigung beim Vorversorger ([above](#kundigung-beim-vorversorger)) |
 
 A `422` is final for that body: sending it again tomorrow is refused again,
 so a front end shows it to a person. The two `409`s pass — set the policy, or
@@ -620,6 +709,15 @@ recorded — `billingd` refuses it when it bills, rather than the record droppin
 a module. `billingd` selects the reductions it bills from this, never from the
 product.
 
+The customer chooses the module „gegenüber dem Lieferanten" when concluding
+the contract (BK8-22/010-A, Begründung Rn. 148), so an order and a contract
+carry it per Strom component as `sect14a: { "module": [...] }`. It is recorded
+from the Lieferbeginn, in the contract's transaction. Intake admits only the
+three sets the Festlegung offers — Modul 1, Modul 2, Modul 1 with 3 —
+(`422 sect14a_kombination_unzulaessig`) and only on Strom
+(`sect14a_nur_strom`). Nothing about the module is sent to the Netzbetreiber:
+no binding UTILMD element carries it.
+
 ## DSGVO
 
 ### Art. 15 / Art. 20 — access and portability
@@ -734,9 +832,9 @@ A **consumer** contract becomes **unbefristet** with at most a month's notice
 
 ## CloudEvents emitted
 
-Seventeen `de.mako.vertrag.*` types, all through `event_outbox` and all signed per
+Twenty-one `de.mako.vertrag.*` types, all through `event_outbox` and all signed per
 [Standard Webhooks](https://www.standardwebhooks.com/).
-Each carries the `tenantid` and `correlationid` extensions. The thirteen contract
+Each carries the `tenantid` and `correlationid` extensions. The seventeen contract
 events carry `subject` = the Vertrags-UUID and `correlationid` repeats it, so a
 consumer can join every event of one contract without parsing `data`. The four
 order events below carry `subject` = the front end's `bestellreferenz` and
@@ -748,6 +846,10 @@ by its own reference.
 | `de.mako.vertrag.aktiv` | Every component NB-confirmed | — |
 | `de.mako.vertrag.lieferbeginn.bestaetigt` | The grid operator confirmed one component's Anmeldung | `vertrags_nr`, `kunden_id`, the caller's `erp_contract_id` / `bestellreferenz`, `komp_id`, `sparte`, `malo_id`, `lieferbeginn` |
 | `de.mako.vertrag.lieferbeginn.abgelehnt` | The grid operator refused it | the same, plus `antwortcode`, the `codeliste` that defines it, and `reason` |
+| `de.mako.vertrag.ersatzversorgung.begonnen` | An Ersatzversorgung contract was written | the component, `ende`, `kunde_name`, `quelle` (`55013` or `api`) |
+| `de.mako.vertrag.zuordnung.beendet` | The Netzbetreiber ended this supplier's Zuordnung (55037/44037) | the component, `zuordnungsende`, `grund`, `wechsel`, `netzbetreiber` |
+| `de.mako.vertrag.kuendigung-vorversorger.bestaetigt` | The previous supplier confirmed the Kündigung | the component, `vorversorger_mp_id`, `kuendigung_zum`, `antwortcode`, `codeliste`, `reaktion` |
+| `de.mako.vertrag.kuendigung-vorversorger.abgelehnt` | It refused | the component, `vorversorger_mp_id`, `antwortcode`, `codeliste`, `reason`, `klasse`, `reaktion` |
 | `de.mako.vertrag.kuendigung` | A Kündigung is accepted and the Lieferende dispatched | `lieferende`, `grund`, `frist`, `rechtsgrundlage`, and the § 41 Abs. 8 Nr. 2 EnWG `kuendigungsbestaetigung` block |
 | `de.mako.vertrag.gekuendigt` | One child of a Rahmenvertrag-Kündigung cascade | as above, plus `rahmenvertrag_id` / `rahmenvertrag_nr` |
 | `de.mako.vertrag.kuendigung-widerrufen` | `POST /widerruf-kuendigung` reverted a Kündigung still ahead of its Lieferende | — |
@@ -870,6 +972,10 @@ edmd_api_key    = "env:VERTRAGD_EDMD_SERVICE_KEY"
 outputd_url     = "http://outputd:9880"
 # outputd_api_key = "env:VERTRAGD_OUTPUTD_KEY"
 
+# The product an Ersatzversorgung accepted on a 55013 is priced on; without it
+# none is opened (§ 38 Abs. 1 Satz 2 EnWG).
+# ersatzversorgung_produkt = "STROM-ERSATZ"
+
 # Required once [policy] vertragsschluss is set: the frozen Endkunden-Angebot.
 # productd_url     = "http://productd:9080"
 # productd_api_key = "env:VERTRAGD_PRODUCTD_KEY"
@@ -908,6 +1014,7 @@ audience = "vertragd"
 # [policy]                       # see [policy] vertragsschluss
 # vertragsschluss = "mit_bestellung"
 # lieferbeginn_in_widerrufsfrist = "nur_auf_verlangen"
+# nach_kuendigungsablehnung = "halten"
 
 # [policy.dsr.portabel]          # see [policy.dsr]; every entry defaults to true
 # zahlungsinformation = false

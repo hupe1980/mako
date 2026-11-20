@@ -75,3 +75,16 @@ event_types = ["de.mako.engine.process.completed", "de.mako.markt.malo.updated"]
 name        = "invoicd"
 url         = "http://invoicd:8280/webhook"
 event_types = ["de.mako.engine.process.initiated"]
+
+# The contract layer: an Anmeldung's and a Kündigung's answer, the EoG it
+# accepted, the NB's Beendigung der Zuordnung (55037/44037), and a lapsed
+# answer window. Signed with vertragd's `inbound_secret`.
+[[subscriptions.endpoints]]
+name        = "vertragd"
+url         = "http://vertragd:9780/api/v1/events"
+secret      = "dev-vertragd-webhook-secret"
+event_types = [
+  "de.mako.engine.process.initiated",
+  "de.mako.engine.process.completed",
+  "de.mako.engine.antwortfrist.abgelaufen",
+]

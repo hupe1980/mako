@@ -242,3 +242,16 @@ fn widerrufkanal_matches_its_check_list() {
         WiderrufKanal::from_db,
     );
 }
+
+/// The Kündigung beim Vorversorger's state decides whether the Anmeldung is
+/// held, so an unlisted state cannot be stored and an unknown one is no state.
+#[test]
+fn kuendigung_status_matches_its_check_list() {
+    use vertragd::kuendigung_vorversorger::KuendigungStatus;
+    assert_pinned(
+        "kuendigung_status",
+        KuendigungStatus::ALL,
+        KuendigungStatus::as_db,
+        KuendigungStatus::from_db,
+    );
+}

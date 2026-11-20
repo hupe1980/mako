@@ -71,6 +71,13 @@ pub struct VertragdConfig {
     #[serde(default)]
     pub productd_api_key: Option<String>,
 
+    /// The product an Ersatzversorgung opened from the Netzbetreiber's 55013 is
+    /// priced on — the operator's „gesonderte Allgemeine Preise" for it (§ 38
+    /// Abs. 1 Satz 2 EnWG). Absent, an accepted Ersatzversorgung opens no
+    /// contract: a price is never assumed.
+    #[serde(default)]
+    pub ersatzversorgung_produkt: Option<String>,
+
     /// `[absender]` — the operator as § 126b BGB's declarant, printed on every
     /// customer notice this service issues.
     ///
@@ -135,6 +142,10 @@ pub struct VertragdPolicy {
     /// operator's reading, listed here.
     #[serde(default = "default_bestellbutton")]
     pub bestellbutton_beschriftungen: Vec<String>,
+    /// `nach_kuendigungsablehnung` — the reaction to a Vertragsbindung refusal
+    /// of the Kündigung beim Vorversorger.
+    #[serde(default)]
+    pub nach_kuendigungsablehnung: Policy<NachKuendigungsablehnung>,
 }
 
 impl Default for VertragdPolicy {
@@ -144,6 +155,7 @@ impl Default for VertragdPolicy {
             vertragsschluss: None,
             lieferbeginn_in_widerrufsfrist: Policy::default(),
             bestellbutton_beschriftungen: default_bestellbutton(),
+            nach_kuendigungsablehnung: Policy::default(),
         }
     }
 }
@@ -192,6 +204,25 @@ mako_service::policy_choice! {
     }
 }
 
+mako_service::policy_choice! {
+    /// The reaction to an old supplier refusing the Kündigung beim Vorversorger
+    /// for Vertragsbindung (`E_0614` A05/A06/A14/A15, `E_3001` Z12). Every other
+    /// refusal class is decided by its code (`kuendigung_vorversorger`).
+    pub enum NachKuendigungsablehnung {
+        key: "nach_kuendigungsablehnung",
+        doc: "@/docs/services/vertragd.md#policy-nach-kuendigungsablehnung",
+        default: tightening(Halten, "holding the Anmeldung sends nothing to the Netzbetreiber that the old supplier's 55010 answer would refuse, and leaves the decision with a person"),
+        options: {
+            /// Hold the Anmeldung until it is released or the component
+            /// withdrawn.
+            Halten = "halten" => "the 24-hour switch does not shorten a binding contract (BNetzA, Verbraucherportal Lieferantenwechsel), so the Anmeldung waits for the customer's decision",
+            /// Send the Anmeldung anyway; the Netzbetreiber's 55010 to the old
+            /// supplier decides.
+            Anmelden = "anmelden" => "the Netzbetreiber asks the old supplier with the 55010 and a lapse of its answer „gilt … als Bestätigung\" (GPKE Teil 2 Kap. 2.1.2, S. 22)",
+        }
+    }
+}
+
 impl VertragdConfig {
     /// The policy and posture vertragd runs under — logged, exported, recorded
     /// and served by the runner and `GET /api/v1/policy`.
@@ -216,6 +247,8 @@ impl VertragdConfig {
             ));
         r.entries
             .push(self.policy.lieferbeginn_in_widerrufsfrist.entry());
+        r.entries
+            .push(self.policy.nach_kuendigungsablehnung.entry());
         r.entries.push(mako_service::policy::PolicyEntry {
             key: "bestellbutton_beschriftungen".to_owned(),
             value: self.policy.bestellbutton_beschriftungen.join(" | "),
@@ -272,6 +305,21 @@ impl VertragdConfig {
              allow_insecure_no_auth = true to accept an unauthenticated deployment.",
             fehlt.join("; ")
         )))
+    }
+
+    /// An E/G deployment without `ersatzversorgung_produkt` answers the
+    /// Netzbetreiber's 55013 and opens no contract for the household it then
+    /// supplies — nothing bills it and nobody hears of it.
+    #[must_use]
+    pub fn ersatzversorgung_befunde(&self) -> Vec<mako_service::Befund> {
+        if self.ersatzversorgung_produkt.is_some() {
+            return Vec::new();
+        }
+        vec![mako_service::befund::Befund::warnung(
+            "ersatzversorgung_produkt",
+            "ersatzversorgung_produkt — an Ersatzversorgung accepted on a 55013 opens no \
+             contract without the product it is priced on (§ 38 Abs. 1 Satz 2 EnWG)",
+        )]
     }
 
     /// What `[policy] vertragsschluss` needs beside it: the order route reads

@@ -33,6 +33,7 @@ impl Daemon for Vertragd {
     fn validate(cfg: &config::VertragdConfig) -> Vec<mako_service::Befund> {
         let mut befunde = cfg.auth_befunde();
         befunde.extend(cfg.bestellung_befunde());
+        befunde.extend(cfg.ersatzversorgung_befunde());
         befunde.extend(cfg.subscription_befunde());
         befunde
     }

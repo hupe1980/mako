@@ -19,6 +19,13 @@ edmd_url        = "http://edmd:8380"
 outputd_url     = "http://outputd:9880"
 # The online order checks the frozen Endkunden-Angebot productd serves.
 productd_url    = "http://productd:9080"
+# An Ersatzversorgung accepted on a 55013 opens a contract on this product; the
+# demo Stadtwerk prices it on its one Strom product.
+ersatzversorgung_produkt = "MUSTERSTADT-STROM-ZUHAUSE"
+
+# marktd delivers makod's process events to vertragd's endpoint in
+# deploy/demo/marktd.toml, signed with this secret, which vertragd verifies.
+inbound_secret = "dev-vertragd-webhook-secret"
 
 [http]
 addr = "0.0.0.0:9780"

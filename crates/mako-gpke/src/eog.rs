@@ -316,6 +316,9 @@ pub enum EogEvent {
         haushaltskunde: Option<bool>,
         /// `SG4 IDE+24` Vorgangsnummer of the received 55013.
         vorgangsnummer: Option<String>,
+        /// `SG12 NAD+Z67` Informativer Kundenname des NB, where sent.
+        #[serde(default)]
+        kunde_name: Option<InformativerKundenname>,
     },
     /// EDIFACT message passed profile validation.
     ValidationPassed {
@@ -418,6 +421,17 @@ impl EventPayload for EogEvent {
 
 // ── Domain state ──────────────────────────────────────────────────────────────
 
+/// `SG12 NAD+Z67` „Informativer Kundenname des NB" — Kann on a 55013 (UTILMD
+/// AHB Strom 2.2 Kap. 8.6): the household the Ersatzversorger supplies, as far
+/// as the NB knows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InformativerKundenname {
+    /// DE 3045 — `Z01` Personenname, `Z02` Firmenbezeichnung.
+    pub namensformat: Option<String>,
+    /// The DE 3036 components, in wire order.
+    pub teile: Vec<String>,
+}
+
 /// Business data captured when the process starts (either role).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EogData {
@@ -440,6 +454,9 @@ pub struct EogData {
     /// number its answer restates in `SG6 RFF+TN`, on the NB's side the number
     /// that answer is matched by ([`nb_vorgang_key`]).
     pub vorgangsnummer: Option<String>,
+    /// `SG12 NAD+Z67` as the NB sent it (E/G side only).
+    #[serde(default)]
+    pub kunde_name: Option<InformativerKundenname>,
 }
 
 /// State of a GPKE EoG process.
@@ -657,6 +674,8 @@ pub enum EogCommand {
         haushaltskunde: Option<bool>,
         /// `SG4 IDE+24` Vorgangsnummer of the 55013.
         vorgangsnummer: Option<String>,
+        /// `SG12 NAD+Z67` Informativer Kundenname des NB, where sent.
+        kunde_name: Option<InformativerKundenname>,
         /// `true` if validation returned no errors.
         validation_passed: bool,
         /// Validation error strings.
@@ -733,6 +752,9 @@ fn process_completed_outbox(
             "haushaltskunde":    data.haushaltskunde,
             "bilanzkreis":       bilanzkreis,
             "ohne_antwort":      ohne_antwort,
+            // The household the E/G now supplies, as far as the NB named it —
+            // what opens its Ersatzversorgung contract.
+            "kunde_name":        data.kunde_name,
         }),
     )
 }
@@ -795,6 +817,7 @@ impl Workflow for GpkeEogWorkflow {
                 transaktionsgrund: transaktionsgrund.clone(),
                 haushaltskunde: *haushaltskunde,
                 vorgangsnummer: vorgangsnummer.clone(),
+                kunde_name: None,
             }),
             EogEvent::AntwortErhalten {
                 accepted,
@@ -839,6 +862,7 @@ impl Workflow for GpkeEogWorkflow {
                 transaktionsgrund,
                 haushaltskunde,
                 vorgangsnummer,
+                kunde_name,
                 ..
             } => EogState::Eingegangen(EogData {
                 location_id: location_id.clone(),
@@ -849,6 +873,7 @@ impl Workflow for GpkeEogWorkflow {
                 transaktionsgrund: transaktionsgrund.clone(),
                 haushaltskunde: *haushaltskunde,
                 vorgangsnummer: vorgangsnummer.clone(),
+                kunde_name: kunde_name.clone(),
             }),
             EogEvent::ValidationPassed { .. } => match state {
                 EogState::Eingegangen(data) => EogState::ValidationPassed(data),
@@ -1034,6 +1059,7 @@ impl Workflow for GpkeEogWorkflow {
                 transaktionsgrund,
                 haushaltskunde,
                 vorgangsnummer,
+                kunde_name,
                 validation_passed,
                 validation_errors,
                 received_at,
@@ -1064,6 +1090,7 @@ impl Workflow for GpkeEogWorkflow {
                     transaktionsgrund,
                     haushaltskunde,
                     vorgangsnummer,
+                    kunde_name,
                 }];
                 if validation_passed {
                     events.push(EogEvent::ValidationPassed {
@@ -1334,6 +1361,10 @@ mod tests {
             transaktionsgrund: "ZT7".to_owned(),
             haushaltskunde: Some(true),
             vorgangsnummer: Some("EOGV0001".to_owned()),
+            kunde_name: Some(InformativerKundenname {
+                namensformat: Some("Z01".to_owned()),
+                teile: vec!["Mustermann".to_owned(), "Erika".to_owned()],
+            }),
             validation_passed: ok,
             validation_errors: if ok {
                 vec![]
@@ -1691,6 +1722,11 @@ mod tests {
         assert_eq!(out.outbox[0].payload["enfg_grundlage"], "ZG1");
         assert_eq!(out.outbox[1].message_type.as_ref(), "ProcessCompleted");
         assert_eq!(out.outbox[1].payload["eog_art"], "GRUNDVERSORGUNG");
+        // The household the NB named reaches the contract layer.
+        assert_eq!(
+            out.outbox[1].payload["kunde_name"]["teile"][0],
+            "Mustermann"
+        );
         let state = apply_all(state, &out.events);
         assert!(
             matches!(state, EogState::AntwortGesendet { response_pid, accepted: true, .. }

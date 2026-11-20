@@ -605,7 +605,19 @@ async fn without_the_request_supply_cannot_start_inside_the_widerrufsfrist() {
         Some(heute),
         mako_fristen::HolidayCalendar::BdewMaKo,
     );
-    let innerhalb = (heute + time::Duration::days(3)).to_string();
+    // Inside the Widerrufsfrist, and no earlier than the Anmeldung's own lead
+    // time allows — the order is held to both.
+    let innerhalb = mako_fristen::vorlauf::fruehester_lieferbeginn(
+        mako_fristen::Sparte::Strom,
+        true,
+        heute,
+        mako_fristen::HolidayCalendar::BdewMaKo,
+    );
+    assert!(
+        innerhalb <= frist.ende,
+        "the lead time ends inside the Widerrufsfrist"
+    );
+    let innerhalb = innerhalb.to_string();
 
     let mut ohne = order(Uuid::new_v4(), &docs);
     ohne["lieferung_in_widerrufsfrist_verlangt"] = json!({ "verlangt": false });

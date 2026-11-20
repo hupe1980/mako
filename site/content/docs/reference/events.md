@@ -12,16 +12,16 @@ Every type an integrator can subscribe to, with a webhook endpoint or the
 is emitted through a payload bound to it, and its events carry the schema's
 URL in `dataschema`. A **phantom** is declared and emitted by nothing.
 
-136 types: 15 with a schema, 13 phantoms.
+140 types: 19 with a schema, 13 phantoms.
 
 | Type | Emitted by | Named in | Schema | What it says |
 |---|---|---|---|---|
-| `de.mako.engine.process.initiated` | — | agentd, invoicd, marktd, processd | — | A MaKo market process was started (first outbound message built). |
-| `de.mako.engine.process.completed` | — | agentd, edmd, marktd, processd | — | Happy path finished — the process reached its terminal success state. |
+| `de.mako.engine.process.initiated` | — | agentd, invoicd, marktd, processd, vertragd | — | A MaKo market process was started (first outbound message built). |
+| `de.mako.engine.process.completed` | — | agentd, edmd, marktd, processd, vertragd | — | Happy path finished — the process reached its terminal success state. |
 | `de.mako.engine.process.failed` | — | agentd, processd | — | Unrecoverable failure — the process was cancelled/failed. |
 | `de.mako.engine.aperak.accepted` | — | processd | — | APERAK acknowledged the outbound message. |
 | `de.mako.engine.aperak.rejected` | — | agentd, processd | — | APERAK rejected the outbound message (carries BDEW ERC code). |
-| `de.mako.engine.antwortfrist.abgelaufen` | — | agentd, processd | — | The business Antwortfrist of a Wechselprozess lapsed unanswered — not an APERAK delivery window, which makod alerts on itself. |
+| `de.mako.engine.antwortfrist.abgelaufen` | — | agentd, processd, vertragd | — | The business Antwortfrist of a Wechselprozess lapsed unanswered — not an APERAK delivery window, which makod alerts on itself. |
 | `de.mako.engine.contrl.received` | — | — | — | CONTRL received for an outbound interchange. |
 | `de.mako.engine.malo.identified` | — | — | — | MaLo identified during Lieferantenwechsel (GPKE identification step). |
 | `de.mako.engine.abmeldeanfrage.beantwortet` | — | processd | — | The LFA answered the NB's Anfrage zur Beendigung der Zuordnung — or its 09:00 window lapsed, which the Festlegung reads as a Zustimmung. |
@@ -108,6 +108,10 @@ URL in `dataschema`. A **phantom** is declared and emitted by nothing.
 | `de.mako.vertrag.aktiv` | — | vertragd | — | All components NB-confirmed — billing may start. |
 | `de.mako.vertrag.lieferbeginn.bestaetigt` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.lieferbeginn.bestaetigt.json) | The grid operator confirmed one component's Anmeldung: supply begins on its Lieferbeginn. Per component, with the caller's references. |
 | `de.mako.vertrag.lieferbeginn.abgelehnt` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.lieferbeginn.abgelehnt.json) | The grid operator refused one component's Anmeldung, with the Antwortcode and the Codeliste it is defined in. |
+| `de.mako.vertrag.ersatzversorgung.begonnen` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.ersatzversorgung.begonnen.json) | An Ersatzversorgung contract was written (§ 38 EnWG) — from the Netzbetreiber's 55013/44013 or through the API. |
+| `de.mako.vertrag.zuordnung.beendet` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.zuordnung.beendet.json) | The Netzbetreiber ended this supplier's Zuordnung (55037/44037); the component's Lieferende is the Zuordnungsende. |
+| `de.mako.vertrag.kuendigung-vorversorger.bestaetigt` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.kuendigung-vorversorger.bestaetigt.json) | The previous supplier confirmed the Kündigung sent on the customer's behalf (55017/44017). |
+| `de.mako.vertrag.kuendigung-vorversorger.abgelehnt` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.kuendigung-vorversorger.abgelehnt.json) | The previous supplier refused it (55018/44018), with the Antwortcode and the reaction taken. |
 | `de.mako.vertrag.gekuendigt` | — | vertragd | — | Lieferende dispatched (Rahmenvertrag cascade, per child). |
 | `de.mako.vertrag.kuendigung` | — | vertragd | — | Kündigung accepted; the Lieferende and the Schlussablesung are enqueued. Carries the § 41 Abs. 8 Nr. 2 EnWG Textform confirmation the supplier owes the customer — the document is produced downstream, the instruction to produce it commits with the termination. |
 | `de.mako.vertrag.kuendigung-widerrufen` | — | vertragd | — | Kündigung withdrawn before Lieferende. |

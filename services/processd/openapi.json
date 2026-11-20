@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.40.0"
+    "version": "0.41.0"
   },
   "paths": {
     "/api/v1/audit/gleichbehandlung": {
@@ -796,6 +796,145 @@
           },
           "422": {
             "description": "`begruendung_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/kuendigung": {
+      "post": {
+        "tags": [
+          "supply"
+        ],
+        "summary": "`POST /api/v1/kuendigung` — the Lieferant terminates the customer's\ncontract with the previous supplier on their behalf (55016).",
+        "description": "Forwards to makod `gpke.kuendigung.anmelden`. The previous supplier\nanswers 55017 / 55018 „spätester ÜT ist der 1. WT nach dem ÜT\"\n(GPKE Teil 2 Kap. 1.2.2 Nr. 2, S. 9). The Vollmacht is held by the\ncaller, not sent (GPKE Teil 1 Kap. 5, S. 25).",
+        "operationId": "kuendigung",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KuendigungRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "makod opened the Kündigung (55016)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `initiate-supply` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "makod refused the command in the process's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the missing field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/kuendigung-gas": {
+      "post": {
+        "tags": [
+          "supply"
+        ],
+        "summary": "`POST /api/v1/kuendigung-gas` — the Gas twin (44016). The previous\nsupplier answers „spätestens jedoch bis zum Ablauf des 3. Werktages nach\nEingang der Kündigung\" (GeLi Gas Anlage Kap. 3.1, S. 7).",
+        "operationId": "kuendigung_gas",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KuendigungGasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "makod opened the Kündigung (44016)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `initiate-supply` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "makod refused the command in the process's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the missing field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
             "content": {
               "application/json": {
                 "schema": {
@@ -2857,6 +2996,52 @@
           }
         },
         "additionalProperties": false
+      },
+      "KuendigungGasRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/kuendigung-gas` — the Kündigung 44016, LFN → LFA (GeLi\nGas Anlage Kap. 3.1). The body `makod`'s `geli.kuendigung.anmelden`\nreads (`mako_markt::commands::GeliKuendigungAnmelden`).",
+        "required": [
+          "malo_id",
+          "lfa_mp_id",
+          "process_date"
+        ],
+        "properties": {
+          "lfa_mp_id": {
+            "type": "string",
+            "description": "The previous supplier's MP-ID — `NAD+MR`."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "Gas-MaLo-ID — `SG5 LOC+172`."
+          },
+          "process_date": {
+            "type": "string",
+            "description": "„Ende zum\", `YYYYMMDD` — `SG4 DTM+93`."
+          }
+        }
+      },
+      "KuendigungRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/kuendigung` — the Kündigung 55016, LFN → LFA (GPKE Teil 2\nKap. 1.2).",
+        "required": [
+          "malo_id",
+          "lfa_mp_id",
+          "kuendigung_datum"
+        ],
+        "properties": {
+          "kuendigung_datum": {
+            "type": "string",
+            "description": "„Ende zum\", ISO-8601 date — `SG4 DTM+93`."
+          },
+          "lfa_mp_id": {
+            "type": "string",
+            "description": "The previous supplier's MP-ID — `NAD+MR`."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Strom Marktlokations-ID — the only identification the\n55016 carries (GPKE Teil 2 Kap. 1.2.2 Nr. 1, S. 9)."
+          }
+        }
       },
       "NeuanlageIdentifikationRequest": {
         "type": "object",

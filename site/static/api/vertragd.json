@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.40.0"
+    "version": "0.41.0"
   },
   "paths": {
     "/api/v1/aggregatorvertraege": {
@@ -2128,6 +2128,110 @@
         }
       }
     },
+    "/api/v1/lieferbeginn/fruehestens": {
+      "get": {
+        "tags": [
+          "vertraege"
+        ],
+        "summary": "`GET /api/v1/lieferbeginn/fruehestens` — the earliest Lieferbeginn an order\nplaced today may name, and each bound that sets it.",
+        "description": "The answer is what the order route and processd's Anmeldung check accept\ntoday: both compute it with the same function.",
+        "operationId": "fruehester_lieferbeginn",
+        "parameters": [
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "`STROM` or `GAS`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lieferbeginn_anlass",
+            "in": "query",
+            "description": "`WECHSEL` (default), `UMZUG`, `NEUANLAGE` or `ENDE_ERSATZVERSORGUNG` —\nonly a Gas Wechsel carries a lead time of its own.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Why a supply begins — the contract fact the Anmeldung states as its `SG4\nSTS+7` Transaktionsgrund: the GeLi Gas Anmeldung NN 44001 (UTILMD AHB Gas\n1.2 Kap. 5.6, S. 45) and the Strom Anmeldung 55001 (UTILMD AHB Strom 2.2\nKap. 8.2, S. 73, [`Self::anmeldung_strom_transaktionsgrund`]).\n\nOn Gas it decides the Mindestvorlauffrist as well: a Wechsel needs 10 WT, an\nEinzug has the NB correct the date (AWH GeLi Gas 2.0 Kap. 2.5.2, Kap. 4).",
+              "enum": [
+                "WECHSEL",
+                "UMZUG",
+                "NEUANLAGE",
+                "ENDE_ERSATZVERSORGUNG"
+              ]
+            }
+          },
+          {
+            "name": "verbraucher",
+            "in": "query",
+            "description": "§ 13 BGB — a consumer has a Widerrufsrecht. Default `true`, the\ntighter reading.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "lieferung_in_widerrufsfrist_verlangt",
+            "in": "query",
+            "description": "§ 357a Abs. 2 Satz 1 Nr. 1 BGB — the express request to start supply\ninside the Widerrufsfrist.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "belehrung_angezeigt",
+            "in": "query",
+            "description": "The Widerrufsbelehrung is shown before the order.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A Sparte other than STROM or GAS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/malo/{malo_id}/produkte": {
       "get": {
         "tags": [
@@ -3433,6 +3537,150 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/freigeben": {
+      "post": {
+        "tags": [
+          "vertraege"
+        ],
+        "summary": "`POST /api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/freigeben`\n— send the Anmeldung a refused Kündigung beim Vorversorger is holding.",
+        "description": "The person releasing it and the instant are recorded on the component.",
+        "operationId": "kuendigung_vorversorger_freigeben",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contract",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "komp",
+            "in": "path",
+            "description": "The component",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`kuendigung_nicht_gehalten` — no Anmeldung is held",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/zurueckziehen": {
+      "post": {
+        "tags": [
+          "vertraege"
+        ],
+        "summary": "`POST /api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/zurueckziehen`\n— withdraw a component whose Anmeldung a refused Kündigung is holding.",
+        "description": "Nothing reached the Netzbetreiber, so nothing is sent: the component is\n`STORNIERT` and the held Anmeldung dropped.",
+        "operationId": "kuendigung_vorversorger_zurueckziehen",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contract",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "komp",
+            "in": "path",
+            "description": "The component",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`kuendigung_nicht_gehalten` — no Anmeldung is held",
             "content": {
               "application/json": {
                 "schema": {

@@ -30326,6 +30326,145 @@
         }
       }
     },
+    "/svc/processd/api/v1/kuendigung": {
+      "post": {
+        "tags": [
+          "supply"
+        ],
+        "summary": "`POST /api/v1/kuendigung` — the Lieferant terminates the customer's\ncontract with the previous supplier on their behalf (55016).",
+        "description": "Forwards to makod `gpke.kuendigung.anmelden`. The previous supplier\nanswers 55017 / 55018 „spätester ÜT ist der 1. WT nach dem ÜT\"\n(GPKE Teil 2 Kap. 1.2.2 Nr. 2, S. 9). The Vollmacht is held by the\ncaller, not sent (GPKE Teil 1 Kap. 5, S. 25).",
+        "operationId": "kuendigung",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/processd.KuendigungRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "makod opened the Kündigung (55016)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `initiate-supply` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "makod refused the command in the process's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the missing field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/svc/processd/api/v1/kuendigung-gas": {
+      "post": {
+        "tags": [
+          "supply"
+        ],
+        "summary": "`POST /api/v1/kuendigung-gas` — the Gas twin (44016). The previous\nsupplier answers „spätestens jedoch bis zum Ablauf des 3. Werktages nach\nEingang der Kündigung\" (GeLi Gas Anlage Kap. 3.1, S. 7).",
+        "operationId": "kuendigung_gas",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/processd.KuendigungGasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "makod opened the Kündigung (44016)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `initiate-supply` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "makod refused the command in the process's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A refusal naming the missing field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "makod did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/svc/processd/api/v1/neuanlage": {
       "get": {
         "tags": [
@@ -36401,6 +36540,110 @@
         }
       }
     },
+    "/svc/vertragd/api/v1/lieferbeginn/fruehestens": {
+      "get": {
+        "tags": [
+          "vertraege"
+        ],
+        "summary": "`GET /api/v1/lieferbeginn/fruehestens` — the earliest Lieferbeginn an order\nplaced today may name, and each bound that sets it.",
+        "description": "The answer is what the order route and processd's Anmeldung check accept\ntoday: both compute it with the same function.",
+        "operationId": "fruehester_lieferbeginn",
+        "parameters": [
+          {
+            "name": "sparte",
+            "in": "query",
+            "description": "`STROM` or `GAS`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lieferbeginn_anlass",
+            "in": "query",
+            "description": "`WECHSEL` (default), `UMZUG`, `NEUANLAGE` or `ENDE_ERSATZVERSORGUNG` —\nonly a Gas Wechsel carries a lead time of its own.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Why a supply begins — the contract fact the Anmeldung states as its `SG4\nSTS+7` Transaktionsgrund: the GeLi Gas Anmeldung NN 44001 (UTILMD AHB Gas\n1.2 Kap. 5.6, S. 45) and the Strom Anmeldung 55001 (UTILMD AHB Strom 2.2\nKap. 8.2, S. 73, [`Self::anmeldung_strom_transaktionsgrund`]).\n\nOn Gas it decides the Mindestvorlauffrist as well: a Wechsel needs 10 WT, an\nEinzug has the NB correct the date (AWH GeLi Gas 2.0 Kap. 2.5.2, Kap. 4).",
+              "enum": [
+                "WECHSEL",
+                "UMZUG",
+                "NEUANLAGE",
+                "ENDE_ERSATZVERSORGUNG"
+              ]
+            }
+          },
+          {
+            "name": "verbraucher",
+            "in": "query",
+            "description": "§ 13 BGB — a consumer has a Widerrufsrecht. Default `true`, the\ntighter reading.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "lieferung_in_widerrufsfrist_verlangt",
+            "in": "query",
+            "description": "§ 357a Abs. 2 Satz 1 Nr. 1 BGB — the express request to start supply\ninside the Widerrufsfrist.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "belehrung_angezeigt",
+            "in": "query",
+            "description": "The Widerrufsbelehrung is shown before the order.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A Sparte other than STROM or GAS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/svc/vertragd/api/v1/malo/{malo_id}/produkte": {
       "get": {
         "tags": [
@@ -37706,6 +37949,150 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/svc/vertragd/api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/freigeben": {
+      "post": {
+        "tags": [
+          "vertraege"
+        ],
+        "summary": "`POST /api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/freigeben`\n— send the Anmeldung a refused Kündigung beim Vorversorger is holding.",
+        "description": "The person releasing it and the instant are recorded on the component.",
+        "operationId": "kuendigung_vorversorger_freigeben",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contract",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "komp",
+            "in": "path",
+            "description": "The component",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`kuendigung_nicht_gehalten` — no Anmeldung is held",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/svc/vertragd/api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/zurueckziehen": {
+      "post": {
+        "tags": [
+          "vertraege"
+        ],
+        "summary": "`POST /api/v1/vertraege/{id}/komponenten/{komp}/kuendigung-vorversorger/zurueckziehen`\n— withdraw a component whose Anmeldung a refused Kündigung is holding.",
+        "description": "Nothing reached the Netzbetreiber, so nothing is sent: the component is\n`STORNIERT` and the held Anmeldung dropped.",
+        "operationId": "kuendigung_vorversorger_zurueckziehen",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contract",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "komp",
+            "in": "path",
+            "description": "The component",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`kuendigung_nicht_gehalten` — no Anmeldung is held",
             "content": {
               "application/json": {
                 "schema": {
@@ -49732,6 +50119,52 @@
           }
         },
         "additionalProperties": false
+      },
+      "processd.KuendigungGasRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/kuendigung-gas` — the Kündigung 44016, LFN → LFA (GeLi\nGas Anlage Kap. 3.1). The body `makod`'s `geli.kuendigung.anmelden`\nreads (`mako_markt::commands::GeliKuendigungAnmelden`).",
+        "required": [
+          "malo_id",
+          "lfa_mp_id",
+          "process_date"
+        ],
+        "properties": {
+          "lfa_mp_id": {
+            "type": "string",
+            "description": "The previous supplier's MP-ID — `NAD+MR`."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "Gas-MaLo-ID — `SG5 LOC+172`."
+          },
+          "process_date": {
+            "type": "string",
+            "description": "„Ende zum\", `YYYYMMDD` — `SG4 DTM+93`."
+          }
+        }
+      },
+      "processd.KuendigungRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/kuendigung` — the Kündigung 55016, LFN → LFA (GPKE Teil 2\nKap. 1.2).",
+        "required": [
+          "malo_id",
+          "lfa_mp_id",
+          "kuendigung_datum"
+        ],
+        "properties": {
+          "kuendigung_datum": {
+            "type": "string",
+            "description": "„Ende zum\", ISO-8601 date — `SG4 DTM+93`."
+          },
+          "lfa_mp_id": {
+            "type": "string",
+            "description": "The previous supplier's MP-ID — `NAD+MR`."
+          },
+          "malo_id": {
+            "type": "string",
+            "description": "11-digit Strom Marktlokations-ID — the only identification the\n55016 carries (GPKE Teil 2 Kap. 1.2.2 Nr. 1, S. 9)."
+          }
+        }
       },
       "processd.NeuanlageIdentifikationRequest": {
         "type": "object",

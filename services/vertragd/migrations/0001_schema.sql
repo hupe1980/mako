@@ -587,6 +587,43 @@ CREATE TABLE vertragskomponenten (
                             )),
     CHECK ((enfg_grund IS NOT NULL) = (enfg_grundlage IS NOT DISTINCT FROM 'ZF9')),
     CHECK (netznutzung_zahler IS DISTINCT FROM 'KUNDE' OR netznutzungsvertrag = 'KUNDE_NB'),
+    -- ── The previous supplier and the Kündigung sent on the customer's behalf
+    -- GPKE Teil 2 Kap. 1.2 (55016) / GeLi Gas Anlage Kap. 3.1 (44016). The
+    -- Vollmacht is held, not sent („im Regelfall auf den Versand von
+    -- Vollmachten zu verzichten", GPKE Teil 1 Kap. 5, S. 25): its date and the
+    -- front end's reference are the proof.
+    vorversorger_mp_id        TEXT        CHECK (vorversorger_mp_id IS NULL OR vorversorger_mp_id ~ '^[0-9]{13}$'),
+    -- `SG12 RFF+Z01` Kundennummer beim Altlieferanten — on a 44016 only; the
+    -- 55016 carries none (GPKE Teil 2 Kap. 1.2.2 Nr. 1, S. 9).
+    vorversorger_kundennummer TEXT        CHECK (vorversorger_kundennummer IS NULL
+                                  OR char_length(vorversorger_kundennummer) BETWEEN 1 AND 35),
+    vollmacht_erteilt_am      DATE,
+    vollmacht_referenz        TEXT        CHECK (vollmacht_referenz IS NULL
+                                  OR char_length(vollmacht_referenz) BETWEEN 1 AND 256),
+    kuendigung_status         TEXT        CHECK (kuendigung_status IS NULL OR kuendigung_status IN (
+                                  'AUSSTEHEND','BESTAETIGT','ABGELEHNT','FRIST_ABGELAUFEN',
+                                  'FREIGEGEBEN','ZURUECKGEZOGEN'
+                              )),
+    -- The requested end of the old contract (`SG4 DTM+93`).
+    kuendigung_zum            DATE,
+    kuendigung_bestaetigt_zum DATE,
+    kuendigung_process_id     TEXT,
+    kuendigung_antwortcode    TEXT,
+    kuendigung_codeliste      TEXT,
+    -- The Lieferbeginn call held while the Kündigung is answered — the
+    -- processd body the contract's insert assembled, enqueued unchanged (its
+    -- date moved to the confirmed end where that is later) on release.
+    kuendigung_wartende_anmeldung JSONB,
+    -- Who released or withdrew a held Anmeldung, and when.
+    kuendigung_aktor          TEXT,
+    kuendigung_aktion_am      TIMESTAMPTZ,
+    CHECK (kuendigung_status IS NULL
+           OR (vorversorger_mp_id IS NOT NULL AND vollmacht_erteilt_am IS NOT NULL
+               AND vollmacht_referenz IS NOT NULL AND kuendigung_zum IS NOT NULL)),
+    -- Set when the Netzbetreiber ended this supplier's Zuordnung: the PID of
+    -- the Meldung (55037 / 44037) the Lieferende was taken from.
+    zuordnungsende_quelle     TEXT        CHECK (zuordnungsende_quelle IS NULL
+                                  OR zuordnungsende_quelle IN ('55037','44037')),
     fulfillment_data        JSONB,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -598,6 +635,21 @@ CREATE INDEX komp_status   ON vertragskomponenten (tenant, status, sparte)
     WHERE status IN ('ANGELEGT','ANGEMELDET');
 CREATE INDEX komp_prozess  ON vertragskomponenten (mako_process_id)
     WHERE mako_process_id IS NOT NULL;
+CREATE INDEX komp_kuendigung_prozess ON vertragskomponenten (kuendigung_process_id)
+    WHERE kuendigung_process_id IS NOT NULL;
+
+-- ── Ersatzversorgung opened from the Netzbetreiber's Zuordnung ──────────────
+--
+-- One row per Zuordnung a 55013/44013 announced and this E/G accepted as
+-- Ersatzversorgung: its key makes a redelivered outcome open nothing twice.
+CREATE TABLE ersatzversorgung_eroeffnungen (
+    tenant           TEXT        NOT NULL,
+    malo_id          TEXT        NOT NULL,
+    zuordnungsbeginn DATE        NOT NULL,
+    vertrag_id       UUID        NOT NULL REFERENCES versorgungsvertraege(id) ON DELETE CASCADE,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, malo_id, zuordnungsbeginn)
+);
 
 -- ── Produktzuordnung je Komponente (valid-time) ──────────────────────────────
 --

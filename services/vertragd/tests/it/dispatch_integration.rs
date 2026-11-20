@@ -108,7 +108,11 @@ pub(crate) fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
             enfg_grundlage: Some("ZG1".to_owned()),
             enfg_grund: None,
             fulfillment_data: None,
+            sect14a: None,
+            vorversorger: None,
+            kuendigung_beim_vorversorger: None,
         }],
+        eog_quelle: None,
     }
 }
 

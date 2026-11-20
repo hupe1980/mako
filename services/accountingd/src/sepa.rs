@@ -473,7 +473,8 @@ pub fn build_pain_008(
         ("OOFF", SequenceType::Ooff),
     ];
 
-    let mut builder = Pain008Builder::new(creditor.name, msg_id.clone()).schema(schema);
+    let mut builder =
+        Pain008Builder::new(creditor.name, msg_id.clone(), IsoDateTime::now()).schema(schema);
     let mut groups_info = Vec::new();
     let mut entries_info = Vec::new();
     let mut total_ct = 0i64;
@@ -782,7 +783,7 @@ pub fn build_pain_001(
         group = group.add_entry(entry);
     }
 
-    Pain001Builder::new(debtor.name, msg_id)
+    Pain001Builder::new(debtor.name, msg_id, IsoDateTime::now())
         .schema(schema)
         .add_group(group)
         .build()
@@ -945,9 +946,14 @@ pub fn build_pain_007(
         group = group.add_entry(entry);
     }
 
-    let builder = Pain007Builder::new(creditor.name, first.original_msg_id, msg_id.clone())
-        .original_schema(original_schema)
-        .add_group(group);
+    let builder = Pain007Builder::new(
+        creditor.name,
+        msg_id.clone(),
+        IsoDateTime::now(),
+        first.original_msg_id,
+    )
+    .original_schema(original_schema)
+    .add_group(group);
 
     let xml = builder
         .build()
@@ -1036,10 +1042,16 @@ pub fn build_camt_055(
     let assignment_id = format!("RC-{}", &unique[..24]);
 
     let original = OriginalMessage::new(original_msg_id, original_schema.message_id());
-    let mut builder = Camt055Builder::new(assignment_id.clone(), creditor_name, bic, original)
-        // One case per recall, named after it: a follow-up refers to the
-        // investigation rather than opening a second one.
-        .case_id(assignment_id.clone());
+    let mut builder = Camt055Builder::new(
+        assignment_id.clone(),
+        IsoDateTime::now(),
+        creditor_name,
+        bic,
+        original,
+    )
+    // One case per recall, named after it: a follow-up refers to the
+    // investigation rather than opening a second one.
+    .case_id(assignment_id.clone());
 
     let (scope_label, entry_count, total_ct) = match scope {
         RecallScope::WholeMessage => {

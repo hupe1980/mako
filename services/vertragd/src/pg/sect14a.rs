@@ -73,6 +73,108 @@ pub struct Sect14aInput {
     pub gueltig_ab: Date,
 }
 
+/// The module set a contract or an order states for one Strom component.
+///
+/// The customer chooses „gegenüber dem Lieferanten" at conclusion
+/// (BK8-22/010-A, Begründung Rn. 148, S. 54), so the choice arrives with the
+/// contract and is recorded from its Lieferbeginn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sect14aIntake {
+    pub module: Vec<Sect14aModul>,
+}
+
+/// Why an intake module set is refused — new data is held to the Festlegung,
+/// unlike a recorded state, which stays representable for billing to refuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sect14aIntakeFehler {
+    /// An empty set states nothing.
+    Leer,
+    /// § 14a EnWG covers steuerbare Verbrauchseinrichtungen in the
+    /// electricity grid.
+    NurStrom,
+    /// Modul 2 is chosen „als Alternative zum Modul 1" (Tenor 2 a), and
+    /// Modul 3 only „in Ergänzung zu Modul 1" (Tenor 3 a): Modul 1 with
+    /// Modul 3 is the only pair, and Modul 3 never stands alone.
+    Kombination,
+}
+
+impl Sect14aIntakeFehler {
+    /// The stable `code` of the `422`.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Leer => "sect14a_leer",
+            Self::NurStrom => "sect14a_nur_strom",
+            Self::Kombination => "sect14a_kombination_unzulaessig",
+        }
+    }
+}
+
+impl Sect14aIntake {
+    /// The module set, sorted and each once, when `sparte` may carry it.
+    ///
+    /// # Errors
+    ///
+    /// [`Sect14aIntakeFehler`] naming the rule that refuses it.
+    pub fn pruefe(
+        &self,
+        sparte: &str,
+    ) -> std::result::Result<Vec<Sect14aModul>, Sect14aIntakeFehler> {
+        let mut module = self.module.clone();
+        module.sort();
+        module.dedup();
+        if module.is_empty() {
+            return Err(Sect14aIntakeFehler::Leer);
+        }
+        if sparte != "STROM" {
+            return Err(Sect14aIntakeFehler::NurStrom);
+        }
+        let hat = |m| module.contains(&m);
+        let (m1, m2, m3) = (
+            hat(Sect14aModul::Modul1),
+            hat(Sect14aModul::Modul2),
+            hat(Sect14aModul::Modul3),
+        );
+        // The three sets the Festlegung offers: Modul 1, Modul 2, Modul 1 + 3.
+        if !matches!(
+            (m1, m2, m3),
+            (true, false, false) | (false, true, false) | (true, false, true)
+        ) {
+            return Err(Sect14aIntakeFehler::Kombination);
+        }
+        Ok(module)
+    }
+}
+
+/// Write the first module slice of a component created with one, on the
+/// contract's transaction, from its Lieferbeginn — never earlier: „Ein
+/// rückwirkender Modulwechsel ist ausgeschlossen" (BK8-22/010-A Rn. 145, S. 53).
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn open_initial(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    komp_id: Uuid,
+    module: &[Sect14aModul],
+    ab: Date,
+) -> Result<()> {
+    let module: Vec<&'static str> = module.iter().map(|m| m.as_db()).collect();
+    sqlx::query(
+        "INSERT INTO komponenten_sect14a (tenant, komp_id, module, gueltig_von)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(tenant)
+    .bind(komp_id)
+    .bind(&module)
+    .bind(ab)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// Why a module state could not be recorded.
 #[derive(Debug)]
 pub enum Sect14aError {
@@ -226,4 +328,39 @@ pub async fn malo_sect14a(
         .fetch_all(pool)
         .await?,
     )
+}
+
+#[cfg(test)]
+mod intake_tests {
+    use super::{Sect14aIntake, Sect14aIntakeFehler, Sect14aModul::*};
+
+    /// BK8-22/010-A offers Modul 1, Modul 2, and Modul 3 beside Modul 1 —
+    /// every other set is refused, and none on another Sparte.
+    #[test]
+    fn only_the_three_offered_sets_pass() {
+        let pruefe = |m: Vec<_>, sparte| Sect14aIntake { module: m }.pruefe(sparte);
+        assert!(pruefe(vec![Modul1], "STROM").is_ok());
+        assert!(pruefe(vec![Modul2], "STROM").is_ok());
+        assert_eq!(
+            pruefe(vec![Modul3, Modul1, Modul1], "STROM"),
+            Ok(vec![Modul1, Modul3])
+        );
+        for set in [
+            vec![Modul1, Modul2],
+            vec![Modul2, Modul3],
+            vec![Modul3],
+            vec![Modul1, Modul2, Modul3],
+        ] {
+            assert_eq!(
+                pruefe(set.clone(), "STROM"),
+                Err(Sect14aIntakeFehler::Kombination),
+                "{set:?}"
+            );
+        }
+        assert_eq!(
+            pruefe(vec![Modul1], "GAS"),
+            Err(Sect14aIntakeFehler::NurStrom)
+        );
+        assert_eq!(pruefe(vec![], "STROM"), Err(Sect14aIntakeFehler::Leer));
+    }
 }

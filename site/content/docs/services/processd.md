@@ -114,7 +114,7 @@ and policy to each other in both directions.
 | `POST /api/v1/queue/{id}/approve` · `/reject` | `decide-queue` | `NB`, `LF` or `MSB` |
 | `GET /api/v1/counterparties` · `/{mp_id}/{rolle}` | `read-counterparty` | `NB`, `LF` or `MSB`; rows kept to the caller's Marktrollen |
 | `PUT /api/v1/neuanlage/{id}/identifikation` | `identify-neuanlage` | `NB` |
-| `POST /api/v1/start-supply[-gas]` · `end-supply[-gas]` | `initiate-supply` | `LF` |
+| `POST /api/v1/start-supply[-gas]` · `end-supply[-gas]` · `kuendigung[-gas]` | `initiate-supply` | `LF` |
 | `GET /obs/processes` · `/obs/processes/{id}` | `read-process` | any caller of the tenant |
 | `GET /obs/kpis` · `GET /api/v1/audit/gleichbehandlung` | `read-kpi` | any caller of the tenant |
 | `GET /obs/overdue` | `read-overdue` | any caller of the tenant |
@@ -768,6 +768,13 @@ Kap. 2.5.2 Nr. 1), enforced here; an Einzug passes with a
 `geli.lieferende.anmelden` reads — and forwards it as `LFG`, the only role that
 command is licensed to. All fields are mandatory; the notice period is
 `vertragd`'s to enforce.
+
+`POST /api/v1/kuendigung` sends the Kündigung beim Vorversorger, LFN → LFA
+(55016, `gpke.kuendigung.anmelden`): `malo_id`, the previous supplier's
+`lfa_mp_id` and the „Ende zum" `kuendigung_datum`. `kuendigung-gas` is the
+44016 (`geli.kuendigung.anmelden` as `LFG`) with a `YYYYMMDD` `process_date`.
+vertragd calls them when a contract asks for the Kündigung; the answer reaches
+it as the process's outcome.
 
 ### Gas Datenabruf
 

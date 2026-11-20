@@ -697,11 +697,11 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
 // ── REST handlers ──────────────────────────────────────────────────────────────
 
 /// The supply request bodies another service sends: `vertragd` builds its
-/// Lieferbeginn and Lieferende tasks to these, and its contract test reads each
+/// Lieferbeginn, Lieferende and Kündigung tasks to these, and its contract test reads each
 /// body through them as the handler's [`mako_service::Json`] does.
 pub use rest::{
-    EndSupplyGasRequest, EndSupplyRequest, StartSupplyGasRequest, StartSupplyRequest,
-    transaktionsgruende_44001,
+    EndSupplyGasRequest, EndSupplyRequest, KuendigungGasRequest, KuendigungRequest,
+    StartSupplyGasRequest, StartSupplyRequest, transaktionsgruende_44001,
 };
 
 /// The `SG4 STS+7` DE 9013 codes `start-supply` admits — the 55001 column's
@@ -851,6 +851,32 @@ pub(crate) mod rest {
         pub process_date: String,
         /// `SG4 STS+7` DE 9013 — makod holds it against the column's codes.
         pub transaktionsgrund: String,
+    }
+
+    /// `POST /api/v1/kuendigung` — the Kündigung 55016, LFN → LFA (GPKE Teil 2
+    /// Kap. 1.2).
+    #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+    pub struct KuendigungRequest {
+        /// 11-digit Strom Marktlokations-ID — the only identification the
+        /// 55016 carries (GPKE Teil 2 Kap. 1.2.2 Nr. 1, S. 9).
+        pub malo_id: String,
+        /// The previous supplier's MP-ID — `NAD+MR`.
+        pub lfa_mp_id: String,
+        /// „Ende zum", ISO-8601 date — `SG4 DTM+93`.
+        pub kuendigung_datum: String,
+    }
+
+    /// `POST /api/v1/kuendigung-gas` — the Kündigung 44016, LFN → LFA (GeLi
+    /// Gas Anlage Kap. 3.1). The body `makod`'s `geli.kuendigung.anmelden`
+    /// reads (`mako_markt::commands::GeliKuendigungAnmelden`).
+    #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+    pub struct KuendigungGasRequest {
+        /// Gas-MaLo-ID — `SG5 LOC+172`.
+        pub malo_id: String,
+        /// The previous supplier's MP-ID — `NAD+MR`.
+        pub lfa_mp_id: String,
+        /// „Ende zum", `YYYYMMDD` — `SG4 DTM+93`.
+        pub process_date: String,
     }
 
     /// Authorize `action` for the caller, or produce the `403`.
@@ -2256,7 +2282,9 @@ pub(crate) mod rest {
         // Earliest allowed Lieferbeginn: the calendar day after the next
         // Werktag after today (the Werktag in between is the NB's processing
         // day — its answer is due 11:00 Uhr des 1. WT nach dem ÜT).
-        let base = fristen::vorlauf::fruehester_termin_nach_tag_vor_dem_letzten_werktag(
+        let base = fristen::vorlauf::fruehester_lieferbeginn(
+            fristen::Sparte::Strom,
+            true,
             today_berlin,
             HolidayCalendar::BdewMaKo,
         );
@@ -2311,12 +2339,6 @@ pub(crate) mod rest {
             Err(e) => Err(makod_dispatch_error(e)),
         }
     }
-
-    /// GeLi Gas Mindestvorlauffrist for a Lieferantenwechsel, in Werktagen.
-    ///
-    /// AWH GeLi Gas 2.0 Kap. 2.5.2 SD „Lieferbeginn" Nr. 1. Not to be confused
-    /// with the *GNB's* answer window, which is the Ablauf des 4. WT.
-    const GELI_GAS_VORLAUF_WT: u32 = 10;
 
     /// The `SG4 STS+7` DE 9013 codes the 44001 column admits, read from the
     /// UTILMD Gas profile in force today — the profile the pre-send gate holds
@@ -2583,11 +2605,18 @@ pub(crate) mod rest {
 
         let mut vorlauf_hinweis = None;
         {
-            use mako_fristen::{HolidayCalendar, add_werktage};
+            use mako_fristen::HolidayCalendar;
+            use mako_fristen::vorlauf::{GAS_WECHSEL_VORLAUF_WT, fruehester_lieferbeginn};
 
             let today_berlin = mako_fristen::heute();
-            let fruehestens =
-                add_werktage(today_berlin, GELI_GAS_VORLAUF_WT, HolidayCalendar::BdewMaKo);
+            // The Wechsel bound either way: a Wechsel short of it is refused,
+            // an Einzug short of it is passed with the NB's correction named.
+            let fruehestens = fruehester_lieferbeginn(
+                mako_fristen::Sparte::Gas,
+                true,
+                today_berlin,
+                HolidayCalendar::BdewMaKo,
+            );
 
             if lieferbeginn < fruehestens {
                 if ist_wechsel {
@@ -2606,7 +2635,7 @@ pub(crate) mod rest {
                     ));
                 }
                 vorlauf_hinweis = Some(format!(
-                    "Lieferbeginn {lieferbeginn} liegt weniger als {GELI_GAS_VORLAUF_WT} WT in \
+                    "Lieferbeginn {lieferbeginn} liegt weniger als {GAS_WECHSEL_VORLAUF_WT} WT in \
                      der Zukunft (frühestens {fruehestens}). Bei Einzug/Neuanlage setzt der NB \
                      den Netznutzungswechsel auf den zweiten auf das Bestätigungsdatum \
                      folgenden WT fest (AWH GeLi Gas 2.0 Kap. 4)."
@@ -2810,6 +2839,137 @@ pub(crate) mod rest {
         date_key: &'static str,
         date: String,
         payload: serde_json::Value,
+    }
+
+    /// `POST /api/v1/kuendigung` — the Lieferant terminates the customer's
+    /// contract with the previous supplier on their behalf (55016).
+    ///
+    /// Forwards to makod `gpke.kuendigung.anmelden`. The previous supplier
+    /// answers 55017 / 55018 „spätester ÜT ist der 1. WT nach dem ÜT"
+    /// (GPKE Teil 2 Kap. 1.2.2 Nr. 2, S. 9). The Vollmacht is held by the
+    /// caller, not sent (GPKE Teil 1 Kap. 5, S. 25).
+    #[utoipa::path(
+        post,
+        path = "/api/v1/kuendigung",
+        tag = "supply",
+        request_body = KuendigungRequest,
+        responses(
+            (status = 202, description = "makod opened the Kündigung (55016)", body = serde_json::Value),
+            (status = 403, description = "Cedar `initiate-supply` refused", body = ApiError),
+            (status = 409, description = "makod refused the command in the process's state", body = ApiError),
+            (status = 422, description = "A refusal naming the missing field", body = ApiError),
+            (status = 502, description = "makod did not answer", body = ApiError),
+        ),
+    )]
+    pub async fn kuendigung(
+        State(state): State<ProcessdState>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+        Json(body): Json<KuendigungRequest>,
+    ) -> ApiResult<axum::response::Response> {
+        authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
+        let KuendigungRequest {
+            malo_id,
+            lfa_mp_id,
+            kuendigung_datum,
+        } = body;
+        kuendigung_pflichtfelder(&malo_id, &lfa_mp_id, &kuendigung_datum, "kuendigung_datum")?;
+        let payload = serde_json::json!({
+            "malo_id": malo_id,
+            "lfa_mp_id": lfa_mp_id.trim(),
+            "kuendigung_datum": kuendigung_datum,
+        });
+        end_supply_inner(
+            state,
+            Lieferende {
+                command: mako_markt::commands::GPKE_KUENDIGUNG_ANMELDEN,
+                key_prefix: "processd-kuendigung",
+                marktrolle: "LF",
+                malo_id,
+                date_key: "kuendigung_datum",
+                date: kuendigung_datum,
+                payload,
+            },
+        )
+        .await
+    }
+
+    /// `POST /api/v1/kuendigung-gas` — the Gas twin (44016). The previous
+    /// supplier answers „spätestens jedoch bis zum Ablauf des 3. Werktages nach
+    /// Eingang der Kündigung" (GeLi Gas Anlage Kap. 3.1, S. 7).
+    #[utoipa::path(
+        post,
+        path = "/api/v1/kuendigung-gas",
+        tag = "supply",
+        request_body = KuendigungGasRequest,
+        responses(
+            (status = 202, description = "makod opened the Kündigung (44016)", body = serde_json::Value),
+            (status = 403, description = "Cedar `initiate-supply` refused", body = ApiError),
+            (status = 409, description = "makod refused the command in the process's state", body = ApiError),
+            (status = 422, description = "A refusal naming the missing field", body = ApiError),
+            (status = 502, description = "makod did not answer", body = ApiError),
+        ),
+    )]
+    pub async fn kuendigung_gas(
+        State(state): State<ProcessdState>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+        Json(body): Json<KuendigungGasRequest>,
+    ) -> ApiResult<axum::response::Response> {
+        authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
+        let KuendigungGasRequest {
+            malo_id,
+            lfa_mp_id,
+            process_date,
+        } = body;
+        kuendigung_pflichtfelder(&malo_id, &lfa_mp_id, &process_date, "process_date")?;
+        let payload = serde_json::to_value(mako_markt::commands::GeliKuendigungAnmelden {
+            malo_id: malo_id.clone(),
+            process_date: process_date.clone(),
+            lfa_mp_id: lfa_mp_id.trim().to_owned(),
+        })
+        .map_err(|e| ApiError::Internal(e.into()))?;
+        end_supply_inner(
+            state,
+            Lieferende {
+                command: mako_markt::commands::GELI_KUENDIGUNG_ANMELDEN,
+                key_prefix: "processd-kuendigung-gas",
+                // `geli.kuendigung.anmelden` is licensed to the Gas supplier.
+                marktrolle: "LFG",
+                malo_id,
+                date_key: "process_date",
+                date: process_date,
+                payload,
+            },
+        )
+        .await
+    }
+
+    /// The three facts every Kündigung names.
+    fn kuendigung_pflichtfelder(
+        malo_id: &str,
+        lfa_mp_id: &str,
+        datum: &str,
+        datum_key: &str,
+    ) -> ApiResult<()> {
+        if malo_id.is_empty() {
+            return Err(refuse("MISSING_MALO_ID", "\"malo_id\" is required"));
+        }
+        // The shape here; makod holds the MP-ID to its check digit.
+        let lfa = lfa_mp_id.trim();
+        if lfa.len() != 13 || !lfa.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(refuse(
+                "INVALID_LFA_MP_ID",
+                "\"lfa_mp_id\" must be the previous supplier's 13-digit MP-ID",
+            ));
+        }
+        if datum.is_empty() {
+            return Err(refuse(
+                "MISSING_KUENDIGUNGSDATUM",
+                format!("\"{datum_key}\" is required — SG4 DTM+93 „Ende zum\""),
+            ));
+        }
+        Ok(())
     }
 
     /// Shared Lieferende dispatch for Strom and Gas.

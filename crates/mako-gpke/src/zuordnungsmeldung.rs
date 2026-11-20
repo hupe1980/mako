@@ -326,6 +326,11 @@ pub enum ZuordnungsmeldungEvent {
         transaktionsgrund: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The Meldung's `SG4` process date, `YYYYMMDD`: the Zuordnungsende
+        /// (`DTM+93`) on a 55037, the ursprünglicher Zuordnungsbeginn
+        /// (`DTM+92`) on a 55038, absent on a 55036.
+        #[serde(default)]
+        process_date: Option<String>,
     },
 }
 
@@ -468,6 +473,9 @@ pub enum ZuordnungsmeldungCommand {
         validation_passed: bool,
         /// Validation issues, for the APERAK.
         validation_errors: Vec<String>,
+        /// The `SG4` process date, `YYYYMMDD` — the Zuordnungsende a 55037
+        /// states (GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 10, S. 23).
+        process_date: Option<String>,
     },
 }
 
@@ -630,6 +638,7 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
                 message_ref,
                 validation_passed,
                 validation_errors,
+                process_date,
             } => {
                 if !matches!(state, ZuordnungsmeldungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -671,6 +680,9 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
                             "malo_id":           location_id.as_str(),
                             "grid_operator":     sender.as_str(),
                             "transaktionsgrund": transaktionsgrund,
+                            // A supplier whose Zuordnung ends needs the day it
+                            // ends; the Grund alone tells it only that it does.
+                            "process_date":      process_date,
                         }),
                     ),
                 ];
@@ -682,6 +694,7 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
                         receiver,
                         transaktionsgrund,
                         message_ref,
+                        process_date,
                     }],
                     outbox,
                 ))
@@ -975,6 +988,7 @@ mod tests {
             message_ref: MessageRef::new("MSG-1".to_owned()),
             validation_passed: true,
             validation_errors: vec![],
+            process_date: Some("20270401".to_owned()),
         });
         let kinds: Vec<&str> = out.outbox.iter().map(|o| &*o.message_type).collect();
         assert_eq!(kinds, vec!["APERAK", "ProcessInitiated"]);
@@ -982,6 +996,8 @@ mod tests {
             !kinds.contains(&"UTILMD"),
             "a Meldung has no Antwortnachricht"
         );
+        // The LFA learns the day its Zuordnung ends, not only that it ends.
+        assert_eq!(out.outbox[1].payload["process_date"], "20270401");
     }
 
     #[test]
@@ -1004,6 +1020,7 @@ mod tests {
             message_ref: MessageRef::new("MSG-1".to_owned()),
             validation_passed: true,
             validation_errors: vec![],
+            process_date: Some("20270401".to_owned()),
         });
         assert_eq!(
             out.events[0].verlauf(),

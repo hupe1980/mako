@@ -411,6 +411,20 @@ pub fn geli_gas_zuordnungsmeldung_registry()
                     message_ref: MessageRef::new(msg.message_ref()),
                     validation_passed,
                     validation_errors,
+                    // `SG4 DTM+93` Zuordnungsende on a 44037, `DTM+92` on a
+                    // 44038 — the Gastag the instant begins.
+                    process_date: super::prozesstag(
+                        u.transactions().first().and_then(|t| {
+                            super::sg4_dtm(Some(t), edi_energy::utilmd_codes::dtm::ENDE_ZUM)
+                                .or_else(|| {
+                                    super::sg4_dtm(
+                                        Some(t),
+                                        edi_energy::utilmd_codes::dtm::BEGINN_ZUM,
+                                    )
+                                })
+                        }),
+                        mako_fristen::Sparte::Gas,
+                    )?,
                 },
             )
         },

@@ -457,12 +457,13 @@ async fn pruefe_bestellung(
             Abweichung::LieferbeginnZuFrueh(d) => lieferbeginn_zu_frueh(d),
         });
     }
-    if let Some(fruehestens) =
-        fruehester_lieferbeginn_in_widerrufsfrist(ctx, input, mako_fristen::heute())
-        && input.gewuenschter_lieferbeginn < fruehestens
-    {
+    let fruehestens = fruehestens_fuer(ctx, input, &angebot.sparte, mako_fristen::heute()).datum;
+    if input.gewuenschter_lieferbeginn < fruehestens {
         return Err(lieferbeginn_zu_frueh(fruehestens));
     }
+    komponente(input, &angebot)
+        .pruefe_vertriebsangaben("SONDERVERTRAG", mako_fristen::heute())
+        .map_err(|a| ApiError::unprocessable(a.message).with_code(a.code))?;
     let fehlend = anmeldung_fehlend(input, &angebot);
     if !fehlend.is_empty() {
         return Err(
@@ -488,28 +489,102 @@ fn lieferbeginn_zu_frueh(fruehestens: Date) -> ApiError {
         .with_fields(serde_json::json!({ "fruehestens": fruehestens.to_string() }))
 }
 
-/// § 357a Abs. 2 Satz 1 Nr. 1 BGB: without the consumer's express request, and under
-/// `lieferbeginn_in_widerrufsfrist = "nur_auf_verlangen"`, supply starts no
-/// earlier than the day after the Widerrufsfrist ends — computed as if the
-/// contract came about on `vertragsschluss`. `None` when no such bound applies.
-fn fruehester_lieferbeginn_in_widerrufsfrist(
+/// One bound on the earliest Lieferbeginn, with the rule that sets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Grenze {
+    /// `vorlauf` (the market's lead time) or `widerrufsfrist`.
+    pub regel: &'static str,
+    pub datum: Date,
+    pub quelle: &'static str,
+}
+
+/// The earliest Lieferbeginn and every bound that decides it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fruehestens {
+    pub datum: Date,
+    pub grenzen: Vec<Grenze>,
+}
+
+/// The earliest Lieferbeginn an order concluded on `vertragsschluss` may name.
+///
+/// Two bounds, the later one governs:
+/// - the market's lead time for an Anmeldung sent that day
+///   ([`mako_fristen::vorlauf::fruehester_lieferbeginn`] — the function
+///   processd's Anmeldung check runs);
+/// - for a consumer, under `lieferbeginn_in_widerrufsfrist = "nur_auf_verlangen"`
+///   and without the express request, the day after the Widerrufsfrist ends
+///   (§ 357a Abs. 2 Satz 1 Nr. 1 BGB), computed as if the contract came about
+///   on `vertragsschluss`.
+#[must_use]
+pub fn fruehester_lieferbeginn(
+    policy: LieferbeginnInWiderrufsfrist,
+    sparte: &str,
+    wechsel: bool,
+    verbraucher: bool,
+    verlangt: bool,
+    belehrung_angezeigt: bool,
+    vertragsschluss: Date,
+) -> Fruehestens {
+    let mako_sparte = if sparte == "GAS" {
+        mako_fristen::Sparte::Gas
+    } else {
+        mako_fristen::Sparte::Strom
+    };
+    let mut grenzen = vec![Grenze {
+        regel: "vorlauf",
+        datum: mako_fristen::vorlauf::fruehester_lieferbeginn(
+            mako_sparte,
+            wechsel,
+            vertragsschluss,
+            CAL,
+        ),
+        quelle: if mako_sparte == mako_fristen::Sparte::Gas {
+            "AWH GeLi Gas 2.0 Kap. 2.5.2 SD Lieferbeginn Nr. 1"
+        } else {
+            "BK6-24-174 GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1"
+        },
+    }];
+    if verbraucher && !verlangt && policy != LieferbeginnInWiderrufsfrist::Immer {
+        let frist = mako_fristen::vorlauf::widerrufsfrist(
+            vertragsschluss,
+            belehrung_angezeigt.then_some(vertragsschluss),
+            CAL,
+        );
+        if let Some(tag) = frist.ende.next_day() {
+            grenzen.push(Grenze {
+                regel: "widerrufsfrist",
+                datum: tag,
+                quelle: "§ 357a Abs. 2 Satz 1 Nr. 1 BGB",
+            });
+        }
+    }
+    let datum = grenzen
+        .iter()
+        .map(|g| g.datum)
+        .max()
+        .unwrap_or(vertragsschluss);
+    Fruehestens { datum, grenzen }
+}
+
+/// [`fruehester_lieferbeginn`] for an order, with this deployment's policy.
+fn fruehestens_fuer(
     ctx: &Ctx,
     input: &BestellungInput,
+    sparte: &str,
     vertragsschluss: Date,
-) -> Option<Date> {
-    if !input.verbraucher
-        || input.lieferung_in_widerrufsfrist_verlangt.verlangt
-        || ctx.cfg.policy.lieferbeginn_in_widerrufsfrist.get()
-            == LieferbeginnInWiderrufsfrist::Immer
-    {
-        return None;
-    }
-    let frist = mako_fristen::vorlauf::widerrufsfrist(
+) -> Fruehestens {
+    fruehester_lieferbeginn(
+        ctx.cfg.policy.lieferbeginn_in_widerrufsfrist.get(),
+        sparte,
+        input
+            .anmeldung
+            .lieferbeginn_anlass
+            .is_none_or(|a| a == crate::domain::Lieferbeginnanlass::Wechsel),
+        input.verbraucher,
+        input.lieferung_in_widerrufsfrist_verlangt.verlangt,
+        input.belehrung_angezeigt,
         vertragsschluss,
-        input.belehrung_angezeigt.then_some(vertragsschluss),
-        CAL,
-    );
-    frist.ende.next_day()
+    )
 }
 
 /// The supply component an order concludes into.
@@ -532,6 +607,9 @@ fn komponente(input: &BestellungInput, angebot: &EndkundenAngebot) -> pg::Create
         enfg_grundlage: a.enfg_grundlage.clone(),
         enfg_grund: a.enfg_grund.clone(),
         fulfillment_data: None,
+        sect14a: input.sect14a.clone(),
+        vorversorger: input.vorversorger.clone(),
+        kuendigung_beim_vorversorger: input.kuendigung_beim_vorversorger.clone(),
     }
 }
 
@@ -655,6 +733,7 @@ async fn schliesse_vertrag(
         erp_contract_id: None,
         notizen: None,
         komponenten: vec![komponente(input, angebot)],
+        eog_quelle: None,
     };
     let online = OnlineVertragsschluss::new(nachweis, am);
     let inserted = pg::insert_versorgungsvertrag_tx(
@@ -913,10 +992,8 @@ pub async fn annehmen(
         .ok_or_else(|| internal(anyhow::anyhow!("Bestellnachweis of {id} missing")))?;
     // The Frist starts at this acceptance, so the Lieferbeginn bound is
     // decided against it.
-    if let Some(fruehestens) =
-        fruehester_lieferbeginn_in_widerrufsfrist(&ctx, &input, mako_fristen::heute())
-        && input.gewuenschter_lieferbeginn < fruehestens
-    {
+    let fruehestens = fruehestens_fuer(&ctx, &input, &angebot.sparte, mako_fristen::heute()).datum;
+    if input.gewuenschter_lieferbeginn < fruehestens {
         return Err(lieferbeginn_zu_frueh(fruehestens));
     }
     let abschluss = schliesse_vertrag(
@@ -1465,4 +1542,62 @@ fn widerruf_antwort(w: &store::WiderrufRow) -> serde_json::Value {
         "eingegangen_am": dokumente::berlin_iso(w.eingegangen_am),
         "eingangsbestaetigung": w.id,
     })
+}
+
+#[cfg(test)]
+mod fruehestens_tests {
+    use super::*;
+    use time::macros::date;
+
+    const FREITAG: Date = date!(2026 - 11 - 20);
+
+    /// Without a Widerruf bound the answer is the market's, from the function
+    /// processd's Anmeldung check runs — so the two cannot disagree.
+    #[test]
+    fn a_business_order_takes_the_market_bound() {
+        for (sparte, wechsel, ms) in [
+            ("STROM", true, mako_fristen::Sparte::Strom),
+            ("GAS", true, mako_fristen::Sparte::Gas),
+            ("GAS", false, mako_fristen::Sparte::Gas),
+        ] {
+            let f = fruehester_lieferbeginn(
+                LieferbeginnInWiderrufsfrist::NurAufVerlangen,
+                sparte,
+                wechsel,
+                false,
+                false,
+                true,
+                FREITAG,
+            );
+            assert_eq!(
+                f.datum,
+                mako_fristen::vorlauf::fruehester_lieferbeginn(ms, wechsel, FREITAG, CAL),
+                "{sparte} {wechsel}"
+            );
+            assert_eq!(f.grenzen.len(), 1);
+        }
+    }
+
+    /// A consumer who did not ask for supply inside the Widerrufsfrist waits
+    /// for its end; the express request, or the `immer` policy, lifts it.
+    #[test]
+    fn a_consumer_waits_for_the_widerrufsfrist_unless_asked() {
+        let policy = LieferbeginnInWiderrufsfrist::NurAufVerlangen;
+        let ohne = fruehester_lieferbeginn(policy, "STROM", true, true, false, true, FREITAG);
+        let frist = mako_fristen::vorlauf::widerrufsfrist(FREITAG, Some(FREITAG), CAL);
+        assert_eq!(Some(ohne.datum), frist.ende.next_day());
+        assert_eq!(ohne.grenzen.len(), 2);
+        let mit = fruehester_lieferbeginn(policy, "STROM", true, true, true, true, FREITAG);
+        assert_eq!(mit.datum, date!(2026 - 11 - 24), "LFW24 from a Friday");
+        let immer = fruehester_lieferbeginn(
+            LieferbeginnInWiderrufsfrist::Immer,
+            "STROM",
+            true,
+            true,
+            false,
+            true,
+            FREITAG,
+        );
+        assert_eq!(immer.datum, mit.datum);
+    }
 }

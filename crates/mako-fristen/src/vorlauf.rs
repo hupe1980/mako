@@ -513,6 +513,35 @@ pub const SPERRUNG_MSB_ANFRAGE_WT: u32 = 3;
 /// (AWH GeLi Gas 2.0 V1.2, SD „Lieferbeginn" Prozessschritt 1).
 pub const GAS_WECHSEL_VORLAUF_WT: u32 = 10;
 
+/// The earliest Lieferbeginn an Anmeldung transmitted on `uebertragungstag`
+/// may name — the market's bound, before any contractual one.
+///
+/// - **Strom**, Wechsel and Einzug alike: „spätester ÜT ist der Tag vor dem
+///   letzten WT vor dem Zuordnungsbeginn" (BK6-24-174 GPKE Teil 2 Kap. 2.1.2,
+///   SD Lieferbeginn Nr. 1) — [`fruehester_termin_nach_tag_vor_dem_letzten_werktag`].
+/// - **Gas, Wechsel**: „mindestens 10 WT vor Aufnahme der Belieferung"
+///   ([`GAS_WECHSEL_VORLAUF_WT`]).
+/// - **Gas, Einzug or Neuanlage**: no lead time; the NB corrects a date it
+///   cannot serve instead of refusing it (AWH GeLi Gas 2.0 Kap. 4), so the
+///   bound is the ÜT itself.
+#[must_use]
+pub fn fruehester_lieferbeginn(
+    sparte: crate::Sparte,
+    wechsel: bool,
+    uebertragungstag: Date,
+    cal: HolidayCalendar,
+) -> Date {
+    match (sparte, wechsel) {
+        (crate::Sparte::Strom, _) => {
+            fruehester_termin_nach_tag_vor_dem_letzten_werktag(uebertragungstag, cal)
+        }
+        (crate::Sparte::Gas, true) => {
+            crate::add_werktage(uebertragungstag, GAS_WECHSEL_VORLAUF_WT, cal)
+        }
+        (crate::Sparte::Gas, false) => uebertragungstag,
+    }
+}
+
 /// How far back a Gas An-/Abmeldung that is **not** a Wechsel may reach, in
 /// weeks (AWH GeLi Gas 2.0 Kap. 2.2 Grundregel 3a — „bis zu sechs Wochen zzgl.
 /// einer zu berücksichtigenden Bearbeitungsfrist nach An- oder
@@ -1720,6 +1749,45 @@ mod abrechnung_tests {
         assert_eq!(
             guthaben_faellig(date!(2026 - 04 - 01)),
             date!(2026 - 04 - 15)
+        );
+    }
+}
+
+#[cfg(test)]
+mod fruehester_lieferbeginn_tests {
+    use super::*;
+    use crate::Sparte;
+    use time::macros::date;
+
+    const CAL: HolidayCalendar = HolidayCalendar::BdewMaKo;
+
+    /// Strom: an ÜT on Monday 23.11.2026 reaches Wednesday 25.11. — a full
+    /// Werktag (Tuesday) lies between; Wechsel and Einzug share the rule.
+    #[test]
+    fn strom_needs_one_full_werktag_between() {
+        for wechsel in [true, false] {
+            assert_eq!(
+                fruehester_lieferbeginn(Sparte::Strom, wechsel, date!(2026 - 11 - 23), CAL),
+                date!(2026 - 11 - 25)
+            );
+        }
+    }
+
+    /// Gas Wechsel: 10 Werktage from Monday 23.11.2026 is Monday 07.12.2026.
+    #[test]
+    fn gas_wechsel_needs_ten_werktage() {
+        assert_eq!(
+            fruehester_lieferbeginn(Sparte::Gas, true, date!(2026 - 11 - 23), CAL),
+            date!(2026 - 12 - 07)
+        );
+    }
+
+    /// Gas Einzug: the NB corrects the date rather than refusing it.
+    #[test]
+    fn gas_einzug_has_no_lead_time() {
+        assert_eq!(
+            fruehester_lieferbeginn(Sparte::Gas, false, date!(2026 - 11 - 23), CAL),
+            date!(2026 - 11 - 23)
         );
     }
 }

@@ -224,6 +224,10 @@ pub enum ZuordnungsmeldungEvent {
         transaktionsgrund: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The Meldung's `SG4` process date, `YYYYMMDD` — the Zuordnungsende
+        /// on a 44037.
+        #[serde(default)]
+        process_date: Option<String>,
     },
 }
 
@@ -359,6 +363,9 @@ pub enum ZuordnungsmeldungCommand {
         validation_passed: bool,
         /// Validation issues, for the APERAK.
         validation_errors: Vec<String>,
+        /// The `SG4` process date, `YYYYMMDD` — the Zuordnungsende a 44037
+        /// states (AWH GeLi Gas Kap. 2.5.2 Nr. 6, S. 45).
+        process_date: Option<String>,
     },
 }
 
@@ -514,6 +521,7 @@ impl Workflow for GeliGasZuordnungsmeldungWorkflow {
                 message_ref,
                 validation_passed,
                 validation_errors,
+                process_date,
             } => {
                 if !matches!(state, ZuordnungsmeldungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -546,6 +554,7 @@ impl Workflow for GeliGasZuordnungsmeldungWorkflow {
                         "malo_id":           location_id.as_str(),
                         "grid_operator":     sender.as_str(),
                         "transaktionsgrund": transaktionsgrund,
+                        "process_date":      process_date,
                     }),
                 ));
                 Ok(WorkflowOutput::with_outbox(
@@ -556,6 +565,7 @@ impl Workflow for GeliGasZuordnungsmeldungWorkflow {
                         receiver,
                         transaktionsgrund,
                         message_ref,
+                        process_date,
                     }],
                     outbox,
                 ))
@@ -670,6 +680,7 @@ mod tests {
             receiver: mp("9871234567897"),
             transaktionsgrund: grund::BEENDIGUNG_ZUORDNUNG.to_owned(),
             message_ref: MessageRef::new("ZM-1"),
+            process_date: None,
         };
         assert_eq!(
             empfangen.verlauf(),
@@ -780,9 +791,11 @@ mod tests {
             message_ref: MessageRef::new("MSG-1".to_owned()),
             validation_passed: true,
             validation_errors: vec![],
+            process_date: Some("20270401".to_owned()),
         });
         let kinds: Vec<&str> = out.outbox.iter().map(|o| &*o.message_type).collect();
         assert_eq!(kinds, vec!["ProcessInitiated"]);
+        assert_eq!(out.outbox[0].payload["process_date"], "20270401");
     }
 
     #[test]
@@ -796,6 +809,7 @@ mod tests {
             message_ref: MessageRef::new("MSG-2".to_owned()),
             validation_passed: false,
             validation_errors: vec!["missing SG12".to_owned()],
+            process_date: None,
         });
         assert_eq!(&*out.outbox[0].message_type, "APERAK");
         // A rejection is Anwendungsfall 29001 (`BGM+313`, `SG4`
