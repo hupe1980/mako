@@ -364,7 +364,12 @@ reason  = "Transitive of zstd 0.13 — see the zstd skip."
 [[bans.skip]]
 name    = "asyncband"
 version = "=0.6"
-reason  = "opendal 0.58 (iceberg-storage-opendal, edmd cold tier) uses asyncband 0.6; foyer (slatedb) and reqsign use 0.7."
+reason  = "opendal 0.58 (iceberg-storage-opendal, edmd cold tier) uses asyncband 0.6; foyer (slatedb) uses 0.7 and reqsign 3.3 uses 0.8."
+
+[[bans.skip]]
+name    = "asyncband"
+version = "=0.7"
+reason  = "foyer 0.22 (slatedb, makod's engine store) uses asyncband 0.7; reqsign-aws-core 3.3 (iceberg-storage-opendal, edmd cold tier) uses 0.8. Resolves when foyer moves to 0.8."
 
 [[bans.skip]]
 name    = "aes-gcm"
