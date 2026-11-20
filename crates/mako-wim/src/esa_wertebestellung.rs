@@ -496,6 +496,15 @@ impl EsaWertebestellungState {
 
 // ── Domain commands ───────────────────────────────────────────────────────────
 
+/// `SG14 CTA+IC` name and its `COM` address on the REQOTE 35003.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ansprechpartner {
+    /// `CTA` DE 3412.
+    pub name: String,
+    /// `COM` DE 3148 — e-mail address or telephone number.
+    pub kommunikation: String,
+}
+
 /// Commands for the ESA-origination workflow.
 #[derive(Clone)]
 pub enum EsaWertebestellungCommand {
@@ -520,6 +529,9 @@ pub enum EsaWertebestellungCommand {
         /// `handle` is pure, and a retried or replayed command must arm the
         /// same Frist it armed the first time.
         gesendet_am: OffsetDateTime,
+        /// `SG14 CTA+IC` / `COM` — the ESA's Ansprechpartner the MSB answers
+        /// to. `None` leaves the renderer's deployment default.
+        ansprechpartner: Option<Ansprechpartner>,
     },
     /// QUOTES 15003 Angebot received (UC 4.1 Nr. 2).
     ReceiveAngebot {
@@ -953,36 +965,6 @@ impl Workflow for EsaWertebestellungWorkflow {
             let message_ref = Some(message_ref.as_str().to_owned());
             let korrelation_ref = korrelation_ref.map(str::to_owned);
             match message_type {
-                "REQOTE" => PendingOutbox::typed(
-                    data.msb.as_str(),
-                    &mako_engine::payload::ReqotePayload {
-                        pid: Some(pid.as_u32()),
-                        sender,
-                        receiver: Some(data.msb.as_str().to_owned()),
-                        message_ref,
-                        location: Some(data.lokations_id.clone()),
-                        wunschtermin: Some(data.gegenstand.wunschtermin.to_string()),
-                        messprodukt: Some(data.gegenstand.messprodukt.clone()),
-                        smgw: data.gegenstand.smgw.as_ref().map(|z| {
-                            mako_engine::payload::SmgwZiel {
-                                uri_ipv4: z.uri_ipv4.clone(),
-                                uri_ipv6: z.uri_ipv6.clone(),
-                                zertifikat_aussteller: z.zertifikat_aussteller.clone(),
-                                zertifikat_nutzer: z.zertifikat_nutzer.clone(),
-                                schwellwerte: z
-                                    .schwellwerte
-                                    .iter()
-                                    .map(|sw| mako_engine::payload::Schwellwert {
-                                        position_code: sw.position_code.clone(),
-                                        oberer: sw.oberer.clone(),
-                                        unterer: sw.unterer.clone(),
-                                    })
-                                    .collect(),
-                            }
-                        }),
-                        ..Default::default()
-                    },
-                ),
                 "ORDCHG" => PendingOutbox::typed(
                     data.msb.as_str(),
                     &mako_engine::payload::OrdchgPayload {
@@ -1008,6 +990,52 @@ impl Workflow for EsaWertebestellungWorkflow {
             }
         }
 
+        /// The REQOTE 35003 — the one message carrying the location (`ZO-T17`)
+        /// and the ESA's Ansprechpartner.
+        fn esa_reqote(
+            pid: Pruefidentifikator,
+            data: &EsaWertebestellungData,
+            message_ref: &MessageRef,
+            ansprechpartner: Option<&Ansprechpartner>,
+        ) -> PendingOutbox {
+            let sender = Some(data.esa.as_str().to_owned());
+            let message_ref = Some(message_ref.as_str().to_owned());
+            PendingOutbox::typed(
+                data.msb.as_str(),
+                &mako_engine::payload::ReqotePayload {
+                    pid: Some(pid.as_u32()),
+                    sender,
+                    receiver: Some(data.msb.as_str().to_owned()),
+                    message_ref,
+                    location: Some(data.lokations_id.clone()),
+                    wunschtermin: Some(data.gegenstand.wunschtermin.to_string()),
+                    messprodukt: Some(data.gegenstand.messprodukt.clone()),
+                    contact: ansprechpartner.map(|a| a.name.clone()),
+                    contact_comm: ansprechpartner.map(|a| a.kommunikation.clone()),
+                    smgw: data
+                        .gegenstand
+                        .smgw
+                        .as_ref()
+                        .map(|z| mako_engine::payload::SmgwZiel {
+                            uri_ipv4: z.uri_ipv4.clone(),
+                            uri_ipv6: z.uri_ipv6.clone(),
+                            zertifikat_aussteller: z.zertifikat_aussteller.clone(),
+                            zertifikat_nutzer: z.zertifikat_nutzer.clone(),
+                            schwellwerte: z
+                                .schwellwerte
+                                .iter()
+                                .map(|sw| mako_engine::payload::Schwellwert {
+                                    position_code: sw.position_code.clone(),
+                                    oberer: sw.oberer.clone(),
+                                    unterer: sw.unterer.clone(),
+                                })
+                                .collect(),
+                        }),
+                    ..Default::default()
+                },
+            )
+        }
+
         use EsaWertebestellungCommand as C;
         use EsaWertebestellungEvent as E;
         use EsaWertebestellungState as S;
@@ -1025,6 +1053,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                 gegenstand,
                 message_ref,
                 gesendet_am,
+                ansprechpartner,
             } => {
                 if !matches!(state, S::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -1060,16 +1089,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                     smgw_quelle: None,
                     letzte_antwort: None,
                 };
-                let wunschtermin = gegenstand.wunschtermin.midnight().assume_utc();
-                let outbox = esa_send(
-                    "REQOTE",
-                    ANFRAGE_PID,
-                    &data,
-                    &message_ref,
-                    None,
-                    Some(wunschtermin),
-                    gegenstand.abonnement,
-                );
+                let outbox = esa_reqote(ANFRAGE_PID, &data, &message_ref, ansprechpartner.as_ref());
                 // The MSB owes an Angebot within 5 WT, measured from the ÜT of
                 // this REQOTE (the AS4 Receipt is issued in the same request).
                 // The instant comes in on the command so a retried `handle`

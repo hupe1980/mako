@@ -1755,7 +1755,7 @@ fails **closed**.
 | `abonnement` | `Z01` (default, running) or `Z03` (single transmission) |
 | `msb_mp_id` | Optional. Omitted: resolved from marktd's dated MSB timeline (`GET /melos/{id}/msb?at=`) using `melo_id` and `zeitraum_von` — the MSB of the requested period (UC 4.1.1). A `zeitraum_bis` spanning an MSB change is `422` |
 | `smgw` | Kap. 4.6.2 products: IPv4/IPv6 target URIs, certificate issuer and subject, Schwellwerte |
-| `contact`, `contact_comm` | `SG14 CTA+IC` / `COM`, verbatim |
+| `contact`, `contact_comm` | `SG14 CTA+IC` / `COM`. Both or neither — one alone is `422` |
 
 **Revocation loop.** Every end of a consent in marktd — a Widerruf, an expiry,
 a replacing grant — owes `esa.abbestellung.beauftragen` per location the consent

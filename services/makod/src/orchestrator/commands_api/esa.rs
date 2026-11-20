@@ -249,6 +249,39 @@ fn parse_gegenstand(
     }))
 }
 
+/// `contact` / `contact_comm` → the REQOTE's `SG14 CTA+IC` / `COM`. They name
+/// one Ansprechpartner, so one without the other is refused rather than paired
+/// with the deployment default.
+fn parse_ansprechpartner(
+    payload: &serde_json::Value,
+) -> Result<Option<mako_wim::esa_wertebestellung::Ansprechpartner>, DispatchError> {
+    let field = |key: &str| -> Result<Option<String>, DispatchError> {
+        match payload.get(key) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(v)) if !v.trim().is_empty() => {
+                Ok(Some(v.trim().to_owned()))
+            }
+            Some(_) => Err(DispatchError::InvalidPayload(format!(
+                "{key} must be a non-empty string"
+            ))),
+        }
+    };
+    match (field("contact")?, field("contact_comm")?) {
+        (None, None) => Ok(None),
+        (Some(name), Some(kommunikation)) => {
+            Ok(Some(mako_wim::esa_wertebestellung::Ansprechpartner {
+                name,
+                kommunikation,
+            }))
+        }
+        _ => Err(DispatchError::InvalidPayload(
+            "contact and contact_comm name one Ansprechpartner (CTA+IC / COM) — give both or \
+             neither"
+                .to_owned(),
+        )),
+    }
+}
+
 /// How a Werteanfrage's MSB is determined — decided purely from the payload.
 #[derive(Debug, PartialEq, Eq)]
 enum MsbResolution {
@@ -359,6 +392,7 @@ pub(super) async fn dispatch_esa_werteanfrage(
     // Parse (and thereby validate) the order before any I/O — a Messprodukt
     // outside Kapitel 4.6 is not orderable by this Marktrolle at all.
     let gegenstand = parse_gegenstand(payload)?;
+    let ansprechpartner = parse_ansprechpartner(payload)?;
     // The product names the level; the identifier cannot (a MaLo-ID and a
     // Tranchen-ID have the same shape).
     let ebene = esa_ebene(&location, &gegenstand.messprodukt);
@@ -403,6 +437,7 @@ pub(super) async fn dispatch_esa_werteanfrage(
         // ÜT of the outbound REQOTE — resolved here so the pure workflow anchors
         // the 5-WT Angebot window on an instant that survives a retry.
         gesendet_am: time::OffsetDateTime::now_utc(),
+        ansprechpartner,
     };
 
     let workflow_id = WorkflowId::new(
@@ -1048,7 +1083,7 @@ pub(super) fn extract_esa_location(payload: &serde_json::Value) -> Result<String
 mod werteanfrage_msb_tests {
     use serde_json::json;
 
-    use super::{MsbResolution, plan_werteanfrage_msb};
+    use super::{MsbResolution, parse_ansprechpartner, plan_werteanfrage_msb};
     use crate::orchestrator::commands_api::types::DispatchError;
 
     const MALO: &str = "51238696012"; // 11 chars → Marktlokation
@@ -1056,6 +1091,27 @@ mod werteanfrage_msb_tests {
 
     fn date(s: &str) -> time::Date {
         time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).unwrap()
+    }
+
+    /// One Ansprechpartner is a name and its address together; half of one is
+    /// refused, not completed with the deployment default.
+    #[test]
+    fn half_an_ansprechpartner_is_refused() {
+        let both =
+            json!({ "contact": "Acme ESA Service", "contact_comm": "mako@acme-esa.example" });
+        let a = parse_ansprechpartner(&both).unwrap().expect("both given");
+        assert_eq!(
+            (a.name.as_str(), a.kommunikation.as_str()),
+            ("Acme ESA Service", "mako@acme-esa.example")
+        );
+        assert!(parse_ansprechpartner(&json!({})).unwrap().is_none());
+        for half in [
+            json!({ "contact": "Acme ESA Service" }),
+            json!({ "contact_comm": "mako@acme-esa.example" }),
+            json!({ "contact": " ", "contact_comm": "mako@acme-esa.example" }),
+        ] {
+            assert!(parse_ansprechpartner(&half).is_err(), "{half}");
+        }
     }
 
     /// An explicit `msb_mp_id` short-circuits — no timeline resolution.

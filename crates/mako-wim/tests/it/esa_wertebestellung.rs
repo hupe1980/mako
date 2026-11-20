@@ -76,6 +76,7 @@ fn werteanfrage() -> C {
         ebene: Lokationsebene::Marktlokation,
         lokations_id: "51238696012".to_owned(),
         message_ref: mref("ESA-WA-1"),
+        ansprechpartner: None,
     }
 }
 
@@ -148,6 +149,30 @@ fn werteanfrage_emits_reqote_35003_and_arms_the_angebot_window() {
             .iter()
             .any(|d| d.label == ANGEBOT_WINDOW_LABEL),
         "the 5 WT Angebot window is armed"
+    );
+}
+
+/// The caller's Ansprechpartner is what the MSB answers to, so it must reach
+/// the outbox the renderer reads `SG14 CTA+IC` / `COM` from; dropped here, the
+/// wire would carry the deployment's placeholder instead.
+#[test]
+fn the_ansprechpartner_reaches_the_reqote_payload() {
+    let mut cmd = werteanfrage();
+    if let C::SendWerteanfrage {
+        ansprechpartner, ..
+    } = &mut cmd
+    {
+        *ansprechpartner = Some(mako_wim::esa_wertebestellung::Ansprechpartner {
+            name: "Acme ESA Service".to_owned(),
+            kommunikation: "mako@acme-esa.example".to_owned(),
+        });
+    }
+    let (_, out) = step(&S::default(), cmd).unwrap();
+    let ob = out.outbox.first().expect("REQOTE sent");
+    assert_eq!(ob.payload["contact"].as_str(), Some("Acme ESA Service"));
+    assert_eq!(
+        ob.payload["contact_comm"].as_str(),
+        Some("mako@acme-esa.example")
     );
 }
 
@@ -812,6 +837,7 @@ fn a_one_shot_is_stornierbar_not_abbestellbar() {
         ebene: Lokationsebene::Marktlokation,
         lokations_id: "51238696012".to_owned(),
         message_ref: mref("ESA-WA-1"),
+        ansprechpartner: None,
     };
     let (s, _) = step(&S::default(), einmalig).unwrap();
     let (s, _) = step(

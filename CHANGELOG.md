@@ -9,6 +9,12 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.40.0] — 2026-11-20
+
+### Fixed
+
+- **A Werteanfrage names the caller's Ansprechpartner.** `esa.werteanfrage.stellen` dropped `contact` / `contact_comm`, so the REQOTE 35003 carried the deployment's placeholder in `SG14 CTA+IC` / `COM`. Both now reach the wire; one without the other is `422`. Breaking for `mako-wim`: `EsaWertebestellungCommand::SendWerteanfrage` carries `ansprechpartner`.
+
 ## [0.39.0] — 2026-11-20
 
 ### Added
