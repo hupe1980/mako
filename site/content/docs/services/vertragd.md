@@ -439,7 +439,16 @@ code's `klasse` and the `reaktion` taken.
   Without `ersatzversorgung_produkt` no contract is opened, and
   `--check-config` says so. A Gas 44013 opens no contract.
 
-Both arrive as makod's process events, which marktd fans out to vertragd's
+- **A new supplier gives notice.** A Lieferant's 55016 (Gas 44016)
+  Kündigung for a Marktlokation this deployment supplies is announced as
+  `de.mako.vertrag.kuendigung-neulieferant.eingegangen`, once per running
+  component: the new supplier, `kuendigung_zum` or `naechstmoeglicher_termin`.
+  The contract does not change. Whether the Kündigung is valid is the
+  LF's answer (55017/55018), and the supply ends only when the Netzbetreiber's
+  55037 ends the Zuordnung. It is the earliest moment a front end can win the
+  customer back.
+
+All three arrive as makod's process events, which marktd fans out to vertragd's
 `POST /api/v1/events` (`[[subscriptions.endpoints]]` in marktd's
 configuration, signed with vertragd's `inbound_secret`).
 
@@ -510,7 +519,10 @@ the record must hold (all missing ones named in `fehlend`), the button label,
 every document hash against `rechtsdokumente` (the `PREISBLATT` against the
 offer's product version), the frozen offer `angebot_ref` names (`id`, `sha256`)
 — its hash, validity and MaLo-ID and its earliest Lieferbeginn — and the facts
-the Anmeldung needs. Each refusal is a stable
+the Anmeldung needs. An offer priced on a front end's own price names its
+contract price as the product
+([productd](@/docs/services/productd.md#a-front-end-s-own-price-vertriebspreis)),
+so the contract is billed at what the customer signed. Each refusal is a stable
 `code`:
 
 | Code | Status | When |
@@ -850,6 +862,7 @@ by its own reference.
 | `de.mako.vertrag.zuordnung.beendet` | The Netzbetreiber ended this supplier's Zuordnung (55037/44037) | the component, `zuordnungsende`, `grund`, `wechsel`, `netzbetreiber` |
 | `de.mako.vertrag.kuendigung-vorversorger.bestaetigt` | The previous supplier confirmed the Kündigung | the component, `vorversorger_mp_id`, `kuendigung_zum`, `antwortcode`, `codeliste`, `reaktion` |
 | `de.mako.vertrag.kuendigung-vorversorger.abgelehnt` | It refused | the component, `vorversorger_mp_id`, `antwortcode`, `codeliste`, `reason`, `klasse`, `reaktion` |
+| `de.mako.vertrag.kuendigung-neulieferant.eingegangen` | A new supplier's Kündigung (55016/44016) arrived for a running component; nothing changes | the component, `neulieferant`, `kuendigung_zum`, `naechstmoeglicher_termin` |
 | `de.mako.vertrag.kuendigung` | A Kündigung is accepted and the Lieferende dispatched | `lieferende`, `grund`, `frist`, `rechtsgrundlage`, and the § 41 Abs. 8 Nr. 2 EnWG `kuendigungsbestaetigung` block |
 | `de.mako.vertrag.gekuendigt` | One child of a Rahmenvertrag-Kündigung cascade | as above, plus `rahmenvertrag_id` / `rahmenvertrag_nr` |
 | `de.mako.vertrag.kuendigung-widerrufen` | `POST /widerruf-kuendigung` reverted a Kündigung still ahead of its Lieferende | — |

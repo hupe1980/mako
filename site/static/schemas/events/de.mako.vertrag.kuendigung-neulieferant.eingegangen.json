@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KuendigungNeulieferantEingegangen",
+  "description": "The `data` of `de.mako.vertrag.kuendigung-neulieferant.eingegangen`.",
+  "type": "object",
+  "properties": {
+    "vertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "vertrags_nr": {
+      "type": "string"
+    },
+    "kunden_id": {
+      "description": "The Kunde the contract is with — the customer number of the portfolio\nroute.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "erp_contract_id": {
+      "description": "The caller's contract reference, where the contract was created with one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bestellreferenz": {
+      "description": "The front end's order reference, where the contract came from an order.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "komp_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sparte": {
+      "type": "string"
+    },
+    "malo_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lieferbeginn": {
+      "description": "The day supply begins, as the contract holds it.",
+      "type": "string",
+      "format": "date"
+    },
+    "neulieferant": {
+      "description": "The new supplier that sent the Kündigung.",
+      "type": "string"
+    },
+    "kuendigung_zum": {
+      "description": "The end it asks for (`DTM+93`); absent where it asks for the\nnächstmöglicher Termin.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "naechstmoeglicher_termin": {
+      "description": "It asks for the nächstmöglicher Termin (`DTM+471`).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "vertrag_id",
+    "vertrags_nr",
+    "kunden_id",
+    "komp_id",
+    "sparte",
+    "lieferbeginn",
+    "neulieferant",
+    "naechstmoeglicher_termin"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.kuendigung-neulieferant.eingegangen.json"
+}

@@ -57,8 +57,14 @@ CREATE TABLE products (
     bo4e_version    TEXT    NOT NULL DEFAULT '202607.1.0',
     -- DRAFT = staged/preview — invisible to billingd and comparison feed.
     -- PUBLISHED = active for billing, portald, and § 41c comparison feed.
+    -- VERTRAG = one contract's price, derived from a front end's hand-over on a
+    -- PUBLISHED basis product: billable by its code, never listed or offered.
     product_status  TEXT    NOT NULL DEFAULT 'PUBLISHED'
-                    CHECK (product_status IN ('DRAFT', 'PUBLISHED')),
+                    CHECK (product_status IN ('DRAFT', 'PUBLISHED', 'VERTRAG')),
+    -- The front end's own reference for a VERTRAG price (its digest of what it
+    -- sold), echoed on the offer; opaque to mako.
+    vertriebsreferenz TEXT  CHECK (vertriebsreferenz IS NULL
+                              OR char_length(vertriebsreferenz) BETWEEN 1 AND 128),
     -- BO4E Energiemix COM (§42 EnWG energy source mix disclosure)
     energiemix      JSONB,
     -- Certification labels extracted from energiemix for GIN filtering

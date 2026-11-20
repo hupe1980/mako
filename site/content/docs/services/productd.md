@@ -229,7 +229,7 @@ Exactly one of `malo_id` (the NB is read from `marktd`
 
 | Line (`preise[].art`) | Source |
 |---|---|
-| `ARBEITSPREIS`, `GRUNDPREIS` | the product version in force and `PUBLISHED` |
+| `ARBEITSPREIS`, `GRUNDPREIS` | the product version in force and `PUBLISHED`, or the front end's [`vertriebspreis`](#a-front-end-s-own-price-vertriebspreis) |
 | `NETZENTGELT_ARBEITSPREIS`, `NETZENTGELT_GRUNDPREIS` | `marktd` Preisblatt Netznutzung of the NB — positions `ARBEITSPREIS_WIRKARBEIT`, `GRUNDPREIS` |
 | `MESSSTELLENBETRIEB` | `marktd` Preisblatt Messung of the NB as grundzuständiger Messstellenbetreiber — position `MESSSTELLENBETRIEB` |
 | `KONZESSIONSABGABE` | `marktd` Preisblatt Konzessionsabgabe — Strom: Tarifkunden up to 30 000 kWh (§ 2 Abs. 7 KAV), refused above; Gas: only a sheet for every Kundengruppe |
@@ -250,6 +250,43 @@ product's `data`. The schema holds the hash to the stored bytes
 `GET` answer is read back out of them.
 
 Without `marktd_url` the route answers `503 marktd_nicht_konfiguriert`.
+
+### A front end's own price: `vertriebspreis`
+
+A shop, CRM or sales platform that quotes from its own catalogue hands over the
+price it sold, so the customer is billed what they signed. It sets only the
+supplier's own lines, net; every regulated line still comes from its source
+above.
+
+```http
+POST /api/v1/products/9900357000004/endkunden-angebote
+
+{ "product_code": "STROM-OEKO-24", "sparte": "STROM", "verbrauch_kwh": "3500",
+  "malo_id": "51238696012", "gewuenschter_lieferbeginn": "2027-02-01",
+  "vertriebspreis": {
+    "arbeitspreis_ct_kwh": "27.5", "grundpreis_eur_jahr": "146",
+    "referenz": "sha256:9f2c…",
+    "angezeigt": { "arbeitspreis_brutto_ct_kwh": "41.87", "jahreskosten_brutto_eur": "1638.52" } } }
+```
+
+| Field | Rule |
+|---|---|
+| `product_code` | The **basis**: a `PUBLISHED`, non-dynamic product of the Sparte. It supplies everything that is not a price — category, tax, billing settings, Energiemix. Otherwise `422 basis_ungeeignet` |
+| `arbeitspreis_ct_kwh` — or `arbeitspreis_ht_ct_kwh` and `arbeitspreis_nt_ct_kwh` for a Zweitarif basis | net, ≤ 4 decimals |
+| `grundpreis_eur_jahr` | net, ≤ 2 decimals; stored as ct/Tag (× 100 / 365) |
+| `referenz` | optional, 1–128 characters, echoed as `vertriebsreferenz` on the offer |
+| `angezeigt` | optional: what the customer saw, gross — any of `arbeitspreis_brutto_ct_kwh`, `grundpreis_brutto_eur_jahr`, `jahreskosten_brutto_eur`. Compared at the precision given (kaufmännisch gerundet); a difference refuses `422 angezeigt_abweichend` with `abweichungen` naming each line with both values, and stores nothing |
+
+A price outside these rules is `422 vertriebspreis_ungueltig`. The price
+becomes a **contract price**: a product version with status `VERTRAG`, code
+`<basis>~<12 hex digits of its content hash>`, written in the offer's
+transaction. The same price handed over again reuses it. The offer's
+`product_code` names it, so the order cites it and billingd bills it like any
+product. A contract price is never listed, never in the § 41c feed, and is
+refused as the product of a catalogue or B2B offer. A `PUT` cannot create it,
+cannot make it a catalogue product, and cannot rewrite a version. A later
+version with a `valid_from` after every existing one is the operator's
+Preisanpassung (§ 41 Abs. 5 EnWG).
 
 ## What productd is *not*
 

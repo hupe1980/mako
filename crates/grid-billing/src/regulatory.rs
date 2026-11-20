@@ -53,9 +53,10 @@ pub enum NetzzugangRegime {
 /// formed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub enum EntgeltRegime {
-    /// **To 31.12.2028.** Verordnungsrecht: StromNEV / GasNEV together with the
-    /// ARegV, and the §19 Abs. 2 individual charges decided by BNetzA
-    /// Beschlusskammer 4 (BK4-22-089).
+    /// **To 31.12.2028.** Verordnungsrecht: StromNEV together with the ARegV,
+    /// and the §19 Abs. 2 individual charges decided by BNetzA
+    /// Beschlusskammer 4 (BK4-22-089). The GasNEV is the Gas axis's and ends a
+    /// year earlier ([`GasEntgeltRegime`]).
     Verordnung,
     /// **From 01.01.2029.** The BNetzA framework Festlegung *AgNeS*
     /// (Allgemeine Netzentgeltsystematik Strom), which replaces StromNEV and
@@ -73,7 +74,7 @@ pub enum EntgeltRegime {
     /// already-computed settlement).
     ///
     /// The substantive methodology is not implemented: the framework
-    /// Festlegung was still in consultation when this was written.
+    /// Festlegung is not published.
     AgNeS,
 }
 

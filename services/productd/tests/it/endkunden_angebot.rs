@@ -15,8 +15,9 @@
 )]
 
 use productd::endkunden_angebot::{
-    Eingaben, EndkundenAngebotAnfrage, KaBlatt, Produktstand, Sparte, bepreise, code, gueltig_bis,
-    kanonisch, pruefe_anfrage, sha256_hex,
+    Angezeigt, Eingaben, EndkundenAngebotAnfrage, KaBlatt, Produktstand, Sparte, Vertriebspreis,
+    abweichungen, bepreise, code, gueltig_bis, kanonisch, pruefe_anfrage, sha256_hex,
+    vertragspreis_daten,
 };
 use productd::handlers::{PricingContext, pricing_context_fuer};
 use rust_decimal::{Decimal, dec};
@@ -38,6 +39,7 @@ fn anfrage(sparte: Sparte, kwh: Decimal, lieferbeginn: time::Date) -> EndkundenA
         nb_mp_id: None,
         plz: None,
         gewuenschter_lieferbeginn: lieferbeginn,
+        vertriebspreis: None,
     }
 }
 
@@ -600,4 +602,402 @@ async fn a_wrong_check_digit_stores_nothing() {
     .expect_err("wrong check digit");
     assert_eq!(err.code(), Some(code::MALO_ID_UNGUELTIG));
     assert_eq!(anzahl(&pool).await, 0);
+}
+
+// ── A front end's own price ───────────────────────────────────────────────────────
+
+fn vertriebspreis(ap: Decimal, gp: Decimal) -> Vertriebspreis {
+    Vertriebspreis {
+        arbeitspreis_ct_kwh: Some(ap),
+        arbeitspreis_ht_ct_kwh: None,
+        arbeitspreis_nt_ct_kwh: None,
+        grundpreis_eur_jahr: gp,
+        referenz: Some("sha256:abc".to_owned()),
+        angezeigt: None,
+    }
+}
+
+/// The handed-over Energie prices replace the basis's; the Grundpreis is
+/// stored in the catalogue's ct-per-day unit.
+#[test]
+fn the_front_ends_price_replaces_the_energie_lines() {
+    let data =
+        vertragspreis_daten(&produkt_data(), &vertriebspreis(dec!(27.5), dec!(146))).unwrap();
+    let preis = |pt: &str| {
+        data["tarifpreise"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["preistyp"] == pt)
+            .map(|p| p["preisstaffeln"][0]["preis"].as_str().unwrap().to_owned())
+    };
+    assert_eq!(preis("ARBEITSPREIS_EINTARIF").as_deref(), Some("27.5"));
+    // 146 EUR / Jahr = 40 ct / Tag.
+    assert_eq!(preis("GRUNDPREIS").as_deref(), Some("40"));
+}
+
+/// A price that does not fit its basis is refused, naming why.
+#[test]
+fn a_price_that_does_not_fit_its_basis_is_refused() {
+    let zweitarif = Vertriebspreis {
+        arbeitspreis_ct_kwh: None,
+        arbeitspreis_ht_ct_kwh: Some(dec!(30)),
+        arbeitspreis_nt_ct_kwh: Some(dec!(22)),
+        ..vertriebspreis(dec!(0), dec!(0))
+    };
+    for vp in [
+        zweitarif,
+        vertriebspreis(dec!(-1), dec!(100)),
+        vertriebspreis(dec!(27.12345), dec!(100)),
+        vertriebspreis(dec!(27), dec!(100.123)),
+    ] {
+        let err = vertragspreis_daten(&produkt_data(), &vp).unwrap_err();
+        assert_eq!(err.code, code::VERTRIEBSPREIS_UNGUELTIG, "{}", err.meldung);
+    }
+}
+
+/// The offer prices the handed-over Energie line and still reads every
+/// regulated line from its source; the Energie line names its origin.
+#[test]
+fn an_offer_is_priced_from_the_front_ends_price() {
+    let mut f = Fixture::strom(dec!(3500), date!(2027 - 02 - 01));
+    let vp = vertriebspreis(dec!(27.5), dec!(146));
+    f.produkt = vertragspreis_daten(&produkt_data(), &vp).unwrap();
+    f.status = "VERTRAG";
+    f.anfrage.vertriebspreis = Some(vp);
+    f.anfrage.product_code = "STROM-OEKO-24~0123456789ab".to_owned();
+    let a = bepreise(&f.eingaben()).expect("priced");
+    let energie = a.preise.iter().find(|z| z.art == "ARBEITSPREIS").unwrap();
+    assert_eq!(energie.wert, "27.5");
+    assert!(
+        energie
+            .quelle
+            .contains("Vertriebspreis auf Basis von Produkt STROM-OEKO-24"),
+        "{}",
+        energie.quelle
+    );
+    assert!(
+        energie.quelle.contains("Referenz sha256:abc"),
+        "{}",
+        energie.quelle
+    );
+    assert!(a.preise.iter().any(|z| z.art == "NETZENTGELT_ARBEITSPREIS"));
+    assert_eq!(a.vertriebsreferenz.as_deref(), Some("sha256:abc"));
+    assert_eq!(a.body().unwrap()["vertriebsreferenz"], "sha256:abc");
+}
+
+/// A contract price prices nothing without its own hand-over.
+#[test]
+fn a_contract_price_is_not_a_catalogue_product() {
+    let mut f = Fixture::strom(dec!(3500), date!(2027 - 02 - 01));
+    f.status = "VERTRAG";
+    let err = bepreise(&f.eingaben()).expect_err("a VERTRAG product is not offered alone");
+    assert_eq!(err.code, code::EINGABE_FEHLT);
+}
+
+/// What the customer saw is compared at its own precision.
+#[test]
+fn what_the_customer_saw_is_checked_at_its_precision() {
+    let mut f = Fixture::strom(dec!(3500), date!(2027 - 02 - 01));
+    let vp = vertriebspreis(dec!(27.5), dec!(146));
+    f.produkt = vertragspreis_daten(&produkt_data(), &vp).unwrap();
+    f.status = "VERTRAG";
+    f.anfrage.vertriebspreis = Some(vp);
+    let a = bepreise(&f.eingaben()).expect("priced");
+    let gesamt: Decimal = a
+        .preise
+        .iter()
+        .find(|z| z.art == "ARBEITSPREIS_GESAMT_BRUTTO")
+        .unwrap()
+        .wert
+        .parse()
+        .unwrap();
+    use grid_billing::RoundMoney as _;
+    let gezeigt = gesamt.round_kfm(2);
+    let gleich = Angezeigt {
+        arbeitspreis_brutto_ct_kwh: Some(gezeigt),
+        grundpreis_brutto_eur_jahr: None,
+        jahreskosten_brutto_eur: Some(a.jahreskosten_brutto_eur.round_kfm(2)),
+    };
+    assert!(abweichungen(&a, &gleich).is_empty());
+    let daneben = Angezeigt {
+        arbeitspreis_brutto_ct_kwh: Some(gezeigt + dec!(0.01)),
+        ..gleich
+    };
+    let ab = abweichungen(&a, &daneben);
+    assert_eq!(ab.len(), 1, "{ab:?}");
+    assert_eq!(ab[0]["zeile"], "arbeitspreis_brutto_ct_kwh");
+}
+
+// ── A front end's own price on PostgreSQL ─────────────────────────────────────────
+
+async fn basis(pool: &sqlx::PgPool) -> productd::pg::ProductRow {
+    let req = productd::pg::ProductUpsertRequest {
+        category: "STROM".to_owned(),
+        name: "Öko 24".to_owned(),
+        sparte: Some("STROM".to_owned()),
+        register_count: Some("Eintarif".to_owned()),
+        kundentyp: Some("Haushalt".to_owned()),
+        dyn_source: None,
+        valid_from: Some("2026-01-01".to_owned()),
+        valid_to: None,
+        data: produkt_data(),
+        bo4e_version: "v202607.0.0".to_owned(),
+        product_status: "PUBLISHED".to_owned(),
+        energiemix: None,
+        oekolabel: None,
+        abrechnung: Default::default(),
+    };
+    productd::pg::upsert_product(pool, LF, TENANT, "STROM-OEKO-24", req)
+        .await
+        .expect("basis");
+    productd::pg::fetch_product(pool, LF, TENANT, "STROM-OEKO-24", None)
+        .await
+        .unwrap()
+        .expect("basis stored")
+}
+
+/// The same price stored twice is one version; it is
+/// readable — and billable — by its code and absent from the catalogue list,
+/// drafts included.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_contract_price_is_one_version_readable_by_code_and_never_listed() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let b = basis(&pool).await;
+    let data = vertragspreis_daten(&b.data, &vertriebspreis(dec!(27.5), dec!(146))).unwrap();
+    for _ in 0..2 {
+        productd::pg::insert_vertragspreis(
+            &pool,
+            TENANT,
+            &b,
+            "STROM-OEKO-24~0123456789ab",
+            &data,
+            Some("sha256:abc"),
+        )
+        .await
+        .unwrap();
+    }
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM products WHERE product_status = 'VERTRAG'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 1, "one version per handed-over price");
+
+    let row = productd::pg::fetch_product(
+        &pool,
+        LF,
+        TENANT,
+        "STROM-OEKO-24~0123456789ab",
+        Some(date!(2027 - 02 - 01)),
+    )
+    .await
+    .unwrap()
+    .expect("readable by its code on any day");
+    assert_eq!(row.product_status, "VERTRAG");
+    assert_eq!(row.data, data);
+
+    let q = productd::pg::ProductListQuery {
+        category: None,
+        sparte: None,
+        kundentyp: None,
+        include_drafts: Some(true),
+        include_expired: Some(true),
+        limit: None,
+    };
+    let liste = productd::pg::list_products(&pool, LF, TENANT, &q)
+        .await
+        .unwrap();
+    let codes: Vec<_> = liste.iter().map(|p| p.product_code.as_str()).collect();
+    assert_eq!(
+        codes,
+        ["STROM-OEKO-24"],
+        "the catalogue lists the basis only"
+    );
+}
+
+/// A PUT cannot turn a contract price into a catalogue
+/// product nor rewrite its version; a later version is admitted.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_put_cannot_rewrite_a_contract_price() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let b = basis(&pool).await;
+    let code = "STROM-OEKO-24~0123456789ab";
+    let data = vertragspreis_daten(&b.data, &vertriebspreis(dec!(27.5), dec!(146))).unwrap();
+    productd::pg::insert_vertragspreis(&pool, TENANT, &b, code, &data, None)
+        .await
+        .unwrap();
+    let put = |status: &str, from: Option<&str>| productd::pg::ProductUpsertRequest {
+        category: "STROM".to_owned(),
+        name: "x".to_owned(),
+        sparte: Some("STROM".to_owned()),
+        register_count: Some("Eintarif".to_owned()),
+        kundentyp: Some("Haushalt".to_owned()),
+        dyn_source: None,
+        valid_from: from.map(str::to_owned),
+        valid_to: None,
+        data: produkt_data(),
+        bo4e_version: "v202607.0.0".to_owned(),
+        product_status: status.to_owned(),
+        energiemix: None,
+        oekolabel: None,
+        abrechnung: Default::default(),
+    };
+    for (status, from) in [("PUBLISHED", Some("2027-06-01")), ("VERTRAG", None)] {
+        productd::pg::upsert_product(&pool, LF, TENANT, code, put(status, from))
+            .await
+            .expect_err("refused");
+    }
+    productd::pg::upsert_product(&pool, LF, TENANT, "NEU", put("VERTRAG", Some("2027-06-01")))
+        .await
+        .expect_err("a PUT does not create a contract price");
+    let unveraendert =
+        productd::pg::fetch_product(&pool, LF, TENANT, code, Some(date!(2027 - 02 - 01)))
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(unveraendert.data, data, "the agreed price is unchanged");
+
+    productd::pg::upsert_product(&pool, LF, TENANT, code, put("VERTRAG", Some("2027-06-01")))
+        .await
+        .expect("a Preisanpassung is a later version");
+    let alt = productd::pg::fetch_product(&pool, LF, TENANT, code, Some(date!(2027 - 05 - 31)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(alt.data, data, "the agreed version still prices its period");
+}
+
+/// A marktd that serves the fixture's three sheets for any NB.
+async fn marktd_attrappe() -> String {
+    use axum::routing::get;
+    let app = axum::Router::new()
+        .route(
+            "/api/v1/preisblaetter/{nb}",
+            get(|| async { axum::Json(serde_json::json!({ "data": netznutzung() })) }),
+        )
+        .route(
+            "/api/v1/preisblaetter-messung/{nb}",
+            get(|| async { axum::Json(serde_json::json!({ "data": messung() })) }),
+        )
+        .route(
+            "/api/v1/preisblaetter-ka/{nb}",
+            get(|| async {
+                let k = ka(Some("Tarifkunden"));
+                axum::Json(
+                    serde_json::json!({ "kundengruppe_ka": k.kundengruppe_ka, "data": k.data }),
+                )
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{addr}")
+}
+
+async fn als_json(e: mako_service::ApiError) -> serde_json::Value {
+    use axum::response::IntoResponse as _;
+    let body = axum::body::to_bytes(e.into_response().into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+/// A displayed price mako cannot reproduce is refused
+/// and leaves no row; the reproduced one stores the contract price and the
+/// offer that names it, together.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_handed_over_price_is_checked_then_stored_with_its_offer() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    basis(&pool).await;
+    let marktd = productd::endkunden_angebot::MarktdQuelle::new(
+        Some(&marktd_attrappe().await),
+        None,
+        reqwest::Client::new(),
+    );
+    let regime = productd::billingd::BehgRegimeQuelle::keine();
+    let mut a = anfrage(
+        Sparte::Strom,
+        dec!(3500),
+        mako_fristen::heute() + time::Duration::days(30),
+    );
+    a.malo_id = None;
+    a.nb_mp_id = Some(NB.to_owned());
+    let mut vp = vertriebspreis(dec!(27.5), dec!(146));
+    vp.angezeigt = Some(Angezeigt {
+        arbeitspreis_brutto_ct_kwh: Some(dec!(0.01)),
+        grundpreis_brutto_eur_jahr: None,
+        jahreskosten_brutto_eur: None,
+    });
+    a.vertriebspreis = Some(vp.clone());
+
+    let err = productd::endkunden_angebot::erstelle(&pool, TENANT, LF, &marktd, &regime, &a)
+        .await
+        .expect_err("the displayed price is not mako's");
+    let body = als_json(err).await;
+    assert_eq!(body["code"], code::ANGEZEIGT_ABWEICHEND, "{body}");
+    let zeile = &body["abweichungen"][0];
+    assert_eq!(zeile["zeile"], "arbeitspreis_brutto_ct_kwh", "{body}");
+    assert_eq!(zeile["angezeigt"], "0.01", "{body}");
+    let vertrag: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM products WHERE product_status = 'VERTRAG'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (vertrag, anzahl(&pool).await),
+        (0, 0),
+        "a refusal stores nothing"
+    );
+
+    // What mako computes, stated back at the same precision, passes.
+    let mako: Decimal = zeile["mako"].as_str().unwrap().parse().unwrap();
+    vp.angezeigt = Some(Angezeigt {
+        arbeitspreis_brutto_ct_kwh: Some(mako),
+        grundpreis_brutto_eur_jahr: None,
+        jahreskosten_brutto_eur: None,
+    });
+    a.vertriebspreis = Some(vp);
+    let angebot = productd::endkunden_angebot::erstelle(&pool, TENANT, LF, &marktd, &regime, &a)
+        .await
+        .expect("the reproduced price is offered");
+    let code_vertrag = angebot["product_code"].as_str().unwrap();
+    assert!(code_vertrag.starts_with("STROM-OEKO-24~"), "{angebot}");
+    assert_eq!(angebot["vertriebsreferenz"], "sha256:abc");
+    let row = productd::pg::fetch_product(&pool, LF, TENANT, code_vertrag, None)
+        .await
+        .unwrap()
+        .expect("billingd reads the contract price by the offer's code");
+    assert_eq!(row.product_status, "VERTRAG");
+    assert_eq!(row.vertriebsreferenz.as_deref(), Some("sha256:abc"));
+    assert_eq!(anzahl(&pool).await, 1);
+}
+
+/// A front end sets only the Energie prices; a regulated line handed
+/// over beside them is an unknown field and refused before anything is read.
+#[test]
+fn a_vertriebspreis_sets_no_regulated_line() {
+    for extra in [
+        serde_json::json!({ "netzentgelt_ct_kwh": "8.5" }),
+        serde_json::json!({ "angezeigt": { "umlagen_ct_kwh": "1" } }),
+    ] {
+        let mut v =
+            serde_json::json!({ "arbeitspreis_ct_kwh": "27.5", "grundpreis_eur_jahr": "146" });
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        let err = serde_json::from_value::<Vertriebspreis>(v).expect_err("unknown field");
+        assert!(err.to_string().contains("unknown field"), "{err}");
+    }
 }

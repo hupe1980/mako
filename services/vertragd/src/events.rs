@@ -15,6 +15,7 @@
 //! | `de.mako.vertrag.lieferbeginn.abgelehnt` | The grid operator refused one component's Anmeldung; with the Antwortcode and its Codeliste |
 //! | `de.mako.vertrag.ersatzversorgung.begonnen` | An Ersatzversorgung contract was written — from the NB's 55013 or the contract route |
 //! | `de.mako.vertrag.zuordnung.beendet` | The NB ended this supplier's Zuordnung (55037/44037); the component's Lieferende is the Zuordnungsende |
+//! | `de.mako.vertrag.kuendigung-neulieferant.eingegangen` | A new supplier's Kündigung reached this deployment as the old supplier (55016/44016) |
 //! | `de.mako.vertrag.kuendigung-vorversorger.bestaetigt` | The previous supplier confirmed the Kündigung sent on the customer's behalf |
 //! | `de.mako.vertrag.kuendigung-vorversorger.abgelehnt` | It refused, with the Antwortcode's class and whether the Anmeldung went out |
 //! | `de.mako.vertrag.gekuendigt` | Lieferende dispatched (Rahmenvertrag cascade, per child) |
@@ -308,6 +309,27 @@ impl mako_service::EventPayload for ZuordnungBeendet {
     const TYPE: &'static str = mako_events::vertrag::ZUORDNUNG_BEENDET;
 }
 
+/// The `data` of `de.mako.vertrag.kuendigung-neulieferant.eingegangen`.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct KuendigungNeulieferantEingegangen {
+    #[serde(flatten)]
+    pub vertrag: Vertragsbezug,
+    #[serde(flatten)]
+    pub komponente: Komponentenbezug,
+    /// The new supplier that sent the Kündigung.
+    pub neulieferant: String,
+    /// The end it asks for (`DTM+93`); absent where it asks for the
+    /// nächstmöglicher Termin.
+    #[schemars(extend("format" = "date"))]
+    pub kuendigung_zum: Option<String>,
+    /// It asks for the nächstmöglicher Termin (`DTM+471`).
+    pub naechstmoeglicher_termin: bool,
+}
+
+impl mako_service::EventPayload for KuendigungNeulieferantEingegangen {
+    const TYPE: &'static str = mako_events::vertrag::KUENDIGUNG_NEULIEFERANT_EINGEGANGEN;
+}
+
 /// The `data` of `de.mako.vertrag.kuendigung-vorversorger.bestaetigt`.
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct KuendigungVorversorgerBestaetigt {
@@ -380,6 +402,7 @@ fn event_schemas() -> Vec<(&'static str, Value)> {
         mako_service::cloudevent::event_schema::<ZuordnungBeendet>(),
         mako_service::cloudevent::event_schema::<KuendigungVorversorgerBestaetigt>(),
         mako_service::cloudevent::event_schema::<KuendigungVorversorgerAbgelehnt>(),
+        mako_service::cloudevent::event_schema::<KuendigungNeulieferantEingegangen>(),
     ]
 }
 

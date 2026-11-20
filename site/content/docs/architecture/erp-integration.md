@@ -197,6 +197,10 @@ with `200 OK` without re-processing.
 | edmd API → ERP | `GET /api/v1/billing-period/{malo_id}` | `MeterBillingPeriod` — arbeitsmenge, spitzenleistung, brennwert |
 | ERP → marktd | `PUT /api/v1/nb-contracts/{id}` | Upsert NB contract with full BO4E `Vertrag` payload |
 | processd API → ERP | `GET /obs/kpis` | BNetzA KPI report — § 7a Abs. 5 EnWG Gleichbehandlung parity, STP rates, decision times |
+| Sales front end → productd | `POST /api/v1/products/{lf}/endkunden-angebote` | The frozen offer an order cites; with `vertriebspreis` the front end's own Arbeits- and Grundpreis become the contract's price ([productd](@/docs/services/productd.md#a-front-end-s-own-price-vertriebspreis)) |
+| Sales front end → marktd | `GET /api/v1/partners?marktrolle=LF&name=` | Supplier candidates for the previous supplier the customer names; the customer picks the MP-ID |
+| Sales front end → vertragd | `POST /api/v1/bestellungen` | The order, against the frozen offer |
+| vertragd → sales front end | `de.mako.vertrag.*` CloudEvents | Lieferbeginn confirmed or refused, the Kündigung beim Vorversorger answered, a new supplier's Kündigung arrived, the Zuordnung ended, an Ersatzversorgung began |
 
 ### Webhook subscriptions
 

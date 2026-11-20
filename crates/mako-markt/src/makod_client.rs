@@ -257,8 +257,8 @@ impl MakodClient {
     /// header: a person's approval the calling service relays.
     ///
     /// `makod` honours it only for a caller its Cedar policy grants
-    /// `ActOnBehalf` (`403 actor_not_permitted` otherwise) and only for an
-    /// approval (`400 invalid_actor_header` otherwise).
+    /// `ActOnBehalf` and only for an approval; anything else is
+    /// `403 actor_not_permitted`.
     ///
     /// # Errors
     ///

@@ -441,6 +441,10 @@ pub mod vertrag {
     /// The Netzbetreiber ended this supplier's Zuordnung (55037/44037); the
     /// component's Lieferende is the Zuordnungsende.
     pub const ZUORDNUNG_BEENDET: &str = "de.mako.vertrag.zuordnung.beendet";
+    /// A new supplier's Kündigung reached this deployment as the old supplier
+    /// (55016/44016) — weeks before the Netzbetreiber ends the Zuordnung.
+    pub const KUENDIGUNG_NEULIEFERANT_EINGEGANGEN: &str =
+        "de.mako.vertrag.kuendigung-neulieferant.eingegangen";
     /// The previous supplier confirmed the Kündigung sent on the customer's
     /// behalf (55017/44017).
     pub const KUENDIGUNG_VORVERSORGER_BESTAETIGT: &str =
@@ -815,6 +819,7 @@ pub fn all() -> &'static [&'static str] {
         vertrag::ZUORDNUNG_BEENDET,
         vertrag::KUENDIGUNG_VORVERSORGER_BESTAETIGT,
         vertrag::KUENDIGUNG_VORVERSORGER_ABGELEHNT,
+        vertrag::KUENDIGUNG_NEULIEFERANT_EINGEGANGEN,
         vertrag::GEKUENDIGT,
         vertrag::KUENDIGUNG,
         vertrag::KUENDIGUNG_WIDERRUFEN,

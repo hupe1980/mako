@@ -24,14 +24,16 @@ fn the_category_list_matches_the_constant() {
     assert_agrees_in(SCHEMA, "products", "category", PRODUCT_CATEGORIES);
 }
 
-/// `product_status` has exactly two states and the handler gates on both.
+/// `product_status` has exactly three states: the PUT gate writes `DRAFT` and
+/// `PUBLISHED`, and `VERTRAG` only as a contract price's next version;
+/// `insert_vertragspreis` writes `VERTRAG`.
 #[test]
 fn product_status_matches_the_handler_gate() {
     assert_agrees_in(
         SCHEMA,
         "products",
         "product_status",
-        &["DRAFT", "PUBLISHED"],
+        &["DRAFT", "PUBLISHED", "VERTRAG"],
     );
 }
 
@@ -178,6 +180,7 @@ fn minimal_row() -> productd::pg::ProductRow {
         energiemix: None,
         oekolabel: None,
         abrechnung: serde_json::json!({}),
+        vertriebsreferenz: None,
         updated_at: time::OffsetDateTime::UNIX_EPOCH,
     }
 }

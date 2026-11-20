@@ -38,8 +38,56 @@ use super::{Claims, IntoMdmResponse as _};
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct PartnerQuery {
+    /// `LF`, `NB`, `MSB`, … — the BO4E Marktrolle.
     pub marktrolle: Option<String>,
+    /// `STROM` or `GAS`.
     pub sparte: Option<String>,
+    /// A name as a customer types it („stadtwerke münchen"): every word must
+    /// begin a word of the partner's name; case, umlauts and legal forms are
+    /// ignored. Exact names first. For a front end to show candidates the
+    /// customer confirms — a name is never resolved to an MP-ID unasked.
+    pub name: Option<String>,
+}
+
+/// The words of a company name as compared: lowercased, `ä`/`ö`/`ü`/`ß`
+/// spelled out, punctuation dropped, legal forms left out.
+fn name_words(name: &str) -> Vec<String> {
+    const RECHTSFORMEN: &[&str] = &[
+        "gmbh",
+        "mbh",
+        "ag",
+        "kg",
+        "se",
+        "ug",
+        "ohg",
+        "eg",
+        "kgaa",
+        "co",
+        "cokg",
+        "haftungsbeschraenkt",
+    ];
+    name.to_lowercase()
+        .replace('ä', "ae")
+        .replace('ö', "oe")
+        .replace('ü', "ue")
+        .replace('ß', "ss")
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty() && !RECHTSFORMEN.contains(w))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// How `query` matches `display_name`: `Some(0)` the same words, `Some(1)`
+/// every query word begins a word of the name, `None` no match.
+fn name_rank(query: &[String], display_name: &str) -> Option<u8> {
+    let words = name_words(display_name);
+    if words == query {
+        return Some(0);
+    }
+    query
+        .iter()
+        .all(|q| words.iter().any(|w| w.starts_with(q.as_str())))
+        .then_some(1)
 }
 
 /// The `PUT /api/v1/partners/{mp_id}` body.
@@ -408,7 +456,20 @@ pub async fn list_partners(
                     role_ok && sparte_ok
                 })
                 .collect();
-            Json(filtered).into_response()
+            let Some(query) = q.name.as_deref().map(name_words).filter(|w| !w.is_empty()) else {
+                return Json(filtered).into_response();
+            };
+            let mut ranked: Vec<_> = filtered
+                .into_iter()
+                .filter_map(|p| {
+                    let rank = name_rank(&query, p.display_name.as_deref().unwrap_or_default())?;
+                    Some((rank, p))
+                })
+                .collect();
+            ranked.sort_by(|(ra, a), (rb, b)| {
+                ra.cmp(rb).then_with(|| a.display_name.cmp(&b.display_name))
+            });
+            Json(ranked.into_iter().map(|(_, p)| p).collect::<Vec<_>>()).into_response()
         }
         Err(e) => e.into_response(),
     }
@@ -522,5 +583,27 @@ pub async fn get_as4_address(
         .into_response(),
         Ok(_) => ApiError::NotFound.into_response(),
         Err(e) => e.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::{name_rank, name_words};
+
+    #[test]
+    fn a_typed_name_finds_the_partner_and_ranks_the_exact_one_first() {
+        let q = name_words("stadtwerke münchen");
+        assert_eq!(name_rank(&q, "Stadtwerke München GmbH"), Some(0));
+        assert_eq!(name_rank(&q, "Stadtwerke Muenchen Vertrieb GmbH"), Some(1));
+        assert_eq!(
+            name_rank(&name_words("swm stadt"), "SWM Stadtwerke"),
+            Some(1)
+        );
+        assert_eq!(name_rank(&q, "Stadtwerke Musterstadt GmbH"), None);
+        // Punctuation splits words on both sides, so „E.ON" is found as typed.
+        assert_eq!(
+            name_rank(&name_words("e.on energie"), "E.ON Energie Deutschland GmbH"),
+            Some(1)
+        );
     }
 }

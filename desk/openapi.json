@@ -21622,6 +21622,7 @@
           {
             "name": "marktrolle",
             "in": "query",
+            "description": "`LF`, `NB`, `MSB`, … — the BO4E Marktrolle.",
             "required": false,
             "schema": {
               "type": "string"
@@ -21630,6 +21631,16 @@
           {
             "name": "sparte",
             "in": "query",
+            "description": "`STROM` or `GAS`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "A name as a customer types it („stadtwerke münchen\"): every word must\nbegin a word of the partner's name; case, umlauts and legal forms are\nignored. Exact names first. For a front end to show candidates the\ncustomer confirms — a name is never resolved to an MP-ID unasked.",
             "required": false,
             "schema": {
               "type": "string"

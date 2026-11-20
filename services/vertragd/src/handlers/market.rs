@@ -54,6 +54,9 @@ pub(super) async fn apply(
         mako_events::mako::PROCESS_INITIATED if matches!(pid, Some(55_037 | 44_037)) => {
             zuordnung_beendet(ctx, tx, data).await
         }
+        mako_events::mako::PROCESS_INITIATED if matches!(pid, Some(55_016 | 44_016)) => {
+            kuendigung_eingegangen(ctx, tx, data).await
+        }
         mako_events::mako::PROCESS_COMPLETED => {
             if pid == Some(55_013) && text(data, "eog_art") == Some("ERSATZVERSORGUNG") {
                 ersatzversorgung(ctx, tx, data).await?;
@@ -152,6 +155,60 @@ async fn zuordnung_beendet(ctx: &Ctx, tx: &mut sqlx::PgConnection, data: &Value)
                 wechsel: grund == "E03",
                 grund: grund.clone(),
                 netzbetreiber: nb.to_owned(),
+            },
+        )
+        .map_err(internal)?;
+        mako_service::outbox::enqueue(&mut *tx, &ce)
+            .await
+            .map_err(internal)?;
+    }
+    Ok(())
+}
+
+// ── A new supplier's Kündigung arrives (55016 / 44016) ───────────────────────
+
+/// Announce a new supplier's Kündigung for every running component on the
+/// Marktlokation. It changes nothing: whether the old contract ends is the
+/// answer processd gives (55017/55018), and the supply ends on the
+/// Netzbetreiber's 55037. The event is the moment that comes weeks earlier.
+async fn kuendigung_eingegangen(
+    ctx: &Ctx,
+    tx: &mut sqlx::PgConnection,
+    data: &Value,
+) -> ApiResult<()> {
+    let (Some(malo_id), Some(lfn)) = (text(data, "malo_id"), text(data, "sender")) else {
+        return Ok(());
+    };
+    let komponenten: Vec<pg::VertragskomponenteRow> = sqlx::query_as(
+        "SELECT k.* FROM vertragskomponenten k
+           JOIN versorgungsvertraege v ON v.id = k.vertrag_id
+          WHERE k.tenant = $1 AND v.tenant = $1 AND k.malo_id = $2
+            AND k.status IN ('BESTAETIGT','AKTIV')",
+    )
+    .bind(ctx.tenant())
+    .bind(malo_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(internal)?;
+    let naechstmoeglich = text(data, "naechstmoeglicher_termin").is_some();
+    let zum = if naechstmoeglich {
+        None
+    } else {
+        text(data, "process_date").and_then(datum)
+    };
+    for k in komponenten {
+        let vertrag = pg::vertraege::vertragsbezug(&mut *tx, k.vertrag_id, ctx.tenant())
+            .await
+            .map_err(internal)?;
+        let ce = events::typed_event(
+            k.vertrag_id,
+            ctx.tenant(),
+            &events::KuendigungNeulieferantEingegangen {
+                vertrag,
+                komponente: komponentenbezug(&k),
+                neulieferant: lfn.to_owned(),
+                kuendigung_zum: zum.map(|d| d.to_string()),
+                naechstmoeglicher_termin: naechstmoeglich,
             },
         )
         .map_err(internal)?;

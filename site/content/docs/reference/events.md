@@ -12,7 +12,7 @@ Every type an integrator can subscribe to, with a webhook endpoint or the
 is emitted through a payload bound to it, and its events carry the schema's
 URL in `dataschema`. A **phantom** is declared and emitted by nothing.
 
-140 types: 19 with a schema, 13 phantoms.
+141 types: 20 with a schema, 13 phantoms.
 
 | Type | Emitted by | Named in | Schema | What it says |
 |---|---|---|---|---|
@@ -110,6 +110,7 @@ URL in `dataschema`. A **phantom** is declared and emitted by nothing.
 | `de.mako.vertrag.lieferbeginn.abgelehnt` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.lieferbeginn.abgelehnt.json) | The grid operator refused one component's Anmeldung, with the Antwortcode and the Codeliste it is defined in. |
 | `de.mako.vertrag.ersatzversorgung.begonnen` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.ersatzversorgung.begonnen.json) | An Ersatzversorgung contract was written (§ 38 EnWG) — from the Netzbetreiber's 55013/44013 or through the API. |
 | `de.mako.vertrag.zuordnung.beendet` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.zuordnung.beendet.json) | The Netzbetreiber ended this supplier's Zuordnung (55037/44037); the component's Lieferende is the Zuordnungsende. |
+| `de.mako.vertrag.kuendigung-neulieferant.eingegangen` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.kuendigung-neulieferant.eingegangen.json) | A new supplier's Kündigung reached this deployment as the old supplier (55016/44016) — weeks before the Netzbetreiber ends the Zuordnung. |
 | `de.mako.vertrag.kuendigung-vorversorger.bestaetigt` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.kuendigung-vorversorger.bestaetigt.json) | The previous supplier confirmed the Kündigung sent on the customer's behalf (55017/44017). |
 | `de.mako.vertrag.kuendigung-vorversorger.abgelehnt` | vertragd | vertragd | [schema](https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.kuendigung-vorversorger.abgelehnt.json) | The previous supplier refused it (55018/44018), with the Antwortcode and the reaction taken. |
 | `de.mako.vertrag.gekuendigt` | — | vertragd | — | Lieferende dispatched (Rahmenvertrag cascade, per child). |

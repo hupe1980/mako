@@ -40,7 +40,7 @@ person decides; every answer, amount and Frist carries its source.
 | **Customer** | `vertragd` contracts and online Vertragsschluss · `productd` catalogue · `accountingd` ledger · `outputd` documents · `portald` portal |
 | **Agents** | 11 of the 14 services expose an MCP server — **212 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
 | **Desk** | [`desk/`](desk/) — one inbox per Rolle, the rule behind every item, an assistant that cites every sentence ([guide](https://hupe1980.github.io/mako/docs/guide/desk/)) |
-| **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties and a `pytest` plugin |
+| **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties and a `pytest` plugin · [`mako-conformance`](tools/mako-conformance/) — checks a replacement for a service against the contract mako's publishes ([guide](https://hupe1980.github.io/mako/docs/guide/replace-a-service/)) |
 
 ## Quick start
 
@@ -250,7 +250,7 @@ generated from the BDEW PDFs — fix the reader in `xtask/src/bdew/` and run
 
 | Section | What's inside |
 |---|---|
-| [Guide](https://hupe1980.github.io/mako/docs/guide/) | Start the estate, set up a deployment, use the Desk |
+| [Guide](https://hupe1980.github.io/mako/docs/guide/) | Start the estate, set up a deployment, use the Desk, replace a service |
 | [Architecture](https://hupe1980.github.io/mako/docs/architecture/) | Engine, domain model, deadlines, ERP integration |
 | [Reference](https://hupe1980.github.io/mako/docs/reference/) | Parsing, validation, builders, process catalogue, AS4, operator policy, the HTTP APIs, the event catalog, `makotest` |
 | [Services](https://hupe1980.github.io/mako/docs/services/) | One operator guide per daemon |

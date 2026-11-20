@@ -100,7 +100,10 @@ Marktkommunikation teil"); where that list publishes no wording for the code,
 the line names the list alone. Steps between two messages fold into one quiet
 row („2 interne Schritte"). Pending Fristen close the thread, each named for what it is — an
 „Eingangsbestätigung (APERAK)", a „Syntaxquittung (CONTRL)" or a „Frist des
-Prozesses".
+Prozesses". Under each step stands who caused it, as makod recorded it:
+„automatisch", „von einer Person", or — in the assistant's colour, because a
+proposal was involved — „freigegeben, Vorschlag unverändert" or „freigegeben,
+Vorschlag geändert".
 
 The **Frist-Uhr** says how far a deadline is: plain while it is far, amber
 inside a day, red inside two hours and once it has lapsed — tinted text, never
@@ -322,6 +325,11 @@ take or deliver and lists the most recent. The Lieferant also sees
 **Rechnungsprüfung**, **Rechnungsdispute** and **Geparkte Buchungen**, the
 Messstelle **Ableseaufträge überfällig** — each the same read as its row in
 Heute, which a click opens.
+
+**Ohne Eingriff · PID 55001** (the Messstelle: 55039) counts how many of
+that PID's processes ended this month with no person among their actors, out
+of all that ended — processd's count, with the share only from 20 ended
+processes and processd's definition under the number.
 
 Every Rolle sees **Assistent**: the share of the desk-assistant's answers
 people found „hilfreich" over the last 30 days — the ratio of agentd's two

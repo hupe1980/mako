@@ -143,6 +143,8 @@ pub struct ProductRow {
     pub oekolabel: Option<Vec<String>>,
     /// The product's [`Abrechnung`], as stored.
     pub abrechnung: serde_json::Value,
+    /// A contract price's reference from the front end that sold it.
+    pub vertriebsreferenz: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
@@ -183,6 +185,20 @@ pub async fn upsert_product_announced(
     // unpriced stretch of time is exactly what closing the predecessor here is
     // meant to prevent.
     let mut tx = pool.begin().await.context("begin upsert_product")?;
+
+    let bestehend: Vec<(String, Option<Date>)> = sqlx::query_as(
+        r"SELECT product_status, valid_from FROM products
+          WHERE tenant = $1 AND lf_mp_id = $2 AND product_code = $3
+          FOR UPDATE",
+    )
+    .bind(tenant)
+    .bind(lf_mp_id)
+    .bind(product_code)
+    .fetch_all(&mut *tx)
+    .await
+    .context("read the code's versions")?;
+    vertragspreis_schutz(&bestehend, &req.product_status, valid_from)
+        .map_err(anyhow::Error::msg)?;
 
     // Archive previous version before upsert (includes energiemix for §42 audit trail).
     sqlx::query(
@@ -537,6 +553,96 @@ pub struct ProductListQuery {
     pub limit: Option<i64>,
 }
 
+/// What a product PUT may do to a contract price (`VERTRAG`).
+///
+/// A contract price is created only by the offer that agreed it, so a PUT
+/// cannot create one, cannot turn one into a catalogue product, and cannot
+/// rewrite a version in place: the price the customer agreed stays readable.
+/// A later version — the operator's Preisanpassung with its § 41 Abs. 5 EnWG
+/// notice — is a PUT with a `valid_from` after every existing version.
+///
+/// # Errors
+///
+/// The refusal's sentence.
+pub fn vertragspreis_schutz(
+    bestehend: &[(String, Option<Date>)],
+    status: &str,
+    valid_from: Option<Date>,
+) -> Result<(), String> {
+    let ist_vertrag = bestehend.iter().any(|(s, _)| s == "VERTRAG");
+    match (ist_vertrag, status == "VERTRAG") {
+        (false, false) => Ok(()),
+        (false, true) => Err(
+            "product_status VERTRAG is set only by an Endkunden-Angebot \
+             with a vertriebspreis; a PUT writes DRAFT or PUBLISHED"
+                .to_owned(),
+        ),
+        (true, false) => Err("this code is a contract price (VERTRAG); it cannot become \
+             a catalogue product"
+            .to_owned()),
+        (true, true) => {
+            let Some(from) = valid_from else {
+                return Err("a contract price's next version needs a valid_from after \
+                     every existing version"
+                    .to_owned());
+            };
+            if bestehend.iter().any(|(_, v)| v.is_some_and(|v| v >= from)) {
+                return Err(format!(
+                    "a contract price version is not rewritten; valid_from {from} must \
+                     lie after every existing version"
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Store a contract price version: `basis` with `data` in place of its
+/// Tarifpreisblatt, status `VERTRAG`, open-ended. Idempotent — the code is
+/// derived from the content, so the same price handed over again keeps the
+/// row it already has.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn insert_vertragspreis<'e>(
+    exec: impl sqlx::PgExecutor<'e>,
+    tenant: &str,
+    basis: &ProductRow,
+    product_code: &str,
+    data: &serde_json::Value,
+    vertriebsreferenz: Option<&str>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"INSERT INTO products
+              (lf_mp_id, product_code, category, name, sparte, register_count, kundentyp,
+               dyn_source, valid_from, valid_to, data, bo4e_version, product_status,
+               energiemix, oekolabel, tenant, abrechnung, vertriebsreferenz, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, NULL, $8, $9, 'VERTRAG',
+                  $10, $11, $12, $13, $14, now())
+          ON CONFLICT (tenant, lf_mp_id, product_code, (COALESCE(valid_from, DATE '0001-01-01')))
+          DO NOTHING",
+    )
+    .bind(&basis.lf_mp_id)
+    .bind(product_code)
+    .bind(&basis.category)
+    .bind(format!("{} (Vertriebspreis)", basis.name))
+    .bind(&basis.sparte)
+    .bind(&basis.register_count)
+    .bind(&basis.kundentyp)
+    .bind(data)
+    .bind(&basis.bo4e_version)
+    .bind(&basis.energiemix)
+    .bind(&basis.oekolabel)
+    .bind(tenant)
+    .bind(&basis.abrechnung)
+    .bind(vertriebsreferenz)
+    .execute(exec)
+    .await
+    .context("store the contract price version")?;
+    Ok(())
+}
+
 pub async fn list_products(
     pool: &PgPool,
     lf_mp_id: &str,
@@ -552,7 +658,8 @@ pub async fn list_products(
             AND ($2::text IS NULL OR category = $2)
             AND ($3::text IS NULL OR sparte = $3)
             AND ($4::text IS NULL OR kundentyp = $4)
-            AND ($5::bool IS TRUE OR product_status = 'PUBLISHED')
+            -- A contract price is one customer's, never part of the catalogue.
+            AND (product_status = 'PUBLISHED' OR ($5::bool IS TRUE AND product_status = 'DRAFT'))
             AND ($6::bool IS TRUE OR valid_to IS NULL OR valid_to >= heute())
           ORDER BY product_code, valid_from DESC NULLS LAST
           LIMIT $7",
@@ -1860,5 +1967,46 @@ mod abrechnung_tests {
         );
         let d = parse(serde_json::json!({ "preisgarantie_bis": "31.12.2027" }));
         assert!(d.pruefen("STROM").is_err());
+    }
+}
+
+#[cfg(test)]
+mod vertragspreis_schutz_tests {
+    use super::vertragspreis_schutz;
+    use time::macros::date;
+
+    fn v(s: &str, from: Option<time::Date>) -> (String, Option<time::Date>) {
+        (s.to_owned(), from)
+    }
+
+    #[test]
+    fn a_catalogue_code_is_written_as_before() {
+        assert!(vertragspreis_schutz(&[], "PUBLISHED", None).is_ok());
+        assert!(vertragspreis_schutz(&[v("DRAFT", None)], "PUBLISHED", None).is_ok());
+    }
+
+    #[test]
+    fn a_put_does_not_create_a_contract_price() {
+        assert!(vertragspreis_schutz(&[], "VERTRAG", Some(date!(2027 - 01 - 01))).is_err());
+        assert!(vertragspreis_schutz(&[v("PUBLISHED", None)], "VERTRAG", None).is_err());
+    }
+
+    #[test]
+    fn a_contract_price_does_not_become_a_catalogue_product() {
+        let b = [v("VERTRAG", None)];
+        assert!(vertragspreis_schutz(&b, "PUBLISHED", Some(date!(2027 - 06 - 01))).is_err());
+        assert!(vertragspreis_schutz(&b, "DRAFT", Some(date!(2027 - 06 - 01))).is_err());
+    }
+
+    #[test]
+    fn a_contract_price_is_not_rewritten_only_succeeded() {
+        let b = [
+            v("VERTRAG", None),
+            v("VERTRAG", Some(date!(2027 - 06 - 01))),
+        ];
+        assert!(vertragspreis_schutz(&b, "VERTRAG", None).is_err());
+        assert!(vertragspreis_schutz(&b, "VERTRAG", Some(date!(2027 - 06 - 01))).is_err());
+        assert!(vertragspreis_schutz(&b, "VERTRAG", Some(date!(2027 - 03 - 01))).is_err());
+        assert!(vertragspreis_schutz(&b, "VERTRAG", Some(date!(2027 - 07 - 01))).is_ok());
     }
 }

@@ -447,3 +447,41 @@ async fn the_class_and_the_policy_decide_the_reaction() {
         "a Vollmacht refusal holds"
     );
 }
+
+/// A new supplier's 55016 is announced for the running contract with its
+/// date, weeks before the 55037 — and changes nothing on the contract.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_new_suppliers_kuendigung_is_announced_and_changes_nothing() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let v = laufender_vertrag(&pool, "C-WIN").await;
+    let kuendigung = ce(
+        "ce-n-1",
+        mako_events::mako::PROCESS_INITIATED,
+        "33333333-3333-4333-8333-333333333333",
+        serde_json::json!({
+            "pid": 55016, "malo_id": MALO, "sender": "9900357000011",
+            "receiver": TENANT, "process_date": "20270131",
+        }),
+    );
+    assert_eq!(
+        post(&pool, "halten", "/api/v1/events", &kuendigung).await.0,
+        StatusCode::OK
+    );
+    let ev = events_of(
+        &pool,
+        mako_events::vertrag::KUENDIGUNG_NEULIEFERANT_EINGEGANGEN,
+    )
+    .await;
+    assert_eq!(ev.len(), 1);
+    assert_eq!(ev[0]["data"]["neulieferant"], "9900357000011");
+    assert_eq!(ev[0]["data"]["kuendigung_zum"], "2027-01-31");
+    assert_eq!(ev[0]["data"]["erp_contract_id"], "C-WIN");
+    assert_eq!(
+        lieferende(&pool, v).await,
+        None,
+        "the 55037 ends supply, not this"
+    );
+}

@@ -35,7 +35,7 @@ just test-productd-db
 | `POST /api/v1/products/{lf_mp_id}/resolve` | Many `(code, as_of)` prices in one call — `billingd`'s read |
 | `PUT /api/v1/epex-prices/{date}`, `GET /{date}/quarter-hourly`, `GET /{year}/{month}/average` | EPEX day-ahead series |
 | `PUT /api/v1/nehs-prices/{date}`, `GET /nehs-prices/latest` | nEHS certificate prices |
-| `POST /api/v1/products/{lf_mp_id}/endkunden-angebote`, `GET /api/v1/endkunden-angebote/{id}` | Frozen Endkunden-Angebot; a missing input refuses `422 eingabe_fehlt` |
+| `POST /api/v1/products/{lf_mp_id}/endkunden-angebote`, `GET /api/v1/endkunden-angebote/{id}` | Frozen Endkunden-Angebot, from the catalogue or a front end's `vertriebspreis` (stored as a `VERTRAG` contract price); a missing input refuses `422 eingabe_fehlt` |
 | `/api/v1/angebote` (+ `/{id}`, `/comparison`, `/versenden`, `/annehmen`, `/ablehnen`, `/expire`) | B2B quotations |
 | `GET /api/v1/comparison-feed`, `/comparison-feed/bo4e` | § 41c EnWG feed, public |
 | `/api/v1/webhooks/endpoints` (+ `/deliveries`, `/replay`, `/test`), `GET /api/v1/events` | Webhook subscriptions and the event feed (`ADMIN`) |

@@ -760,6 +760,7 @@ mod comparison_feed_tests {
             energiemix: None,
             oekolabel: None,
             abrechnung: serde_json::json!({}),
+            vertriebsreferenz: None,
             updated_at: time::OffsetDateTime::from_unix_timestamp(updated_at_secs).unwrap(),
         }
     }

@@ -162,3 +162,47 @@ async fn an_accepted_angebot_is_contracted_after_vertragd_returns() {
         "the Angebot names its contract"
     );
 }
+
+/// A contract price (`VERTRAG`) is not a catalogue product, so
+/// a B2B Angebot naming its code is refused, the position named.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_contract_price_is_not_offered_in_an_angebot() {
+    let Some((url, _pg)) = pg().await else {
+        return;
+    };
+    let pool = PgPool::connect(&url).await.expect("connect");
+    let base = serve(&url, &pool, "http://127.0.0.1:9/api/v1/webhooks/angebot").await;
+    sqlx::query(
+        "INSERT INTO products (lf_mp_id, product_code, category, name, sparte, data, bo4e_version,
+                               product_status, tenant, abrechnung)
+         VALUES ($1, 'P~0123456789ab', 'STROM', 'P (Vertriebspreis)', 'STROM',
+                 '{\"tarifpreise\": []}', 'v202607.0.0', 'VERTRAG', $1, '{}')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("contract price");
+
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/v1/angebote"))
+        .json(&serde_json::json!({
+            "lf_mp_id": TENANT,
+            "interessent_name": "ACME GmbH",
+            "positionen": [{
+                "product_code": "P~0123456789ab",
+                "sparte": "STROM",
+                "jahresverbrauch_kwh": "3500",
+            }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(
+        body["unpreisbare_positionen"][0]["grund"], "PRODUKT_UNBEKANNT",
+        "{body}"
+    );
+}

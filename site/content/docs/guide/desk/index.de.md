@@ -5,7 +5,7 @@ weight = 3
 
 [extra]
 translated_from = "content/docs/guide/desk/index.md"
-source_sha256 = "cab78b0b93a96f54b37d171bd562eb6c4ecbe78709189bc468113c75305d9f6a"
+source_sha256 = "09c41c701222bed33f78a3b8304cd7f9858283fdf4b30ac71c28071e370c5aa1"
 
 +++
 **mako Desk** ist deine Arbeitsoberfläche im Betrieb. Er liest die MCP-Tools
@@ -114,7 +114,10 @@ veröffentlicht, nennt die Zeile nur die Liste. Schritte zwischen zwei
 Nachrichten falten sich in eine ruhige Zeile („2 interne Schritte"). Offene
 Fristen schließen den Verlauf ab, jede benannt nach dem, was sie ist — eine
 „Eingangsbestätigung (APERAK)", eine „Syntaxquittung (CONTRL)" oder eine „Frist
-des Prozesses".
+des Prozesses". Unter jedem Schritt steht, wer ihn verursacht hat, so wie makod
+es festgehalten hat: „automatisch", „von einer Person" oder — in der Farbe des
+Assistenten, weil ein Vorschlag im Spiel war — „freigegeben, Vorschlag
+unverändert" oder „freigegeben, Vorschlag geändert".
 
 Die **Frist-Uhr** zeigt, wie weit eine Frist entfernt ist: schlicht, solange sie
 weit weg ist, bernsteinfarben innerhalb eines Tages, rot innerhalb von zwei
@@ -364,6 +367,11 @@ annehmen oder zustellen konnte, und listet die jüngsten. Der Lieferant sieht
 außerdem **Rechnungsprüfung**, **Rechnungsdispute** und **Geparkte Buchungen**,
 die Messstelle **Ableseaufträge überfällig** — jeweils derselbe Lesevorgang wie
 ihre Zeile in Heute, die ein Klick öffnet.
+
+**Ohne Eingriff · PID 55001** (die Messstelle: 55039) zählt, wie viele
+Prozesse dieser PID in diesem Monat ohne eine Person unter ihren Akteuren
+geendet haben, von allen beendeten — die Zählung von processd, der Anteil erst
+ab 20 beendeten Prozessen und darunter die Definition von processd.
 
 Jede Rolle sieht **Assistent**: den Anteil der Antworten des Desk-Assistenten,
 die Personen in den letzten 30 Tagen „hilfreich" fanden — das Verhältnis der

@@ -14388,6 +14388,7 @@ export interface Api {
           query?: {
             marktrolle?: string;
             sparte?: string;
+            name?: string;
           };
         };
         responses: {

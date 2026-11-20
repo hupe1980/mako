@@ -179,7 +179,7 @@ suite crate name *test_args:
 # vars. Without Docker the `#[ignore]`d tests skip gracefully.
 
 # All database integration suites in one go.
-test-db: check-sql test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-invoicd-db test-netzbilanzd-db test-outbox-db test-policy-db
+test-db: check-sql test-conformance-db test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-invoicd-db test-netzbilanzd-db test-outbox-db test-policy-db
 
 # Every service's SQL literals prepare against its own schema.
 #
@@ -229,6 +229,15 @@ test-billingd-db:
 # Template-store integration tests for outputd.
 test-outputd-db:
     {{ just_executable() }} suite outputd store_integration --include-ignored --test-threads=1
+
+# The conformance kit against its reference services (vertragd on PostgreSQL).
+test-conformance-db:
+    cargo test -p mako-conformance ${CARGO_ARGS:-} --test it -- reference:: --include-ignored --test-threads=1
+
+# Check a service — mako's own or a replacement — against its published
+# contract: `just conformance vertragd http://localhost:9780 --token …`.
+conformance service url *args:
+    cargo run -q -p mako-conformance -- {{ service }} {{ url }} {{ args }}
 
 # Dispatch integration tests for vertragd.
 test-vertragd-db:

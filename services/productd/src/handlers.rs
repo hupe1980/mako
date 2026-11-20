@@ -438,9 +438,14 @@ pub async fn put_product(
         .into_response();
     }
     // product_status validation.
-    if !matches!(req.product_status.as_str(), "DRAFT" | "PUBLISHED") {
+    // VERTRAG passes only into the store's own guard, which admits it as the
+    // next version of an existing contract price (`vertragspreis_schutz`).
+    if !matches!(
+        req.product_status.as_str(),
+        "DRAFT" | "PUBLISHED" | "VERTRAG"
+    ) {
         return ApiError::unprocessable(format!(
-            "product_status {:?} is not valid; accepted values: DRAFT, PUBLISHED",
+            "product_status {:?} is not valid; accepted values: DRAFT, PUBLISHED, VERTRAG",
             req.product_status
         ))
         .into_response();
@@ -1765,6 +1770,21 @@ async fn price_positionen(
             );
             continue;
         };
+        // A contract price belongs to the contract that agreed it; offering it
+        // to anyone else would sell one customer's price.
+        if product.product_status == "VERTRAG" {
+            errors.push(
+                Unpreisbar::new(
+                    grund::PRODUKT_UNBEKANNT,
+                    format!(
+                        "{} ist ein Vertragspreis, kein Produkt des Katalogs von {lf_mp_id}",
+                        pos.product_code
+                    ),
+                )
+                .at(i, pos),
+            );
+            continue;
+        }
         match compute_cost_breakdown(&product.data, pos, rabatt_pct, ctx) {
             Ok(breakdown) => priced.push(PricedPosition {
                 product_name: product.name.clone(),

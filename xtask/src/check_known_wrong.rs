@@ -103,6 +103,23 @@ fn statute_follows(statute: &Regex, line: &str, end: usize) -> bool {
 /// The phrase list. Each `row` must occur in the `AGENTS.md` table.
 const RULES: &[Rule] = &[
     Rule {
+        id: "sect42c-netzentgelt-reduction",
+        row: "§42c Energy Sharing reduces Netzentgelte",
+        // A § 42c credit on the energy price is real (`energy-billing`
+        // `EnergySharingProvider`); only a Netzentgelt reduction is refused,
+        // so the pattern needs the Netzentgelt between § 42c and the cut.
+        pattern: r"(?i)(§ ?42c|sect_?42c|(^|[^0-9a-z])42c([^0-9a-z]|$)).{0,80}(netzentgelt|(^|[^a-z])nne([^a-z]|$)|grid[ _-]?fees?|network[ _-]?charges?).{0,40}(reduz|reduc|ermäßig|ermaessig|rabatt|discount|nachlass|minder|befrei|exempt)|(reduz|reduc|ermäßig|ermaessig|rabatt|discount|nachlass|minder|befrei|exempt)[a-z_]*.{0,40}(netzentgelt|(^|[^a-z])nne([^a-z]|$)|grid[ _-]?fees?|network[ _-]?charges?).{0,80}(§ ?42c|sect_?42c|(^|[^0-9a-z])42c([^0-9a-z]|$))|(netzentgelt|(^|[^a-z])nne([^a-z]|$)|grid[ _-]?fees?|network[ _-]?charges?).{0,40}(reduz|reduc|ermäßig|ermaessig|rabatt|discount|nachlass|minder|befrei|exempt).{0,80}(§ ?42c|sect_?42c|(^|[^0-9a-z])42c([^0-9a-z]|$))",
+        reason: "current law has no § 42c EnWG Netzentgelt reduction — full Netzentgelte apply \
+                 (BK6 Mitteilung Nr. 73, BK6-06-009); a § 42c credit belongs on the energy price",
+    },
+    Rule {
+        id: "lokalitaetskomponente",
+        row: "A Netzentgelt component keys on the Lokalitätskomponente",
+        pattern: r"(?i)lokalit(ä|ae|a)ts[_ -]?komponente",
+        reason: "no published Festlegung or statute names a Lokalitätskomponente; an NNE period \
+                 under AgNes is refused until the Festlegung publishes its parameters",
+    },
+    Rule {
         id: "aperak-weekday",
         row: "The Strom UTILMD/ORDERS APERAK window is 45 Minuten",
         pattern: r"(?i)45[ -]?(min\b|minuten|minutes|-minute).{0,40}(weekday|mo[–-]fr|montag|on a werktag|am werktag|an werktagen|werktags)|(weekday|mo[–-]fr\b|montag bis freitag).{0,40}45[ -]?(min\b|minuten|minutes)",
@@ -391,7 +408,6 @@ const UNCOVERED: &[&str] = &[
     // reached heating gas"); the energy-billing rate table holds the rule.
     "2022 heating-gas Energiesteuer = 0",
     "MaBiS vorläufig day 3 / endgültig day 8",
-    "§42c Energy Sharing reduces Netzentgelte",
     "invoice content (Kilowattstundenpreis",
     "§24 EEG Anlagenzusammenfassung requires operator identity",
     "A §-based reduction can be subtracted from the settled euro amount",
@@ -907,6 +923,27 @@ mod tests {
     fn a_planted_phrase_fails_per_covered_row() {
         let planted: &[(&str, &str)] = &[
             (
+                "sect42c-netzentgelt-reduction",
+                "/// §42c Energy Sharing: the Netzentgelt is reduced for shared kWh",
+            ),
+            (
+                "sect42c-netzentgelt-reduction",
+                "pub sect42c_nne_reduction_pct: Decimal,",
+            ),
+            (
+                "sect42c-netzentgelt-reduction",
+                "| Energy Sharing | Netzentgelt-Rabatt nach § 42c EnWG |",
+            ),
+            (
+                "lokalitaetskomponente",
+                "pub lokalitaetskomponente_ct_kwh: Decimal,",
+            ),
+            ("lokalitaetskomponente", "lokalitaets_komponente = 0.4"),
+            (
+                "lokalitaetskomponente",
+                "/// Die Lokalitätskomponente der AgNes-Netzentgelte",
+            ),
+            (
                 "eeg-21-3-eigenverbrauch",
                 "/// §21 Abs. 3 EEG — **Eigenverbrauch**: no grid feed-in payment.",
             ),
@@ -1199,6 +1236,10 @@ mod tests {
             "§ 41c Abs. 5 Satz 2 EnWG: „Stromlieferanten müssen eine kostenlose Nutzung",
             "//! `policies/productd.cedar`, except the two § 41c EnWG comparison-feed routes,",
             "/// deliberate: § 41c Abs. 5 Satz 2 EnWG obliges a Stromlieferant to let",
+            "| 73 | Az. BK6-06-009 — Energy Sharing (**§42c EnWG**) läuft über das **Dienstleistungsmodell** innerhalb der bestehenden Lieferanten-/Bilanzkreiszuordnung |",
+            "/// §42c EnWG Energy Sharing — community energy allocation credit provider.",
+            ".with_legal_basis(\"§42c EnWG\")",
+            "Energiegemeinschaft Gutschrift (§42c EnWG): full Netzentgelte apply",
         ] {
             assert!(
                 hit_ids(line).is_empty(),

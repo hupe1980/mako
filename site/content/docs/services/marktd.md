@@ -290,7 +290,7 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/melos/{melo_id}` | `read-melo` | Typed `Messlokation` |
 | `GET` | `/api/v1/melos/{melo_id}/standorteigenschaften` | `read-melo` | BO4E `Standorteigenschaften` |
 | `PUT` | `/api/v1/partners/{mp_id}` | `write-partner` | Upsert a Marktpartner — see [Trading partners](#trading-partners) |
-| `GET` | `/api/v1/partners/{mp_id}` · `/api/v1/partners` | `read-partner` | One partner; list |
+| `GET` | `/api/v1/partners/{mp_id}` · `/api/v1/partners` | `read-partner` | One partner; list by `?marktrolle=`, `?sparte=`, `?name=` |
 | `GET` | `/api/v1/partners/{mp_id}/as4-address` | `read-partner` | AS4 endpoint and certificate |
 | `GET` | `/api/v1/partners/{mp_id}/marktteilnehmer` | `read-partner` | BO4E `Marktteilnehmer` view |
 | `GET/PUT` | `/api/v1/mmma-preise/gas/{year}/{month}` | `read-mmma-preis` / `write-mmma-preis` | Gas MMM prices (THE) |
@@ -693,6 +693,12 @@ curl -s -X POST "http://marktd:8180/api/v1/referenzreihen/kav_grenzpreis_strom/i
 |---|---|
 | `marktrolle`, `rollencodetyp`, `sparte` (top level) | Typed enums; `422` on an unknown value, including the EDIFACT `LFG` |
 | `geschaeftspartner` | A `Bo4e<Geschaeftspartner>` through the gate; the canonical round-trip is stored |
+
+`?name=` filters by what a customer types („stadtwerke münchen"). Every word
+must begin a word of the partner's `display_name`. Case, umlauts and legal
+forms are ignored, and exact names come first. It is for a front end showing
+candidates the customer confirms. marktd never resolves a name to an MP-ID on
+its own.
 
 `marktrolle`, `rollencodetyp` and `marktteilnehmerstatus` are `Marktteilnehmer`
 fields. Inside `geschaeftspartner` they are absorbed as unvalidated extension

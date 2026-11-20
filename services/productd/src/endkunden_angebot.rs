@@ -105,6 +105,15 @@ pub mod code {
     pub const SPARTE_ABWEICHEND: &str = "sparte_abweichend";
     /// No `marktd_url` is configured, so no Preisblatt can be read.
     pub const MARKTD_NICHT_KONFIGURIERT: &str = "marktd_nicht_konfiguriert";
+    /// The `vertriebspreis` does not fit its basis product (a band missing
+    /// or extra, a negative price, too many decimals).
+    pub const VERTRIEBSPREIS_UNGUELTIG: &str = "vertriebspreis_ungueltig";
+    /// The basis product cannot carry a front end's price: not published, a
+    /// contract price itself, or dynamic (§ 41a EnWG).
+    pub const BASIS_UNGEEIGNET: &str = "basis_ungeeignet";
+    /// What the front end showed is not what mako prices; `abweichungen`
+    /// names each line with both values.
+    pub const ANGEZEIGT_ABWEICHEND: &str = "angezeigt_abweichend";
 }
 
 /// Strom or Gas — the two Sparten an Endkunden-Angebot is made for.
@@ -147,6 +156,174 @@ pub struct EndkundenAngebotAnfrage {
     pub plz: Option<String>,
     /// The day supply should start; every sheet and series is read for it.
     pub gewuenschter_lieferbeginn: Date,
+    /// A front end's own price on `product_code` as the basis: the offer is
+    /// priced from it instead of the catalogue's Energie prices.
+    #[serde(default)]
+    pub vertriebspreis: Option<Vertriebspreis>,
+}
+
+/// The price a front end sold — the supplier's own lines, net. Every
+/// regulated line (Netzentgelte, Messstellenbetrieb, Konzessionsabgabe,
+/// Umlagen, Steuern) is read from its source, as for a catalogue product.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Vertriebspreis {
+    /// Arbeitspreis Energie, ct/kWh, Eintarif basis.
+    #[serde(default)]
+    pub arbeitspreis_ct_kwh: Option<Decimal>,
+    /// Arbeitspreis HT and NT, ct/kWh, Zweitarif basis.
+    #[serde(default)]
+    pub arbeitspreis_ht_ct_kwh: Option<Decimal>,
+    #[serde(default)]
+    pub arbeitspreis_nt_ct_kwh: Option<Decimal>,
+    /// Grundpreis Energie, EUR per year.
+    pub grundpreis_eur_jahr: Decimal,
+    /// The front end's own reference (its digest of what it sold), echoed.
+    #[serde(default)]
+    pub referenz: Option<String>,
+    /// What the customer was shown, gross; checked at its own precision.
+    #[serde(default)]
+    pub angezeigt: Option<Angezeigt>,
+}
+
+/// The all-in prices and Jahreskosten a front end showed, gross.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Angezeigt {
+    #[serde(default)]
+    pub arbeitspreis_brutto_ct_kwh: Option<Decimal>,
+    #[serde(default)]
+    pub grundpreis_brutto_eur_jahr: Option<Decimal>,
+    #[serde(default)]
+    pub jahreskosten_brutto_eur: Option<Decimal>,
+}
+
+/// The Tarifpreisblatt of a contract price: `basis` with the Energie prices
+/// replaced by the handed-over ones, one unbounded staffel each. The
+/// Grundpreis is stored in the catalogue's unit, ct per day.
+///
+/// # Errors
+///
+/// [`code::VERTRIEBSPREIS_UNGUELTIG`] naming what does not fit.
+pub fn vertragspreis_daten(
+    basis: &serde_json::Value,
+    vp: &Vertriebspreis,
+) -> Result<serde_json::Value, Ablehnung> {
+    let ungueltig = |m: String| Ablehnung::neu(code::VERTRIEBSPREIS_UNGUELTIG, m);
+    let positionen = basis
+        .get("tarifpreise")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| ungueltig("das Basisprodukt führt kein Tarifpreisblatt".to_owned()))?;
+    let hat = |pt: &str| {
+        positionen
+            .iter()
+            .any(|p| mako_markt::bo4e::position_preistyp(p) == pt)
+    };
+    let zweitarif = hat("ARBEITSPREIS_HT") || hat("ARBEITSPREIS_NT");
+    let mut preise: Vec<(&str, Decimal)> = Vec::new();
+    match (
+        zweitarif,
+        vp.arbeitspreis_ct_kwh,
+        vp.arbeitspreis_ht_ct_kwh,
+        vp.arbeitspreis_nt_ct_kwh,
+    ) {
+        (false, Some(ap), None, None) => preise.push(("ARBEITSPREIS_EINTARIF", ap)),
+        (true, None, Some(ht), Some(nt)) => {
+            preise.push(("ARBEITSPREIS_HT", ht));
+            preise.push(("ARBEITSPREIS_NT", nt));
+        }
+        (false, ..) => {
+            return Err(ungueltig(
+                "das Basisprodukt ist ein Eintarif: genau arbeitspreis_ct_kwh, ohne HT/NT"
+                    .to_owned(),
+            ));
+        }
+        (true, ..) => {
+            return Err(ungueltig(
+                "das Basisprodukt ist ein Zweitarif: arbeitspreis_ht_ct_kwh und arbeitspreis_nt_ct_kwh, \
+                 ohne arbeitspreis_ct_kwh"
+                    .to_owned(),
+            ));
+        }
+    }
+    for (pt, wert) in &preise {
+        if wert.is_sign_negative() || wert.scale() > 4 {
+            return Err(ungueltig(format!(
+                "{pt} {wert}: ein Arbeitspreis ist nicht negativ und hat höchstens 4 Nachkommastellen"
+            )));
+        }
+    }
+    let gp = vp.grundpreis_eur_jahr;
+    if gp.is_sign_negative() || gp.scale() > 2 {
+        return Err(ungueltig(format!(
+            "grundpreis_eur_jahr {gp}: nicht negativ, höchstens 2 Nachkommastellen"
+        )));
+    }
+    if !hat("GRUNDPREIS") && !gp.is_zero() {
+        return Err(ungueltig(
+            "das Basisprodukt führt keinen Grundpreis; grundpreis_eur_jahr ist 0".to_owned(),
+        ));
+    }
+    // The catalogue's Grundpreis is ct per day (`GRUNDPREIS × 365 / 100` is
+    // EUR per year), so the EUR-per-year figure is stored in that unit.
+    let gp_ct_tag = (gp * Decimal::ONE_HUNDRED / dec!(365)).round_kfm(10);
+    if hat("GRUNDPREIS") {
+        preise.push(("GRUNDPREIS", gp_ct_tag));
+    }
+    let mut data = basis.clone();
+    for p in data["tarifpreise"].as_array_mut().into_iter().flatten() {
+        let pt = mako_markt::bo4e::position_preistyp(p).to_owned();
+        if let Some((_, wert)) = preise.iter().find(|(t, _)| *t == pt) {
+            p["preisstaffeln"] = serde_json::json!([{ "preis": wert.normalize().to_string() }]);
+        }
+    }
+    Ok(data)
+}
+
+/// The lines whose stated value differs from mako's at the stated precision —
+/// empty when what the customer saw is what mako prices.
+#[must_use]
+pub fn abweichungen(angebot: &Angebot, gezeigt: &Angezeigt) -> Vec<serde_json::Value> {
+    let zeile = |art: &str| {
+        angebot
+            .preise
+            .iter()
+            .find(|z| z.art == art)
+            .and_then(|z| z.wert.parse::<Decimal>().ok())
+    };
+    let pruefe = |name: &str, mako: Option<Decimal>, gezeigt: Option<Decimal>| {
+        let (Some(gezeigt), Some(mako)) = (gezeigt, mako) else {
+            return None;
+        };
+        let gerundet = mako.round_kfm(gezeigt.scale());
+        (gerundet != gezeigt).then(|| {
+            serde_json::json!({
+                "zeile": name,
+                "mako": gerundet.to_string(),
+                "angezeigt": gezeigt.to_string(),
+            })
+        })
+    };
+    [
+        pruefe(
+            "arbeitspreis_brutto_ct_kwh",
+            zeile("ARBEITSPREIS_GESAMT_BRUTTO"),
+            gezeigt.arbeitspreis_brutto_ct_kwh,
+        ),
+        pruefe(
+            "grundpreis_brutto_eur_jahr",
+            zeile("GRUNDPREIS_GESAMT_BRUTTO"),
+            gezeigt.grundpreis_brutto_eur_jahr,
+        ),
+        pruefe(
+            "jahreskosten_brutto_eur",
+            Some(angebot.jahreskosten_brutto_eur),
+            gezeigt.jahreskosten_brutto_eur,
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Where the Netzbetreiber comes from, after the request has been checked.
@@ -369,6 +546,8 @@ pub struct Angebot {
     pub jahreskosten_brutto_eur: Decimal,
     pub abschlag_monat_brutto_eur: Decimal,
     pub gueltig_bis: OffsetDateTime,
+    /// The front end's reference, for an offer priced from its price.
+    pub vertriebsreferenz: Option<String>,
 }
 
 impl Angebot {
@@ -379,7 +558,7 @@ impl Angebot {
     ///
     /// When `gueltig_bis` cannot be formatted as RFC 3339.
     pub fn body(&self) -> Result<serde_json::Value, time::error::Format> {
-        Ok(serde_json::json!({
+        let mut body = serde_json::json!({
             "lf_mp_id": self.lf_mp_id,
             "product_code": self.product_code,
             "product_version": self.product_version,
@@ -395,7 +574,11 @@ impl Angebot {
             "gueltig_bis": self
                 .gueltig_bis
                 .format(&time::format_description::well_known::Rfc3339)?,
-        }))
+        });
+        if let Some(r) = &self.vertriebsreferenz {
+            body["vertriebsreferenz"] = serde_json::Value::String(r.clone());
+        }
+        Ok(body)
     }
 }
 
@@ -541,7 +724,11 @@ pub fn bepreise(e: &Eingaben<'_>) -> Result<Angebot, Ablehnung> {
             ));
             None
         }
-        Some(p) if p.product_status != "PUBLISHED" => {
+        // A contract price is offered only from its own hand-over.
+        Some(p)
+            if !(p.product_status == "PUBLISHED"
+                || (p.product_status == "VERTRAG" && a.vertriebspreis.is_some())) =>
+        {
             fehlend.push(format!(
                 "veröffentlichtes Produkt {} (es ist {})",
                 a.product_code, p.product_status
@@ -783,10 +970,21 @@ pub fn bepreise(e: &Eingaben<'_>) -> Result<Angebot, Ablehnung> {
     let liefer_gp = b.grundpreis_eur_per_year.unwrap_or(Decimal::ZERO);
     let brutto = Decimal::ONE + b.mwst_satz;
 
-    let produkt_quelle = format!(
-        "productd Produkt {} Version {product_version}",
-        a.product_code
-    );
+    let produkt_quelle = match &a.vertriebspreis {
+        Some(vp) => format!(
+            "Vertriebspreis auf Basis von Produkt {}{} (Vertragspreis {}, Version {product_version})",
+            a.product_code.split('~').next().unwrap_or_default(),
+            vp.referenz
+                .as_deref()
+                .map(|r| format!(", Referenz {r}"))
+                .unwrap_or_default(),
+            a.product_code,
+        ),
+        None => format!(
+            "productd Produkt {} Version {product_version}",
+            a.product_code
+        ),
+    };
     let marktd = |blatt: &str| format!("marktd {blatt} des Netzbetreibers {nb}, gültig am {tag}");
     let mut preise = vec![Preiszeile {
         art: "ARBEITSPREIS",
@@ -871,6 +1069,7 @@ pub fn bepreise(e: &Eingaben<'_>) -> Result<Angebot, Ablehnung> {
         jahreskosten_brutto_eur: jahreskosten,
         abschlag_monat_brutto_eur: (jahreskosten / dec!(12)).round_kfm(2),
         gueltig_bis: e.gueltig_bis,
+        vertriebsreferenz: a.vertriebspreis.as_ref().and_then(|v| v.referenz.clone()),
     })
 }
 
@@ -1001,6 +1200,59 @@ pub async fn erstelle(
         crate::pg::fetch_product(pool, lf_mp_id, tenant, &anfrage.product_code, Some(tag))
             .await
             .map_err(ApiError::internal)?;
+    // A front end's price: the basis is checked and the contract price derived
+    // here, priced below like any product, and stored only once the offer
+    // stands — a refused display check leaves nothing behind.
+    let vertragspreis = match (&anfrage.vertriebspreis, &produkt) {
+        (None, _) => None,
+        (Some(_), None) => None,
+        (Some(vp), Some(basis)) => {
+            if basis.product_status != "PUBLISHED" {
+                return Err(Ablehnung::neu(
+                    code::BASIS_UNGEEIGNET,
+                    format!(
+                        "Basis {} ist {}: ein Vertriebspreis setzt auf ein veröffentlichtes Produkt",
+                        basis.product_code, basis.product_status
+                    ),
+                )
+                .into());
+            }
+            if basis.dyn_source.is_some() {
+                return Err(Ablehnung::neu(
+                    code::BASIS_UNGEEIGNET,
+                    format!(
+                        "Basis {} ist dynamisch (§ 41a EnWG): sein Arbeitspreis folgt der Börse",
+                        basis.product_code
+                    ),
+                )
+                .into());
+            }
+            if let Some(r) = &vp.referenz
+                && (r.is_empty() || r.chars().count() > 128 || r.chars().any(char::is_control))
+            {
+                return Err(Ablehnung::neu(
+                    code::VERTRIEBSPREIS_UNGUELTIG,
+                    "referenz: 1 bis 128 Zeichen ohne Steuerzeichen",
+                )
+                .into());
+            }
+            let data = vertragspreis_daten(&basis.data, vp)?;
+            let sha = sha256_hex(&kanonisch(&data).map_err(ApiError::internal)?);
+            let code = format!("{}~{}", basis.product_code, &sha[..12]);
+            Some((code, data))
+        }
+    };
+    let preisanfrage;
+    let anfrage = match &vertragspreis {
+        Some((code, _)) => {
+            preisanfrage = EndkundenAngebotAnfrage {
+                product_code: code.clone(),
+                ..anfrage.clone()
+            };
+            &preisanfrage
+        }
+        None => anfrage,
+    };
     let datum = tag.to_string();
     let netznutzung = marktd
         .blatt(
@@ -1031,10 +1283,17 @@ pub async fn erstelle(
         anfrage,
         malo_id: malo_id.as_deref(),
         nb_mp_id: &nb_mp_id,
-        produkt: produkt.as_ref().map(|p| Produktstand {
-            product_status: &p.product_status,
-            sparte: p.sparte.as_deref(),
-            data: &p.data,
+        produkt: produkt.as_ref().map(|p| match &vertragspreis {
+            Some((_, data)) => Produktstand {
+                product_status: "VERTRAG",
+                sparte: p.sparte.as_deref(),
+                data,
+            },
+            None => Produktstand {
+                product_status: &p.product_status,
+                sparte: p.sparte.as_deref(),
+                data: &p.data,
+            },
         }),
         netznutzung: netznutzung.as_ref(),
         messung: messung.as_ref(),
@@ -1042,7 +1301,42 @@ pub async fn erstelle(
         ctx: &ctx,
         gueltig_bis: gueltig_bis(heute),
     })?;
-    speichere(pool, tenant, &angebot).await
+    if let Some(gezeigt) = anfrage
+        .vertriebspreis
+        .as_ref()
+        .and_then(|v| v.angezeigt.as_ref())
+    {
+        let abweichend = abweichungen(&angebot, gezeigt);
+        if !abweichend.is_empty() {
+            let mut a = Ablehnung::neu(
+                code::ANGEZEIGT_ABWEICHEND,
+                "was der Kunde gesehen hat, ist nicht, was mako bepreist",
+            );
+            a.felder = serde_json::json!({ "abweichungen": abweichend });
+            return Err(a.into());
+        }
+    }
+    // The contract price and the offer that cites it commit together: an
+    // offer without its price version would answer a code billing cannot read.
+    let mut tx = pool.begin().await.map_err(ApiError::internal)?;
+    if let (Some((code, data)), Some(basis)) = (&vertragspreis, &produkt) {
+        crate::pg::insert_vertragspreis(
+            &mut *tx,
+            tenant,
+            basis,
+            code,
+            data,
+            anfrage
+                .vertriebspreis
+                .as_ref()
+                .and_then(|v| v.referenz.as_deref()),
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    }
+    let gespeichert = speichere(&mut *tx, tenant, &angebot).await?;
+    tx.commit().await.map_err(ApiError::internal)?;
+    Ok(gespeichert)
 }
 
 /// Insert `angebot` and answer with it as stored.
@@ -1050,8 +1344,8 @@ pub async fn erstelle(
 /// # Errors
 ///
 /// Serialisation and storage errors.
-pub async fn speichere(
-    pool: &PgPool,
+pub async fn speichere<'e>(
+    exec: impl sqlx::PgExecutor<'e>,
     tenant: &str,
     angebot: &Angebot,
 ) -> Result<serde_json::Value, ApiError> {
@@ -1086,7 +1380,7 @@ pub async fn speichere(
     .bind(angebot.gueltig_bis)
     .bind(&bytes)
     .bind(&sha)
-    .fetch_one(pool)
+    .fetch_one(exec)
     .await
     .map_err(ApiError::internal)?;
     antwort(id, &bytes, &sha, created_at)

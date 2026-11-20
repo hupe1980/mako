@@ -9,6 +9,19 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.42.0] — 2026-11-20
+
+### Added
+
+- **The conformance kit.** `just conformance <service> <url>` checks a service — mako's own or a replacement — against the contract its reference publishes. REST: refusals, documented statuses, bodies valid against the OpenAPI document. Events: the kit registers its own endpoint, then checks signatures, CloudEvents envelopes and `data` against the published schema, and that inbound routes refuse unsigned events. MCP: the snapshot's tools and the refused principal. A vertragd suite ships first; `just test-conformance-db` holds it against vertragd itself.
+- **A front end's own price is the contract's.** `POST /api/v1/products/{lf}/endkunden-angebote` takes `vertriebspreis`: the net Arbeits- and Grundpreis a shop or CRM sold, on a published basis product. The offer prices every regulated line from its source as before. The price is stored as a contract price (status `VERTRAG`, code `<basis>~<hash>`) in the offer's transaction, so the order cites it and billingd bills it unchanged. With `angezeigt`, what the customer saw is checked against mako's computation at its own precision (`422 angezeigt_abweichend`, each line with both values). `referenz` is echoed as `vertriebsreferenz`. A contract price is never listed, never in the § 41c feed, refused in a B2B Angebot, and a `PUT` can only append a later version (the Preisanpassung).
+- **`GET /api/v1/partners?name=`** in marktd: every typed word must begin a word of the partner's name; case, umlauts and legal forms are ignored. A front end shows the candidates and the customer picks one; mako never resolves a name to an MP-ID on its own.
+- **`de.mako.vertrag.kuendigung-neulieferant.eingegangen`**: a new supplier's 55016 / 44016 for a running component is announced with the supplier and the date, weeks before the Netzbetreiber's 55037. The contract does not change.
+
+### Changed
+
+- **`check-known-wrong` enforces two more AGENTS.md known-wrong rows**: the Energy Sharing row and the new AgNes component row, so a symbol, config key or sentence carrying either claim fails the gate.
+
 ## [0.41.0] — 2026-11-20
 
 ### Added
